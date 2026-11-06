@@ -4,14 +4,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use underline_core::{
-    check_directory, check_open_directory, check_readable_directory, create_workspace,
-    heading_title, note_overview, now, outside_copy_path, user_settings_dir, Autosave,
-    CreateProblem, DirectoryProblem, EditingView, Git, GitRepositoryOption, NewNote,
+    check_directory, check_open_directory, check_readable_directory, create_workspace, embed_file,
+    heading_title, note_overview, now, outside_copy_path, relative, user_settings_dir, Autosave,
+    CreateProblem, DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, NewNote,
     NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry,
     OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState, Workspace,
     WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
-use underline_editor::{FacadeView, SourceView};
+use underline_editor::{FacadeView, SourceView, Tool};
+use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -44,6 +45,8 @@ pub struct UnderlineApp {
     create: Option<CreateDialog>,
     open: Option<OpenDialog>,
     new_note: Option<NoteDialog>,
+    /// The question a link or image tool asks (UC-005 A2).
+    tool_dialog: Option<ToolDialog>,
     /// Workspaces, tabs, and recent notes kept between starts (ADR-008).
     state: StateStore,
 }
@@ -89,6 +92,25 @@ impl OpenTab {
         }
         label
     }
+}
+
+/// What the link and image tools ask (UC-005 A2).
+enum ToolDialog {
+    /// A web address, or a note of the workspace.
+    Link { address: String, filter: String },
+    /// An image file; `large` is set when it is larger than 10 MB (A19).
+    Image {
+        path: String,
+        large: Option<(PathBuf, u64)>,
+    },
+}
+
+/// The answer of the link or image dialog.
+enum ToolAnswer {
+    Address(String),
+    Note(NoteId),
+    /// A file to embed; `true` when the user agreed to copy a large one.
+    File(PathBuf, bool),
 }
 
 /// What waits for the user's answer before closing (UC-005 A14 step 3).
@@ -200,6 +222,7 @@ impl UnderlineApp {
             create: None,
             open: None,
             new_note: None,
+            tool_dialog: None,
             state,
         };
         if let Some(notice) = notice {
@@ -934,6 +957,181 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-005 A2: asks for the address of a link or the file of an image.
+    fn show_tool_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.tool_dialog else {
+            return;
+        };
+        let notes: Vec<OverviewEntry> = self.overview.clone();
+        let mut done = None;
+        let mut cancel = false;
+        match dialog {
+            ToolDialog::Link { address, filter } => {
+                egui::Window::new("Insert link")
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.label("Web address:");
+                        let edit = ui.text_edit_singleline(address);
+                        if address.is_empty() && filter.is_empty() {
+                            edit.request_focus();
+                        }
+                        ui.label("Or a note of the workspace:");
+                        ui.text_edit_singleline(filter);
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| {
+                                let needle = filter.to_lowercase();
+                                for entry in notes
+                                    .iter()
+                                    .filter(|e| e.label.to_lowercase().contains(&needle))
+                                    .take(50)
+                                {
+                                    if ui.selectable_label(false, &entry.label).clicked() {
+                                        done = Some(ToolAnswer::Note(entry.id.clone()));
+                                    }
+                                }
+                            });
+                        ui.horizontal(|ui| {
+                            let enter =
+                                edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if (ui.button("Insert").clicked() || enter)
+                                && !address.trim().is_empty()
+                            {
+                                done = Some(ToolAnswer::Address(address.trim().to_owned()));
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+            }
+            ToolDialog::Image { path, large } => {
+                egui::Window::new("Insert image")
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| match large {
+                        // A19: a large file is copied or only linked.
+                        Some((file, bytes)) => {
+                            ui.label(format!(
+                                "{} has {} MB. Copy it into the workspace, or only link to where it is (it is then not part of the workspace and not pushed with git)?",
+                                file.display(),
+                                *bytes / (1024 * 1024)
+                            ));
+                            ui.horizontal(|ui| {
+                                if ui.button("Copy").clicked() {
+                                    done = Some(ToolAnswer::File(file.clone(), true));
+                                }
+                                if ui.button("Link to its place").clicked() {
+                                    done = Some(ToolAnswer::Address(file.display().to_string()));
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    cancel = true;
+                                }
+                            });
+                        }
+                        None => {
+                            ui.label("Image file:");
+                            let edit = ui.text_edit_singleline(path);
+                            if path.is_empty() {
+                                edit.request_focus();
+                            }
+                            ui.horizontal(|ui| {
+                                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if (ui.button("Insert").clicked() || enter) && !path.trim().is_empty() {
+                                    done = Some(ToolAnswer::File(PathBuf::from(path.trim()), false));
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    cancel = true;
+                                }
+                            });
+                        }
+                    });
+            }
+        }
+        if cancel {
+            self.tool_dialog = None;
+        }
+        if let Some(answer) = done {
+            self.answer_tool(answer);
+        }
+    }
+
+    /// Applies the answer of the link or image dialog to the active tab.
+    fn answer_tool(&mut self, answer: ToolAnswer) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let format = match answer {
+            ToolAnswer::Address(address) => Format::Link {
+                address,
+                label: None,
+            },
+            ToolAnswer::Note(id) => {
+                let (Ok(target), Some((_, tab))) = (workspace.note_path(&id), self.tabs.active())
+                else {
+                    return;
+                };
+                let dir = tab.path.parent().unwrap_or(&root).to_owned();
+                let dir = std::path::absolute(&dir).unwrap_or(dir);
+                let target = std::path::absolute(&target).unwrap_or(target);
+                Format::Link {
+                    address: relative(&dir, &target),
+                    label: Some(id.title()),
+                }
+            }
+            ToolAnswer::File(file, allow_large) => {
+                let Some((_, tab)) = self.tabs.active() else {
+                    return;
+                };
+                match embed_file(&root, &tab.path, &file, allow_large) {
+                    Ok(embedded) => {
+                        if embedded.renamed {
+                            self.status =
+                                format!("Copied as {}, since the name was taken", embedded.place);
+                        }
+                        if embedded.image {
+                            Format::Image(embedded.place)
+                        } else {
+                            let label = embedded.place.rsplit('/').next().map(str::to_owned);
+                            Format::Link {
+                                address: embedded.place,
+                                label,
+                            }
+                        }
+                    }
+                    Err(EmbedError::Large { path, bytes }) => {
+                        self.tool_dialog = Some(ToolDialog::Image {
+                            path: String::new(),
+                            large: Some((path, bytes)),
+                        });
+                        return;
+                    }
+                    Err(err) => {
+                        self.status = err.to_string();
+                        self.tool_dialog = None;
+                        return;
+                    }
+                }
+            }
+        };
+        self.tool_dialog = None;
+        if let Some((_, tab)) = self.tabs.active_mut() {
+            if tab.view.apply_format(&format) {
+                tab.autosave.changed(Instant::now());
+            }
+            match tab.editing_view {
+                EditingView::Facade => tab.facade.request_focus(),
+                EditingView::Source => tab.view.focus_cursor(),
+            }
+        }
+        if let Some(workspace) = &mut self.workspace {
+            workspace.rescan();
+        }
+        self.refresh_overview();
+    }
+
     /// UC-005 A14 step 3: asks before closing with changes not stored.
     fn show_close_confirm(&mut self, ctx: &egui::Context) {
         let Some(confirm) = &self.close_confirm else {
@@ -1141,6 +1339,7 @@ impl eframe::App for UnderlineApp {
         self.show_open_dialog(ctx);
         self.show_create_dialog(ctx);
         self.show_note_dialog(ctx);
+        self.show_tool_dialog(ctx);
         self.write_state(ctx);
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -1218,6 +1417,7 @@ impl eframe::App for UnderlineApp {
         });
 
         let mut persist = false;
+        let mut ask_tool = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
@@ -1268,6 +1468,7 @@ impl eframe::App for UnderlineApp {
             // FR-010: switch the editing view at any time; the cursor stays
             // at its place, since both views share it (UC-005 A1).
             let mut switched = false;
+            let mut tool_used = None;
             ui.horizontal(|ui| {
                 for (view, label) in [
                     (EditingView::Facade, "Facade"),
@@ -1282,7 +1483,23 @@ impl eframe::App for UnderlineApp {
                         switched = true;
                     }
                 }
+                ui.separator();
+                // FR-023: the formatting toolbar, the same in both views.
+                for tool in Tool::ALL {
+                    if ui.button(tool.label()).on_hover_text(tool.hint()).clicked() {
+                        tool_used = Some(tool);
+                    }
+                }
             });
+            if let Some(tool) = tool_used {
+                if tab.view.apply_tool(tool) {
+                    tab.autosave.changed(Instant::now());
+                }
+                switched = true;
+            }
+            if let Some(tool) = tab.view.take_request() {
+                ask_tool = Some(tool);
+            }
             if switched {
                 match tab.editing_view {
                     EditingView::Facade => tab.facade.request_focus(),
@@ -1300,6 +1517,18 @@ impl eframe::App for UnderlineApp {
         });
         if persist {
             self.persist_tabs();
+        }
+        if let Some(tool) = ask_tool {
+            self.tool_dialog = Some(match tool {
+                Tool::Image => ToolDialog::Image {
+                    path: String::new(),
+                    large: None,
+                },
+                _ => ToolDialog::Link {
+                    address: String::new(),
+                    filter: String::new(),
+                },
+            });
         }
         self.autosave(ctx);
     }

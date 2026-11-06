@@ -13,6 +13,8 @@ use underline_core::NoteFormat;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use crate::document::Document;
+use crate::Tool;
+use underline_facade::formatting::{apply_format, Format};
 
 const FONT_SIZE: f32 = 14.0;
 const PADDING: f32 = 6.0;
@@ -47,6 +49,9 @@ pub struct SourceView {
     /// An edit since the last layout: its first line and the lines it added
     /// (negative when removed), so only these rows are estimated again.
     pending_edit: Option<(usize, isize)>,
+    /// A toolbar function that asks the user first (link, image), for the
+    /// window to answer (UC-005 A2).
+    request: Option<Tool>,
 }
 
 impl SourceView {
@@ -71,6 +76,7 @@ impl SourceView {
             layout_revision: None,
             row_height: FONT_SIZE,
             pending_edit: None,
+            request: None,
         }
     }
 
@@ -116,6 +122,46 @@ impl SourceView {
     pub fn focus_end(&mut self) {
         self.set_cursor(self.doc.len_chars());
         self.focus = true;
+    }
+
+    /// UC-005 A2: applies a toolbar function at the selection, in the markup
+    /// of the note's format; link and image are asked for first and come
+    /// back through [`Self::take_request`].
+    pub fn apply_tool(&mut self, tool: Tool) -> bool {
+        match tool.format() {
+            Some(format) => self.apply_format(&format),
+            None => {
+                self.request = Some(tool);
+                false
+            }
+        }
+    }
+
+    /// Applies `format` at the selection (UC-005 A2, BR-005).
+    pub fn apply_format(&mut self, format: &Format) -> bool {
+        let text = self.doc.text();
+        let rope = self.doc.rope();
+        let (start, end) = self.selection();
+        let bytes = rope.char_to_byte(start)..rope.char_to_byte(end);
+        let edit = apply_format(&text, self.highlight.format(), bytes, format);
+        let (from, to) = (
+            rope.byte_to_char(edit.range.start),
+            rope.byte_to_char(edit.range.end),
+        );
+        self.replace(from..to, &edit.text);
+        let rope = self.doc.rope();
+        let selection = (
+            rope.byte_to_char(edit.selection.start.min(rope.len_bytes())),
+            rope.byte_to_char(edit.selection.end.min(rope.len_bytes())),
+        );
+        self.anchor = selection.0;
+        self.cursor = selection.1;
+        true
+    }
+
+    /// The toolbar function waiting for the user's answer, if any.
+    pub fn take_request(&mut self) -> Option<Tool> {
+        self.request.take()
     }
 
     /// Puts the keyboard focus on the view at the cursor, as after a switch
@@ -396,6 +442,9 @@ impl SourceView {
     }
 
     fn key(&mut self, key: Key, modifiers: egui::Modifiers, page: usize) -> bool {
+        if let Some(tool) = Tool::for_key(key, modifiers) {
+            return self.apply_tool(tool);
+        }
         let rope_len = self.doc.len_chars();
         let line = self.doc.rope().char_to_line(self.cursor);
         let column = self.cursor - self.doc.rope().line_to_char(line);

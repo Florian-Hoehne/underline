@@ -7,6 +7,7 @@
 mod atomic;
 mod autosave;
 mod create;
+mod embed;
 mod format;
 mod git;
 mod new_note;
@@ -25,6 +26,9 @@ pub use create::{
     check_directory, create_workspace, CreateError, CreateProblem, DirectoryProblem,
     GitRepositoryOption, NewWorkspace, Surroundings, FALLBACK_BRANCH, FIRST_COMMIT_MESSAGE,
     HOME_TITLE, REMOTE_NAME,
+};
+pub use embed::{
+    embed_file, is_image, relative, EmbedError, Embedded, IMAGE_EXTENSIONS, LARGE_FILE,
 };
 pub use format::NoteFormat;
 pub use git::{Git, GitError};

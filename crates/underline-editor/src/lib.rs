@@ -6,10 +6,12 @@ mod document;
 mod facade_view;
 pub mod fonts;
 mod source_view;
+mod toolbar;
 
 pub use document::{Document, Edit};
 pub use facade_view::FacadeView;
 pub use source_view::SourceView;
+pub use toolbar::Tool;
 
 #[cfg(test)]
 mod prototype_benchmark;

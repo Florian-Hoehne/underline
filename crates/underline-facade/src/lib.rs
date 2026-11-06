@@ -6,6 +6,7 @@
 //! AsciiDoc) is added with the use cases that edit notes in the facade.
 
 pub mod blocks;
+pub mod formatting;
 pub mod highlight;
 
 use underline_core::NoteFormat;

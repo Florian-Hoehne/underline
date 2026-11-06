@@ -16,7 +16,7 @@ use underline_core::NoteFormat;
 use underline_facade::blocks::{insert_typed, parse_blocks, Block, BlockKind, ListMarker};
 use underline_facade::highlight::highlight_code;
 
-use crate::{fonts, SourceView};
+use crate::{fonts, SourceView, Tool};
 
 const PADDING: f32 = 12.0;
 const BLOCK_GAP: f32 = 8.0;
@@ -463,6 +463,9 @@ impl FacadeView {
             }
             return false;
         };
+        if let Some(tool) = Tool::for_key(key, modifiers) {
+            return source.apply_tool(tool);
+        }
         let count = self.blocks[index].text().chars().count();
         let mut target = None;
         match key {
@@ -928,6 +931,36 @@ mod tests {
         h.cursor_after("# Head\n\n");
         h.key(Key::Backspace);
         assert_eq!(h.text(), "# HeadA  b\n");
+    }
+
+    /// TC-005-09: toolbar keys work in the facade on the selection, and a
+    /// link asks first.
+    #[test]
+    fn uc005_tc09_toolbar_keys_in_the_facade() {
+        let mut h = Harness::new("Some word here\n");
+        let text = h.text();
+        let start = text.find("word").unwrap();
+        h.source.set_cursor_anchor(start + 4, start);
+        let ctrl = |key, shift| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                shift,
+                ..Default::default()
+            },
+        };
+        h.frame(vec![ctrl(Key::B, false)]);
+        assert_eq!(h.text(), "Some **word** here\n");
+        h.frame(vec![ctrl(Key::B, false)]);
+        assert_eq!(h.text(), "Some word here\n");
+        h.frame(vec![ctrl(Key::L, true)]);
+        assert_eq!(h.text(), "- Some word here\n");
+        h.frame(vec![ctrl(Key::K, false)]);
+        assert_eq!(h.source.take_request(), Some(Tool::Link));
     }
 
     #[test]
