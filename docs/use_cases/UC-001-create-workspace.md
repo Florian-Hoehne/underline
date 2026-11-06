@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user has a new workspace that holds only its Home note, in the default format of their choice, optionally as a git repository, and can start writing in the Home note.  
 **Trigger:** The user asks to create a new workspace.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-001, FR-002, FR-070, FR-071, FR-072, NFR-014, C-002, C-006](../requirements.md)
 
