@@ -181,6 +181,15 @@ impl Workspace {
         Ok(())
     }
 
+    /// The file of note `id`: the existing one, or where a new note in the
+    /// default format would be stored.
+    pub fn note_path(&self, id: &NoteId) -> Result<PathBuf, WorkspaceError> {
+        Ok(match self.existing_path(id)? {
+            Some(path) => path,
+            None => self.root.join(id.file_name(self.default_format())),
+        })
+    }
+
     /// The file of note `id`, if it exists in any known note format.
     fn existing_path(&self, id: &NoteId) -> Result<Option<PathBuf>, WorkspaceError> {
         if !id.is_valid() {

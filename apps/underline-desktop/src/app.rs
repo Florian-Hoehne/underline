@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace,
-    heading_title, note_overview, now, user_settings_dir, CreateProblem, DirectoryProblem,
-    EditingView, Git, GitRepositoryOption, NewNote, NewNoteProblem, NewWorkspace, Note, NoteFormat,
-    NoteId, OpenProblem, OverviewEntry, StateNotice, StateStore, Surroundings, Workspace,
-    HOME_TITLE, STATE_WRITE_DELAY,
+    heading_title, note_overview, now, user_settings_dir, Autosave, CreateProblem,
+    DirectoryProblem, EditingView, Git, GitRepositoryOption, NewNote, NewNoteProblem, NewWorkspace,
+    NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice,
+    StateStore, Surroundings, TabList, TabState, Workspace, HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_editor::SourceView;
 use underline_facade::highlight::HighlightSet;
@@ -25,13 +25,16 @@ pub struct UnderlineApp {
     overview: Vec<OverviewEntry>,
     /// State of the last git sync for the status bar (UC-002 step 9).
     git_state: Option<String>,
-    current: Option<Note>,
-    /// The source view of the open note (ADR-012 prototype).
-    source: Option<SourceView>,
+    /// The open tabs of the workspace (UC-004).
+    tabs: TabList<OpenTab>,
     highlight: Arc<HighlightSet>,
-    /// Put the cursor at the end of the note once, below the title of a new
-    /// note (UC-003 step 6).
-    cursor_to_end: bool,
+    /// Stores changed notes in the background (UC-005 BR-001).
+    saver: NoteSaver,
+    /// A close that waits for the user, because changes could not be stored
+    /// (UC-005 A14 step 3).
+    close_confirm: Option<CloseConfirm>,
+    /// The user agreed to close Underline although changes are not stored.
+    close_anyway: bool,
     wiki_url: String,
     status: String,
     create: Option<CreateDialog>,
@@ -39,6 +42,43 @@ pub struct UnderlineApp {
     new_note: Option<NoteDialog>,
     /// Workspaces, tabs, and recent notes kept between starts (ADR-008).
     state: StateStore,
+}
+
+/// One open tab (UC-004): the note in its source view, with its autosave
+/// clock (UC-005).
+struct OpenTab {
+    view: SourceView,
+    path: PathBuf,
+    title: String,
+    autosave: Autosave,
+    /// A background save of this tab is running.
+    saving: bool,
+    /// Why the last save failed (UC-005 A14).
+    error: Option<String>,
+    /// The note was deleted outside while open (UC-004 A8).
+    deleted: bool,
+}
+
+impl OpenTab {
+    /// The label of the tab: its title, marked when not stored or deleted.
+    fn label(&self) -> String {
+        let mut label = self.title.clone();
+        if self.error.is_some() {
+            label.push_str(" ⚠");
+        } else if self.autosave.is_unstored() {
+            label.push_str(" •");
+        }
+        if self.deleted {
+            label.push_str(" (deleted)");
+        }
+        label
+    }
+}
+
+/// What waits for the user's answer before closing (UC-005 A14 step 3).
+enum CloseConfirm {
+    Tab(NoteId, String),
+    App(String),
 }
 
 /// The dialog of UC-001 Create Workspace, one stage per question.
@@ -127,10 +167,11 @@ impl UnderlineApp {
             git: Git::new(),
             overview: Vec::new(),
             git_state: None,
-            current: None,
-            source: None,
+            tabs: TabList::default(),
             highlight: Arc::new(HighlightSet::new(true)),
-            cursor_to_end: false,
+            saver: NoteSaver::new(OwnWrites::default()),
+            close_confirm: None,
+            close_anyway: false,
             wiki_url: String::new(),
             status: String::new(),
             create: None,
@@ -218,6 +259,15 @@ impl UnderlineApp {
             self.open = None;
             return;
         }
+        // UC-005 BR-001: the notes of the open workspace are stored first.
+        if let Err(failures) = self.flush_all() {
+            self.open = None;
+            self.status = format!(
+                "The workspace stays open, because changes could not be stored: {}",
+                failures.join("; ")
+            );
+            return;
+        }
         match Workspace::open_excluding(dir, &self.state.recent_workspaces()) {
             Ok(workspace) => {
                 self.open = None;
@@ -256,16 +306,25 @@ impl UnderlineApp {
             (!remotes.is_empty()).then(|| "git: no sync yet".to_owned())
         });
         self.workspace = Some(workspace);
-        self.current = None;
-        self.source = None;
+        self.tabs = TabList::default();
         self.state.workspace_opened(&root, now());
-        let note = self
-            .state
-            .active_note(&root)
-            .or_else(|| self.workspace.as_ref().and_then(Workspace::first_note));
-        if let Some(note) = note {
-            self.open_note(&note);
+        // UC-004: the remembered tabs come back in their order; restoring
+        // them does not change the order of the note overview.
+        let remembered = self.state.tabs(&root);
+        for tab in &remembered {
+            self.open_tab(&tab.note, false);
         }
+        let active = remembered.iter().find(|t| t.active).map(|t| t.note.clone());
+        match active.and_then(|note| self.tabs.find(&note)) {
+            Some(index) => self.tabs.activate(index),
+            None if self.tabs.is_empty() => {
+                if let Some(note) = self.workspace.as_ref().and_then(Workspace::first_note) {
+                    self.open_note(&note);
+                }
+            }
+            None => {}
+        }
+        self.persist_tabs();
         self.refresh_overview();
     }
 
@@ -302,6 +361,14 @@ impl UnderlineApp {
 
     /// UC-001 step 5 / A3: create the workspace and open its Home note.
     fn create_workspace(&mut self, request: NewWorkspace) {
+        if let Err(failures) = self.flush_all() {
+            self.create = None;
+            self.status = format!(
+                "No workspace was created, because changes could not be stored: {}",
+                failures.join("; ")
+            );
+            return;
+        }
         let home = self.formats.new_note(request.default_format, HOME_TITLE);
         match create_workspace(&request, &home, &self.surroundings(), &self.git) {
             Ok(workspace) => {
@@ -543,48 +610,211 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-004 step 2: opens `id` in a tab, or activates its tab (A1), and
+    /// lists it first in the note overview.
     fn open_note(&mut self, id: &NoteId) {
-        let Some(workspace) = &self.workspace else {
-            return;
-        };
-        match workspace.read(id) {
-            Ok(note) => {
-                // Tabs and the facade come with later use cases; until then the
-                // one open note is the active tab, shown as source.
-                let root = workspace.root().to_owned();
-                self.state
-                    .note_opened(&root, &note.id, EditingView::Source, now());
-                let format = workspace
-                    .listing()
-                    .notes
-                    .iter()
-                    .find(|entry| entry.id == note.id)
-                    .map_or(workspace.default_format(), |entry| entry.format);
-                self.source = Some(SourceView::new(
-                    note.id.as_str(),
-                    &note.body,
-                    format,
-                    Arc::clone(&self.highlight),
-                ));
-                self.current = Some(note);
-            }
-            Err(err) => self.status = err.to_string(),
+        if self.open_tab(id, true) {
+            self.persist_tabs();
+            self.refresh_overview();
         }
     }
 
-    fn save(&mut self) {
-        let (Some(workspace), Some(note)) = (&mut self.workspace, &mut self.current) else {
+    /// Opens `id` in a tab; with `viewed`, records it as the most recently
+    /// opened note. Returns whether a tab shows the note now.
+    fn open_tab(&mut self, id: &NoteId, viewed: bool) -> bool {
+        let Some(workspace) = &self.workspace else {
+            return false;
+        };
+        let root = workspace.root().to_owned();
+        if let Some(index) = self.tabs.find(id) {
+            self.tabs.activate(index);
+        } else {
+            let (note, path) = match (workspace.read(id), workspace.note_path(id)) {
+                (Ok(note), Ok(path)) => (note, path),
+                (Err(err), _) | (_, Err(err)) => {
+                    // UC-004 A10: no tab for a note that cannot be read.
+                    self.status = format!("{} cannot be read: {err}", id.title());
+                    return false;
+                }
+            };
+            let format = workspace
+                .listing()
+                .notes
+                .iter()
+                .find(|entry| entry.id == note.id)
+                .map_or(workspace.default_format(), |entry| entry.format);
+            let highlight = Arc::clone(&self.highlight);
+            let opened = self.tabs.open(id.clone(), || OpenTab {
+                view: SourceView::new(note.id.as_str(), &note.body, format, highlight),
+                path,
+                title: note.title(),
+                autosave: Autosave::default(),
+                saving: false,
+                error: None,
+                deleted: false,
+            });
+            // UC-004 A6: the tab used longest ago was closed; its changes
+            // are stored first.
+            if let Some((closed, mut tab)) = opened.closed {
+                let _ = self.flush_tab_now(&mut tab);
+                self.status = format!("Closed the tab {}, used longest ago", closed.title());
+            }
+        }
+        if viewed {
+            self.state.note_viewed(&root, id, now());
+        }
+        true
+    }
+
+    /// Remembers the open tabs and the active one (UC-004 step 6).
+    fn persist_tabs(&mut self) {
+        let Some(workspace) = &self.workspace else {
             return;
         };
-        if let Some(source) = &self.source {
-            note.body = source.document().text();
+        let active = self.tabs.active_index();
+        let tabs = (0..self.tabs.len())
+            .map(|i| TabState {
+                note: self.tabs.note(i).clone(),
+                position: u32::try_from(i + 1).unwrap_or(u32::MAX),
+                editing_view: EditingView::Source,
+                active: Some(i) == active,
+            })
+            .collect();
+        let root = workspace.root().to_owned();
+        self.state.set_tabs(&root, tabs);
+    }
+
+    /// Stores a tab's changes now (UC-005 BR-001).
+    fn flush_tab_now(&self, tab: &mut OpenTab) -> Result<(), String> {
+        if !tab.autosave.is_unstored() {
+            return Ok(());
         }
-        self.status = match workspace.write(note) {
-            Ok(()) => format!("Saved {}", note.id),
-            Err(err) => err.to_string(),
+        let started = Instant::now();
+        match self.saver.save_now(&tab.path, &tab.view.document().text()) {
+            Ok(()) => {
+                tab.autosave.stored(started);
+                tab.error = None;
+                tab.deleted = false;
+                Ok(())
+            }
+            Err(err) => {
+                tab.autosave.failed(started);
+                tab.error = Some(err.clone());
+                Err(format!("{}: {err}", tab.title))
+            }
+        }
+    }
+
+    /// Stores every tab's changes now; returns the failures.
+    fn flush_all(&mut self) -> Result<(), Vec<String>> {
+        let mut tabs = std::mem::take(&mut self.tabs);
+        let failures: Vec<String> = tabs
+            .iter_mut()
+            .filter_map(|(_, tab)| self.flush_tab_now(tab).err())
+            .collect();
+        self.tabs = tabs;
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures)
+        }
+    }
+
+    /// UC-004 A5: closes a tab, storing its changes first; when they cannot
+    /// be stored, asks first (UC-005 A14 step 3).
+    fn close_tab(&mut self, id: &NoteId, force: bool) {
+        let Some(index) = self.tabs.find(id) else {
+            return;
         };
-        workspace.rescan();
-        self.refresh_overview();
+        let mut tabs = std::mem::take(&mut self.tabs);
+        let result = self.flush_tab_now(tabs.get_mut(index));
+        self.tabs = tabs;
+        if let (Err(err), false) = (result, force) {
+            self.close_confirm = Some(CloseConfirm::Tab(id.clone(), err));
+            return;
+        }
+        self.tabs.close(index);
+        self.persist_tabs();
+    }
+
+    /// UC-005 step 4: stores due tabs in the background and takes in the
+    /// outcomes (FR-021, A14, A15).
+    fn autosave(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        let mut busy = false;
+        for (_, tab) in self.tabs.iter_mut() {
+            if !tab.saving && tab.autosave.is_due(now) {
+                self.saver.save(SaveJob {
+                    path: tab.path.clone(),
+                    text: tab.view.document().text(),
+                    started: now,
+                });
+                tab.saving = true;
+            }
+            busy |= tab.saving || tab.autosave.is_unstored();
+        }
+        for result in self.saver.poll() {
+            let Some((_, tab)) = self.tabs.iter_mut().find(|(_, t)| t.path == result.path) else {
+                continue;
+            };
+            tab.saving = false;
+            match result.result {
+                Ok(()) => {
+                    tab.autosave.stored(result.started);
+                    tab.error = None;
+                    if std::mem::take(&mut tab.deleted) {
+                        // UC-005 A15: a note deleted outside is stored again.
+                        self.status = format!("Stored {} again at its place", tab.title);
+                    } else {
+                        self.status = format!("Saved {}", tab.title);
+                    }
+                }
+                Err(err) => {
+                    tab.autosave.failed(Instant::now());
+                    self.status = format!("{} could not be stored: {err}", tab.title);
+                    tab.error = Some(err);
+                }
+            }
+        }
+        if busy {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+    }
+
+    /// UC-005 A14 step 3: asks before closing with changes not stored.
+    fn show_close_confirm(&mut self, ctx: &egui::Context) {
+        let Some(confirm) = &self.close_confirm else {
+            return;
+        };
+        let (what, error) = match confirm {
+            CloseConfirm::Tab(id, err) => (format!("the tab {}", id.title()), err.clone()),
+            CloseConfirm::App(err) => ("Underline".to_owned(), err.clone()),
+        };
+        let mut answer = None;
+        egui::Window::new("Changes not stored")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Changes could not be stored: {error}"));
+                ui.label(format!("Close {what} anyway and lose these changes?"));
+                ui.horizontal(|ui| {
+                    if ui.button("Keep open").clicked() {
+                        answer = Some(false);
+                    }
+                    if ui.button("Close anyway").clicked() {
+                        answer = Some(true);
+                    }
+                });
+            });
+        match (answer, self.close_confirm.take()) {
+            (Some(true), Some(CloseConfirm::Tab(id, _))) => self.close_tab(&id, true),
+            (Some(true), Some(CloseConfirm::App(_))) => {
+                self.close_anyway = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            (None, confirm) => self.close_confirm = confirm,
+            (Some(_), _) => {}
+        }
     }
 
     /// UC-003 step 2: the folder of the active note and the default format
@@ -594,9 +824,9 @@ impl UnderlineApp {
             return;
         };
         let folder = self
-            .current
-            .as_ref()
-            .and_then(|note| note.id.folder())
+            .tabs
+            .active()
+            .and_then(|(note, _)| note.folder())
             .unwrap_or_default()
             .to_owned();
         self.new_note = Some(NoteDialog {
@@ -689,8 +919,9 @@ impl UnderlineApp {
             Ok(id) => {
                 self.new_note = None;
                 self.open_note(&id);
-                self.cursor_to_end = true;
-                self.refresh_overview();
+                if let Some((_, tab)) = self.tabs.active_mut() {
+                    tab.view.focus_end();
+                }
                 self.status = format!("Created the note {}", id.title());
             }
             Err(NewNoteProblem::Exists(id)) => {
@@ -738,10 +969,20 @@ impl UnderlineApp {
 
 impl eframe::App for UnderlineApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let _ = self.flush_all();
         let _ = self.state.write();
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // UC-005 BR-001: closing Underline stores every change first; when
+        // that fails, the user is asked (A14 step 3).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.close_anyway {
+            if let Err(failures) = self.flush_all() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.close_confirm = Some(CloseConfirm::App(failures.join("; ")));
+            }
+        }
+        self.show_close_confirm(ctx);
         self.show_open_dialog(ctx);
         self.show_create_dialog(ctx);
         self.show_note_dialog(ctx);
@@ -809,7 +1050,7 @@ impl eframe::App for UnderlineApp {
             let mut selected = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for entry in &self.overview {
-                    let active = self.current.as_ref().is_some_and(|n| n.id == entry.id);
+                    let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
                     if ui.selectable_label(active, &entry.label).clicked() {
                         selected = Some(entry.id.clone());
                     }
@@ -822,23 +1063,57 @@ impl eframe::App for UnderlineApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let Some(title) = self.current.as_ref().map(Note::title) else {
+            // UC-004 A5: the tab bar, left to right.
+            let mut activate = None;
+            let mut close = None;
+            egui::ScrollArea::horizontal()
+                .id_salt("tabs")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let active = self.tabs.active_index();
+                        for (index, (id, tab)) in self.tabs.iter().enumerate() {
+                            let label = ui
+                                .selectable_label(Some(index) == active, tab.label())
+                                .on_hover_text(tab.path.display().to_string());
+                            if label.clicked() {
+                                activate = Some(index);
+                            }
+                            if label.middle_clicked() || ui.small_button("×").clicked() {
+                                close = Some(id.clone());
+                            }
+                            ui.separator();
+                        }
+                    });
+                });
+            if let Some(index) = activate {
+                self.tabs.activate(index);
+                let id = self.tabs.note(index).clone();
+                if let Some(workspace) = &self.workspace {
+                    let root = workspace.root().to_owned();
+                    self.state.note_viewed(&root, &id, now());
+                }
+                self.persist_tabs();
+                self.refresh_overview();
+            }
+            if let Some(id) = close {
+                self.close_tab(&id, false);
+            }
+            ui.separator();
+            let Some((_, tab)) = self.tabs.active_mut() else {
                 ui.label("Select or create a note.");
                 return;
             };
-            ui.horizontal(|ui| {
-                ui.heading(title);
-                if ui.button("Save").clicked() {
-                    self.save();
-                }
-            });
-            if let Some(source) = &mut self.source {
-                if std::mem::take(&mut self.cursor_to_end) {
-                    source.focus_end();
-                }
-                source.show(ui);
+            if let Some(err) = &tab.error {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Not stored: {err}. Underline keeps trying."),
+                );
+            }
+            if tab.view.show(ui) {
+                tab.autosave.changed(Instant::now());
             }
         });
+        self.autosave(ctx);
     }
 }
 

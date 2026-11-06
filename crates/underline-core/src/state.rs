@@ -296,6 +296,30 @@ impl StateStore {
         loaded.changed_at.get_or_insert_with(Instant::now);
     }
 
+    /// Records when `note` was last opened, for the note overview (UC-004
+    /// step 2), without changing the remembered tabs.
+    pub fn note_viewed(&mut self, directory: &Path, note: &NoteId, at: Timestamp) {
+        let loaded = self.workspace(directory);
+        match loaded.state.notes.iter_mut().find(|n| &n.note == note) {
+            Some(entry) => entry.last_opened = at,
+            None => loaded.state.notes.push(NoteState {
+                note: note.clone(),
+                last_opened: at,
+            }),
+        }
+        loaded.changed_at.get_or_insert_with(Instant::now);
+    }
+
+    /// Remembers the open tabs of the workspace at `directory`, left to
+    /// right (UC-004 step 6, A5); positions start at 1.
+    pub fn set_tabs(&mut self, directory: &Path, tabs: Vec<TabState>) {
+        let loaded = self.workspace(directory);
+        if loaded.state.tabs != tabs {
+            loaded.state.tabs = tabs;
+            loaded.changed_at.get_or_insert_with(Instant::now);
+        }
+    }
+
     /// Whether a change waits to be written.
     pub fn has_unwritten_changes(&self) -> bool {
         self.changed_at.is_some() || self.workspaces.values().any(|w| w.changed_at.is_some())
