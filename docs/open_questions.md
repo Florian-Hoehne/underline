@@ -120,3 +120,39 @@ character appears within 16 milliseconds (NFR-002).
 **Blocking:** No
 **Status:** Open
 **Assumed:** Rename (FR-005) and delete (FR-006) are High; search (FR-007) is Medium. The brief does not name them.
+
+## OQ-014: Can a workspace sync with more than one git remote?
+
+**Element:** Entity: GIT_REMOTE
+**Raised by:** /entity-model, 2026-11-06
+**Blocking:** No
+**Status:** Open
+**Assumed:** No: a workspace syncs with at most one git remote, the one its current branch tracks.
+
+## OQ-015: May two notes of a workspace have the same title?
+
+**Element:** Entity: NOTE.title
+**Raised by:** /entity-model, 2026-11-06
+**Blocking:** No
+**Status:** Open
+**Assumed:** No: titles are unique within a workspace, so a local link by title always finds one note.
+
+Notes in different folders of a workspace could share a file name (`a/Home.md`, `b/Home.md`). Readings: (a) titles
+are unique in the workspace; (b) titles are unique per folder, and local links name the folder.
+
+## OQ-016: Are a due date and a scheduled date required for a todo?
+
+**Element:** Entity: TODO.due_date
+**Raised by:** /entity-model, 2026-11-06
+**Blocking:** No
+**Status:** Open
+**Assumed:** Both are optional; only the title is required when a todo is created.
+
+## OQ-017: Which built-in defaults do the settings have?
+
+**Element:** Entity: SETTINGS
+**Raised by:** /entity-model, 2026-11-06
+**Blocking:** No
+**Status:** Open
+**Assumed:** Theme Light, input mode Normal, line numbers shown on the left, copy on select on, git sync every
+5 minutes, MCP server off.

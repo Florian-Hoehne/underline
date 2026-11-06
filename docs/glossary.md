@@ -34,6 +34,7 @@
 | Agent cursor            | The second cursor in an open note that marks where the agent is reading or writing.                                              | AI cursor         |
 | Copy on select          | Copying selected text, an image, or another element to the clipboard as soon as it is selected.                                   |                   |
 | Todo                    | A piece of work the user is heading towards, with a title, a due date, an urgency, a scheduled date, and links to notes.          | Task              |
+| Todo link               | The link from a todo to one note it is about; a note with a todo link cannot be deleted.                                         |                   |
 | Due date                | The date by which a todo has to be done.                                                                                           | Deadline, Frist   |
 | Urgency                 | How pressing a todo is: low, normal, high, or critical.                                                                            |                   |
 | Scheduled date          | The day the user plans to work on a todo.                                                                                          |                   |
