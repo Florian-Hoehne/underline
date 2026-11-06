@@ -33,6 +33,21 @@ records (`docs/architecture/decisions/`, via `/architecture-decision`) and into 
    `/architecture-decision`, linked to the non-functional requirement or constraint it serves.
 7. A gap in a specification goes into `docs/open_questions.md` (`/open-questions`), not into an assumption in the code.
 
+## Technical decisions
+
+The technical counterpart of the requirements is in `docs/architecture/decisions/`:
+
+| ADR     | Decision                                              | Status   |
+|---------|-------------------------------------------------------|----------|
+| ADR-001 | Rust with egui/eframe, crate layout, CI checks        | Accepted |
+| ADR-002 | MCP server over stdio (`underline mcp <dir>`)         | Accepted |
+| ADR-003 | Facade engine with one format module per note format  | Proposed |
+| ADR-004 | Layered YAML settings in `underline.yaml`             | Proposed |
+| ADR-005 | Atomic, debounced autosave                            | Proposed |
+| ADR-006 | Git through the user's credential helper and SSH agent | Proposed |
+
+Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
+
 ## Code conventions
 
 - Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-wiki`,
