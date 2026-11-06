@@ -728,3 +728,14 @@ Answer: Above 10 MB the system asks whether to copy the file or only link to its
 
 Answer: While the cursor is in the diagram, its source is shown below the picture and edited there; the picture
 follows each change. Without the cursor only the picture is shown.
+
+## OQ-073: How is an image or diagram enlarged, and how is the enlarged view used?
+
+**Element:** FR-039, UC-004 step 5
+**Raised by:** implementation of enlarging, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), BR-011
+
+Answer: A double click or a magnifier at the corner of the picture opens it over the whole window, where it is
+zoomed, moved, and fitted again; escape, a click beside it, or its close button returns to the note at the same place.

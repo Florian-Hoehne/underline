@@ -3,6 +3,7 @@
 //! text.
 
 mod document;
+mod enlarged;
 mod facade_view;
 pub mod fonts;
 mod source_view;

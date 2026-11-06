@@ -172,3 +172,10 @@ A change to an open note from another program, from git, or from an agent appear
 ### BR-010: Note properties
 
 The properties of the active note are its place in the workspace with its file name, its note format, its size, and when it was last saved (FR-019).
+
+### BR-011: Enlarged view
+
+A double click on an image or a diagram, or the magnifier shown at its corner while pointing at it, opens it enlarged
+over the whole window (FR-039). There it can be zoomed with the mouse wheel or the keys for larger and smaller,
+moved by dragging, and fitted to the window again. The escape key, a click beside it, or its close button closes
+it; the note is then shown at the same place as before. A single click puts the cursor into it, as in UC-005 BR-008.

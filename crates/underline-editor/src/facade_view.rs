@@ -19,6 +19,7 @@ use underline_facade::diagram::{DiagramLanguage, DiagramState, Diagrams, Picture
 use underline_facade::highlight::highlight_code;
 use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
 
+use crate::enlarged::{Enlarged, Shown};
 use crate::{fonts, SourceView, Tool};
 
 const PADDING: f32 = 12.0;
@@ -55,6 +56,8 @@ pub struct FacadeView {
     /// The last picture of each diagram block, shown while its changed
     /// source is rendered.
     last_pictures: HashMap<usize, Arc<Picture>>,
+    /// The picture shown enlarged over the window (FR-039).
+    enlarged: Option<Enlarged>,
 }
 
 /// What a block shows besides its text: the marker before it, in chars, and
@@ -98,6 +101,7 @@ impl FacadeView {
             editing: None,
             textures: HashMap::new(),
             last_pictures: HashMap::new(),
+            enlarged: None,
         }
     }
 
@@ -199,6 +203,14 @@ impl FacadeView {
                         }
                     }
                 }
+                // UC-004 BR-011: a double click on a picture enlarges it.
+                if response.double_clicked() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        if let Some((index, _)) = self.picture_at(ui, source, &theme, origin, pos) {
+                            self.enlarge(ui, index);
+                        }
+                    }
+                }
                 if response.is_pointer_button_down_on() || response.clicked() {
                     response.request_focus();
                     if let Some(pos) = response.interact_pointer_pos() {
@@ -210,7 +222,7 @@ impl FacadeView {
                     }
                 }
 
-                if response.has_focus() {
+                if response.has_focus() && self.enlarged.is_none() {
                     ui.memory_mut(|m| {
                         m.set_focus_lock_filter(
                             self.id,
@@ -337,6 +349,50 @@ impl FacadeView {
                     }
                     if laid.text_shown {
                         painter.galley(top, Arc::clone(&laid.galley), theme.text);
+                    }
+                }
+
+                // UC-004 BR-011: the magnifier at the corner of the picture
+                // under the pointer enlarges it.
+                // The pointer is asked directly: over the button, the facade
+                // itself is not hovered.
+                let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| {
+                    rect.contains(*p)
+                        && ui.layer_id() == ui.ctx().layer_id_at(*p).unwrap_or(ui.layer_id())
+                });
+                if let Some(pos) = pointer.filter(|_| self.enlarged.is_none()) {
+                    if let Some((index, picture)) = self.picture_at(ui, source, &theme, origin, pos)
+                    {
+                        let button = Rect::from_min_size(
+                            picture.right_top() + Vec2::new(-30.0, 6.0),
+                            Vec2::splat(24.0),
+                        );
+                        let magnifier =
+                            ui.interact(button, self.id.with("magnifier"), Sense::click());
+                        let hovered = magnifier.hovered();
+                        painter.rect_filled(
+                            button,
+                            4.0,
+                            Color32::from_black_alpha(if hovered { 200 } else { 140 }),
+                        );
+                        let glass = button.center() - Vec2::splat(2.0);
+                        painter.circle_stroke(glass, 6.0, Stroke::new(2.0_f32, Color32::WHITE));
+                        painter.line_segment(
+                            [glass + Vec2::splat(4.5), glass + Vec2::splat(9.0)],
+                            Stroke::new(2.5_f32, Color32::WHITE),
+                        );
+                        let magnifier = magnifier.on_hover_text("Enlarge (double click)");
+                        if magnifier.clicked() {
+                            self.enlarge(ui, index);
+                        }
+                    }
+                }
+                if let Some(enlarged) = &mut self.enlarged {
+                    let open =
+                        enlarged.show(ui.ctx(), self.diagrams.as_deref(), self.images.as_deref());
+                    if !open {
+                        self.enlarged = None;
+                        response.request_focus();
                     }
                 }
 
@@ -588,6 +644,55 @@ impl FacadeView {
                 0.0
             };
         laid.figure = Some(figure);
+    }
+
+    /// The picture block under `pos` and where its picture is.
+    fn picture_at(
+        &mut self,
+        ui: &egui::Ui,
+        source: &SourceView,
+        theme: &Theme,
+        origin: Pos2,
+        pos: Pos2,
+    ) -> Option<(usize, Rect)> {
+        if self.blocks.is_empty() {
+            return None;
+        }
+        let index = self.block_at(pos.y - origin.y);
+        let laid = self.laid(ui, source, theme, index);
+        let Some(Figure::Picture(_, size)) = laid.figure else {
+            return None;
+        };
+        let rect = Rect::from_min_size(origin + Vec2::new(0.0, self.tops[index]), size);
+        rect.contains(pos).then_some((index, rect))
+    }
+
+    /// FR-039: shows the picture of block `index` enlarged.
+    fn enlarge(&mut self, ui: &egui::Ui, index: usize) {
+        let Some(picture) = self.last_pictures.get(&index).cloned() else {
+            return;
+        };
+        let block = &self.blocks[index];
+        let shown = match &block.kind {
+            BlockKind::Image { target, .. } => match image_source(self.place.as_ref(), target) {
+                Ok(source) => Shown::Image(source),
+                Err(_) => return,
+            },
+            kind => match diagram_language(kind) {
+                Some(language) => Shown::Diagram {
+                    language,
+                    source: block.text(),
+                    dark: ui.visuals().dark_mode,
+                },
+                None => return,
+            },
+        };
+        self.enlarged = Some(Enlarged::new(shown, picture));
+    }
+
+    /// Whether a picture is shown enlarged.
+    pub fn is_enlarged(&self) -> bool {
+        self.enlarged.is_some()
     }
 
     /// The texture of `picture`, loaded once.
@@ -1519,6 +1624,49 @@ mod tests {
         h.frame(vec![]);
         let (_, shown, _) = look(&mut h, 0);
         assert!(shown, "the markup shows while the cursor is in the image");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// FR-039, UC-004 BR-011: a picture is enlarged over the note; keys do
+    /// not reach the note meanwhile, and escape closes the view.
+    #[test]
+    fn uc004_br011_enlarged_view_opens_and_closes() {
+        let dir = std::env::temp_dir().join(format!("underline-enlarge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("shape.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><rect width="40" height="30"/></svg>"#,
+        )
+        .unwrap();
+        let note = "![Shape](shape.svg)\n\nEnd\n";
+        let mut h = Harness::new(note);
+        let facade = std::mem::replace(&mut h.facade, FacadeView::new("x"));
+        h.facade = facade.with_images(
+            Arc::new(Images::start(|| {})),
+            dir.clone(),
+            dir.join("N.md"),
+        );
+        h.facade.request_focus();
+        h.cursor_after("End");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !h.facade.last_pictures.contains_key(&0) {
+            h.frame(vec![]);
+            assert!(std::time::Instant::now() < deadline, "no picture");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let ctx = h.ctx.clone();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| h.facade.enlarge(ui, 0));
+        });
+        assert!(h.facade.is_enlarged());
+        h.facade.request_focus();
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("x".into())]);
+        assert_eq!(h.text(), note, "typing does not reach the note");
+        assert!(h.facade.is_enlarged());
+        h.key(Key::Escape);
+        assert!(!h.facade.is_enlarged());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
