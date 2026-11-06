@@ -95,6 +95,23 @@ impl FacadeView {
                     response.request_focus();
                 }
 
+                // UC-004 BR-006: pointing at a link shows where it leads;
+                // Ctrl+click (Cmd+click) follows it.
+                if let Some(pos) = response.hover_pos() {
+                    if let Some(link) = self.link_at_pos(ui, source, &theme, origin, pos) {
+                        let key = if cfg!(target_os = "macos") {
+                            "Cmd"
+                        } else {
+                            "Ctrl"
+                        };
+                        response
+                            .clone()
+                            .on_hover_text_at_pointer(format!("{link}\n{key}+click to follow"));
+                        if response.clicked() && ui.input(|i| i.modifiers.command) {
+                            source.follow(link);
+                        }
+                    }
+                }
                 if response.is_pointer_button_down_on() || response.clicked() {
                     response.request_focus();
                     if let Some(pos) = response.interact_pointer_pos() {
@@ -359,6 +376,46 @@ impl FacadeView {
         let ccursor = laid.galley.cursor_from_pos(local).ccursor.index;
         let at = ccursor.saturating_sub(laid.prefix);
         Some(self.char_of(source, index, at))
+    }
+
+    /// The link under the pointer, if any.
+    fn link_at_pos(
+        &mut self,
+        ui: &egui::Ui,
+        source: &SourceView,
+        theme: &Theme,
+        origin: Pos2,
+        pos: Pos2,
+    ) -> Option<String> {
+        if self.blocks.is_empty() {
+            return None;
+        }
+        let index = self.block_at(pos.y - origin.y);
+        let laid = self.laid(ui, source, theme, index);
+        let local = pos - origin - Vec2::new(0.0, self.tops[index]);
+        if local.y < 0.0 || local.y > laid.galley.size().y || local.x > laid.galley.size().x {
+            return None;
+        }
+        let at = laid
+            .galley
+            .cursor_from_pos(local)
+            .ccursor
+            .index
+            .checked_sub(laid.prefix)?;
+        let mut rest = at;
+        for run in &self.blocks[index].runs {
+            let count = run.offsets.len();
+            if rest < count {
+                return run.style.link.clone();
+            }
+            rest -= count;
+        }
+        None
+    }
+
+    /// Facade blocks of the text, for following links and headings.
+    pub fn blocks(&self) -> &[Block] {
+        &self.blocks
     }
 
     /// The char index in the text of facade index `at` of block `index`.

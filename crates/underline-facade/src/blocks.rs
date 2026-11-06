@@ -200,6 +200,33 @@ pub fn insert_typed(
     false
 }
 
+/// The address of the link at source offset `at`, if a link is there
+/// (UC-004 A2).
+pub fn link_at(blocks: &[Block], at: usize) -> Option<String> {
+    blocks
+        .iter()
+        .filter(|b| b.span.start <= at && at <= b.span.end)
+        .flat_map(|b| &b.runs)
+        .find(|run| {
+            run.style.link.is_some()
+                && run.offsets.first().is_some_and(|first| *first <= at)
+                && at <= run.end
+        })
+        .and_then(|run| run.style.link.clone())
+}
+
+/// The source offset of the heading whose anchor is `anchor` (UC-004 A2).
+pub fn heading_offset(
+    blocks: &[Block],
+    anchor: &str,
+    slug: impl Fn(&str) -> String,
+) -> Option<usize> {
+    blocks
+        .iter()
+        .find(|b| matches!(b.kind, BlockKind::Heading(_)) && slug(&b.text()) == anchor)
+        .map(|b| b.source_offset(0))
+}
+
 /// Splits `source` into the blocks of the facade.
 pub fn parse_blocks(source: &str, format: NoteFormat) -> Vec<Block> {
     match format {
@@ -650,6 +677,17 @@ mod tests {
             }
             assert_eq!(blocks.len(), fresh.len());
         }
+    }
+
+    #[test]
+    fn finds_links_and_headings() {
+        let note = "# Getting Started\n\nSee [the plan](Plan.md) now.\n";
+        let blocks = parse_blocks(note, NoteFormat::Markdown);
+        let inside = note.find("plan]").unwrap();
+        assert_eq!(link_at(&blocks, inside).as_deref(), Some("Plan.md"));
+        assert_eq!(link_at(&blocks, note.find("now").unwrap()), None);
+        let slug = |t: &str| t.to_lowercase().replace(' ', "-");
+        assert_eq!(heading_offset(&blocks, "getting-started", slug), Some(2));
     }
 
     #[test]

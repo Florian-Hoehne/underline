@@ -14,6 +14,7 @@ use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use crate::document::Document;
 use crate::Tool;
+use underline_facade::blocks::{link_at, parse_blocks};
 use underline_facade::formatting::{apply_format, Format};
 
 const FONT_SIZE: f32 = 14.0;
@@ -52,6 +53,8 @@ pub struct SourceView {
     /// A toolbar function that asks the user first (link, image), for the
     /// window to answer (UC-005 A2).
     request: Option<Tool>,
+    /// A link the user followed with Ctrl+click (UC-004 A2, BR-006).
+    followed: Option<String>,
 }
 
 impl SourceView {
@@ -77,6 +80,7 @@ impl SourceView {
             row_height: FONT_SIZE,
             pending_edit: None,
             request: None,
+            followed: None,
         }
     }
 
@@ -159,6 +163,28 @@ impl SourceView {
         true
     }
 
+    /// The link the user followed, for the window to open (UC-004 A2).
+    pub fn take_followed_link(&mut self) -> Option<String> {
+        self.followed.take()
+    }
+
+    pub(crate) fn follow(&mut self, link: String) {
+        self.followed = Some(link);
+    }
+
+    /// Puts the cursor at source byte `offset` and scrolls to it, as when a
+    /// link leads to a heading (UC-004 A2).
+    pub fn jump_to_byte(&mut self, offset: usize) {
+        let rope = self.doc.rope();
+        let at = rope.byte_to_char(offset.min(rope.len_bytes()));
+        self.set_cursor(at);
+    }
+
+    /// The note format of the text.
+    pub fn document_format(&self) -> NoteFormat {
+        self.highlight.format()
+    }
+
     /// The toolbar function waiting for the user's answer, if any.
     pub fn take_request(&mut self) -> Option<Tool> {
         self.request.take()
@@ -205,6 +231,17 @@ impl SourceView {
                 }
 
                 // Pointer: place the cursor, extend the selection by dragging.
+                // UC-004 BR-006: Ctrl+click (Cmd+click) follows a link.
+                if response.clicked() && ui.input(|i| i.modifiers.command) {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        let at = self.char_at(ui, &font, origin, pos);
+                        let byte = self.doc.rope().char_to_byte(at);
+                        let blocks = parse_blocks(&self.doc.text(), self.highlight.format());
+                        if let Some(link) = link_at(&blocks, byte) {
+                            self.followed = Some(link);
+                        }
+                    }
+                }
                 if response.is_pointer_button_down_on() || response.clicked() {
                     response.request_focus();
                     if let Some(pos) = response.interact_pointer_pos() {

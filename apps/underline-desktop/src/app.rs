@@ -5,13 +5,15 @@ use std::time::{Duration, Instant, SystemTime};
 use eframe::egui;
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace, embed_file,
-    heading_title, note_overview, now, outside_copy_path, relative, user_settings_dir, Autosave,
-    CreateProblem, DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, NewNote,
-    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry,
-    OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState, Workspace,
-    WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
+    heading_anchor, heading_title, note_overview, now, outside_copy_path, relative, resolve_link,
+    user_settings_dir, Autosave, CreateProblem, DirectoryProblem, EditingView, EmbedError, Git,
+    GitRepositoryOption, LinkTarget, NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId,
+    NoteSaver, OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore,
+    Surroundings, TabList, TabState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
+    STATE_WRITE_DELAY,
 };
 use underline_editor::{FacadeView, SourceView, Tool};
+use underline_facade::blocks::{heading_offset, parse_blocks};
 use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::Registry;
@@ -47,6 +49,10 @@ pub struct UnderlineApp {
     new_note: Option<NoteDialog>,
     /// The question a link or image tool asks (UC-005 A2).
     tool_dialog: Option<ToolDialog>,
+    /// The user agreed to open web addresses in this session (UC-004 A4).
+    web_allowed: bool,
+    /// A web address waiting for that agreement.
+    web_confirm: Option<String>,
     /// Workspaces, tabs, and recent notes kept between starts (ADR-008).
     state: StateStore,
 }
@@ -223,6 +229,8 @@ impl UnderlineApp {
             open: None,
             new_note: None,
             tool_dialog: None,
+            web_allowed: false,
+            web_confirm: None,
             state,
         };
         if let Some(notice) = notice {
@@ -957,6 +965,103 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-004 A2–A4: follows a link of the note at `note`.
+    fn follow_link(&mut self, link: &str, note: &Path) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        match resolve_link(workspace.root(), note, link) {
+            LinkTarget::Heading(anchor) => self.jump_to_heading(&anchor),
+            LinkTarget::Note { id, heading } => {
+                self.open_note(&id);
+                if let Some(anchor) = heading {
+                    self.jump_to_heading(&anchor);
+                }
+            }
+            // A3: the missing note is offered for creation (UC-003).
+            LinkTarget::MissingNote { folder, title } => {
+                self.start_new_note();
+                if let Some(dialog) = &mut self.new_note {
+                    dialog.folder = folder;
+                    dialog.title = title.clone();
+                    dialog.problem = Some(format!("{title} does not exist yet. Create it?"));
+                }
+            }
+            LinkTarget::Web(address) => {
+                if self.web_allowed {
+                    self.open_with_system(&address);
+                } else {
+                    self.web_confirm = Some(address);
+                }
+            }
+            LinkTarget::File(path) => {
+                if path.exists() {
+                    self.open_with_system(&path.display().to_string());
+                } else {
+                    self.status = format!("{} does not exist", path.display());
+                }
+            }
+            LinkTarget::Outside => {
+                self.status = format!("{link} leads outside the workspace and is not followed");
+            }
+        }
+    }
+
+    /// Scrolls the active tab to the heading with `anchor` (UC-004 A2).
+    fn jump_to_heading(&mut self, anchor: &str) {
+        let Some((_, tab)) = self.tabs.active_mut() else {
+            return;
+        };
+        let text = tab.view.document().text();
+        let blocks = parse_blocks(&text, tab.view.document_format());
+        match heading_offset(&blocks, anchor, heading_anchor) {
+            Some(offset) => {
+                tab.view.jump_to_byte(offset);
+                tab.facade.request_focus();
+            }
+            None => self.status = format!("The heading {anchor} was not found"),
+        }
+    }
+
+    /// UC-004 BR-007: opens an address or file with the system's program.
+    fn open_with_system(&mut self, target: &str) {
+        if let Err(err) = open::that_detached(target) {
+            self.status = format!("{target} could not be opened: {err}");
+        }
+    }
+
+    /// UC-004 A4: asks once per session before opening web addresses.
+    fn show_web_confirm(&mut self, ctx: &egui::Context) {
+        let Some(address) = self.web_confirm.clone() else {
+            return;
+        };
+        let mut answer = None;
+        egui::Window::new("Open web address")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Open {address} in your browser?"));
+                ui.label("Underline asks this once until it is closed.");
+                ui.horizontal(|ui| {
+                    if ui.button("Open").clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        match answer {
+            Some(true) => {
+                self.web_confirm = None;
+                self.web_allowed = true;
+                self.open_with_system(&address);
+            }
+            Some(false) => self.web_confirm = None,
+            None => {}
+        }
+    }
+
     /// UC-005 A2: asks for the address of a link or the file of an image.
     fn show_tool_dialog(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &mut self.tool_dialog else {
@@ -1340,6 +1445,7 @@ impl eframe::App for UnderlineApp {
         self.show_create_dialog(ctx);
         self.show_note_dialog(ctx);
         self.show_tool_dialog(ctx);
+        self.show_web_confirm(ctx);
         self.write_state(ctx);
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -1418,6 +1524,7 @@ impl eframe::App for UnderlineApp {
 
         let mut persist = false;
         let mut ask_tool = None;
+        let mut followed = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
@@ -1511,12 +1618,18 @@ impl eframe::App for UnderlineApp {
                 EditingView::Source => tab.view.show(ui),
             };
             persist |= switched;
+            if let Some(link) = tab.view.take_followed_link() {
+                followed = Some((link, tab.path.clone()));
+            }
             if changed {
                 tab.autosave.changed(Instant::now());
             }
         });
         if persist {
             self.persist_tabs();
+        }
+        if let Some((link, note)) = followed {
+            self.follow_link(&link, &note);
         }
         if let Some(tool) = ask_tool {
             self.tool_dialog = Some(match tool {

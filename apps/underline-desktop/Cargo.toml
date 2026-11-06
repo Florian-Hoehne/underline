@@ -18,3 +18,4 @@ underline-facade.workspace = true
 underline-mcp.workspace = true
 underline-wiki.workspace = true
 eframe.workspace = true
+open.workspace = true
