@@ -53,8 +53,10 @@ settings file.
 **Element:** FR-033
 **Raised by:** /requirements, 2026-11-06
 **Blocking:** No
-**Status:** Open
-**Assumed:** It is copied into the workspace, next to the note, and the note links to the copy.
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A9 to A11 and BR-012
+
+Answer: reading (a): it is copied into the folder of the note and linked by its place; a file of the workspace is linked where it is.
 
 Readings: (a) copy into the workspace; (b) link to the original location outside the workspace; (c) ask on every drop.
 
@@ -595,3 +597,83 @@ Answer: Yes, as on GitHub; offline a placeholder names the address.
 **Resolved in:** [UC-004](use_cases/UC-004-read-note.md), step 2, BR-008
 
 Answer: Right of the active tab.
+
+## OQ-060: How far does undo reach?
+
+**Element:** UC-005 A5
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-004
+
+Answer: Per tab, across switches of the editing view, until the tab is closed; not after a restart.
+
+## OQ-061: How is a block edited that the facade cannot format?
+
+**Element:** UC-005 A4
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A4, BR-008
+
+Answer: Its markup is edited in place, inside a frame, in the facade.
+
+## OQ-062: What does the Vim input mode cover?
+
+**Element:** UC-005 A6, FR-024
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-009
+
+Answer: A common subset (modes, motions, operators, counts, undo, search, :q, :w), in both editing views.
+
+## OQ-063: What happens when a dropped file's name is taken?
+
+**Element:** UC-005 A10
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A10
+
+Answer: A file with the same content is reused; otherwise the copy gets the next free number.
+
+## OQ-064: In which form does copy on select copy from the facade?
+
+**Element:** UC-005 A8, FR-031
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-011
+
+Answer: As markup of the note format and as formatted text; from the source view as markup.
+
+## OQ-065: What happens when autosave cannot store a note?
+
+**Element:** UC-005 A14, FR-044
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A14, BR-013
+
+Answer: The tab keeps the changes, marked as not stored; the status bar says why until it is stored; the system retries; closing asks first.
+
+## OQ-066: Which format-specific options does the facade offer first?
+
+**Element:** UC-005 A3, FR-012
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-007
+
+Answer: For AsciiDoc: captions for images and tables, admonition blocks, and ids; none beyond the shared ones for Markdown.
+
+## OQ-067: What happens when a note deleted outside is edited?
+
+**Element:** UC-005 step 1, UC-004 A8
+**Raised by:** /use-case-spec UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A15
+
+Answer: The note is stored again at its place and listed again; the status bar says so.
