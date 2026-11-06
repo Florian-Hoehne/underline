@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::format::NoteFormat;
+
 /// Identifies a note by its page name, as wikis do (`Home`, `Getting-Started`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NoteId(String);
@@ -16,9 +18,9 @@ impl NoteId {
         &self.0
     }
 
-    /// File name of the note inside a notebook directory.
-    pub fn file_name(&self) -> String {
-        format!("{}.md", self.0)
+    /// File name of the note inside a workspace directory, in `format`.
+    pub fn file_name(&self, format: NoteFormat) -> String {
+        format!("{}.{}", self.0, format.extension())
     }
 }
 
@@ -28,7 +30,7 @@ impl std::fmt::Display for NoteId {
     }
 }
 
-/// A single Markdown note.
+/// A single note; its note format follows its file in the workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
     pub id: NoteId,
@@ -57,7 +59,14 @@ mod tests {
     fn title_round_trips_through_wiki_page_name() {
         let note = Note::new("Getting   Started", "");
         assert_eq!(note.id.as_str(), "Getting-Started");
-        assert_eq!(note.id.file_name(), "Getting-Started.md");
+        assert_eq!(
+            note.id.file_name(NoteFormat::Markdown),
+            "Getting-Started.md"
+        );
+        assert_eq!(
+            note.id.file_name(NoteFormat::AsciiDoc),
+            "Getting-Started.adoc"
+        );
         assert_eq!(note.title(), "Getting Started");
     }
 }

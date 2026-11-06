@@ -1,22 +1,22 @@
 //! Model Context Protocol (MCP) server for Underline.
 //!
-//! Exposes a notebook to an AI agent as MCP tools, so the user and the agent
+//! Exposes a workspace to an AI agent as MCP tools, so the user and the agent
 //! read and edit the same notes. Messages are JSON-RPC 2.0, one per line,
 //! as in the MCP stdio transport.
 
 use serde_json::{json, Value};
-use underline_core::{Note, NoteId, Notebook};
+use underline_core::{Note, NoteId, Workspace};
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// Handles MCP requests against one notebook.
+/// Handles MCP requests against one workspace.
 pub struct Server {
-    notebook: Notebook,
+    workspace: Workspace,
 }
 
 impl Server {
-    pub fn new(notebook: Notebook) -> Self {
-        Self { notebook }
+    pub fn new(workspace: Workspace) -> Self {
+        Self { workspace }
     }
 
     /// Handles one JSON-RPC message. Returns `None` for notifications.
@@ -59,7 +59,7 @@ impl Server {
         let page = || args["page"].as_str().map(NoteId::from_title);
         let outcome = match params["name"].as_str() {
             Some("list_notes") => self
-                .notebook
+                .workspace
                 .list()
                 .map(|ids| {
                     ids.iter()
@@ -70,7 +70,7 @@ impl Server {
                 .map_err(|e| e.to_string()),
             Some("read_note") => match page() {
                 Some(id) => self
-                    .notebook
+                    .workspace
                     .read(&id)
                     .map(|n| n.body)
                     .map_err(|e| e.to_string()),
@@ -78,7 +78,7 @@ impl Server {
             },
             Some("write_note") => match (page(), args["body"].as_str()) {
                 (Some(id), Some(body)) => self
-                    .notebook
+                    .workspace
                     .write(&Note {
                         id: id.clone(),
                         body: body.to_owned(),
@@ -102,7 +102,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "list_notes",
-            "description": "List the pages in the notebook.",
+            "description": "List the pages in the workspace.",
             "inputSchema": { "type": "object", "properties": {} },
         },
         {
@@ -129,7 +129,7 @@ mod tests {
     fn server(name: &str) -> Server {
         let dir = std::env::temp_dir().join(format!("underline-mcp-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        Server::new(Notebook::open(dir).unwrap())
+        Server::new(Workspace::open(dir).unwrap())
     }
 
     fn call(server: &Server, id: u64, method: &str, params: Value) -> Value {
@@ -168,7 +168,7 @@ mod tests {
             }),
         );
         assert_eq!(read["result"]["content"][0]["text"], "- ship it");
-        std::fs::remove_dir_all(server.notebook.root()).unwrap();
+        std::fs::remove_dir_all(server.workspace.root()).unwrap();
     }
 
     #[test]

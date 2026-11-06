@@ -1,0 +1,11 @@
+[package]
+name = "underline-facade"
+description = "Facade engine of Underline: one format module per note format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+underline-core.workspace = true
