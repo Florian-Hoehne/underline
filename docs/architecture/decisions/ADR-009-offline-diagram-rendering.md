@@ -77,6 +77,25 @@ Not yet checked: Windows and macOS (QuickJS is C code built by `cc`; checked whe
 The primary path is therefore taken; the Java fallback is not needed. The vendored files are `plantuml.js`,
 `themes.js` (registered as `PLANTUML_THEMES` for `!theme`) and the license.
 
+## Mermaid crate (2026-11-06)
+
+`merman` 0.9.3 (MIT or Apache-2.0) is chosen, by the criteria above:
+
+- **License:** compatible with MIT.
+- **Coverage:** all Mermaid diagram families, among them flowchart, sequence, class, state, ER, gantt, and pie, which
+  render light and dark in the tests; its layout, configuration, and SVG are checked against Mermaid's own fixtures,
+  and Zed uses it as its Mermaid renderer.
+- **Theme colors:** the Mermaid themes (`default`, `dark`) and theme variables are set by configuration.
+- **Releases:** frequent, about 230,000 downloads.
+
+It needs Rust 1.95, and every other candidate (`mermaid-rs-renderer` 0.3.1, `rusty-mermaid` 0.2.0, `fermaid` 0.5.1)
+at least Rust 1.85 through the 2024 edition; the minimum Rust version of the workspace is raised from 1.80 to 1.95
+for it. `mermaid-rs-renderer` is the alternative: as fast, but by its own words not yet as close to Mermaid. The two
+were not rendered side by side.
+
+Labels are written as SVG text (`htmlLabels: false`), because HTML labels need a browser to be drawn. A flowchart of
+200 elements renders and rasterizes in about 26 ms. ELK layouts are left out of the build.
+
 ## Consequences
 
 - Rendering needs no network, no browser, and, with the primary path, no Java; the app grows by about 5 MB for

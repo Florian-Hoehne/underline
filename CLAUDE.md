@@ -47,7 +47,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-006 | Git through the installed git program                 | Accepted |
 | ADR-007 | App state (workspaces, tabs, recent notes) in a state file | Superseded |
 | ADR-008 | Workspace state in `.underline/`, ignored by git by itself | Accepted |
-| ADR-009 | Offline diagrams: pure-Rust Mermaid, PlantUML TeaVM build in QuickJS (spike), Java fallback | Accepted |
+| ADR-009 | Offline diagrams: Mermaid with `merman`, PlantUML's JavaScript build in QuickJS, rasterized with resvg | Accepted |
 | ADR-010 | Code and markup highlighting with syntect, palettes per theme | Accepted |
 | ADR-011 | Watch the workspace with notify, poll as fallback | Accepted |
 | ADR-012 | Own editor widget on egui (rope, block facade, key maps), prototype first | Accepted |

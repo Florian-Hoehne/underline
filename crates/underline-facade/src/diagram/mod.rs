@@ -4,10 +4,12 @@
 //! on a worker thread with a cache ([`Diagrams`]), so typing never waits for
 //! a diagram (NFR-004).
 
+mod mermaid;
 mod plantuml;
 mod raster;
 mod service;
 
+pub use mermaid::Mermaid;
 pub use plantuml::PlantUml;
 pub use raster::{rasterize, Picture};
 pub use service::{DiagramState, Diagrams};

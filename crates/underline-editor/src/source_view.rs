@@ -382,7 +382,7 @@ impl SourceView {
                 if added > 0 {
                     let at = (line + 1).min(self.rows.len());
                     self.rows
-                        .splice(at..at, std::iter::repeat(1).take(added as usize));
+                        .splice(at..at, std::iter::repeat_n(1, added as usize));
                 } else if added < 0 {
                     let from = (line + 1).min(self.rows.len());
                     let to = (from + added.unsigned_abs()).min(self.rows.len());

@@ -115,12 +115,12 @@ impl DocumentHighlight {
         if added > 0 {
             let at = (line + 1).min(self.spans.len());
             self.spans
-                .splice(at..at, std::iter::repeat(None).take(added as usize));
+                .splice(at..at, std::iter::repeat_n(None, added as usize));
             let at = (line + 1).min(self.starts.len());
             let filler = self.starts.get(at.saturating_sub(1)).cloned();
             if let Some(filler) = filler {
                 self.starts
-                    .splice(at..at, std::iter::repeat(filler).take(added as usize));
+                    .splice(at..at, std::iter::repeat_n(filler, added as usize));
             }
         } else if added < 0 {
             let removed = (-added) as usize;
@@ -189,7 +189,7 @@ impl DocumentHighlight {
 
     /// Whether every line up to `line` has its colors.
     pub fn is_ready(&self, line: usize) -> bool {
-        self.dirty.map_or(true, |d| d > line) && self.spans.get(line).is_some_and(Option::is_some)
+        self.dirty.is_none_or(|d| d > line) && self.spans.get(line).is_some_and(Option::is_some)
     }
 
     /// Recolors from the edited line `from`; stops early when the state at

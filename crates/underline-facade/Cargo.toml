@@ -14,6 +14,8 @@ comrak.workspace = true
 thiserror.workspace = true
 dejavu.workspace = true
 ab_glyph = "0.2"
-# Rust 1.80: the newest releases that build with it (ADR-009).
 rquickjs = "=0.8.1"
 resvg = { version = "=0.45.1", default-features = false, features = ["text"] }
+# Mermaid (ADR-009): every diagram family, SVG without the ELK layout.
+merman = { version = "=0.9.3", default-features = false, features = ["all-diagrams", "complete-svg"] }
+serde_json.workspace = true

@@ -1085,7 +1085,7 @@ fn asciidoc_plain(before: Option<char>, after: Option<char>, text: &str) -> bool
     let plain = |c: char| c.is_alphanumeric() || c == ' ';
     text.chars().all(|c| plain(c) || ",;!?".contains(c))
         && before.is_some_and(plain)
-        && after.map_or(true, |c| plain(c) || c == '\n')
+        && after.is_none_or(|c| plain(c) || c == '\n')
 }
 
 /// The marker of the next list item after the item line `line`: same

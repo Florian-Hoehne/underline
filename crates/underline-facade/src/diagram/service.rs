@@ -12,7 +12,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{rasterize, DiagramError, DiagramLanguage, DiagramRenderer, Picture, PlantUml};
+use super::{
+    rasterize, DiagramError, DiagramLanguage, DiagramRenderer, Mermaid, Picture, PlantUml,
+};
 
 /// Diagrams kept in the cache.
 const CACHE_SIZE: usize = 64;
@@ -200,20 +202,7 @@ fn work(shared: &Shared) {
 fn renderer(language: DiagramLanguage) -> Box<dyn DiagramRenderer> {
     match language {
         DiagramLanguage::PlantUml => Box::new(PlantUml::new()),
-        DiagramLanguage::Mermaid => Box::new(NotYet(language)),
-    }
-}
-
-/// A language whose renderer is not built yet; its diagrams are shown as
-/// their source (UC-004 A11).
-struct NotYet(DiagramLanguage);
-
-impl DiagramRenderer for NotYet {
-    fn render(&mut self, _source: &str, _dark: bool) -> Result<String, DiagramError> {
-        Err(DiagramError::NotAvailable(format!(
-            "{} diagrams are not shown as pictures yet",
-            self.0.name()
-        )))
+        DiagramLanguage::Mermaid => Box::new(Mermaid::new()),
     }
 }
 
@@ -255,10 +244,10 @@ mod tests {
 
         let mermaid = "graph TD\nA-->B";
         diagrams.get(DiagramLanguage::Mermaid, mermaid, false, 1.0);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match diagrams.get(DiagramLanguage::Mermaid, mermaid, false, 1.0) {
-                DiagramState::Failed(DiagramError::NotAvailable(_)) => break,
+                DiagramState::Ready(_) => break,
                 DiagramState::Pending if Instant::now() < deadline => {
                     thread::sleep(Duration::from_millis(10))
                 }
