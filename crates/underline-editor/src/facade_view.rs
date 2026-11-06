@@ -14,6 +14,7 @@ use eframe::egui::{
 };
 use underline_core::NoteFormat;
 use underline_facade::blocks::{insert_typed, link_at, parse_blocks, Block, BlockKind, ListMarker};
+use underline_facade::diagram::{DiagramLanguage, DiagramState, Diagrams, Picture};
 use underline_facade::highlight::highlight_code;
 
 use crate::{fonts, SourceView, Tool};
@@ -36,12 +37,39 @@ pub struct FacadeView {
     width: f32,
     focus: bool,
     scroll_to_cursor: bool,
+    /// Renders the diagrams (FR-036, FR-037); without it they show as code.
+    diagrams: Option<Arc<Diagrams>>,
+    /// The diagrams rendered when the layout was made.
+    diagram_generation: u64,
+    /// The diagram block holding the cursor, whose source is shown below
+    /// its picture (UC-005 BR-008).
+    editing: Option<usize>,
+    /// Textures of the pictures shown, by picture.
+    textures: HashMap<usize, (Arc<Picture>, egui::TextureHandle)>,
+    /// The last picture of each diagram block, shown while its changed
+    /// source is rendered.
+    last_pictures: HashMap<usize, Arc<Picture>>,
 }
 
-/// What a block shows besides its text: the marker before it, in chars.
+/// What a block shows besides its text: the marker before it, in chars, and
+/// for a diagram its picture or message above the text.
 struct Laid {
     galley: Arc<Galley>,
     prefix: usize,
+    /// Where the text starts in the block.
+    offset: Vec2,
+    /// The height of the whole block.
+    height: f32,
+    /// Whether the text is shown (a diagram hides its source).
+    text_shown: bool,
+    figure: Option<Figure>,
+}
+
+/// What a diagram block shows above its source.
+enum Figure {
+    Picture(egui::TextureId, Vec2),
+    /// A message, wrapped to the width of the facade.
+    Message(Arc<Galley>),
 }
 
 impl FacadeView {
@@ -55,6 +83,39 @@ impl FacadeView {
             width: 0.0,
             focus: false,
             scroll_to_cursor: false,
+            diagrams: None,
+            diagram_generation: 0,
+            editing: None,
+            textures: HashMap::new(),
+            last_pictures: HashMap::new(),
+        }
+    }
+
+    /// The same facade, showing diagrams as pictures rendered by `diagrams`.
+    pub fn with_diagrams(mut self, diagrams: Arc<Diagrams>) -> Self {
+        self.diagrams = Some(diagrams);
+        self
+    }
+
+    /// The diagram block holding the cursor, if any; a change of it changes
+    /// the layout.
+    fn update_editing(&mut self, source: &SourceView) {
+        let editing = self
+            .cursor_position(source)
+            .map(|(index, _)| index)
+            .filter(|&index| {
+                self.diagrams.is_some() && diagram_language(&self.blocks[index].kind).is_some()
+            });
+        if editing != self.editing {
+            self.editing = editing;
+            self.tops.clear();
+        }
+        if let Some(diagrams) = &self.diagrams {
+            let generation = diagrams.generation();
+            if generation != self.diagram_generation {
+                self.diagram_generation = generation;
+                self.tops.clear();
+            }
         }
     }
 
@@ -76,6 +137,7 @@ impl FacadeView {
             weak: rgba(foreground).gamma_multiply(0.55),
         };
         self.reparse(source);
+        self.update_editing(source);
         let mut changed = false;
 
         egui::ScrollArea::vertical()
@@ -138,8 +200,9 @@ impl FacadeView {
                     changed = self.handle_input(ui, source, &theme);
                     if changed {
                         self.reparse(source);
-                        self.layout_all(ui, source, &theme, width);
                     }
+                    self.update_editing(source);
+                    self.layout_all(ui, source, &theme, width);
                 }
 
                 let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
@@ -150,10 +213,25 @@ impl FacadeView {
                 let rope = source.document().rope().clone();
                 for index in first..last {
                     let laid = self.laid(ui, source, &theme, index);
-                    let top = origin + Vec2::new(0.0, self.tops[index]);
+                    let block_top = origin + Vec2::new(0.0, self.tops[index]);
+                    let top = block_top + laid.offset;
                     let block = &self.blocks[index];
+                    match &laid.figure {
+                        Some(Figure::Picture(texture, size)) => {
+                            painter.image(
+                                *texture,
+                                Rect::from_min_size(block_top, *size),
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                        Some(Figure::Message(message)) => {
+                            painter.galley(block_top, Arc::clone(message), theme.weak);
+                        }
+                        None => {}
+                    }
                     match &block.kind {
-                        BlockKind::Code { .. } | BlockKind::Markup => {
+                        BlockKind::Code { .. } | BlockKind::Markup if laid.text_shown => {
                             painter.rect_filled(
                                 Rect::from_min_size(
                                     top - Vec2::splat(4.0),
@@ -195,7 +273,7 @@ impl FacadeView {
                         _ => {}
                     }
                     // Selection behind the text.
-                    if sel_start != sel_end {
+                    if sel_start != sel_end && laid.text_shown {
                         let to_char =
                             |offset: usize| rope.byte_to_char(offset.min(rope.len_bytes()));
                         let count = block.text().chars().count();
@@ -223,7 +301,9 @@ impl FacadeView {
                             }
                         }
                     }
-                    painter.galley(top, Arc::clone(&laid.galley), theme.text);
+                    if laid.text_shown {
+                        painter.galley(top, Arc::clone(&laid.galley), theme.text);
+                    }
                 }
 
                 // Cursor, and the format indicator (FR-011).
@@ -287,7 +367,7 @@ impl FacadeView {
                 BlockKind::Code { .. } | BlockKind::Markup => 8.0,
                 _ => 0.0,
             };
-            y += laid.galley.size().y + BLOCK_GAP + extra;
+            y += laid.height + BLOCK_GAP + extra;
         }
         tops.push(y);
         self.tops = tops;
@@ -316,19 +396,120 @@ impl FacadeView {
         }
         self.width.to_bits().hash(&mut hasher);
         let key = hasher.finish();
-        if let Some(galley) = self.galleys.get(&key) {
-            return Laid {
-                galley: Arc::clone(galley),
-                prefix: prefix_chars(&block.kind),
+        let galley = match self.galleys.get(&key) {
+            Some(galley) => Arc::clone(galley),
+            None => {
+                let (job, _) = block_job(block, theme, self.width, source);
+                if self.galleys.len() > 8192 {
+                    self.galleys.clear();
+                }
+                let galley = ui.fonts(|f| f.layout_job(job));
+                self.galleys.insert(key, Arc::clone(&galley));
+                galley
+            }
+        };
+        let prefix = prefix_chars(&block.kind);
+        let mut laid = Laid {
+            height: galley.size().y,
+            galley,
+            prefix,
+            offset: Vec2::ZERO,
+            text_shown: true,
+            figure: None,
+        };
+        if let Some(language) = diagram_language(&block.kind) {
+            self.diagram(ui, theme, index, language, &mut laid);
+        }
+        laid
+    }
+
+    /// FR-036, FR-037, UC-005 BR-008: a diagram block shows its picture,
+    /// and its source below it while the cursor is in it; a diagram that
+    /// cannot be rendered shows its source with the error (UC-004 A11).
+    fn diagram(
+        &mut self,
+        ui: &egui::Ui,
+        theme: &Theme,
+        index: usize,
+        language: DiagramLanguage,
+        laid: &mut Laid,
+    ) {
+        let Some(diagrams) = &self.diagrams else {
+            return;
+        };
+        let source = self.blocks[index].text();
+        let dark = ui.visuals().dark_mode;
+        let scale = ui.ctx().pixels_per_point();
+        let state = diagrams.get(language, &source, dark, scale);
+        let picture = match &state {
+            DiagramState::Ready(picture) => {
+                self.last_pictures.insert(index, Arc::clone(picture));
+                Some(Arc::clone(picture))
+            }
+            DiagramState::Pending => self.last_pictures.get(&index).cloned(),
+            DiagramState::Failed(_) => None,
+        };
+        let width = self.width;
+        let message = |text: String, color: Color32| {
+            let galley = ui.fonts(|f| f.layout(text, FontId::proportional(13.0), color, width));
+            let size = galley.size();
+            (Figure::Message(galley), size, true)
+        };
+        let (figure, size, failed) = match (picture, &state) {
+            (Some(picture), _) => {
+                let [w, h] = picture.size();
+                let shrink = (width / w).min(1.0);
+                let size = Vec2::new(w * shrink, h * shrink);
+                (
+                    Figure::Picture(self.texture(ui, &picture), size),
+                    size,
+                    false,
+                )
+            }
+            (None, DiagramState::Failed(error)) => message(
+                format!("This {} diagram cannot be shown: {error}", language.name()),
+                ui.visuals().error_fg_color,
+            ),
+            (None, _) => message(
+                format!("Rendering the {} diagram…", language.name()),
+                theme.weak,
+            ),
+        };
+        laid.text_shown = failed || self.editing == Some(index);
+        laid.offset = Vec2::new(0.0, size.y + if laid.text_shown { 12.0 } else { 0.0 });
+        laid.height = laid.offset.y
+            + if laid.text_shown {
+                laid.galley.size().y
+            } else {
+                0.0
             };
+        laid.figure = Some(figure);
+    }
+
+    /// The texture of `picture`, loaded once.
+    fn texture(&mut self, ui: &egui::Ui, picture: &Arc<Picture>) -> egui::TextureId {
+        let key = Arc::as_ptr(picture) as usize;
+        if let Some((_, texture)) = self.textures.get(&key) {
+            return texture.id();
         }
-        let (job, prefix) = block_job(block, theme, self.width, source);
-        if self.galleys.len() > 8192 {
-            self.galleys.clear();
+        if self.textures.len() > 64 {
+            let shown: Vec<usize> = self
+                .last_pictures
+                .values()
+                .map(|p| Arc::as_ptr(p) as usize)
+                .collect();
+            self.textures.retain(|key, _| shown.contains(key));
         }
-        let galley = ui.fonts(|f| f.layout_job(job));
-        self.galleys.insert(key, Arc::clone(&galley));
-        Laid { galley, prefix }
+        let image = egui::ColorImage::from_rgba_premultiplied(
+            [picture.width as usize, picture.height as usize],
+            &picture.pixels,
+        );
+        let texture = ui
+            .ctx()
+            .load_texture("diagram", image, egui::TextureOptions::LINEAR);
+        let id = texture.id();
+        self.textures.insert(key, (Arc::clone(picture), texture));
+        id
     }
 
     /// Where the cursor is: the block holding it and the facade index in it.
@@ -362,7 +543,7 @@ impl FacadeView {
         let (index, at) = self.cursor_position(source)?;
         let laid = self.laid(ui, source, theme, index);
         let pos = laid.galley.pos_from_ccursor(CCursor::new(laid.prefix + at));
-        let top = origin + Vec2::new(0.0, self.tops[index]);
+        let top = origin + Vec2::new(0.0, self.tops[index]) + laid.offset;
         Some(Rect::from_min_size(
             top + pos.min.to_vec2(),
             Vec2::new(2.0, pos.height()),
@@ -382,7 +563,11 @@ impl FacadeView {
         }
         let index = self.block_at(pos.y - origin.y);
         let laid = self.laid(ui, source, theme, index);
-        let local = pos - origin - Vec2::new(0.0, self.tops[index]);
+        let local = pos - origin - Vec2::new(0.0, self.tops[index]) - laid.offset;
+        // A click on the picture of a diagram puts the cursor into its source.
+        if local.y < 0.0 && laid.figure.is_some() {
+            return Some(self.char_of(source, index, 0));
+        }
         let ccursor = laid.galley.cursor_from_pos(local).ccursor.index;
         let at = ccursor.saturating_sub(laid.prefix);
         Some(self.char_of(source, index, at))
@@ -402,8 +587,12 @@ impl FacadeView {
         }
         let index = self.block_at(pos.y - origin.y);
         let laid = self.laid(ui, source, theme, index);
-        let local = pos - origin - Vec2::new(0.0, self.tops[index]);
-        if local.y < 0.0 || local.y > laid.galley.size().y || local.x > laid.galley.size().x {
+        let local = pos - origin - Vec2::new(0.0, self.tops[index]) - laid.offset;
+        if !laid.text_shown
+            || local.y < 0.0
+            || local.y > laid.galley.size().y
+            || local.x > laid.galley.size().x
+        {
             return None;
         }
         let at = laid
@@ -794,6 +983,14 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
     (job, prefix_chars)
 }
 
+/// The diagram language of a code block, if it is a diagram.
+fn diagram_language(kind: &BlockKind) -> Option<DiagramLanguage> {
+    match kind {
+        BlockKind::Code { language } => DiagramLanguage::from_code_language(language),
+        _ => None,
+    }
+}
+
 /// The marker text the facade shows before a block's text.
 fn prefix_text(kind: &BlockKind) -> String {
     let mut prefix = String::new();
@@ -1056,6 +1253,73 @@ mod tests {
         h.key(Key::Enter);
         h.frame(vec![Event::Text("deeper".into())]);
         assert!(h.text().contains("** inner\n** deeper\n"), "{}", h.text());
+    }
+
+    /// FR-036, UC-005 BR-008: a diagram shows its picture; with the cursor
+    /// in it, its source below the picture; with an error, its source and
+    /// the error (UC-004 A11).
+    #[test]
+    fn uc005_diagrams_show_pictures_and_their_source_when_edited() {
+        let note = "Intro\n\n```plantuml\nAlice -> Bob : hi\n```\n\n```plantuml\nclass A {\nA -> -> B\n```\n\nEnd\n";
+        let mut h = Harness::new(note);
+        h.facade.diagrams = Some(Arc::new(Diagrams::start(|| {})));
+        h.cursor_after("End");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let (good, bad) = (1, 2);
+        let figure = |h: &mut Harness, index: usize| {
+            let (ctx, source) = (h.ctx.clone(), &h.source);
+            let mut kind = String::new();
+            let mut shown = false;
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let theme = Theme {
+                        text: Color32::WHITE,
+                        strong: Color32::WHITE,
+                        link: Color32::WHITE,
+                        code_bg: Color32::BLACK,
+                        weak: Color32::GRAY,
+                    };
+                    let laid = h.facade.laid(ui, source, &theme, index);
+                    shown = laid.text_shown;
+                    kind = match laid.figure {
+                        Some(Figure::Picture(..)) => "picture".into(),
+                        Some(Figure::Message(m)) if m.text().contains("cannot be shown") => {
+                            format!("error: {}", m.text())
+                        }
+                        Some(Figure::Message(_)) => "pending".into(),
+                        None => "none".into(),
+                    };
+                });
+            });
+            (kind, shown)
+        };
+        loop {
+            h.frame(vec![]);
+            let (a, _) = figure(&mut h, good);
+            let (b, _) = figure(&mut h, bad);
+            if a == "picture" && b.starts_with("error") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{a} / {b}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (_, shown) = figure(&mut h, good);
+        assert!(!shown, "the source is hidden without the cursor");
+        let (error, shown) = figure(&mut h, bad);
+        assert!(shown && error.contains("Line 1: Syntax Error"), "{error}");
+        h.cursor_after("Alice ");
+        h.frame(vec![]);
+        let (kind, shown) = figure(&mut h, good);
+        assert_eq!((kind.as_str(), shown), ("picture", true));
+        // Typing in the source keeps the last picture until the new one.
+        // (The checks above ran frames without the facade, which drops the
+        // focus.)
+        h.facade.request_focus();
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("x".into())]);
+        assert!(h.text().contains("Alice x-> Bob"));
+        let (kind, _) = figure(&mut h, good);
+        assert_eq!(kind, "picture");
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and

@@ -231,6 +231,11 @@ In the first release the facade offers for AsciiDoc notes: captions for images a
 
 A block the facade cannot format, such as raw HTML in Markdown or an AsciiDoc block it does not know, is shown as its markup in a frame and edited there as markup. It is stored exactly as the user leaves it.
 
+A diagram is shown as its picture. While the cursor is in the diagram, for example after clicking the picture, its
+source is shown in a frame below the picture and edited there; the picture follows each change. When the cursor leaves
+the diagram, only the picture is shown again. A diagram whose source has an error is shown as its source with the
+error (UC-004 A11).
+
 ### BR-009: Vim keys
 
 The Vim input mode offers the normal, insert, and visual mode; motions, the operators delete, change, yank, and put; counts; undo and redo; search with `/` and `n`; `:q` to close the tab; and `:w` to store at once. The status bar shows the active mode and its most important commands (FR-026).

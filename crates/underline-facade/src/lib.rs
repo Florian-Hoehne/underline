@@ -7,6 +7,7 @@
 
 mod asciidoc;
 pub mod blocks;
+pub mod diagram;
 pub mod formatting;
 pub mod highlight;
 

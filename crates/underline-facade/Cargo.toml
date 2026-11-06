@@ -11,3 +11,9 @@ rust-version.workspace = true
 underline-core.workspace = true
 syntect.workspace = true
 comrak.workspace = true
+thiserror.workspace = true
+dejavu.workspace = true
+ab_glyph = "0.2"
+# Rust 1.80: the newest releases that build with it (ADR-009).
+rquickjs = "=0.8.1"
+resvg = { version = "=0.45.1", default-features = false, features = ["text"] }

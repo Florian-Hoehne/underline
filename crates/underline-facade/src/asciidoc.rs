@@ -99,6 +99,14 @@ impl Parser<'_, '_> {
                     let mut parts = inner.split(',').map(str::trim);
                     let style = parts.next().unwrap_or("");
                     let language = parts.next().filter(|l| !l.is_empty());
+                    // `[plantuml]` and `[mermaid]`: diagrams, as code
+                    // blocks in their language.
+                    if crate::diagram::DiagramLanguage::from_code_language(style).is_some() {
+                        pending.style = Some("source".into());
+                        pending.language = Some(style.to_owned());
+                        i += 1;
+                        continue;
+                    }
                     if style == "source" || (style.is_empty() && language.is_some()) {
                         pending.style = Some("source".into());
                         pending.language = language.map(str::to_owned);
@@ -250,7 +258,13 @@ impl Parser<'_, '_> {
                 };
                 self.code_between(inner, &language, span);
             }
-            b'.' => self.code_between(inner, "", span),
+            b'.' => {
+                let language = match pending.style.as_deref() {
+                    Some("source") => pending.language.clone().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                self.code_between(inner, &language, span);
+            }
             b'_' => self.parse(inner, quote + 1),
             b'=' => match pending.style.as_deref() {
                 Some(label) if ADMONITIONS.contains(&label) => {
@@ -951,6 +965,22 @@ mod tests {
         assert_eq!(blocks[2].text(), "raw *text*");
         // The delimiters belong to the code block.
         assert_eq!(blocks[2].span.end, blocks[2].span.start + 21);
+    }
+
+    /// FR-036, FR-037: diagram blocks are code blocks in their language.
+    #[test]
+    fn diagram_blocks_name_their_language() {
+        let blocks = asciidoc_blocks(
+            "[plantuml, flow, svg]\n----\nA -> B\n----\n\n[mermaid]\n....\ngraph TD\n....\n",
+        );
+        assert_eq!(
+            kinds(&blocks),
+            [
+                "Code { language: \"plantuml\" }",
+                "Code { language: \"mermaid\" }"
+            ]
+        );
+        assert_eq!(blocks[0].text(), "A -> B");
     }
 
     #[test]

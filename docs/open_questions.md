@@ -717,3 +717,14 @@ Answer: Pasting over a selection pastes what was on the clipboard before the sel
 **Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A19, BR-012
 
 Answer: Above 10 MB the system asks whether to copy the file or only link to its place on this computer; such a link is followed by UC-004 A4.
+
+## OQ-072: How is a diagram edited in the facade, where it is shown as a picture?
+
+**Element:** UC-005 BR-008, FR-036, FR-037
+**Raised by:** implementation of diagrams, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-008
+
+Answer: While the cursor is in the diagram, its source is shown below the picture and edited there; the picture
+follows each change. Without the cursor only the picture is shown.
