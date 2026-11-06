@@ -26,6 +26,7 @@
 | Diagram                 | A PlantUML or Mermaid code block of a note, shown as a picture.                                                                    |                   |
 | Local link              | A link in a note that points to another note or file of the same workspace.                                                        |                   |
 | Autosave                | Writing a changed note to the local disk without a command from the user.                                                          |                   |
+| Git remote              | The git repository elsewhere, for example on GitHub or GitLab, that a workspace pulls from and pushes to.                         |                   |
 | Git sync                | Pulling from and pushing to the remote of a workspace that is a git repository, at a regular interval.                            |                   |
 | MCP server              | The part of Underline that offers the notes of a workspace to an agent over the Model Context Protocol.                           |                   |
 | MCP install             | The action that registers the MCP server in the configuration of an agent's tool.                                                 |                   |
