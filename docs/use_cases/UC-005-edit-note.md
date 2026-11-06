@@ -9,7 +9,7 @@
 **Trigger:** The user types, formats, pastes, or drops something into the note of the active tab.  
 **Status:** Draft  
 
-**Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-033, FR-034, FR-044, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012](../requirements.md)
+**Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-032, FR-033, FR-034, FR-044, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012](../requirements.md)
 
 ## Preconditions
 
@@ -30,7 +30,7 @@
 **Trigger:** The user switches the tab between the source view and the facade (any step)  
 **Flow:**
 
-1. The system shows the note in the other editing view, with the cursor and the selection at the same place of the content.
+1. The system shows the note in the other editing view, with the cursor and the selection at the same place of the content; where that place has no counterpart in the facade, such as inside the address of a link, at the nearest place that has one.
 2. Use case continues at step 1.
 
 ### A2: Format with the toolbar
@@ -38,7 +38,7 @@
 **Trigger:** The user chooses a function of the formatting toolbar: heading, bold, italic, code, list, quote, link, image, or table (step 1)  
 **Flow:**
 
-1. The system applies it to the selected text, or inserts it at the cursor when nothing is selected, in the markup of the note format; in the source view the user sees that markup.
+1. The system applies it to the selected text, or inserts it at the cursor when nothing is selected, in the markup of the note format; in the source view the user sees that markup. For a link it asks for a web address or a note of the workspace; for an image it asks for an image file and inserts it like a dropped one (A9 to A11, A19).
 2. Use case continues at step 2.
 
 ### A3: Format-specific option
@@ -96,7 +96,7 @@
 **Flow:**
 
 1. The system copies the file into the folder of the note, keeping its name.
-2. The system inserts it at the drop position: an image as an image, another file as a link, both by the name of the copy.
+2. The system inserts it at the drop position: an image as an image, another file as a link, both by the name of the copy. Inside a code block it inserts only the name, as text.
 3. Use case continues at step 2.
 
 ### A10: Dropped file name is taken
@@ -158,6 +158,32 @@
 1. The system keeps both versions (UC-004 A9).
 2. Use case continues at step 4.
 
+### A17: Paste text
+
+**Trigger:** The user pastes text from the clipboard (step 1)  
+**Flow:**
+
+1. In the facade the system keeps the formatting the note format can hold, such as headings, emphasis, lists, links, and tables, stores it as markup of the note format, and pastes everything else as plain text.
+2. In the source view, and in both views when the user pastes as plain text, the system pastes the plain text.
+3. Use case continues at step 2.
+
+### A18: Paste an image
+
+**Trigger:** The user pastes while the clipboard holds an image, such as a screenshot (step 1)  
+**Flow:**
+
+1. The system stores the image as a PNG file in the folder of the note, named after the note and the time, and inserts it at the cursor like a dropped image (A9 step 2).
+2. Use case continues at step 2.
+
+### A19: Large file
+
+**Trigger:** A dropped or chosen file from outside the workspace is larger than 10 MB (A9 step 1)  
+**Flow:**
+
+1. The system says how large the file is and asks whether to copy it into the workspace or only to link to where it is.
+2. When the user chooses to copy, use case continues at A9 step 1; when the user chooses to link, the system inserts a link to the file at its place on this computer, which is not part of the workspace and is not pushed with git; use case continues at step 2.
+3. When the user cancels, the system changes nothing; use case continues at step 1.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -175,7 +201,7 @@
 
 ### BR-001: Autosave
 
-A change is stored at most 2 seconds after the last change (NFR-005), and at once when the tab is closed, Underline is closed, the workspace is switched, or `:w` is entered. A stored note holds either its previous or its new content, never part of both (NFR-006). The user never has to save by hand.
+A change is stored at most 2 seconds after the last change (NFR-005), and at once when the tab is closed, Underline is closed, the workspace is switched, or `:w` is entered. A stored note holds either its previous or its new content, never part of both (NFR-006). The user never has to save by hand. A note keeps the character encoding and the line endings it had; new lines get the line endings of the note.
 
 ### BR-002: Format fidelity
 
@@ -187,7 +213,7 @@ Every function of this use case works the same in the source view and the facade
 
 ### BR-004: Undo
 
-Each tab has its own history of changes, which it keeps across switches of the editing view until the tab is closed; it does not survive a restart. An undone or redone change is stored like any other change.
+Each tab has its own history of changes, which it keeps across switches of the editing view until the tab is closed; it does not survive a restart. An undone or redone change is stored like any other change. When the note is changed outside (UC-004 A7), its history starts anew, so undo never takes back a change made by another program, git, or an agent.
 
 ### BR-005: Formatting toolbar
 
@@ -215,12 +241,20 @@ The Nano input mode offers the Nano keys to move, cut and paste lines, search, u
 
 ### BR-011: Copy on select
 
-While copy on select is on, a selection is put on the clipboard as soon as it is made (FR-031). From the facade it is put there both as markup of the note format and as formatted text, so that pasting into a note keeps the markup and pasting into another program keeps the formatting; from the source view as its markup. Copy on select can be switched off (FR-032, UC-010).
+While copy on select is on, a selection is put on the clipboard as soon as it is made (FR-031). From the facade it is put there both as markup of the note format and as formatted text, so that pasting into a note keeps the markup and pasting into another program keeps the formatting; from the source view as its markup. Pasting over a selection pastes what was on the clipboard before that selection was made, so a selection can still be replaced by pasting; afterwards the selection is on the clipboard. Copy on select can be switched off (FR-032, UC-010).
 
 ### BR-012: Dropped files and links
 
-A dropped file from outside the workspace is copied into the folder of the note (A9); a file of the workspace is referred to where it is (A11). Files of the kinds PNG, JPEG, GIF, SVG, and WebP are inserted as images, all others as links. The note refers to the file by its place relative to the note, so the note and its files can move together and look the same on GitHub and GitLab.
+A dropped file from outside the workspace is copied into the folder of the note (A9), after asking when it is larger than 10 MB (A19); a file of the workspace is referred to where it is (A11). Files of the kinds PNG, JPEG, GIF, SVG, and WebP are inserted as images, all others as links. The note refers to the file by its place relative to the note, so the note and its files can move together and look the same on GitHub and GitLab.
 
 ### BR-013: Changes that cannot be stored
 
 A change that cannot be stored is never dropped silently (A14). The tab shows that it is not stored, the status bar says why, and the system keeps trying until the change is stored or the user agrees to lose it.
+
+### BR-014: Pasting
+
+Pasting into the facade keeps the formatting the note format can hold and stores it as markup of the note format (A17); pasting into the source view pastes plain text. Pasting as plain text (`Ctrl+Shift+V`, `Cmd+Shift+V` on macOS) is possible in both views. A pasted image is stored as a PNG file in the folder of the note, named after the note and the time it was pasted, such as `Plan-2026-11-06-1430.png`, with the next free number added when that name is taken (A18).
+
+### BR-015: Normal input mode
+
+The normal input mode follows the usual keys of the platform: `Ctrl` (`Cmd` on macOS) with `Z` to undo, `Shift+Z` or `Y` to redo, `X`, `C`, `V` to cut, copy, and paste, and `A` to select everything. Formatting functions of the toolbar have keys of their own, shown next to them (NFR-011).

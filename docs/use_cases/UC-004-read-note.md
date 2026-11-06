@@ -54,11 +54,11 @@
 
 ### A4: Link to something else
 
-**Trigger:** The followed link points to a web address or to a file of the workspace that is not a note (step 5)  
+**Trigger:** The followed link points to a web address, to a file of the workspace that is not a note, or to a file on this computer that a note links to on purpose (UC-005 A19) (step 5)  
 **Flow:**
 
 1. For a web address the system asks, the first time in a session, whether to open web addresses, and opens it in the default browser once the user agrees.
-2. For a file of the workspace the system opens it with the program the system uses for that kind of file; when the file does not exist, it says so in the status bar.
+2. For a file of the workspace, or a file on this computer linked by its full place, the system opens it with the program the system uses for that kind of file; when the file does not exist, it says so in the status bar.
 3. Use case continues at step 5.
 
 ### A5: Switch or close a tab
@@ -151,7 +151,7 @@ A note is rendered as the GitHub and GitLab web interfaces show its note format 
 
 ### BR-005: Local links
 
-A local link names the place of a note or file of the workspace relative to the note that holds it, as GitHub and GitLab read it, with or without the extension of the note format. It may name a heading of the note, and a link with only a heading points into the same note. A link that leads outside the workspace is not a local link and is not followed.
+A local link names the place of a note or file of the workspace relative to the note that holds it, as GitHub and GitLab read it, with or without the extension of the note format. It may name a heading of the note, and a link with only a heading points into the same note. A relative link that leads outside the workspace is not a local link and is not followed; a link to a file on this computer by its full place, as a large file can be linked (UC-005 A19), is followed like a link to another file (BR-007).
 
 ### BR-006: Following links
 

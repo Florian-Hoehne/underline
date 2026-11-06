@@ -677,3 +677,43 @@ Answer: For AsciiDoc: captions for images and tables, admonition blocks, and ids
 **Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A15
 
 Answer: The note is stored again at its place and listed again; the status bar says so.
+
+## OQ-068: What does pasting formatted text do?
+
+**Element:** UC-005 trigger
+**Raised by:** spec review UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A17, BR-014
+
+Answer: In the facade, formatting the note format can hold is kept as its markup; the source view and Ctrl/Cmd+Shift+V paste plain text.
+
+## OQ-069: What does pasting an image do?
+
+**Element:** UC-005 trigger
+**Raised by:** spec review UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A18, BR-014
+
+Answer: It is stored as a PNG next to the note, named after the note and the time, and inserted like a dropped image.
+
+## OQ-070: How can a selection be replaced by pasting while copy on select is on?
+
+**Element:** UC-005 A8, FR-031
+**Raised by:** spec review UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-011
+
+Answer: Pasting over a selection pastes what was on the clipboard before the selection was made.
+
+## OQ-071: What happens with very large dropped files?
+
+**Element:** UC-005 A9
+**Raised by:** spec review UC-005, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), A19, BR-012
+
+Answer: Above 10 MB the system asks whether to copy the file or only link to its place on this computer; such a link is followed by UC-004 A4.
