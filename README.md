@@ -27,6 +27,21 @@ cargo run --bin underline -- mcp ~/notes # serve the notebook to an AI agent ove
 To use it from an MCP client, register the command `underline mcp <notebook dir>`
 as a stdio server.
 
+## Development process
+
+Underline follows the [AI Unified Process](https://unifiedprocess.ai): the product vision, requirements, entity
+model, and use cases live as Markdown in `docs/` and are the input for implementation and tests.
+The `aiup-core` Claude Code plugin is declared in `.claude/settings.json`; Claude Code offers to install it when you
+open the repository. To install it by hand:
+
+```text
+/plugin marketplace add ai-unified-process/marketplace
+/plugin install aiup-core@ai-unified-process-marketplace
+```
+
+Start with `docs/vision.md`, then run `/requirements`, `/entity-model`, `/use-case-diagram`, and
+`/use-case-spec UC-001`. `/next` tells you which step comes next.
+
 ## Develop
 
 ```sh
