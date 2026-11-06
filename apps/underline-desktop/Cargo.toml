@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 underline-core.workspace = true
+underline-editor.workspace = true
 underline-facade.workspace = true
 underline-mcp.workspace = true
 underline-wiki.workspace = true

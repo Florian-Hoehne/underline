@@ -46,6 +46,21 @@ in the file (NFR-007, ADR-003).
   highlighting, and that scrolling through it keeps 60 frames per second. If it does not, this ADR is revisited before
   more is built on it.
 
+## Prototype result (2026-11-06)
+
+The source view prototype (`crates/underline-editor`, benchmark `adr012_*`, run with
+`cargo test --release -p underline-editor -- --ignored --nocapture`) measured the CPU time of a frame (input,
+highlighting, layout, painting, tessellation) on the development container:
+
+| Measurement                                         | Median   | p99      | Max      | Budget   |
+|-----------------------------------------------------|----------|----------|----------|----------|
+| Typing at line 5,000 of a 10,000-line note          | 0.09 ms  | 0.28 ms  | 14.6 ms  | 16 ms    |
+| Scrolling 50 lines per frame through the note       | 0.11 ms  | 0.32 ms  | 0.65 ms  | 16.7 ms  |
+
+Both criteria are met, so the decision stands. Not yet within budget: highlighting a large note for the first time
+takes 0.5 to 1.4 seconds for 5,000 to 10,000 lines; as ADR-010 says, this moves to the worker thread, and the view
+shows the lines uncolored until their colors are ready. GPU drawing comes on top of the measured CPU time.
+
 ## Consequences
 
 - Underline owns a substantial piece of code: layout, cursor movement, selection, IME, and accessibility of the

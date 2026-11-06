@@ -23,6 +23,8 @@ must be compatible with the MIT license (C-008); this rules out `giallo` (EUPL-1
   name shows the block as plain monospace text.
 - **Where:** in the facade every code block is highlighted. In the source view the markup of Markdown and AsciiDoc is
   highlighted too (headings, emphasis, links, lists, code fences), and code inside a fence in its own language.
+  syntect's Markdown grammar does not embed other languages, so the per-line state of Underline tracks whether a
+  line lies inside a fence and colors it with the grammar of the fence's language.
 - **Theme colors:** each Underline theme defines one palette of highlight colors for the usual scopes (comment,
   keyword, string, number, type, function, variable, punctuation, markup heading, emphasis, link, code). The palette
   is turned into a syntect theme at start and when the theme changes. Themes that have an official palette (GitHub,

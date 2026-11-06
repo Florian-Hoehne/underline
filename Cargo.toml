@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "apps/underline-desktop",
     "crates/underline-core",
+    "crates/underline-editor",
     "crates/underline-facade",
     "crates/underline-mcp",
     "crates/underline-wiki",
@@ -25,4 +26,7 @@ serde_json = "1"
 thiserror = "1"
 serde_norway = "0.9"
 directories = "6"
+ropey = "1.6"
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+underline-editor = { path = "crates/underline-editor" }
 underline-facade = { path = "crates/underline-facade" }

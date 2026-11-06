@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;
@@ -9,6 +10,8 @@ use underline_core::{
     NoteId, OpenProblem, OverviewEntry, StateNotice, StateStore, Surroundings, Workspace,
     HOME_TITLE, STATE_WRITE_DELAY,
 };
+use underline_editor::SourceView;
+use underline_facade::highlight::HighlightSet;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
@@ -23,6 +26,9 @@ pub struct UnderlineApp {
     /// State of the last git sync for the status bar (UC-002 step 9).
     git_state: Option<String>,
     current: Option<Note>,
+    /// The source view of the open note (ADR-012 prototype).
+    source: Option<SourceView>,
+    highlight: Arc<HighlightSet>,
     /// Put the cursor at the end of the note once, below the title of a new
     /// note (UC-003 step 6).
     cursor_to_end: bool,
@@ -122,6 +128,8 @@ impl UnderlineApp {
             overview: Vec::new(),
             git_state: None,
             current: None,
+            source: None,
+            highlight: Arc::new(HighlightSet::new(true)),
             cursor_to_end: false,
             wiki_url: String::new(),
             status: String::new(),
@@ -249,6 +257,7 @@ impl UnderlineApp {
         });
         self.workspace = Some(workspace);
         self.current = None;
+        self.source = None;
         self.state.workspace_opened(&root, now());
         let note = self
             .state
@@ -545,6 +554,18 @@ impl UnderlineApp {
                 let root = workspace.root().to_owned();
                 self.state
                     .note_opened(&root, &note.id, EditingView::Source, now());
+                let format = workspace
+                    .listing()
+                    .notes
+                    .iter()
+                    .find(|entry| entry.id == note.id)
+                    .map_or(workspace.default_format(), |entry| entry.format);
+                self.source = Some(SourceView::new(
+                    note.id.as_str(),
+                    &note.body,
+                    format,
+                    Arc::clone(&self.highlight),
+                ));
                 self.current = Some(note);
             }
             Err(err) => self.status = err.to_string(),
@@ -552,9 +573,12 @@ impl UnderlineApp {
     }
 
     fn save(&mut self) {
-        let (Some(workspace), Some(note)) = (&mut self.workspace, &self.current) else {
+        let (Some(workspace), Some(note)) = (&mut self.workspace, &mut self.current) else {
             return;
         };
+        if let Some(source) = &self.source {
+            note.body = source.document().text();
+        }
         self.status = match workspace.write(note) {
             Ok(()) => format!("Saved {}", note.id),
             Err(err) => err.to_string(),
@@ -808,23 +832,11 @@ impl eframe::App for UnderlineApp {
                     self.save();
                 }
             });
-            if let Some(note) = &mut self.current {
-                let id = egui::Id::new("note-editor");
-                let response = ui.add_sized(
-                    ui.available_size(),
-                    egui::TextEdit::multiline(&mut note.body)
-                        .id(id)
-                        .code_editor(),
-                );
+            if let Some(source) = &mut self.source {
                 if std::mem::take(&mut self.cursor_to_end) {
-                    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
-                    let end = egui::text::CCursor::new(note.body.chars().count());
-                    state
-                        .cursor
-                        .set_char_range(Some(egui::text::CCursorRange::one(end)));
-                    state.store(ctx, id);
-                    response.request_focus();
+                    source.focus_end();
                 }
+                source.show(ui);
             }
         });
     }
