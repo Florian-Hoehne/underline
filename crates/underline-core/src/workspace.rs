@@ -117,6 +117,21 @@ impl Workspace {
         self.settings_problem.as_deref()
     }
 
+    /// Reads the workspace settings file again after it changed (ADR-011);
+    /// a file that cannot be read is reported as when opening (UC-002 A8).
+    pub fn reload_settings(&mut self) {
+        match WorkspaceSettings::load(&self.root) {
+            Ok(settings) => {
+                self.recorded_format = settings.default_format;
+                self.settings_problem = None;
+            }
+            Err(err) => {
+                self.recorded_format = None;
+                self.settings_problem = Some(err.to_string());
+            }
+        }
+    }
+
     /// The notes found when the workspace was opened or last rescanned.
     pub fn listing(&self) -> &Listing {
         &self.listing

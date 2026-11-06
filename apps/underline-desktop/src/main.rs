@@ -36,7 +36,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Underline",
         eframe::NativeOptions::default(),
-        Box::new(|_cc| Ok(Box::new(app::UnderlineApp::new(given, state, notice)))),
+        Box::new(|cc| {
+            Ok(Box::new(app::UnderlineApp::new(
+                cc.egui_ctx.clone(),
+                given,
+                state,
+                notice,
+            )))
+        }),
     )?;
     Ok(())
 }

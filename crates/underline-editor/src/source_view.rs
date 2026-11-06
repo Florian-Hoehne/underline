@@ -79,6 +79,22 @@ impl SourceView {
         self.scroll_to_cursor = true;
     }
 
+    /// Shows `text` instead of the current text, after a change from outside
+    /// (UC-004 A7). The cursor stays at the same line and column as far as
+    /// the new text allows; the undo history starts anew (UC-005 BR-004).
+    pub fn reload(&mut self, text: &str) {
+        let line = self.doc.rope().char_to_line(self.cursor);
+        let column = self.cursor - self.doc.rope().line_to_char(line);
+        let format = self.highlight.format();
+        let set = self.highlight.set();
+        self.doc = Document::new(text);
+        self.highlight = DocumentHighlight::new(set, format);
+        self.highlight.invalidate_from(0, self.doc.len_lines());
+        self.galleys.clear();
+        self.cursor = self.at_line(line, column);
+        self.anchor = self.cursor;
+    }
+
     /// Puts the cursor at the end of the text and the keyboard focus on the
     /// view, as for a new note (UC-003 step 6).
     pub fn focus_end(&mut self) {

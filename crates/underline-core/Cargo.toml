@@ -12,3 +12,5 @@ serde.workspace = true
 thiserror.workspace = true
 serde_norway.workspace = true
 directories.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true

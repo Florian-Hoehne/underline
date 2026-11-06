@@ -92,6 +92,11 @@ impl DocumentHighlight {
         self.format
     }
 
+    /// The grammars and theme this document is colored with.
+    pub fn set(&self) -> Arc<HighlightSet> {
+        Arc::clone(&self.set)
+    }
+
     /// Takes note of an edit that changed lines from `line` on and added
     /// `added` lines (negative when lines were removed); `lines` is the
     /// number of lines the document has now.

@@ -16,6 +16,7 @@ mod saver;
 mod settings;
 mod state;
 mod tabs;
+mod watcher;
 mod workspace;
 
 pub use atomic::{write_atomic, write_new_atomic};
@@ -40,6 +41,9 @@ pub use state::{
     Timestamp, WorkspaceState, STATE_FILE_NAME, STATE_WRITE_DELAY,
 };
 pub use tabs::{Opened, TabList, MAX_TABS};
+pub use watcher::{
+    outside_copy_path, WorkspaceEvent, WorkspaceWatcher, BULK_CHANGES, WATCH_COLLECT,
+};
 pub use workspace::{
     is_workspace_directory, note_overview, Listing, NoteEntry, OverviewEntry, Workspace,
     WorkspaceError,

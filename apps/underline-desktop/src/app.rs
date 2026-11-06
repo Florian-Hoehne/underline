@@ -1,14 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace,
-    heading_title, note_overview, now, user_settings_dir, Autosave, CreateProblem,
-    DirectoryProblem, EditingView, Git, GitRepositoryOption, NewNote, NewNoteProblem, NewWorkspace,
-    NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice,
-    StateStore, Surroundings, TabList, TabState, Workspace, HOME_TITLE, STATE_WRITE_DELAY,
+    heading_title, note_overview, now, outside_copy_path, user_settings_dir, Autosave,
+    CreateProblem, DirectoryProblem, EditingView, Git, GitRepositoryOption, NewNote,
+    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry,
+    OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState, Workspace,
+    WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_editor::SourceView;
 use underline_facade::highlight::HighlightSet;
@@ -35,6 +36,9 @@ pub struct UnderlineApp {
     close_confirm: Option<CloseConfirm>,
     /// The user agreed to close Underline although changes are not stored.
     close_anyway: bool,
+    /// Watches the open workspace for changes from outside (ADR-011).
+    watcher: Option<WorkspaceWatcher>,
+    ctx: egui::Context,
     wiki_url: String,
     status: String,
     create: Option<CreateDialog>,
@@ -57,6 +61,9 @@ struct OpenTab {
     error: Option<String>,
     /// The note was deleted outside while open (UC-004 A8).
     deleted: bool,
+    /// The version from outside last kept as a copy (UC-004 A9), so one
+    /// change is kept once, however many events report it.
+    kept_outside: Option<String>,
 }
 
 impl OpenTab {
@@ -160,7 +167,12 @@ enum OpenAction {
 impl UnderlineApp {
     /// UC-002 A1/A2: opens `given`, else the last opened workspace, else
     /// offers to open or create one.
-    pub fn new(given: Option<PathBuf>, state: StateStore, notice: Option<StateNotice>) -> Self {
+    pub fn new(
+        ctx: egui::Context,
+        given: Option<PathBuf>,
+        state: StateStore,
+        notice: Option<StateNotice>,
+    ) -> Self {
         let mut app = Self {
             workspace: None,
             formats: Registry::default(),
@@ -172,6 +184,8 @@ impl UnderlineApp {
             saver: NoteSaver::new(OwnWrites::default()),
             close_confirm: None,
             close_anyway: false,
+            watcher: None,
+            ctx,
             wiki_url: String::new(),
             status: String::new(),
             create: None,
@@ -305,6 +319,15 @@ impl UnderlineApp {
             // UC-014 brings git sync; until then no sync has run.
             (!remotes.is_empty()).then(|| "git: no sync yet".to_owned())
         });
+        let wake = self.ctx.clone();
+        let watcher = WorkspaceWatcher::start(
+            &root,
+            self.saver.own_writes().clone(),
+            self.git.clone(),
+            move || wake.request_repaint(),
+        );
+        let polling = watcher.is_polling();
+        self.watcher = Some(watcher);
         self.workspace = Some(workspace);
         self.tabs = TabList::default();
         self.state.workspace_opened(&root, now());
@@ -326,6 +349,111 @@ impl UnderlineApp {
         }
         self.persist_tabs();
         self.refresh_overview();
+        if polling {
+            self.status =
+                "Changes from outside may show up later in the note overview; this system delivers no change events"
+                    .to_owned();
+        }
+    }
+
+    /// ADR-011: takes in the changes made outside Underline (UC-004 A7–A9).
+    fn handle_outside_changes(&mut self) {
+        let Some(watcher) = &mut self.watcher else {
+            return;
+        };
+        watcher.set_open_notes(self.tabs.iter().map(|(_, t)| t.path.clone()).collect());
+        let polling = watcher.is_polling();
+        let events = watcher.poll();
+        if polling {
+            self.ctx.request_repaint_after(Duration::from_secs(1));
+        }
+        let mut rescan = false;
+        for event in events {
+            match event {
+                WorkspaceEvent::NoteChanged(path) => {
+                    rescan |= self.outside_change(&path);
+                }
+                WorkspaceEvent::NoteRemoved(path) => {
+                    rescan = true;
+                    if let Some((_, tab)) = self.tabs.iter_mut().find(|(_, t)| t.path == path) {
+                        // UC-004 A8: the tab stays open, marked.
+                        tab.deleted = true;
+                        self.status = format!("{} was deleted outside", tab.title);
+                    }
+                }
+                WorkspaceEvent::SettingsChanged => {
+                    if let Some(workspace) = &mut self.workspace {
+                        workspace.reload_settings();
+                        if let Some(problem) = workspace.settings_problem() {
+                            self.status = format!("Using the user settings, because {problem}");
+                        }
+                    }
+                }
+                WorkspaceEvent::Rescan => {
+                    rescan = true;
+                    let paths: Vec<PathBuf> =
+                        self.tabs.iter().map(|(_, t)| t.path.clone()).collect();
+                    for path in paths {
+                        if path.exists() {
+                            self.outside_change(&path);
+                        } else if let Some((_, tab)) =
+                            self.tabs.iter_mut().find(|(_, t)| t.path == path)
+                        {
+                            tab.deleted = true;
+                        }
+                    }
+                }
+            }
+        }
+        if rescan {
+            if let Some(workspace) = &mut self.workspace {
+                workspace.rescan();
+            }
+            self.refresh_overview();
+        }
+    }
+
+    /// A note's file changed outside: reload its tab (UC-004 A7), or keep
+    /// both versions when the tab holds an unstored change (A9). Returns
+    /// whether the note overview needs a rescan.
+    fn outside_change(&mut self, path: &Path) -> bool {
+        let Some((_, tab)) = self.tabs.iter_mut().find(|(_, t)| t.path == path) else {
+            return true;
+        };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let was_deleted = std::mem::take(&mut tab.deleted);
+        if content == tab.view.document().text() {
+            return was_deleted;
+        }
+        if tab.autosave.is_unstored() || tab.saving {
+            // UC-004 A9: neither version is overwritten.
+            if tab.kept_outside.as_deref() == Some(content.as_str()) {
+                return false;
+            }
+            tab.kept_outside = Some(content.clone());
+            let copy = outside_copy_path(path, SystemTime::now());
+            match self.saver.save_now(&copy, &content) {
+                Ok(()) => {
+                    let name = copy.file_name().unwrap_or_default().to_string_lossy();
+                    self.status = format!(
+                        "{} was changed outside while you were editing; your text stays, the other version is kept as {name}",
+                        tab.title
+                    );
+                }
+                Err(err) => {
+                    self.status = format!(
+                        "{} was changed outside; the other version could not be kept: {err}",
+                        tab.title
+                    );
+                }
+            }
+            return true;
+        }
+        tab.view.reload(&content);
+        self.status = format!("{} was changed outside", tab.title);
+        was_deleted
     }
 
     fn show_notices(&mut self) {
@@ -652,6 +780,7 @@ impl UnderlineApp {
                 saving: false,
                 error: None,
                 deleted: false,
+                kept_outside: None,
             });
             // UC-004 A6: the tab used longest ago was closed; its changes
             // are stored first.
@@ -982,6 +1111,7 @@ impl eframe::App for UnderlineApp {
                 self.close_confirm = Some(CloseConfirm::App(failures.join("; ")));
             }
         }
+        self.handle_outside_changes();
         self.show_close_confirm(ctx);
         self.show_open_dialog(ctx);
         self.show_create_dialog(ctx);
