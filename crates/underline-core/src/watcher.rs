@@ -385,7 +385,10 @@ mod tests {
         for i in 0..150 {
             std::fs::write(root.join(format!("N{i}.md")), "x").unwrap();
         }
-        let seen = wait_for(&mut watcher, &WorkspaceEvent::Rescan);
+        // Let every event arrive first: one poll then sees them all, as the
+        // window does when it was busy while git changed the files.
+        std::thread::sleep(Duration::from_secs(1));
+        let seen = watcher.poll();
         assert!(seen.contains(&WorkspaceEvent::Rescan), "{seen:?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
