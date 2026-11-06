@@ -56,6 +56,7 @@ UC014 --> remote
 UC016 --> agent
 
 UC015 .> UC014 : <<extend>>
+UC002 .> UC001 : <<extend>>
 
 note right of UC014
   Also runs on its own at the
