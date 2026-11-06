@@ -49,7 +49,7 @@ One Markdown or AsciiDoc file in a workspace.
 
 #### Constraints
 
-- Two notes of one workspace never have the same title.
+- Two notes in the same folder of a workspace never have the same title; notes in different folders may.
 - The note format matches the extension of the path: `.md` for Markdown, `.adoc` for AsciiDoc.
 
 ### GIT_REMOTE
@@ -129,8 +129,9 @@ The settings of the user settings file or of one workspace settings file.
 
 - There is exactly one set of settings with the scope User, and it has no workspace.
 - A set of settings with the scope Workspace has a workspace, and every workspace has exactly one such set.
-- The default format is given in the settings of every workspace, chosen when the workspace is created, and never in
-  the user settings.
+- The default format is never given in the user settings. A workspace created in Underline has it in its settings,
+  chosen when it was created; a workspace whose settings do not give it uses the note format most of its notes have,
+  Markdown on a tie or without notes.
 - In the user settings every setting has a value; the built-in default fills any value the user never set (theme
   Light, input mode Normal, line numbers shown on the left, copy on select on, git sync every 5 minutes, MCP server
   off).

@@ -136,8 +136,11 @@ character appears within 16 milliseconds (NFR-002).
 **Element:** Entity: NOTE.title
 **Raised by:** /entity-model, 2026-11-06
 **Blocking:** No
-**Status:** Open
-**Assumed:** No: titles are unique within a workspace, so a local link by title always finds one note.
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), BR-004; [Entity model](entity_model.md), NOTE
+
+Answer: reading (b). Titles are unique per folder; the note overview shows the folder next to a title that occurs
+more than once. How a local link names the folder is left to the use case that follows links.
 
 Notes in different folders of a workspace could share a file name (`a/Home.md`, `b/Home.md`). Readings: (a) titles
 are unique in the workspace; (b) titles are unique per folder, and local links name the folder.
@@ -252,3 +255,73 @@ Answer: the status bar names what is left, so the user can delete it by hand.
 
 Answer: A5 applies. The status bar says why, for example that git is not installed or has no user name and email, and
 how to set them in git. Underline keeps no identity of its own.
+
+## OQ-027: What happens when the directory to open does not exist?
+
+**Element:** UC-002 step 4
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), A3, A4
+
+Answer: The system says so and offers to create a new workspace there (UC-001); nothing is created silently.
+
+## OQ-028: Which default format has a workspace without a workspace settings file?
+
+**Element:** UC-002 step 6, Entity: SETTINGS.default_format
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), BR-001, BR-002
+
+Answer: The format most of its notes have, Markdown on a tie or without notes; opening writes no settings file.
+
+## OQ-029: Which files of an opened directory are notes?
+
+**Element:** UC-002 step 7
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), BR-003
+
+Answer: Every `.md` and `.adoc` file in the directory and its folders, except in hidden folders and except files the git repository ignores.
+
+## OQ-030: Which note opens when a workspace is opened for the first time?
+
+**Element:** UC-002 step 8
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), BR-005
+
+Answer: The Home note, else the README note of the top folder, else no tab.
+
+## OQ-031: What happens when the workspace settings file cannot be read?
+
+**Element:** UC-002 step 6
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), A8
+
+Answer: The workspace opens with the user settings and the derived default format; the status bar names the file and the problem; the file stays as it is.
+
+## OQ-032: May a directory inside a known workspace be opened as a workspace?
+
+**Element:** UC-002 step 4
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), A5, A6
+
+Answer: The system offers to open the outer workspace instead or the directory anyway.
+
+## OQ-033: How does the user choose the workspace to open?
+
+**Element:** UC-002 steps 2–3
+**Raised by:** /use-case-spec UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), steps 2–3, A1, A2, BR-006
+
+Answer: From the recently opened workspaces, most recent first, or any other directory; a directory named at start opens directly.
