@@ -2,6 +2,7 @@
 //! edit recolors only from the changed line on.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use syntect::highlighting::{
     Color, FontStyle, HighlightIterator, HighlightState, Highlighter as SyntectHighlighter, Theme,
@@ -150,49 +151,78 @@ impl DocumentHighlight {
     /// The spans of `line`, computing the lines before it as needed; `text`
     /// gives the text of a line, with its line ending.
     pub fn spans(&mut self, line: usize, text: impl Fn(usize) -> String) -> Arc<Vec<Span>> {
+        self.spans_by(line, text, None)
+            .expect("without a deadline every line is computed")
+    }
+
+    /// Like [`DocumentHighlight::spans`], but stops computing at `deadline`
+    /// and then returns `None`; the next call goes on where this one stopped.
+    /// So coloring a long note is spread over frames and never blocks typing
+    /// (ADR-010).
+    pub fn spans_by(
+        &mut self,
+        line: usize,
+        text: impl Fn(usize) -> String,
+        deadline: Option<Instant>,
+    ) -> Option<Arc<Vec<Span>>> {
         if self.spans.len() <= line {
             self.spans.resize(line + 1, None);
         }
         // Recolor from an edit until the state matches the remembered one.
         if let Some(dirty) = self.dirty {
             if dirty <= line {
-                self.recolor_from(dirty, line, &text);
+                self.recolor_from(dirty, line, &text, deadline);
             }
         }
         if let Some(spans) = &self.spans[line] {
-            return Arc::clone(spans);
+            return Some(Arc::clone(spans));
         }
         let from = self.valid.min(line + 1) - 1;
-        self.compute(from, line, &text, false);
-        Arc::clone(self.spans[line].as_ref().expect("just computed"))
+        self.compute(from, line, &text, false, deadline);
+        self.spans[line].as_ref().map(Arc::clone)
+    }
+
+    /// Whether every line up to `line` has its colors.
+    pub fn is_ready(&self, line: usize) -> bool {
+        self.dirty.map_or(true, |d| d > line) && self.spans.get(line).is_some_and(Option::is_some)
     }
 
     /// Recolors from the edited line `from`; stops early when the state at
     /// the end of a line equals the remembered start state of the next line,
-    /// otherwise forgets everything after `upto`.
-    fn recolor_from(&mut self, from: usize, upto: usize, text: &impl Fn(usize) -> String) {
+    /// otherwise forgets everything after where it stopped.
+    fn recolor_from(
+        &mut self,
+        from: usize,
+        upto: usize,
+        text: &impl Fn(usize) -> String,
+        deadline: Option<Instant>,
+    ) {
         self.dirty = None;
         if from >= self.starts.len() {
             return;
         }
-        if self.compute(from, upto, text, true).is_none() {
-            // Not settled by `upto`: the states after it are unknown now.
-            let keep = (upto + 1).min(self.spans.len());
-            self.invalidate_from(keep, self.spans.len());
+        match self.compute(from, upto, text, true, deadline) {
+            Outcome::Settled => {}
+            // Not settled: the states after the last computed line are unknown.
+            Outcome::Done(last) | Outcome::OutOfTime(last) => {
+                let keep = (last + 1).min(self.spans.len());
+                self.invalidate_from(keep, self.spans.len());
+            }
         }
     }
 
-    /// Computes lines `from..=to` from the state at the start of `from`. With
-    /// `until_settled`, goes on past `to` while the lines after it still have
-    /// remembered states, and stops at the first line whose new end state
-    /// equals the remembered one; returns that line.
+    /// Computes lines from `from` on, from the state at the start of `from`,
+    /// up to `to`. With `until_settled`, goes on past `to` while the lines
+    /// after it still have remembered states, and stops at the first line
+    /// whose new end state equals the remembered one. Stops at `deadline`.
     fn compute(
         &mut self,
         from: usize,
         to: usize,
         text: &impl Fn(usize) -> String,
         until_settled: bool,
-    ) -> Option<usize> {
+        deadline: Option<Instant>,
+    ) -> Outcome {
         let highlighter = SyntectHighlighter::new(&self.set.theme);
         let lines = self.spans.len();
         let mut current = from;
@@ -206,19 +236,22 @@ impl DocumentHighlight {
                 let settled = next < self.valid && self.starts[next] == state;
                 self.starts[next] = state;
                 if until_settled && settled && self.spans.get(next).is_some_and(Option::is_some) {
-                    return Some(current);
+                    return Outcome::Settled;
                 }
             } else {
                 self.starts.push(state);
             }
             let remembered = self.valid;
             self.valid = self.valid.max(next + 1).min(self.starts.len());
-            current += 1;
-            if current > to && (!until_settled || next >= remembered) {
-                break;
+            if current >= to && (!until_settled || next >= remembered) {
+                return Outcome::Done(current);
             }
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                return Outcome::OutOfTime(current);
+            }
+            current += 1;
         }
-        None
+        Outcome::Done(current.saturating_sub(1))
     }
 
     /// Colors one line from the state at its start; returns its spans and
@@ -286,6 +319,16 @@ impl DocumentHighlight {
             rgba(settings.background.unwrap_or(Color::WHITE)),
         )
     }
+}
+
+/// How a run of [`DocumentHighlight::compute`] ended.
+enum Outcome {
+    /// The new state equals the remembered one; later lines keep their colors.
+    Settled,
+    /// The requested lines are computed, up to the given line.
+    Done(usize),
+    /// The deadline came; the given line was the last computed.
+    OutOfTime(usize),
 }
 
 /// The state at the start of a line: in the markup, or inside a code fence
@@ -410,6 +453,27 @@ mod tests {
             "states after the edit were kept: valid {}",
             highlight.valid
         );
+    }
+
+    /// ADR-010: with a deadline, coloring stops and goes on in the next call.
+    #[test]
+    fn coloring_is_spread_over_calls_with_a_deadline() {
+        let set = Arc::new(HighlightSet::new(true));
+        let lines: Vec<String> = (0..3000).map(|i| format!("let x{i} = {i};")).collect();
+        let mut highlight = DocumentHighlight::new(set, NoteFormat::Markdown);
+        highlight.invalidate_from(0, lines.len());
+        let text = |i: usize| format!("{}\n", lines[i]);
+        let mut calls = 0;
+        loop {
+            calls += 1;
+            let deadline = Instant::now() + std::time::Duration::from_millis(2);
+            if highlight.spans_by(2999, text, Some(deadline)).is_some() {
+                break;
+            }
+            assert!(calls < 10_000);
+        }
+        assert!(calls > 1, "3,000 lines take more than one slice of 2 ms");
+        assert!(highlight.is_ready(2999));
     }
 
     #[test]

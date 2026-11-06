@@ -17,6 +17,9 @@ use crate::document::Document;
 const FONT_SIZE: f32 = 14.0;
 const PADDING: f32 = 6.0;
 const MAX_CACHED_GALLEYS: usize = 4096;
+/// Time a frame may spend on coloring lines (ADR-010); lines not colored yet
+/// are shown plain and colored in the next frames.
+const COLORING_BUDGET: std::time::Duration = std::time::Duration::from_millis(4);
 
 /// The source view of one tab.
 pub struct SourceView {
@@ -30,6 +33,10 @@ pub struct SourceView {
     focus: bool,
     galleys: HashMap<u64, Arc<Galley>>,
     widest: f32,
+    /// Until when this frame may color lines.
+    deadline: Option<std::time::Instant>,
+    /// Whether a line was shown without its colors this frame.
+    uncolored: bool,
 }
 
 impl SourceView {
@@ -47,7 +54,14 @@ impl SourceView {
             focus: false,
             galleys: HashMap::new(),
             widest: 0.0,
+            deadline: None,
+            uncolored: false,
         }
+    }
+
+    /// Whether every visible line has its colors (ADR-010).
+    pub fn is_colored(&self) -> bool {
+        !self.uncolored
     }
 
     pub fn document(&self) -> &Document {
@@ -79,6 +93,8 @@ impl SourceView {
         let (foreground, background) = self.highlight.colors();
         let foreground = color(foreground);
         let mut changed = false;
+        self.deadline = Some(std::time::Instant::now() + COLORING_BUDGET);
+        self.uncolored = false;
 
         egui::ScrollArea::both()
             .id_salt(self.id.with("scroll"))
@@ -178,6 +194,9 @@ impl SourceView {
                     ui.scroll_to_rect(cursor_rect.expand(row_height), None);
                 }
             });
+        if self.uncolored {
+            ui.ctx().request_repaint();
+        }
         changed
     }
 
@@ -336,7 +355,13 @@ impl SourceView {
     /// The laid-out text of `line`, cached by its text and colors.
     fn galley(&mut self, ui: &egui::Ui, font: &FontId, line: usize) -> Arc<Galley> {
         let doc = &self.doc;
-        let spans = self.highlight.spans(line, |i| doc.line(i));
+        let spans = match self.highlight.spans_by(line, |i| doc.line(i), self.deadline) {
+            Some(spans) => spans,
+            None => {
+                self.uncolored = true;
+                Arc::new(Vec::new())
+            }
+        };
         let text = doc.line_text(line);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
@@ -348,7 +373,8 @@ impl SourceView {
         if self.galleys.len() > MAX_CACHED_GALLEYS {
             self.galleys.clear();
         }
-        let job = layout_job(&text, &spans, font);
+        let (foreground, _) = self.highlight.colors();
+        let job = layout_job(&text, &spans, font, color(foreground));
         let galley = ui.fonts(|f| f.layout_job(job));
         self.galleys.insert(key, Arc::clone(&galley));
         galley
@@ -383,7 +409,7 @@ impl SourceView {
     }
 }
 
-fn layout_job(text: &str, spans: &[Span], font: &FontId) -> LayoutJob {
+fn layout_job(text: &str, spans: &[Span], font: &FontId, plain: Color32) -> LayoutJob {
     let mut job = LayoutJob::default();
     let mut end = 0;
     for span in spans {
@@ -399,7 +425,7 @@ fn layout_job(text: &str, spans: &[Span], font: &FontId) -> LayoutJob {
             job.append(
                 &text[end..start],
                 0.0,
-                TextFormat::simple(font.clone(), Color32::GRAY),
+                TextFormat::simple(font.clone(), plain),
             );
         }
         let format = TextFormat {
@@ -415,7 +441,7 @@ fn layout_job(text: &str, spans: &[Span], font: &FontId) -> LayoutJob {
         job.append(
             &text[end..],
             0.0,
-            TextFormat::simple(font.clone(), Color32::GRAY),
+            TextFormat::simple(font.clone(), plain),
         );
     }
     job.wrap.max_width = f32::INFINITY;

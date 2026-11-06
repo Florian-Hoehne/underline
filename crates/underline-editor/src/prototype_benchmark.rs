@@ -97,8 +97,14 @@ fn adr012_typing_in_10000_lines_within_16_ms() {
     let at = harness.view.document().rope().line_to_char(5_000);
     harness.view.set_cursor(at);
     let first = harness.frame(vec![]);
-    println!("first frame at line 5,000 (highlights 5,000 lines): {first:?}");
-    harness.frame(vec![]);
+    println!("first frame at line 5,000: {first:?}");
+    assert!(first < FRAME_BUDGET * 2, "the first frame does not wait for the colors");
+    let mut frames = 1;
+    while !harness.view.is_colored() {
+        harness.frame(vec![]);
+        frames += 1;
+    }
+    println!("colors of line 5,000 ready after {frames} frames");
 
     let lines_before = harness.view.document().len_lines();
     let mut times = Vec::new();
@@ -132,8 +138,17 @@ fn adr012_scrolling_keeps_60_frames_per_second() {
     harness.frame(vec![]);
     let last = harness.view.document().len_chars();
     harness.view.set_cursor(last);
-    let warm = harness.frame(vec![]);
-    println!("highlighting all 10,000 lines once: {warm:?}");
+    let start = std::time::Instant::now();
+    let mut frames = 0;
+    loop {
+        let time = harness.frame(vec![]);
+        frames += 1;
+        assert!(time < FRAME_BUDGET * 2, "coloring frame took {time:?}");
+        if harness.view.is_colored() {
+            break;
+        }
+    }
+    println!("coloring all 10,000 lines: {frames} frames, {:?}", start.elapsed());
 
     let mut times = Vec::new();
     for step in 0..200 {

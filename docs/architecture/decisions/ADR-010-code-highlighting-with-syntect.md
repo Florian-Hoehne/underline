@@ -30,8 +30,10 @@ must be compatible with the MIT license (C-008); this rules out `giallo` (EUPL-1
   is turned into a syntect theme at start and when the theme changes. Themes that have an official palette (GitHub,
   Solarized, Nord, Dracula, Gruvbox, Night Owl) take its colors; every palette is checked against NFR-010 in a test.
 - **Speed:** highlighting state is kept per line, so an edit recolors only from the changed line until the state is
-  the same again; lines outside the visible area are colored on the worker thread and cached by content and theme.
-  A long code block is shown uncolored for the moment it takes and never blocks typing.
+  the same again. Coloring runs in slices of at most 4 milliseconds per frame on the UI thread and goes on in the next
+  frame; lines without colors yet are shown in the plain text color. (Amended after the prototype of ADR-012: slices
+  instead of a worker thread, because the per-line states would otherwise have to be kept in step between two threads
+  after every edit; the effect is the same, typing never waits for coloring.)
 - **Location:** highlighting lives in `crates/underline-facade` behind a `Highlighter` type; the desktop app only turns
   its colored spans into egui text.
 
