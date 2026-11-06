@@ -1,71 +1,87 @@
 # Vision: Underline
 
-> Draft written from the current README and code. Review and correct it before running `/requirements`:
-> the requirements catalog is only as good as this document.
-
 ## Mission
 
-Notes that matter to a project end up scattered: in a local notes app, in the project wiki, and in chats with an AI
-assistant that forgets them. Underline is a fast, native note-taking desktop app that keeps all of them in one place:
-a plain directory of Markdown pages in exactly the layout of a GitHub or GitLab wiki. The same files are edited by
-the user in the app, synced with the project wiki through git, and read and written by an AI agent through the
-Model Context Protocol (MCP). Nothing is locked into a proprietary format, and the user and the agent always work on
-the same notes.
+Notes that matter to a project end up scattered: in a local notes app, in the project's git repository or wiki, and
+in chats with an AI assistant that forgets them. Underline is a native note-taking desktop app with a plain but
+modern interface that keeps them in one place: a workspace directory of plain Markdown or AsciiDoc files on the local
+disk. The user edits a note either directly in its markup or in the facade, a rendered editing view that looks and
+works the same whatever format the file is stored in. An AI agent reads and writes the same notes through the Model
+Context Protocol (MCP), and the user watches the agent's cursor next to their own. When the workspace is a git
+repository, Underline shows and drives the usual git workflow. Nothing is locked into a proprietary format.
 
 ## Target users
 
-- **Developer or technical writer** — keeps project notes, documentation, and knowledge next to the code and wants
-  them in the project's GitHub or GitLab wiki without leaving a desktop editor or touching git by hand.
-- **Team member using an AI agent** — works with an MCP-capable agent (Claude Code, Claude Desktop, other MCP
-  clients) and wants the agent to read, create, and update notes as a shared, persistent memory.
-- **Wiki maintainer** — owns a GitHub or GitLab wiki and wants to edit it offline in a comfortable editor and publish
-  the changes later.
+- **User** — a developer, technical writer, or knowledge worker who keeps notes, documentation, and tasks next to
+  their projects and wants a fast, keyboard-friendly editor (normal, Vim, or Nano input) with diagrams, code, and
+  images rendered in place.
+- **AI agent** — an MCP-capable assistant (Claude Code, Claude Desktop, Cursor, VS Code Copilot, Codex, Gemini CLI,
+  or another MCP client) that the user connects to a workspace to read, create, and update notes as a shared,
+  persistent memory.
 
 ## Goals
 
-- A user can create, find, read, and edit Markdown pages in a native window on Linux, Windows, and macOS.
-- A notebook can be connected to a GitHub or GitLab project wiki by its project URL, and cloned, pulled, and pushed
-  from inside the app, without the user running git commands.
-- An AI agent connected through MCP can list, read, create, and update the pages of a notebook, and the user sees the
-  agent's changes in the app.
-- Notes stay plain Markdown files that any other editor, git, or the wiki web UI can open and change.
-- The app starts in under one second and stays responsive with notebooks of at least 1,000 pages.
+- A user edits notes in Markdown or AsciiDoc, in the markup or in the facade, without having to know which format a
+  note is stored in; the facade always shows it and offers the options that only that format supports.
+- The facade engine coordinates every write, so further Markdown flavors and markup formats can be added later
+  without changing the editor.
+- A note can be exported to Markdown, AsciiDoc, HTML, and PDF.
+- No edit is lost: notes are saved to the local disk automatically, and a workspace that is a git repository with a
+  remote is synchronized with it at a regular interval.
+- An AI agent connected through MCP can read and write notes, its cursor is visible while it is connected, and the
+  user can switch the MCP server on and off and install it into their AI tool with one action.
+- Tasks are managed next to the notes: a todo has a due date, an urgency, and a date, and points to the notes it is
+  about.
+- Every setting lives in `underline.yaml`, with user defaults in the home directory that a workspace can override,
+  and every change made in the interface is remembered immediately.
 
 ## Scope
 
 ### In scope
 
-- Notebook as a local directory of `<Page>.md` files, compatible with GitHub and GitLab wikis (page names, links,
-  `Home` page, sidebar and footer pages).
-- Desktop app: page list, Markdown editor, preview, create, rename, and delete pages, search across pages.
-- Wiki sync with GitHub (github.com) and GitLab (gitlab.com and self-hosted instances): clone, pull, push, and handling
-  of conflicting edits.
-- MCP server (`underline mcp <notebook>`) over stdio with tools to list, read, write, and search notes.
-- Several notebooks, each with at most one wiki remote.
+- Workspaces: local directories of notes; when a workspace is created the user chooses its default note format
+  (Markdown preselected); a note's own format follows its file extension.
+- Interface: note overview on the left (recent notes), notes in tabs in the middle, properties and tools on the right
+  (git diff, outline, code index, figure index), and a status bar at the bottom.
+- Editing: source editing and facade editing, a formatting toolbar, input modes normal, Vim, and Nano, folding of
+  sections, line numbers that can be switched off and placed left or right, a minimap of the note, copy on select
+  (can be switched off), and drag and drop of images, files, and links.
+- Rendering: syntax-highlighted code blocks, PlantUML and Mermaid diagrams in the colors of the active theme,
+  diagrams and images that can be enlarged, local links that open the linked note.
+- Color themes: Light, Dark, GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Night Owl, Ubuntu, Nord,
+  Dracula, and Gruvbox.
+- Saving and sync: autosave to the local disk; git pull and push with the workspace's remote at a regular interval.
+- Git: changes, diff, and current branch for a workspace that is a git repository; create and switch branches,
+  commit, push, and pull.
+- MCP: a server that lets an AI agent read and write notes, switchable on and off, with an installer for common AI
+  tools and a configuration snippet for any other.
+- Todo management linked to notes.
+- Export to Markdown, AsciiDoc, HTML, and PDF.
 
 ### Out of scope
 
-- A hosted cloud service or user accounts of its own; sync goes through the wiki's git repository only.
+- A hosted cloud service or user accounts of its own; sync goes through the workspace's git remote only.
 - Real-time collaborative editing between several people.
-- Rich-text or WYSIWYG formats other than Markdown, and proprietary note formats.
+- Proprietary note formats and storage other than plain files.
 - Mobile apps and a web version.
 - An AI model built into the app; Underline works with the agent the user already has, through MCP.
-- Wiki providers other than GitHub and GitLab (for example Gitea or Azure DevOps) in the first release.
+- Markdown flavors and markup formats other than Markdown as GitHub shows it and AsciiDoc in the first release; the
+  facade engine is prepared for them.
 
 ## Constraints
 
-- Written in Rust; the desktop UI uses egui/eframe.
-- Runs on Linux (X11 and Wayland), Windows, and macOS; CI builds and tests on all three.
-- The on-disk format is the GitHub/GitLab wiki repository layout; Underline must not add files to a notebook that
-  would show up as pages in the wiki.
-- The MCP server speaks the MCP stdio transport (JSON-RPC 2.0, one message per line).
-- Authentication against GitHub and GitLab uses the user's existing git credentials; Underline does not store
-  passwords itself.
+- Underline is a desktop app for Linux, Windows, and macOS.
+- Notes are stored as plain `.md` and `.adoc` files that other editors, git, and the GitHub and GitLab web interfaces
+  can open and display the same way.
+- Settings are kept in `underline.yaml`: the defaults in the user's home directory, overridable by an
+  `underline.yaml` in the workspace.
+- Underline uses the access to git remotes the user has already set up and keeps no passwords of its own.
 - Open source under the MIT license.
 
 ## Success measures
 
-- A user can go from installing Underline to editing an existing GitHub or GitLab wiki in under five minutes.
-- Pages edited in Underline and pushed to the wiki render correctly in the wiki web UI, with working links.
-- An MCP client configured with `underline mcp <notebook>` can complete a read–write–read round trip on the first try.
-- No data loss: a sync never silently overwrites a local or a remote change.
+- A user can go from installing Underline to editing an existing repository of notes in under five minutes.
+- Opening a note in the facade and leaving it without an edit leaves it unchanged.
+- An AI tool set up by the MCP installer completes a read–write–read round trip on a note on the first try.
+- No data loss: a crash loses at most the last two seconds of typing, and a sync never silently overwrites a local or
+  a remote change.

@@ -15,6 +15,11 @@ Files that do not exist yet have not been produced; create them with the matchin
 (`/requirements`, `/entity-model`, `/use-case-diagram`, `/use-case-spec`, `/test-case`, `/architecture-decision`).
 `/next` names the next step.
 
+The AIUP documents in `docs/` (vision, requirements, glossary, entity model, use cases, test cases) describe the
+product from the user's point of view only. Keep technical detail out of them: no programming language, libraries,
+code style, protocols, file formats of internals, or API responses. Technical decisions go into architecture decision
+records (`docs/architecture/decisions/`, via `/architecture-decision`) and into this file.
+
 ## Workflow rules
 
 1. Derive requirements from the product vision.
