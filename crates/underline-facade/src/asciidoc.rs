@@ -65,6 +65,8 @@ struct Pending {
     language: Option<String>,
     /// The first line of attribute or title lines not used by the block.
     unused: Option<usize>,
+    /// The text of a block title (`.Title`), a caption for an image.
+    title: Option<String>,
 }
 
 struct Parser<'s, 'l> {
@@ -120,6 +122,9 @@ impl Parser<'_, '_> {
                         i += 1;
                         continue;
                     }
+                }
+                if is_block_title(text) {
+                    pending.title = Some(text[1..].trim().to_owned());
                 }
                 pending.unused.get_or_insert(i);
                 i += 1;
@@ -184,6 +189,22 @@ impl Parser<'_, '_> {
             }
             // Blocks shown as markup: comments, attribute entries, block
             // macros (images, includes), description lists.
+            // A block image, with its title as caption.
+            if let Some((target, alt)) = block_image(text) {
+                let start = pending.unused.take().unwrap_or(i);
+                self.numbers.clear();
+                let span = self.lines[start].start..line.next;
+                let mut block = markup_block(self.source, span);
+                block.kind = BlockKind::Image {
+                    target,
+                    alt,
+                    caption: pending.title.take(),
+                };
+                self.blocks.push(block);
+                pending = Pending::default();
+                i += 1;
+                continue;
+            }
             if is_markup_line(text) {
                 let start = pending.unused.take().unwrap_or(i);
                 let end = self.paragraph_end(i, range.end);
@@ -755,6 +776,29 @@ fn is_attribute_line(line: &str) -> bool {
     line.starts_with('[') && line.ends_with(']') && line.len() >= 2 && !line.contains("] ")
 }
 
+/// The target and alternative text of a block image `image::target[alt]`.
+fn block_image(line: &str) -> Option<(String, String)> {
+    let rest = line.trim_end().strip_prefix("image::")?;
+    let open = rest.find('[')?;
+    let attributes = rest[open + 1..].strip_suffix(']')?;
+    let target = rest[..open].trim();
+    if target.is_empty() {
+        return None;
+    }
+    let alt = attributes.split(',').next().unwrap_or("").trim();
+    let alt = alt.trim_matches('"');
+    let alt = if alt.is_empty() || alt.contains('=') {
+        // Asciidoctor's default: the file name without its extension.
+        let name = target.rsplit('/').next().unwrap_or(target);
+        name.rsplit_once('.')
+            .map_or(name, |(stem, _)| stem)
+            .to_owned()
+    } else {
+        alt.to_owned()
+    };
+    Some((target.to_owned(), alt))
+}
+
 /// `.Title` before a block.
 fn is_block_title(line: &str) -> bool {
     line.starts_with('.')
@@ -858,7 +902,7 @@ mod tests {
                 "Markup",
                 "ThematicBreak",
                 "Markup",
-                "Markup",
+                "Image { target: \"shot.png\", alt: \"Shot\", caption: None }",
             ]
         );
         assert_eq!(blocks[0].text(), "Guide");
@@ -981,6 +1025,26 @@ mod tests {
             ]
         );
         assert_eq!(blocks[0].text(), "A -> B");
+    }
+
+    /// TC-004-02: a block image with its title as caption.
+    #[test]
+    fn block_images_with_captions() {
+        let note =
+            ".The architecture\nimage::img/arch.png[Architecture,600]\n\nimage::shot.png[]\n";
+        let blocks = asciidoc_blocks(note);
+        assert_eq!(
+            kinds(&blocks),
+            [
+                "Image { target: \"img/arch.png\", alt: \"Architecture\", caption: Some(\"The architecture\") }",
+                "Image { target: \"shot.png\", alt: \"shot\", caption: None }",
+            ]
+        );
+        // The block is its markup, title included, for editing.
+        assert_eq!(
+            blocks[0].text(),
+            ".The architecture\nimage::img/arch.png[Architecture,600]"
+        );
     }
 
     #[test]

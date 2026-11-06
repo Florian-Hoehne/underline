@@ -17,6 +17,7 @@ use underline_facade::blocks::{heading_offset, parse_blocks};
 use underline_facade::diagram::Diagrams;
 use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
+use underline_facade::images::Images;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
@@ -35,6 +36,8 @@ pub struct UnderlineApp {
     highlight: Arc<HighlightSet>,
     /// Renders the diagrams of the open notes (FR-036, FR-037, ADR-009).
     diagrams: Arc<Diagrams>,
+    /// Loads the images of the open notes (UC-004 step 3).
+    images: Arc<Images>,
     /// Stores changed notes in the background (UC-005 BR-001).
     saver: NoteSaver,
     /// A close that waits for the user, because changes could not be stored
@@ -224,6 +227,10 @@ impl UnderlineApp {
             diagrams: {
                 let ctx = ctx.clone();
                 Arc::new(Diagrams::start(move || ctx.request_repaint()))
+            },
+            images: {
+                let ctx = ctx.clone();
+                Arc::new(Images::start(move || ctx.request_repaint()))
             },
             saver: NoteSaver::new(OwnWrites::default()),
             close_confirm: None,
@@ -822,9 +829,12 @@ impl UnderlineApp {
                 .find(|entry| entry.id == note.id)
                 .map_or(workspace.default_format(), |entry| entry.format);
             let highlight = Arc::clone(&self.highlight);
+            let root = workspace.root().to_path_buf();
             let opened = self.tabs.open(id.clone(), || OpenTab {
                 view: SourceView::new(note.id.as_str(), &note.body, format, highlight),
-                facade: FacadeView::new(note.id.as_str()).with_diagrams(Arc::clone(&self.diagrams)),
+                facade: FacadeView::new(note.id.as_str())
+                    .with_diagrams(Arc::clone(&self.diagrams))
+                    .with_images(Arc::clone(&self.images), root, path.clone()),
                 editing_view,
                 path,
                 title: note.title(),

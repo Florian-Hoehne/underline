@@ -19,3 +19,5 @@ resvg = { version = "=0.45.1", default-features = false, features = ["text"] }
 # Mermaid (ADR-009): every diagram family, SVG without the ELK layout.
 merman = { version = "=0.9.3", default-features = false, features = ["all-diagrams", "complete-svg"] }
 serde_json.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+ureq = "3"

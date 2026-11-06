@@ -55,6 +55,14 @@ pub enum BlockKind {
     Admonition(String),
     /// A block the facade shows and edits as its markup (UC-005 BR-008).
     Markup,
+    /// An image on its own (UC-004 step 3): where it is, its alternative
+    /// text, and its caption. Its runs are its markup, edited in place
+    /// below the picture.
+    Image {
+        target: String,
+        alt: String,
+        caption: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -279,6 +287,19 @@ fn collect<'a>(
             span,
             runs: inline_runs(node, source, lines),
         }),
+        NodeValue::Paragraph if context.list_depth.is_none() && context.quote == 0 => {
+            if let Some(image) = only_image(node) {
+                let mut block = markup_block(source, span);
+                block.kind = image;
+                blocks.push(block);
+            } else {
+                blocks.push(Block {
+                    kind: BlockKind::Paragraph,
+                    span,
+                    runs: inline_runs(node, source, lines),
+                });
+            }
+        }
         NodeValue::Paragraph => {
             let kind = match (context.list_depth, context.quote) {
                 (Some(depth), _) => BlockKind::ListItem {
@@ -390,6 +411,32 @@ fn collect<'a>(
         }),
         _ => blocks.push(markup_block(source, span)),
     }
+}
+
+/// The image a paragraph holds when it holds nothing else.
+fn only_image<'a>(paragraph: &'a AstNode<'a>) -> Option<BlockKind> {
+    let mut children = paragraph
+        .children()
+        .filter(|c| !matches!(&c.data.borrow().value, NodeValue::Text(t) if t.trim().is_empty()));
+    let image = children.next()?;
+    if children.next().is_some() {
+        return None;
+    }
+    let data = image.data.borrow();
+    let NodeValue::Image(link) = &data.value else {
+        return None;
+    };
+    let mut alt = String::new();
+    for node in image.descendants() {
+        if let NodeValue::Text(text) = &node.data.borrow().value {
+            alt.push_str(text);
+        }
+    }
+    Some(BlockKind::Image {
+        target: link.url.clone(),
+        alt,
+        caption: None,
+    })
 }
 
 /// A block shown as its markup, one to one.
@@ -656,6 +703,24 @@ mod tests {
             }
             assert_eq!(blocks.len(), fresh.len());
         }
+    }
+
+    /// UC-004 step 3: a paragraph that is only an image is an image block;
+    /// an image inside text stays in the text.
+    #[test]
+    fn images_on_their_own_are_image_blocks() {
+        let note = "![The plan](img/plan.png)\n\nSee ![icon](i.png) here.\n";
+        let blocks = parse_blocks(note, NoteFormat::Markdown);
+        assert_eq!(
+            blocks[0].kind,
+            BlockKind::Image {
+                target: "img/plan.png".into(),
+                alt: "The plan".into(),
+                caption: None
+            }
+        );
+        assert_eq!(blocks[0].text(), "![The plan](img/plan.png)");
+        assert_eq!(blocks[1].kind, BlockKind::Paragraph);
     }
 
     #[test]

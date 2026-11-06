@@ -10,6 +10,7 @@ pub mod blocks;
 pub mod diagram;
 pub mod formatting;
 pub mod highlight;
+pub mod images;
 
 use underline_core::NoteFormat;
 

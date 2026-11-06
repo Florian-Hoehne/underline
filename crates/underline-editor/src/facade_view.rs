@@ -6,16 +6,18 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{
     self, text::CCursor, text::LayoutJob, Color32, Event, EventFilter, FontId, Galley, Key, Pos2,
     Rect, Sense, Stroke, TextFormat, Vec2,
 };
-use underline_core::NoteFormat;
+use underline_core::{resolve_link, LinkTarget, NoteFormat};
 use underline_facade::blocks::{insert_typed, link_at, parse_blocks, Block, BlockKind, ListMarker};
 use underline_facade::diagram::{DiagramLanguage, DiagramState, Diagrams, Picture};
 use underline_facade::highlight::highlight_code;
+use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
 
 use crate::{fonts, SourceView, Tool};
 
@@ -39,8 +41,12 @@ pub struct FacadeView {
     scroll_to_cursor: bool,
     /// Renders the diagrams (FR-036, FR-037); without it they show as code.
     diagrams: Option<Arc<Diagrams>>,
-    /// The diagrams rendered when the layout was made.
-    diagram_generation: u64,
+    /// Loads the images (UC-004 step 3); without it they show as markup.
+    images: Option<Arc<Images>>,
+    /// The workspace and the file of the note, to find its images.
+    place: Option<(PathBuf, PathBuf)>,
+    /// The diagrams rendered and images loaded when the layout was made.
+    diagram_generation: (u64, u64),
     /// The diagram block holding the cursor, whose source is shown below
     /// its picture (UC-005 BR-008).
     editing: Option<usize>,
@@ -63,6 +69,8 @@ struct Laid {
     /// Whether the text is shown (a diagram hides its source).
     text_shown: bool,
     figure: Option<Figure>,
+    /// The caption of an image: its top in the block, and its text.
+    caption: Option<(f32, Arc<Galley>)>,
 }
 
 /// What a diagram block shows above its source.
@@ -84,7 +92,9 @@ impl FacadeView {
             focus: false,
             scroll_to_cursor: false,
             diagrams: None,
-            diagram_generation: 0,
+            images: None,
+            place: None,
+            diagram_generation: (0, 0),
             editing: None,
             textures: HashMap::new(),
             last_pictures: HashMap::new(),
@@ -97,25 +107,40 @@ impl FacadeView {
         self
     }
 
-    /// The diagram block holding the cursor, if any; a change of it changes
-    /// the layout.
+    /// The same facade, showing images loaded by `images` for the note in
+    /// the file `note` of the workspace at `root`.
+    pub fn with_images(mut self, images: Arc<Images>, root: PathBuf, note: PathBuf) -> Self {
+        self.images = Some(images);
+        self.place = Some((root, note));
+        self
+    }
+
+    /// Whether block `index` is shown as a picture: a diagram or an image.
+    fn is_figure(&self, index: usize) -> bool {
+        match &self.blocks[index].kind {
+            BlockKind::Image { .. } => self.images.is_some(),
+            kind => self.diagrams.is_some() && diagram_language(kind).is_some(),
+        }
+    }
+
+    /// The picture block holding the cursor, if any; a change of it changes
+    /// the layout, as does a picture that became ready.
     fn update_editing(&mut self, source: &SourceView) {
         let editing = self
             .cursor_position(source)
             .map(|(index, _)| index)
-            .filter(|&index| {
-                self.diagrams.is_some() && diagram_language(&self.blocks[index].kind).is_some()
-            });
+            .filter(|&index| self.is_figure(index));
         if editing != self.editing {
             self.editing = editing;
             self.tops.clear();
         }
-        if let Some(diagrams) = &self.diagrams {
-            let generation = diagrams.generation();
-            if generation != self.diagram_generation {
-                self.diagram_generation = generation;
-                self.tops.clear();
-            }
+        let generation = (
+            self.diagrams.as_ref().map_or(0, |d| d.generation()),
+            self.images.as_ref().map_or(0, |i| i.generation()),
+        );
+        if generation != self.diagram_generation {
+            self.diagram_generation = generation;
+            self.tops.clear();
         }
     }
 
@@ -230,8 +255,17 @@ impl FacadeView {
                         }
                         None => {}
                     }
+                    if let Some((caption_top, caption)) = &laid.caption {
+                        painter.galley(
+                            block_top + Vec2::new(0.0, *caption_top),
+                            Arc::clone(caption),
+                            theme.text,
+                        );
+                    }
                     match &block.kind {
-                        BlockKind::Code { .. } | BlockKind::Markup if laid.text_shown => {
+                        BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Image { .. }
+                            if laid.text_shown =>
+                        {
                             painter.rect_filled(
                                 Rect::from_min_size(
                                     top - Vec2::splat(4.0),
@@ -364,7 +398,7 @@ impl FacadeView {
             let laid = self.laid(ui, source, theme, index);
             let extra = match self.blocks[index].kind {
                 BlockKind::ThematicBreak => 16.0,
-                BlockKind::Code { .. } | BlockKind::Markup => 8.0,
+                BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Image { .. } => 8.0,
                 _ => 0.0,
             };
             y += laid.height + BLOCK_GAP + extra;
@@ -416,65 +450,135 @@ impl FacadeView {
             offset: Vec2::ZERO,
             text_shown: true,
             figure: None,
+            caption: None,
         };
-        if let Some(language) = diagram_language(&block.kind) {
-            self.diagram(ui, theme, index, language, &mut laid);
+        if self.is_figure(index) {
+            self.figure(ui, theme, index, &mut laid);
         }
         laid
     }
 
-    /// FR-036, FR-037, UC-005 BR-008: a diagram block shows its picture,
-    /// and its source below it while the cursor is in it; a diagram that
-    /// cannot be rendered shows its source with the error (UC-004 A11).
-    fn diagram(
-        &mut self,
-        ui: &egui::Ui,
-        theme: &Theme,
-        index: usize,
-        language: DiagramLanguage,
-        laid: &mut Laid,
-    ) {
-        let Some(diagrams) = &self.diagrams else {
-            return;
-        };
-        let source = self.blocks[index].text();
-        let dark = ui.visuals().dark_mode;
+    /// What a picture block shows now: its picture, or why not, and
+    /// whether its markup must be shown.
+    fn picture_state(&self, ui: &egui::Ui, index: usize) -> (Result<Arc<Picture>, String>, bool) {
         let scale = ui.ctx().pixels_per_point();
-        let state = diagrams.get(language, &source, dark, scale);
-        let picture = match &state {
-            DiagramState::Ready(picture) => {
-                self.last_pictures.insert(index, Arc::clone(picture));
-                Some(Arc::clone(picture))
+        let block = &self.blocks[index];
+        match &block.kind {
+            BlockKind::Image { target, alt, .. } => {
+                let Some(images) = &self.images else {
+                    return (Err(alt.clone()), true);
+                };
+                let source = match image_source(self.place.as_ref(), target) {
+                    Ok(source) => source,
+                    Err(reason) => return (Err(reason), false),
+                };
+                match images.get(&source, scale) {
+                    ImageState::Ready(picture) => (Ok(picture), false),
+                    ImageState::Pending => (Err(format!("Loading {target}…")), false),
+                    ImageState::Failed(ImageError::NotFound(_)) => (
+                        Err(format!(
+                            "The image {alt} cannot be shown: {target} was not found"
+                        )),
+                        false,
+                    ),
+                    ImageState::Failed(error) => (
+                        Err(format!("The image {alt} cannot be shown: {error}")),
+                        false,
+                    ),
+                }
             }
-            DiagramState::Pending => self.last_pictures.get(&index).cloned(),
-            DiagramState::Failed(_) => None,
+            kind => {
+                let (Some(diagrams), Some(language)) = (&self.diagrams, diagram_language(kind))
+                else {
+                    return (Err(String::new()), true);
+                };
+                let dark = ui.visuals().dark_mode;
+                match diagrams.get(language, &block.text(), dark, scale) {
+                    DiagramState::Ready(picture) => (Ok(picture), false),
+                    DiagramState::Pending => (
+                        Err(format!("Rendering the {} diagram…", language.name())),
+                        false,
+                    ),
+                    // UC-004 A11: the source with the error.
+                    DiagramState::Failed(error) => (
+                        Err(format!(
+                            "This {} diagram cannot be shown: {error}",
+                            language.name()
+                        )),
+                        true,
+                    ),
+                }
+            }
+        }
+    }
+
+    /// FR-036, FR-037, UC-004 step 3, UC-005 BR-008: a diagram or image
+    /// block shows its picture (an image with its caption), and its markup
+    /// below it while the cursor is in it. While a changed source renders,
+    /// the last picture stays; a diagram that cannot be rendered shows its
+    /// source with the error (UC-004 A11), an image that cannot be shown
+    /// says why, naming its address (BR-004).
+    fn figure(&mut self, ui: &egui::Ui, theme: &Theme, index: usize, laid: &mut Laid) {
+        let (state, failed) = self.picture_state(ui, index);
+        let pending = matches!(&state, Err(m) if m.ends_with('…'));
+        let picture = match state {
+            Ok(picture) => {
+                self.last_pictures.insert(index, Arc::clone(&picture));
+                Ok(picture)
+            }
+            Err(message) if pending => self.last_pictures.get(&index).cloned().ok_or(message),
+            Err(message) => {
+                self.last_pictures.remove(&index);
+                Err(message)
+            }
         };
         let width = self.width;
-        let message = |text: String, color: Color32| {
-            let galley = ui.fonts(|f| f.layout(text, FontId::proportional(13.0), color, width));
-            let size = galley.size();
-            (Figure::Message(galley), size, true)
+        let layout = |text: String, color: Color32, size: f32| {
+            ui.fonts(|f| f.layout(text, FontId::proportional(size), color, width))
         };
-        let (figure, size, failed) = match (picture, &state) {
-            (Some(picture), _) => {
+        let (figure, mut size) = match picture {
+            Ok(picture) => {
                 let [w, h] = picture.size();
                 let shrink = (width / w).min(1.0);
                 let size = Vec2::new(w * shrink, h * shrink);
-                (
-                    Figure::Picture(self.texture(ui, &picture), size),
-                    size,
-                    false,
-                )
+                (Figure::Picture(self.texture(ui, &picture), size), size)
             }
-            (None, DiagramState::Failed(error)) => message(
-                format!("This {} diagram cannot be shown: {error}", language.name()),
-                ui.visuals().error_fg_color,
-            ),
-            (None, _) => message(
-                format!("Rendering the {} diagram…", language.name()),
-                theme.weak,
-            ),
+            Err(message) => {
+                let color = if failed || !pending {
+                    ui.visuals().error_fg_color
+                } else {
+                    theme.weak
+                };
+                let galley = layout(message, color, 13.0);
+                let size = galley.size();
+                (Figure::Message(galley), size)
+            }
         };
+        // TC-004-02: a caption below the picture, numbered as Asciidoctor
+        // numbers figures.
+        laid.caption = None;
+        if let BlockKind::Image {
+            caption: Some(caption),
+            ..
+        } = &self.blocks[index].kind
+        {
+            let number = self.blocks[..=index]
+                .iter()
+                .filter(|b| {
+                    matches!(
+                        &b.kind,
+                        BlockKind::Image {
+                            caption: Some(_),
+                            ..
+                        }
+                    )
+                })
+                .count();
+            let galley = layout(format!("Figure {number}. {caption}"), theme.text, 14.0);
+            let top = size.y + 6.0;
+            size.y = top + galley.size().y;
+            laid.caption = Some((top, galley));
+        }
         laid.text_shown = failed || self.editing == Some(index);
         laid.offset = Vec2::new(0.0, size.y + if laid.text_shown { 12.0 } else { 0.0 });
         laid.height = laid.offset.y
@@ -677,7 +781,7 @@ impl FacadeView {
         let (raw, fast) = match position {
             Some((index, at)) => match &self.blocks[index].kind {
                 BlockKind::Code { .. } if markdown => (text.to_owned(), !text.contains(['`', '~'])),
-                BlockKind::Markup => (text.to_owned(), false),
+                BlockKind::Markup | BlockKind::Image { .. } => (text.to_owned(), false),
                 _ if markdown => (escape_markdown(text, at == 0), at > 0),
                 // AsciiDoc has no escape that always works; plain text away
                 // from markup joins its block, anything else parses again.
@@ -905,7 +1009,9 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
         _ => BODY_SIZE,
     };
     let body = match block.kind {
-        BlockKind::Code { .. } | BlockKind::Markup => FontId::monospace(CODE_SIZE),
+        BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Image { .. } => {
+            FontId::monospace(CODE_SIZE)
+        }
         _ => FontId::new(size, fonts::family(heading, false)),
     };
     let prefix = prefix_text(&block.kind);
@@ -981,6 +1087,24 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
         job.append("", 0.0, TextFormat::simple(body, theme.text));
     }
     (job, prefix_chars)
+}
+
+/// Where the image `target` of a note is: a web address, or a file found as
+/// links are found (UC-004 BR-005); otherwise why it is not shown.
+fn image_source(place: Option<&(PathBuf, PathBuf)>, target: &str) -> Result<ImageSource, String> {
+    let Some((root, note)) = place else {
+        return Err(target.to_owned());
+    };
+    match resolve_link(root, note, target) {
+        LinkTarget::Web(address) => Ok(ImageSource::Web(address)),
+        LinkTarget::File(path) => Ok(ImageSource::File(path)),
+        LinkTarget::Note { id, .. } => Ok(ImageSource::File(root.join(id.as_str()))),
+        LinkTarget::MissingNote { .. } | LinkTarget::Heading(_) => {
+            let base = note.parent().unwrap_or(root);
+            Ok(ImageSource::File(base.join(target)))
+        }
+        LinkTarget::Outside => Err(format!("{target} lies outside the workspace")),
+    }
 }
 
 /// The diagram language of a code block, if it is a diagram.
@@ -1320,6 +1444,82 @@ mod tests {
         assert!(h.text().contains("Alice x-> Bob"));
         let (kind, _) = figure(&mut h, good);
         assert_eq!(kind, "picture");
+    }
+
+    /// UC-004 step 3, TC-004-02, TC-004-06: an image shows its picture
+    /// with its caption, its markup while the cursor is in it, and a
+    /// missing image says so.
+    #[test]
+    fn uc004_images_show_pictures_and_captions() {
+        let dir = std::env::temp_dir().join(format!("underline-facade-img-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("img")).unwrap();
+        std::fs::write(
+            dir.join("img/arch.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect width="120" height="60" fill="blue"/></svg>"#,
+        )
+        .unwrap();
+        let note = ".The architecture\nimage::img/arch.svg[Architecture]\n\nimage::img/gone.png[Gone]\n\nEnd\n";
+        let mut h = Harness::with_format(note, NoteFormat::AsciiDoc);
+        let facade = std::mem::replace(&mut h.facade, FacadeView::new("x"));
+        h.facade = facade.with_images(
+            Arc::new(Images::start(|| {})),
+            dir.clone(),
+            dir.join("Guide.adoc"),
+        );
+        h.facade.request_focus();
+        h.cursor_after("End");
+        let theme = Theme {
+            text: Color32::WHITE,
+            strong: Color32::WHITE,
+            link: Color32::WHITE,
+            code_bg: Color32::BLACK,
+            weak: Color32::GRAY,
+        };
+        let look = |h: &mut Harness, index: usize| {
+            let ctx = h.ctx.clone();
+            let mut out = (String::new(), false, None);
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let laid = h.facade.laid(ui, &h.source, &theme, index);
+                    let kind = match &laid.figure {
+                        Some(Figure::Picture(_, size)) => format!("picture {}x{}", size.x, size.y),
+                        Some(Figure::Message(m)) => m.text().to_owned(),
+                        None => "none".into(),
+                    };
+                    out = (
+                        kind,
+                        laid.text_shown,
+                        laid.caption.map(|(_, g)| g.text().to_owned()),
+                    );
+                });
+            });
+            out
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            h.frame(vec![]);
+            let (kind, _, _) = look(&mut h, 0);
+            if kind.starts_with("picture") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{kind}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (kind, shown, caption) = look(&mut h, 0);
+        assert_eq!(kind, "picture 120x60");
+        assert!(!shown);
+        assert_eq!(caption.as_deref(), Some("Figure 1. The architecture"));
+        let (missing, _, _) = look(&mut h, 1);
+        assert!(
+            missing.contains("Gone") && missing.contains("gone.png"),
+            "{missing}"
+        );
+        h.cursor_after("image::img/arch");
+        h.frame(vec![]);
+        let (_, shown, _) = look(&mut h, 0);
+        assert!(shown, "the markup shows while the cursor is in the image");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and
