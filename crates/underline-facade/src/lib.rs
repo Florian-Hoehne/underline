@@ -5,6 +5,7 @@
 //! into blocks with source spans (comrak for Markdown, an own parser for
 //! AsciiDoc) is added with the use cases that edit notes in the facade.
 
+pub mod blocks;
 pub mod highlight;
 
 use underline_core::NoteFormat;

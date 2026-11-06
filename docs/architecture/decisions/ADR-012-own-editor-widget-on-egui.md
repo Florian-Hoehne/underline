@@ -56,8 +56,11 @@ highlighting, layout, painting, tessellation) on the development container:
 |-----------------------------------------------------|----------|----------|----------|----------|
 | Typing at line 5,000 of a 10,000-line note          | 0.09 ms  | 0.28 ms  | 14.6 ms  | 16 ms    |
 | Scrolling 50 lines per frame through the note       | 0.11 ms  | 0.32 ms  | 0.65 ms  | 16.7 ms  |
+| Typing in the facade of the same note (2026-11-06) | 1.18 ms  | 1.85 ms  | 1.95 ms  | 16 ms    |
 
-Both criteria are met, so the decision stands. Highlighting a large note for the first time took 0.5 to 1.4 seconds
+Both criteria are met, so the decision stands. In the facade, typed text joins its block without parsing the note
+again, because escaped text cannot change the structure of the blocks; other edits parse the note again with comrak
+(about 9 ms for 10,000 lines). Highlighting a large note for the first time took 0.5 to 1.4 seconds
 in one frame; since coloring is spread over frames of at most 4 milliseconds (ADR-010), the first frame at line 5,000
 takes 4 ms, its colors follow after about 60 frames, and typing stays below 0.3 ms per frame. GPU drawing comes on
 top of the measured CPU time.

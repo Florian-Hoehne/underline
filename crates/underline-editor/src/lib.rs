@@ -3,9 +3,11 @@
 //! text.
 
 mod document;
+mod facade_view;
 mod source_view;
 
 pub use document::{Document, Edit};
+pub use facade_view::FacadeView;
 pub use source_view::SourceView;
 
 #[cfg(test)]

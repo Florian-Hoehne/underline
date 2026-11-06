@@ -11,7 +11,7 @@ use underline_core::{
     OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState, Workspace,
     WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
-use underline_editor::SourceView;
+use underline_editor::{FacadeView, SourceView};
 use underline_facade::highlight::HighlightSet;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -52,6 +52,10 @@ pub struct UnderlineApp {
 /// clock (UC-005).
 struct OpenTab {
     view: SourceView,
+    /// The facade of the same text (ADR-012).
+    facade: FacadeView,
+    /// The editing view the tab shows (UC-004 BR-003, FR-010).
+    editing_view: EditingView,
     path: PathBuf,
     title: String,
     autosave: Autosave,
@@ -340,7 +344,7 @@ impl UnderlineApp {
         // them does not change the order of the note overview.
         let remembered = self.state.tabs(&root);
         for tab in &remembered {
-            self.open_tab(&tab.note, false);
+            self.open_tab(&tab.note, false, tab.editing_view);
         }
         let active = remembered.iter().find(|t| t.active).map(|t| t.note.clone());
         match active.and_then(|note| self.tabs.find(&note)) {
@@ -749,7 +753,7 @@ impl UnderlineApp {
     /// UC-004 step 2: opens `id` in a tab, or activates its tab (A1), and
     /// lists it first in the note overview.
     fn open_note(&mut self, id: &NoteId) {
-        if self.open_tab(id, true) {
+        if self.open_tab(id, true, EditingView::Facade) {
             self.persist_tabs();
             self.refresh_overview();
         }
@@ -757,7 +761,7 @@ impl UnderlineApp {
 
     /// Opens `id` in a tab; with `viewed`, records it as the most recently
     /// opened note. Returns whether a tab shows the note now.
-    fn open_tab(&mut self, id: &NoteId, viewed: bool) -> bool {
+    fn open_tab(&mut self, id: &NoteId, viewed: bool, editing_view: EditingView) -> bool {
         let Some(workspace) = &self.workspace else {
             return false;
         };
@@ -782,6 +786,8 @@ impl UnderlineApp {
             let highlight = Arc::clone(&self.highlight);
             let opened = self.tabs.open(id.clone(), || OpenTab {
                 view: SourceView::new(note.id.as_str(), &note.body, format, highlight),
+                facade: FacadeView::new(note.id.as_str()),
+                editing_view,
                 path,
                 title: note.title(),
                 autosave: Autosave::default(),
@@ -815,7 +821,7 @@ impl UnderlineApp {
             .map(|i| TabState {
                 note: self.tabs.note(i).clone(),
                 position: u32::try_from(i + 1).unwrap_or(u32::MAX),
-                editing_view: EditingView::Source,
+                editing_view: self.tabs.get(i).editing_view,
                 active: Some(i) == active,
             })
             .collect();
@@ -1068,6 +1074,7 @@ impl UnderlineApp {
                 self.open_note(&id);
                 if let Some((_, tab)) = self.tabs.active_mut() {
                     tab.view.focus_end();
+                    tab.facade.request_focus();
                 }
                 self.status = format!("Created the note {}", id.title());
             }
@@ -1210,6 +1217,7 @@ impl eframe::App for UnderlineApp {
             }
         });
 
+        let mut persist = false;
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
@@ -1257,10 +1265,42 @@ impl eframe::App for UnderlineApp {
                     format!("Not stored: {err}. Underline keeps trying."),
                 );
             }
-            if tab.view.show(ui) {
+            // FR-010: switch the editing view at any time; the cursor stays
+            // at its place, since both views share it (UC-005 A1).
+            let mut switched = false;
+            ui.horizontal(|ui| {
+                for (view, label) in [
+                    (EditingView::Facade, "Facade"),
+                    (EditingView::Source, "Source"),
+                ] {
+                    if ui
+                        .selectable_label(tab.editing_view == view, label)
+                        .clicked()
+                        && tab.editing_view != view
+                    {
+                        tab.editing_view = view;
+                        switched = true;
+                    }
+                }
+            });
+            if switched {
+                match tab.editing_view {
+                    EditingView::Facade => tab.facade.request_focus(),
+                    EditingView::Source => tab.view.focus_cursor(),
+                }
+            }
+            let changed = match tab.editing_view {
+                EditingView::Facade => tab.facade.show(ui, &mut tab.view),
+                EditingView::Source => tab.view.show(ui),
+            };
+            persist |= switched;
+            if changed {
                 tab.autosave.changed(Instant::now());
             }
         });
+        if persist {
+            self.persist_tabs();
+        }
         self.autosave(ctx);
     }
 }

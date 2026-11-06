@@ -1,0 +1,968 @@
+//! The facade (FR-009, UC-005, ADR-012): the note shown formatted, block by
+//! block. Every edit is turned into an edit of the markup at the source
+//! position the facade character stands for, on the same text and cursor as
+//! the source view, so both views always agree and blocks that are not edited
+//! keep every byte (NFR-007).
+
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use eframe::egui::{
+    self, text::CCursor, text::LayoutJob, Color32, Event, EventFilter, FontId, Galley, Key, Pos2,
+    Rect, Sense, Stroke, TextFormat, Vec2,
+};
+use underline_core::NoteFormat;
+use underline_facade::blocks::{insert_typed, parse_blocks, Block, BlockKind, ListMarker};
+use underline_facade::highlight::highlight_code;
+
+use crate::SourceView;
+
+const PADDING: f32 = 12.0;
+const BLOCK_GAP: f32 = 8.0;
+const BODY_SIZE: f32 = 15.0;
+const CODE_SIZE: f32 = 14.0;
+
+/// The facade of one tab; it shows and edits the text of a [`SourceView`].
+pub struct FacadeView {
+    id: egui::Id,
+    blocks: Vec<Block>,
+    parsed: Option<u64>,
+    /// Laid-out blocks by what they show, so an edit lays out only the
+    /// blocks it changed.
+    galleys: HashMap<u64, Arc<Galley>>,
+    /// Top of each block, and the end.
+    tops: Vec<f32>,
+    width: f32,
+    focus: bool,
+    scroll_to_cursor: bool,
+}
+
+/// What a block shows besides its text: the marker before it, in chars.
+struct Laid {
+    galley: Arc<Galley>,
+    prefix: usize,
+}
+
+impl FacadeView {
+    pub fn new(id: impl Hash) -> Self {
+        Self {
+            id: egui::Id::new(id).with("facade"),
+            blocks: Vec::new(),
+            parsed: None,
+            galleys: HashMap::new(),
+            tops: vec![0.0],
+            width: 0.0,
+            focus: false,
+            scroll_to_cursor: false,
+        }
+    }
+
+    /// Puts the keyboard focus on the facade at the next frame.
+    pub fn request_focus(&mut self) {
+        self.focus = true;
+        self.scroll_to_cursor = true;
+    }
+
+    /// Draws the facade of `source`'s text and handles its input. Returns
+    /// whether the text changed.
+    pub fn show(&mut self, ui: &mut egui::Ui, source: &mut SourceView) -> bool {
+        let (foreground, background) = source.colors();
+        let theme = Theme {
+            text: rgba(foreground),
+            strong: ui.visuals().strong_text_color(),
+            link: ui.visuals().hyperlink_color,
+            code_bg: ui.visuals().code_bg_color,
+            weak: rgba(foreground).gamma_multiply(0.55),
+        };
+        self.reparse(source);
+        let mut changed = false;
+
+        egui::ScrollArea::vertical()
+            .id_salt(self.id.with("scroll"))
+            .auto_shrink(false)
+            .show_viewport(ui, |ui, viewport| {
+                let width = (ui.available_width() - 2.0 * PADDING).max(80.0);
+                self.layout_all(ui, source, &theme, width);
+                let size = Vec2::new(
+                    ui.available_width(),
+                    self.tops[self.blocks.len()] + 2.0 * PADDING,
+                );
+                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+                let response = ui.interact(rect, self.id, Sense::click_and_drag());
+                let origin = rect.min + Vec2::splat(PADDING);
+                if std::mem::take(&mut self.focus) {
+                    response.request_focus();
+                }
+
+                if response.is_pointer_button_down_on() || response.clicked() {
+                    response.request_focus();
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        if let Some(at) = self.char_at(ui, source, &theme, origin, pos) {
+                            let (_, anchor) = source.cursor_anchor();
+                            let extend = response.dragged() || ui.input(|i| i.modifiers.shift);
+                            source.set_cursor_anchor(at, if extend { anchor } else { at });
+                        }
+                    }
+                }
+
+                if response.has_focus() {
+                    ui.memory_mut(|m| {
+                        m.set_focus_lock_filter(
+                            self.id,
+                            EventFilter {
+                                tab: true,
+                                horizontal_arrows: true,
+                                vertical_arrows: true,
+                                escape: false,
+                            },
+                        )
+                    });
+                    changed = self.handle_input(ui, source, &theme);
+                    if changed {
+                        self.reparse(source);
+                        self.layout_all(ui, source, &theme, width);
+                    }
+                }
+
+                let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
+                painter.rect_filled(painter.clip_rect(), 0.0, rgba(background));
+                let first = self.block_at(viewport.min.y - PADDING);
+                let last = (self.block_at(viewport.max.y - PADDING) + 1).min(self.blocks.len());
+                let (sel_start, sel_end) = source.selection();
+                let rope = source.document().rope().clone();
+                for index in first..last {
+                    let laid = self.laid(ui, source, &theme, index);
+                    let top = origin + Vec2::new(0.0, self.tops[index]);
+                    let block = &self.blocks[index];
+                    match &block.kind {
+                        BlockKind::Code { .. } | BlockKind::Markup => {
+                            painter.rect_filled(
+                                Rect::from_min_size(
+                                    top - Vec2::splat(4.0),
+                                    Vec2::new(width + 8.0, laid.galley.size().y + 8.0),
+                                ),
+                                4.0,
+                                theme.code_bg,
+                            );
+                        }
+                        BlockKind::Quote(depth) => {
+                            for d in 0..*depth {
+                                let x = top.x + 4.0 + d as f32 * 14.0;
+                                painter.line_segment(
+                                    [
+                                        Pos2::new(x, top.y),
+                                        Pos2::new(x, top.y + laid.galley.size().y),
+                                    ],
+                                    Stroke::new(3.0_f32, theme.weak),
+                                );
+                            }
+                        }
+                        BlockKind::ThematicBreak => {
+                            let y = top.y + 8.0;
+                            painter.line_segment(
+                                [Pos2::new(top.x, y), Pos2::new(top.x + width, y)],
+                                Stroke::new(1.0_f32, theme.weak),
+                            );
+                        }
+                        _ => {}
+                    }
+                    // Selection behind the text.
+                    if sel_start != sel_end {
+                        let to_char =
+                            |offset: usize| rope.byte_to_char(offset.min(rope.len_bytes()));
+                        let count = block.text().chars().count();
+                        let mut from = None;
+                        let mut to = None;
+                        for i in 0..=count {
+                            let at = to_char(block.source_offset(i));
+                            if from.is_none() && at >= sel_start {
+                                from = Some(i);
+                            }
+                            if at <= sel_end {
+                                to = Some(i);
+                            }
+                        }
+                        if let (Some(from), Some(to)) = (from, to) {
+                            if from < to {
+                                paint_selection(
+                                    &painter,
+                                    &laid,
+                                    top,
+                                    from,
+                                    to,
+                                    ui.visuals().selection.bg_fill,
+                                );
+                            }
+                        }
+                    }
+                    painter.galley(top, Arc::clone(&laid.galley), theme.text);
+                }
+
+                // Cursor, and the format indicator (FR-011).
+                if let Some(cursor_rect) = self.cursor_rect(ui, source, &theme, origin) {
+                    if response.has_focus() {
+                        painter.line_segment(
+                            [cursor_rect.center_top(), cursor_rect.center_bottom()],
+                            Stroke::new(2.0_f32, theme.text),
+                        );
+                        ui.ctx().output_mut(|o| {
+                            o.ime = Some(egui::output::IMEOutput { rect, cursor_rect })
+                        });
+                    }
+                    if std::mem::take(&mut self.scroll_to_cursor) {
+                        ui.scroll_to_rect(cursor_rect.expand(24.0), None);
+                    }
+                }
+                let indicator = match source.format() {
+                    NoteFormat::Markdown => "Markdown",
+                    NoteFormat::AsciiDoc => "AsciiDoc",
+                };
+                painter.text(
+                    Pos2::new(rect.right() - 6.0, viewport.min.y + rect.top() + 4.0),
+                    egui::Align2::RIGHT_TOP,
+                    indicator,
+                    FontId::proportional(11.0),
+                    theme.weak,
+                );
+            });
+        changed
+    }
+
+    /// Parses the blocks again when the text changed.
+    fn reparse(&mut self, source: &SourceView) {
+        let revision = source.document().revision();
+        if self.parsed != Some(revision) {
+            self.blocks = parse_blocks(&source.document().text(), source.format());
+            self.parsed = Some(revision);
+            self.tops.clear();
+        }
+    }
+
+    /// Lays out every block (from the cache when unchanged) and computes the
+    /// tops of the blocks.
+    fn layout_all(&mut self, ui: &egui::Ui, source: &SourceView, theme: &Theme, width: f32) {
+        if (self.width - width).abs() > 0.5 {
+            self.width = width;
+            self.galleys.clear();
+            self.tops.clear();
+        }
+        if self.tops.len() == self.blocks.len() + 1 {
+            return;
+        }
+        let mut tops = Vec::with_capacity(self.blocks.len() + 1);
+        let mut y = 0.0;
+        for index in 0..self.blocks.len() {
+            tops.push(y);
+            let laid = self.laid(ui, source, theme, index);
+            let extra = match self.blocks[index].kind {
+                BlockKind::ThematicBreak => 16.0,
+                BlockKind::Code { .. } | BlockKind::Markup => 8.0,
+                _ => 0.0,
+            };
+            y += laid.galley.size().y + BLOCK_GAP + extra;
+        }
+        tops.push(y);
+        self.tops = tops;
+    }
+
+    fn block_at(&self, y: f32) -> usize {
+        let count = self.blocks.len();
+        if count == 0 {
+            return 0;
+        }
+        self.tops[..count]
+            .partition_point(|top| *top <= y)
+            .saturating_sub(1)
+            .min(count - 1)
+    }
+
+    /// The laid-out block `index`, cached by what it shows; the layout is
+    /// built only when the cache misses.
+    fn laid(&mut self, ui: &egui::Ui, source: &SourceView, theme: &Theme, index: usize) -> Laid {
+        let block = &self.blocks[index];
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        block.kind.hash(&mut hasher);
+        for run in &block.runs {
+            run.text.hash(&mut hasher);
+            run.style.hash(&mut hasher);
+        }
+        self.width.to_bits().hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some(galley) = self.galleys.get(&key) {
+            return Laid {
+                galley: Arc::clone(galley),
+                prefix: prefix_chars(&block.kind),
+            };
+        }
+        let (job, prefix) = block_job(block, theme, self.width, source);
+        if self.galleys.len() > 8192 {
+            self.galleys.clear();
+        }
+        let galley = ui.fonts(|f| f.layout_job(job));
+        self.galleys.insert(key, Arc::clone(&galley));
+        Laid { galley, prefix }
+    }
+
+    /// Where the cursor is: the block holding it and the facade index in it.
+    fn cursor_position(&self, source: &SourceView) -> Option<(usize, usize)> {
+        let rope = source.document().rope();
+        let (cursor, _) = source.cursor_anchor();
+        let byte = rope.char_to_byte(cursor);
+        let index = self
+            .blocks
+            .iter()
+            .position(|b| byte <= b.span.end.max(b.runs.last().map_or(0, |r| r.end)))
+            .unwrap_or(self.blocks.len().checked_sub(1)?);
+        let block = &self.blocks[index];
+        let at = block
+            .facade_index(byte)
+            .unwrap_or(if byte < block.span.start {
+                0
+            } else {
+                block.text().chars().count()
+            });
+        Some((index, at))
+    }
+
+    fn cursor_rect(
+        &mut self,
+        ui: &egui::Ui,
+        source: &SourceView,
+        theme: &Theme,
+        origin: Pos2,
+    ) -> Option<Rect> {
+        let (index, at) = self.cursor_position(source)?;
+        let laid = self.laid(ui, source, theme, index);
+        let pos = laid.galley.pos_from_ccursor(CCursor::new(laid.prefix + at));
+        let top = origin + Vec2::new(0.0, self.tops[index]);
+        Some(Rect::from_min_size(
+            top + pos.min.to_vec2(),
+            Vec2::new(2.0, pos.height()),
+        ))
+    }
+
+    fn char_at(
+        &mut self,
+        ui: &egui::Ui,
+        source: &SourceView,
+        theme: &Theme,
+        origin: Pos2,
+        pos: Pos2,
+    ) -> Option<usize> {
+        if self.blocks.is_empty() {
+            return Some(source.document().len_chars());
+        }
+        let index = self.block_at(pos.y - origin.y);
+        let laid = self.laid(ui, source, theme, index);
+        let local = pos - origin - Vec2::new(0.0, self.tops[index]);
+        let ccursor = laid.galley.cursor_from_pos(local).ccursor.index;
+        let at = ccursor.saturating_sub(laid.prefix);
+        Some(self.char_of(source, index, at))
+    }
+
+    /// The char index in the text of facade index `at` of block `index`.
+    fn char_of(&self, source: &SourceView, index: usize, at: usize) -> usize {
+        let rope = source.document().rope();
+        let offset = self.blocks[index].source_offset(at).min(rope.len_bytes());
+        rope.byte_to_char(offset)
+    }
+
+    fn handle_input(&mut self, ui: &egui::Ui, source: &mut SourceView, theme: &Theme) -> bool {
+        let events = ui.input(|i| i.events.clone());
+        let mut changed = false;
+        for event in events {
+            match event {
+                Event::Text(text) | Event::Paste(text) => {
+                    changed |= self.type_text(source, &text);
+                }
+                Event::Ime(egui::ImeEvent::Commit(text)) => {
+                    changed |= self.type_text(source, &text);
+                }
+                Event::Copy => {
+                    let text = source.selected_text();
+                    if !text.is_empty() {
+                        ui.ctx().copy_text(text);
+                    }
+                }
+                Event::Cut => {
+                    let text = source.selected_text();
+                    if !text.is_empty() {
+                        ui.ctx().copy_text(text);
+                        changed |= self.delete_selection(source);
+                    }
+                }
+                Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
+                    changed |= self.key(ui, source, theme, key, modifiers);
+                }
+                _ => {}
+            }
+            if changed {
+                self.reparse(source);
+            }
+        }
+        changed
+    }
+
+    /// Types `text` at the cursor, escaped where the markup would read it as
+    /// formatting (UC-005 step 3).
+    fn type_text(&mut self, source: &mut SourceView, text: &str) -> bool {
+        self.delete_selection(source);
+        self.reparse(source);
+        let (cursor, _) = source.cursor_anchor();
+        let byte = source.document().rope().char_to_byte(cursor);
+        let markdown = source.format() == NoteFormat::Markdown;
+        let position = self.cursor_position(source);
+        let (raw, fast) = match position {
+            Some((index, at)) => match &self.blocks[index].kind {
+                BlockKind::Code { .. } => (text.to_owned(), markdown && !text.contains(['`', '~'])),
+                BlockKind::Markup => (text.to_owned(), false),
+                _ if markdown => (escape_markdown(text, at == 0), at > 0),
+                _ => (text.to_owned(), false),
+            },
+            None => (text.to_owned(), false),
+        };
+        source.replace(cursor..cursor, &raw);
+        // Typing cannot change the structure of the blocks, so the new
+        // characters join their block without parsing again (ADR-012).
+        if let (true, Some((index, at))) = (fast, position) {
+            if insert_typed(&mut self.blocks, index, at, byte, text, &raw) {
+                self.parsed = Some(source.document().revision());
+                self.tops.clear();
+            }
+        }
+        self.scroll_to_cursor = true;
+        true
+    }
+
+    fn delete_selection(&mut self, source: &mut SourceView) -> bool {
+        let (start, end) = source.selection();
+        if start == end {
+            return false;
+        }
+        source.replace(start..end, "");
+        true
+    }
+
+    fn key(
+        &mut self,
+        ui: &egui::Ui,
+        source: &mut SourceView,
+        theme: &Theme,
+        key: Key,
+        modifiers: egui::Modifiers,
+    ) -> bool {
+        let Some((index, at)) = self.cursor_position(source) else {
+            if key == Key::Enter {
+                return self.type_text(source, "\n");
+            }
+            return false;
+        };
+        let count = self.blocks[index].text().chars().count();
+        let mut target = None;
+        match key {
+            Key::Z if modifiers.command && modifiers.shift => return source.redo(),
+            Key::Z if modifiers.command => return source.undo(),
+            Key::Y if modifiers.command => return source.redo(),
+            Key::A if modifiers.command => {
+                source.set_cursor_anchor(source.document().len_chars(), 0);
+                return false;
+            }
+            Key::Enter => return self.enter(source, index, at),
+            Key::Backspace => {
+                if self.delete_selection(source) {
+                    return true;
+                }
+                return self.delete_back(source, index, at);
+            }
+            Key::Delete => {
+                if self.delete_selection(source) {
+                    return true;
+                }
+                if at < count {
+                    return self.delete_back(source, index, at + 1);
+                }
+                if index + 1 < self.blocks.len() {
+                    return self.delete_back(source, index + 1, 0);
+                }
+                return false;
+            }
+            Key::ArrowLeft => {
+                target = Some(if at > 0 {
+                    self.char_of(source, index, at - 1)
+                } else if index > 0 {
+                    let previous = self.blocks[index - 1].text().chars().count();
+                    self.char_of(source, index - 1, previous)
+                } else {
+                    self.char_of(source, index, 0)
+                });
+            }
+            Key::ArrowRight => {
+                target = Some(if at < count {
+                    self.char_of(source, index, at + 1)
+                } else if index + 1 < self.blocks.len() {
+                    self.char_of(source, index + 1, 0)
+                } else {
+                    self.char_of(source, index, count)
+                });
+            }
+            Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End => {
+                let laid = self.laid(ui, source, theme, index);
+                let galley = &laid.galley;
+                let current = galley.from_ccursor(CCursor::new(laid.prefix + at));
+                let moved = match key {
+                    Key::ArrowUp => galley.cursor_up_one_row(&current),
+                    Key::ArrowDown => galley.cursor_down_one_row(&current),
+                    Key::Home => galley.cursor_begin_of_row(&current),
+                    _ => galley.cursor_end_of_row(&current),
+                };
+                let same_row = moved.rcursor.row == current.rcursor.row;
+                target = Some(match key {
+                    Key::ArrowUp if same_row && index > 0 => {
+                        let previous = self.blocks[index - 1].text().chars().count();
+                        self.char_of(source, index - 1, previous.min(at))
+                    }
+                    Key::ArrowDown if same_row && index + 1 < self.blocks.len() => {
+                        let next = self.blocks[index + 1].text().chars().count();
+                        self.char_of(source, index + 1, at.min(next))
+                    }
+                    _ => {
+                        let at = moved.ccursor.index.saturating_sub(laid.prefix).min(count);
+                        self.char_of(source, index, at)
+                    }
+                });
+            }
+            _ => {}
+        }
+        if let Some(at) = target {
+            let (_, anchor) = source.cursor_anchor();
+            source.set_cursor_anchor(at, if modifiers.shift { anchor } else { at });
+            self.scroll_to_cursor = true;
+        }
+        false
+    }
+
+    /// Enter: a new paragraph, a new list item with the same marker, or a
+    /// new line in code and markup.
+    fn enter(&mut self, source: &mut SourceView, index: usize, _at: usize) -> bool {
+        self.delete_selection(source);
+        self.reparse(source);
+        let block = &self.blocks[index];
+        let text = source.document().text();
+        let insert = match &block.kind {
+            BlockKind::Code { .. } | BlockKind::Markup => "\n".to_owned(),
+            BlockKind::ListItem { .. } => {
+                let line = &text[block.span.clone()];
+                format!("\n{}", next_marker(line.lines().next().unwrap_or("")))
+            }
+            BlockKind::Quote(depth) => format!("\n\n{} ", ">".repeat(*depth)),
+            _ => "\n\n".to_owned(),
+        };
+        let (cursor, _) = source.cursor_anchor();
+        source.replace(cursor..cursor, &insert);
+        self.scroll_to_cursor = true;
+        true
+    }
+
+    /// Deletes the facade character before index `at` of block `index`; at
+    /// the start of a block, joins it with the block before.
+    fn delete_back(&mut self, source: &mut SourceView, index: usize, at: usize) -> bool {
+        let text = source.document().text();
+        let block = &self.blocks[index];
+        let range = if at > 0 {
+            let start = block.source_offset(at - 1);
+            let end = start + text[start..].chars().next().map_or(0, char::len_utf8);
+            // An escaped character goes with its backslash.
+            let start = if start > 0
+                && text.as_bytes()[start - 1] == b'\\'
+                && text[start..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_punctuation())
+            {
+                start - 1
+            } else {
+                start
+            };
+            start..end
+        } else if index > 0 {
+            let previous = &self.blocks[index - 1];
+            let start = match previous.kind {
+                BlockKind::ThematicBreak => previous.span.start,
+                _ => previous.source_offset(previous.text().chars().count()),
+            };
+            start..block.source_offset(0)
+        } else {
+            return false;
+        };
+        if range.is_empty() {
+            return false;
+        }
+        let rope = source.document().rope();
+        let (start, end) = (rope.byte_to_char(range.start), rope.byte_to_char(range.end));
+        source.replace(start..end, "");
+        self.scroll_to_cursor = true;
+        true
+    }
+}
+
+/// Colors the facade uses.
+struct Theme {
+    text: Color32,
+    strong: Color32,
+    link: Color32,
+    code_bg: Color32,
+    weak: Color32,
+}
+
+/// The layout of one block and the number of marker chars before its text.
+fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (LayoutJob, usize) {
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = width;
+    let body = match block.kind {
+        BlockKind::Heading(level) => FontId::proportional(match level {
+            1 => 26.0,
+            2 => 22.0,
+            3 => 19.0,
+            4 => 17.0,
+            _ => 16.0,
+        }),
+        BlockKind::Code { .. } | BlockKind::Markup => FontId::monospace(CODE_SIZE),
+        _ => FontId::proportional(BODY_SIZE),
+    };
+    let heading = matches!(block.kind, BlockKind::Heading(_));
+    let prefix = prefix_text(&block.kind);
+    let prefix_chars = prefix.chars().count();
+    if !prefix.is_empty() {
+        job.append(&prefix, 0.0, TextFormat::simple(body.clone(), theme.weak));
+    }
+    if let BlockKind::Code { language } = &block.kind {
+        let code = block.text();
+        let lines = highlight_code(&source.highlight_set(), language, &code);
+        for (line, spans) in code
+            .split_inclusive('\n')
+            .zip(lines.iter().chain(std::iter::repeat(&Vec::new())))
+        {
+            let mut end = 0;
+            for span in spans {
+                if span.start > end {
+                    job.append(
+                        &line[end..span.start],
+                        0.0,
+                        TextFormat::simple(body.clone(), theme.text),
+                    );
+                }
+                let stop = span.end.min(line.len());
+                if span.start < stop {
+                    job.append(
+                        &line[span.start..stop],
+                        0.0,
+                        TextFormat::simple(body.clone(), rgba(span.color)),
+                    );
+                    end = stop;
+                }
+            }
+            if end < line.len() {
+                job.append(
+                    &line[end..],
+                    0.0,
+                    TextFormat::simple(body.clone(), theme.text),
+                );
+            }
+        }
+        return (job, prefix_chars);
+    }
+    for run in &block.runs {
+        let style = &run.style;
+        let mut format = TextFormat::simple(
+            if style.code {
+                FontId::monospace(CODE_SIZE)
+            } else {
+                body.clone()
+            },
+            if style.link.is_some() {
+                theme.link
+            } else if style.bold || heading {
+                theme.strong
+            } else {
+                theme.text
+            },
+        );
+        format.italics = style.italic;
+        if style.strike {
+            format.strikethrough = Stroke::new(1.0_f32, theme.text);
+        }
+        if style.link.is_some() {
+            format.underline = Stroke::new(1.0_f32, theme.link);
+        }
+        if style.code {
+            format.background = theme.code_bg;
+        }
+        job.append(&run.text, 0.0, format);
+    }
+    if block.runs.is_empty() {
+        job.append("", 0.0, TextFormat::simple(body, theme.text));
+    }
+    (job, prefix_chars)
+}
+
+/// The marker text the facade shows before a block's text.
+fn prefix_text(kind: &BlockKind) -> String {
+    let mut prefix = String::new();
+    match kind {
+        BlockKind::ListItem {
+            depth,
+            marker,
+            checked,
+        } => {
+            prefix.push_str(&"    ".repeat(*depth));
+            match marker {
+                Some(ListMarker::Bullet) => prefix.push_str("•  "),
+                Some(ListMarker::Number(n)) => prefix.push_str(&format!("{n}.  ")),
+                None => prefix.push_str("   "),
+            }
+            match checked {
+                Some(true) => prefix.push_str("☑ "),
+                Some(false) => prefix.push_str("☐ "),
+                None => {}
+            }
+        }
+        BlockKind::Quote(depth) => prefix.push_str(&"    ".repeat(*depth)),
+        _ => {}
+    }
+    prefix
+}
+
+fn prefix_chars(kind: &BlockKind) -> usize {
+    prefix_text(kind).chars().count()
+}
+
+fn paint_selection(
+    painter: &egui::Painter,
+    laid: &Laid,
+    top: Pos2,
+    from: usize,
+    to: usize,
+    color: Color32,
+) {
+    let start = laid
+        .galley
+        .pos_from_ccursor(CCursor::new(laid.prefix + from));
+    let end = laid.galley.pos_from_ccursor(CCursor::new(laid.prefix + to));
+    for row in &laid.galley.rows {
+        let (y0, y1) = (row.rect.min.y, row.rect.max.y);
+        if y1 <= start.min.y || y0 >= end.max.y {
+            continue;
+        }
+        let x0 = if (start.min.y - y0).abs() < 1.0 {
+            start.min.x
+        } else {
+            row.rect.min.x
+        };
+        let x1 = if (end.min.y - y0).abs() < 1.0 {
+            end.min.x
+        } else {
+            row.rect.max.x
+        };
+        painter.rect_filled(
+            Rect::from_min_max(top + Vec2::new(x0, y0), top + Vec2::new(x1, y1)),
+            0.0,
+            color,
+        );
+    }
+}
+
+/// Escapes characters that Markdown would read as formatting.
+fn escape_markdown(text: &str, at_block_start: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (i, c) in text.chars().enumerate() {
+        let start = at_block_start && i == 0;
+        if matches!(c, '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '>' | '~')
+            || (start && matches!(c, '#' | '-' | '+' | '|'))
+        {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The marker of the next list item after the item line `line`: same
+/// indent, same bullet, the next number, and an open task box for tasks.
+fn next_marker(line: &str) -> String {
+    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+    let rest = &line[indent.len()..];
+    let task = |after: &str| {
+        if after.starts_with("[ ] ") || after.starts_with("[x] ") || after.starts_with("[X] ") {
+            "[ ] "
+        } else {
+            ""
+        }
+    };
+    if let Some(bullet) = rest.chars().next().filter(|c| matches!(c, '-' | '*' | '+')) {
+        let after = rest.get(2..).unwrap_or("");
+        return format!("{indent}{bullet} {}", task(after));
+    }
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    if let Ok(number) = digits.parse::<usize>() {
+        let delimiter = rest[digits.len()..].chars().next().unwrap_or('.');
+        let after = rest.get(digits.len() + 2..).unwrap_or("");
+        return format!("{indent}{}{delimiter} {}", number + 1, task(after));
+    }
+    format!("{indent}- ")
+}
+
+fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use underline_facade::highlight::HighlightSet;
+
+    struct Harness {
+        ctx: egui::Context,
+        source: SourceView,
+        facade: FacadeView,
+    }
+
+    impl Harness {
+        fn new(text: &str) -> Self {
+            let set = Arc::new(HighlightSet::new(true));
+            let mut harness = Self {
+                ctx: egui::Context::default(),
+                source: SourceView::new("t", text, NoteFormat::Markdown, set),
+                facade: FacadeView::new("t"),
+            };
+            harness.facade.request_focus();
+            harness.frame(vec![]);
+            harness.frame(vec![]);
+            harness
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                events,
+                ..Default::default()
+            };
+            let (source, facade) = (&mut self.source, &mut self.facade);
+            let _ = self.ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    facade.show(ui, source);
+                });
+            });
+        }
+
+        /// Puts the cursor after the first occurrence of `marker` in the text.
+        fn cursor_after(&mut self, marker: &str) {
+            let text = self.source.document().text();
+            let byte = text.find(marker).unwrap() + marker.len();
+            let at = self.source.document().rope().byte_to_char(byte);
+            self.source.set_cursor_anchor(at, at);
+        }
+
+        fn text(&self) -> String {
+            self.source.document().text()
+        }
+
+        fn key(&mut self, key: Key) {
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }]);
+        }
+    }
+
+    /// UC-005 step 3, BR-002: typing in the facade changes only the edited
+    /// block; formatting characters are escaped.
+    #[test]
+    fn uc005_typing_changes_only_the_edited_block() {
+        let note =
+            "# Title\n\nSome *emph*  text.\n\n* star  bullets\n-  dash\n\n| a | b |\n|-|-|\n";
+        let mut h = Harness::new(note);
+        h.cursor_after("Some *emph");
+        h.frame(vec![Event::Text("asis 2*3".into())]);
+        assert_eq!(
+            h.text(),
+            "# Title\n\nSome *emphasis 2\\*3*  text.\n\n* star  bullets\n-  dash\n\n| a | b |\n|-|-|\n"
+        );
+    }
+
+    /// UC-005: Enter in a list item starts the next item with its marker;
+    /// in a paragraph a new paragraph.
+    #[test]
+    fn uc005_enter_continues_lists_and_paragraphs() {
+        let mut h = Harness::new("1. first\n\nPara\n");
+        h.cursor_after("first");
+        h.key(Key::Enter);
+        h.frame(vec![Event::Text("second".into())]);
+        assert_eq!(h.text(), "1. first\n2. second\n\nPara\n");
+        h.cursor_after("Para");
+        h.key(Key::Enter);
+        h.frame(vec![Event::Text("Next".into())]);
+        assert_eq!(h.text(), "1. first\n2. second\n\nPara\n\nNext\n");
+    }
+
+    /// UC-005: Backspace deletes an escaped character with its backslash, and
+    /// at the start of a block joins it with the block before.
+    #[test]
+    fn uc005_backspace_deletes_characters_and_joins_blocks() {
+        let mut h = Harness::new("# Head\n\nA \\* b\n");
+        h.cursor_after("A \\*");
+        h.key(Key::Backspace);
+        assert_eq!(h.text(), "# Head\n\nA  b\n");
+        h.cursor_after("# Head\n\n");
+        h.key(Key::Backspace);
+        assert_eq!(h.text(), "# HeadA  b\n");
+    }
+
+    #[test]
+    fn next_list_markers() {
+        assert_eq!(next_marker("- item"), "- ");
+        assert_eq!(next_marker("  * [x] done"), "  * [ ] ");
+        assert_eq!(next_marker("9. nine"), "10. ");
+        assert_eq!(next_marker("3) three"), "4) ");
+    }
+
+    /// ADR-012 / NFR-002: typing in the facade of a 10,000-line note.
+    /// Run with `cargo test --release -p underline-editor -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn adr012_facade_typing_in_10000_lines() {
+        let mut note = String::new();
+        let mut n = 0;
+        while note.lines().count() < 10_000 {
+            note.push_str(&format!("## Section {n}\n\nSome *prose* with **bold** and a [link](https://x.org/{n}).\n\n- item one\n- item two\n\n```rust\nfn f{n}() -> u32 {{ {n} }}\n```\n\n"));
+            n += 1;
+        }
+        let mut h = Harness::new(&note);
+        let target = format!("Section {}", n / 2);
+        h.cursor_after(&target);
+        h.facade.request_focus();
+        h.frame(vec![]);
+        let mut times = Vec::new();
+        for _ in 0..100 {
+            let start = Instant::now();
+            h.frame(vec![Event::Text("x".into())]);
+            times.push(start.elapsed());
+        }
+        times.sort();
+        let (median, p99) = (times[50], times[98]);
+        println!(
+            "facade typing: median {median:?}, p99 {p99:?}, max {:?}",
+            times[99]
+        );
+        assert!(p99 < Duration::from_millis(16), "p99 {p99:?}");
+    }
+}

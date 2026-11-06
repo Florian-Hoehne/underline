@@ -326,6 +326,25 @@ impl DocumentHighlight {
     }
 }
 
+/// Colors a code block of `language` line by line, for the facade
+/// (ADR-010); an unknown language gives no colors.
+pub fn highlight_code(set: &HighlightSet, language: &str, code: &str) -> Vec<Vec<Span>> {
+    let Some(syntax) = set.syntaxes.find_syntax_by_token(&language.to_lowercase()) else {
+        return code.lines().map(|_| Vec::new()).collect();
+    };
+    let highlighter = SyntectHighlighter::new(&set.theme);
+    let mut parse = ParseState::new(syntax);
+    let mut highlight = HighlightState::new(&highlighter, ScopeStack::new());
+    code.split_inclusive('\n')
+        .map(|line| {
+            let (spans, p, h) = color_line(&parse, &highlight, line, &set.syntaxes, &highlighter);
+            parse = p;
+            highlight = h;
+            spans
+        })
+        .collect()
+}
+
 /// How a run of [`DocumentHighlight::compute`] ended.
 enum Outcome {
     /// The new state equals the remembered one; later lines keep their colors.

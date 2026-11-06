@@ -118,6 +118,13 @@ impl SourceView {
         self.focus = true;
     }
 
+    /// Puts the keyboard focus on the view at the cursor, as after a switch
+    /// of the editing view (UC-005 A1).
+    pub fn focus_cursor(&mut self) {
+        self.focus = true;
+        self.scroll_to_cursor = true;
+    }
+
     /// Draws the view and handles its input. Returns whether the text changed.
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let font = FontId::monospace(FONT_SIZE);
@@ -453,11 +460,11 @@ impl SourceView {
         self.doc.rope().line_to_char(line) + column.min(length)
     }
 
-    fn selection(&self) -> (usize, usize) {
+    pub(crate) fn selection(&self) -> (usize, usize) {
         (self.cursor.min(self.anchor), self.cursor.max(self.anchor))
     }
 
-    fn selected_text(&self) -> String {
+    pub(crate) fn selected_text(&self) -> String {
         let (start, end) = self.selection();
         self.doc.rope().slice(start..end).to_string()
     }
@@ -465,6 +472,13 @@ impl SourceView {
     /// Replaces the selection by `text` (UC-005 step 1).
     fn insert(&mut self, text: &str) {
         let (start, end) = self.selection();
+        self.replace(start..end, text);
+    }
+
+    /// Replaces the chars in `range` by `text` and puts the cursor after it;
+    /// the facade edits the note through this (ADR-012).
+    pub(crate) fn replace(&mut self, range: std::ops::Range<usize>, text: &str) {
+        let (start, end) = (range.start, range.end);
         if start == end && text.is_empty() {
             return;
         }
@@ -478,12 +492,36 @@ impl SourceView {
         self.scroll_to_cursor = true;
     }
 
-    fn undo(&mut self) -> bool {
+    /// Cursor and selection anchor, as char indices (shared by both views).
+    pub(crate) fn cursor_anchor(&self) -> (usize, usize) {
+        (self.cursor, self.anchor)
+    }
+
+    pub(crate) fn set_cursor_anchor(&mut self, cursor: usize, anchor: usize) {
+        let len = self.doc.len_chars();
+        self.cursor = cursor.min(len);
+        self.anchor = anchor.min(len);
+    }
+
+    /// The theme colors of the view: text and background.
+    pub(crate) fn colors(&self) -> ([u8; 4], [u8; 4]) {
+        self.highlight.colors()
+    }
+
+    pub(crate) fn format(&self) -> NoteFormat {
+        self.highlight.format()
+    }
+
+    pub(crate) fn highlight_set(&self) -> Arc<HighlightSet> {
+        self.highlight.set()
+    }
+
+    pub(crate) fn undo(&mut self) -> bool {
         let result = self.doc.undo();
         self.after_history(result)
     }
 
-    fn redo(&mut self) -> bool {
+    pub(crate) fn redo(&mut self) -> bool {
         let result = self.doc.redo();
         self.after_history(result)
     }
