@@ -10,6 +10,7 @@ mod format;
 mod git;
 mod note;
 mod settings;
+mod state;
 mod workspace;
 
 pub use atomic::write_atomic;
@@ -22,4 +23,8 @@ pub use format::NoteFormat;
 pub use git::{Git, GitError};
 pub use note::{Note, NoteId};
 pub use settings::{user_settings_dir, SettingsError, WorkspaceSettings, SETTINGS_FILE_NAME};
+pub use state::{
+    now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,
+    Timestamp, WorkspaceState, STATE_FILE_NAME, STATE_WRITE_DELAY,
+};
 pub use workspace::{Workspace, WorkspaceError};

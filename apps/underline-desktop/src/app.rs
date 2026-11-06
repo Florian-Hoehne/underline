@@ -1,10 +1,11 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use eframe::egui;
 use underline_core::{
-    check_directory, create_workspace, user_settings_dir, CreateProblem, DirectoryProblem, Git,
-    GitRepositoryOption, NewWorkspace, Note, NoteFormat, NoteId, Surroundings, Workspace,
-    HOME_TITLE,
+    check_directory, create_workspace, now, user_settings_dir, CreateProblem, DirectoryProblem,
+    EditingView, Git, GitRepositoryOption, NewWorkspace, Note, NoteFormat, NoteId, StateNotice,
+    StateStore, Surroundings, Workspace, HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -19,6 +20,8 @@ pub struct UnderlineApp {
     wiki_url: String,
     status: String,
     create: Option<CreateDialog>,
+    /// Workspaces, tabs, and recent notes kept between starts (ADR-007).
+    state: StateStore,
 }
 
 /// The dialog of UC-001 Create Workspace, one stage per question.
@@ -54,7 +57,7 @@ enum DialogAction {
 }
 
 impl UnderlineApp {
-    pub fn new(workspace: Workspace) -> Self {
+    pub fn new(workspace: Workspace, state: StateStore, notice: Option<StateNotice>) -> Self {
         let mut app = Self {
             workspace,
             formats: Registry::default(),
@@ -64,8 +67,13 @@ impl UnderlineApp {
             wiki_url: String::new(),
             status: String::new(),
             create: None,
+            state,
         };
-        app.refresh();
+        let workspace = app.workspace.clone();
+        app.switch_to(workspace);
+        if let Some(notice) = notice {
+            app.status = format!("Note: {notice}");
+        }
         app
     }
 
@@ -77,10 +85,17 @@ impl UnderlineApp {
     }
 
     /// Makes `workspace` the open one; the previous one is closed (UC-001 step 6).
+    ///
+    /// The workspace is remembered as the last opened one, and the note of its
+    /// remembered active tab is opened again (ADR-007).
     fn switch_to(&mut self, workspace: Workspace) {
         self.workspace = workspace;
         self.current = None;
+        self.state.workspace_opened(self.workspace.root(), now());
         self.refresh();
+        if let Some(note) = self.state.active_note(self.workspace.root()) {
+            self.open(&note);
+        }
     }
 
     /// UC-001 step 2: check the chosen directory, then ask for the options.
@@ -129,6 +144,16 @@ impl UnderlineApp {
                 }
                 self.create = None;
             }
+        }
+    }
+
+    /// Writes the app state when a change is due (ADR-007, NFR-009).
+    fn write_state(&mut self, ctx: &egui::Context) {
+        if let Err(err) = self.state.write_if_due(Instant::now()) {
+            self.status = err.to_string();
+        }
+        if self.state.has_unwritten_changes() {
+            ctx.request_repaint_after(STATE_WRITE_DELAY);
         }
     }
 
@@ -257,7 +282,13 @@ action = DialogAction::AskRemote(directory.clone(), *format);
 
     fn open(&mut self, id: &NoteId) {
         match self.workspace.read(id) {
-            Ok(note) => self.current = Some(note),
+            Ok(note) => {
+                // Tabs and the facade come with later use cases; until then the
+                // one open note is the active tab, shown as source.
+                self.state
+                    .note_opened(self.workspace.root(), &note.id, EditingView::Source, now());
+                self.current = Some(note);
+            }
             Err(err) => self.status = err.to_string(),
         }
     }
@@ -274,8 +305,13 @@ action = DialogAction::AskRemote(directory.clone(), *format);
 }
 
 impl eframe::App for UnderlineApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let _ = self.state.write();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.show_create_dialog(ctx);
+        self.write_state(ctx);
 
         egui::TopBottomPanel::top("wiki").show(ctx, |ui| {
             ui.horizontal(|ui| {
