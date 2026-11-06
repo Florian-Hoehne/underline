@@ -37,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Underline",
         eframe::NativeOptions::default(),
         Box::new(|cc| {
+            underline_editor::fonts::install(&cc.egui_ctx);
             Ok(Box::new(app::UnderlineApp::new(
                 cc.egui_ctx.clone(),
                 given,

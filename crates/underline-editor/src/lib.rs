@@ -4,6 +4,7 @@
 
 mod document;
 mod facade_view;
+pub mod fonts;
 mod source_view;
 
 pub use document::{Document, Edit};

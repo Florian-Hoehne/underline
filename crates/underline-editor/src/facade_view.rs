@@ -16,7 +16,7 @@ use underline_core::NoteFormat;
 use underline_facade::blocks::{insert_typed, parse_blocks, Block, BlockKind, ListMarker};
 use underline_facade::highlight::highlight_code;
 
-use crate::SourceView;
+use crate::{fonts, SourceView};
 
 const PADDING: f32 = 12.0;
 const BLOCK_GAP: f32 = 8.0;
@@ -624,18 +624,19 @@ struct Theme {
 fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (LayoutJob, usize) {
     let mut job = LayoutJob::default();
     job.wrap.max_width = width;
-    let body = match block.kind {
-        BlockKind::Heading(level) => FontId::proportional(match level {
-            1 => 26.0,
-            2 => 22.0,
-            3 => 19.0,
-            4 => 17.0,
-            _ => 16.0,
-        }),
-        BlockKind::Code { .. } | BlockKind::Markup => FontId::monospace(CODE_SIZE),
-        _ => FontId::proportional(BODY_SIZE),
-    };
     let heading = matches!(block.kind, BlockKind::Heading(_));
+    let size = match block.kind {
+        BlockKind::Heading(1) => 26.0,
+        BlockKind::Heading(2) => 22.0,
+        BlockKind::Heading(3) => 19.0,
+        BlockKind::Heading(4) => 17.0,
+        BlockKind::Heading(_) => 16.0,
+        _ => BODY_SIZE,
+    };
+    let body = match block.kind {
+        BlockKind::Code { .. } | BlockKind::Markup => FontId::monospace(CODE_SIZE),
+        _ => FontId::new(size, fonts::family(heading, false)),
+    };
     let prefix = prefix_text(&block.kind);
     let prefix_chars = prefix.chars().count();
     if !prefix.is_empty() {
@@ -679,12 +680,13 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
     }
     for run in &block.runs {
         let style = &run.style;
+        let font = if style.code {
+            FontId::monospace(CODE_SIZE)
+        } else {
+            FontId::new(size, fonts::family(style.bold || heading, style.italic))
+        };
         let mut format = TextFormat::simple(
-            if style.code {
-                FontId::monospace(CODE_SIZE)
-            } else {
-                body.clone()
-            },
+            font,
             if style.link.is_some() {
                 theme.link
             } else if style.bold || heading {
@@ -693,7 +695,6 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
                 theme.text
             },
         );
-        format.italics = style.italic;
         if style.strike {
             format.strikethrough = Stroke::new(1.0_f32, theme.text);
         }
@@ -836,8 +837,10 @@ mod tests {
     impl Harness {
         fn new(text: &str) -> Self {
             let set = Arc::new(HighlightSet::new(true));
+            let ctx = egui::Context::default();
+            fonts::install(&ctx);
             let mut harness = Self {
-                ctx: egui::Context::default(),
+                ctx,
                 source: SourceView::new("t", text, NoteFormat::Markdown, set),
                 facade: FacadeView::new("t"),
             };

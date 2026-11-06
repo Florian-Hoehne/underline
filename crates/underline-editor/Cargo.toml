@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+dejavu.workspace = true
 eframe.workspace = true
 ropey.workspace = true
 underline-core.workspace = true
