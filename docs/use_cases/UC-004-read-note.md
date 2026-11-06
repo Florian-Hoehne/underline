@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user reads a note in a tab, rendered with its code, diagrams, and images, finds their way through it and to the notes it links to, and sees how it is stored.  
 **Trigger:** The user chooses a note in the note overview, follows a local link, or a workspace opens with remembered tabs.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, C-003, C-004, C-005](../requirements.md)
 
