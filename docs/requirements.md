@@ -77,6 +77,7 @@ Derived from `docs/vision.md`. Terms are defined in `docs/glossary.md`.
 | FR-069 | User settings                  | As a user, I want my default settings to be kept in the user settings file so that every workspace starts with them.                                                                           | High     | Open     |
 | FR-070 | Workspace settings             | As a user, I want the workspace settings file to override single user settings for one workspace so that a project can use, for example, AsciiDoc or another theme.                            | High     | Open     |
 | FR-071 | Remember settings immediately  | As a user, I want every setting I change in the interface (theme, input mode, panel sizes, line numbers, copy on select, open tabs) to be stored right away so that it is kept after a restart or a crash. | High     | Open     |
+| FR-072 | Create workspace as git repository | As a user, I want to create a new workspace as a git repository, optionally linked to a git remote, so that my notes are versioned and can be synced from the start. | High     | Open     |
 
 ## Non-Functional Requirements
 
