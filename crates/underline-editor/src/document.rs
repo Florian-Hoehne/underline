@@ -72,7 +72,10 @@ impl Document {
             inserted: text.to_owned(),
         });
         let line = self.rope.char_to_line(edit.at.min(self.rope.len_chars()));
-        self.undo.push(edit);
+        match self.undo.last_mut() {
+            Some(last) if merges(last, &edit) => merge(last, edit),
+            _ => self.undo.push(edit),
+        }
         self.redo.clear();
         line
     }
@@ -113,9 +116,68 @@ impl Document {
     }
 }
 
+/// Whether `next` continues the typing or deleting of `last`, so both are
+/// undone in one step (UC-005 BR-004): text typed right after it within a
+/// word, or backspaces right before it, never across a line break, and a
+/// space after a word starts a new step.
+fn merges(last: &Edit, next: &Edit) -> bool {
+    let typed = |e: &Edit| e.removed.is_empty() && !e.inserted.is_empty();
+    let deleted = |e: &Edit| e.inserted.is_empty() && !e.removed.is_empty();
+    if next.inserted.contains('\n') || next.removed.contains('\n') {
+        return false;
+    }
+    if typed(last) && typed(next) {
+        let follows = next.at == last.at + last.inserted.chars().count();
+        let word_ends = !last.inserted.ends_with(char::is_whitespace)
+            && next.inserted.starts_with(char::is_whitespace);
+        return follows && !word_ends && !last.inserted.contains('\n');
+    }
+    if deleted(last) && deleted(next) {
+        return next.at + next.removed.chars().count() == last.at && !last.removed.contains('\n');
+    }
+    false
+}
+
+fn merge(last: &mut Edit, next: Edit) {
+    if next.removed.is_empty() {
+        last.inserted.push_str(&next.inserted);
+    } else {
+        last.removed.insert_str(0, &next.removed);
+        last.at = next.at;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UC-005 BR-004: typing and deleting are undone a word at a time.
+    #[test]
+    fn uc005_undo_takes_back_a_word_at_a_time() {
+        let mut doc = Document::new("");
+        for (i, c) in "hello world".chars().enumerate() {
+            doc.replace(i..i, &c.to_string());
+        }
+        doc.undo();
+        assert_eq!(doc.text(), "hello");
+        doc.undo();
+        assert_eq!(doc.text(), "");
+        doc.redo();
+        doc.redo();
+        assert_eq!(doc.text(), "hello world");
+        // Backspaces in a row are one step.
+        for at in (6..11).rev() {
+            doc.replace(at..at + 1, "");
+        }
+        assert_eq!(doc.text(), "hello ");
+        doc.undo();
+        assert_eq!(doc.text(), "hello world");
+        // A line break starts a new step.
+        doc.replace(11..11, "\n");
+        doc.replace(12..12, "x");
+        doc.undo();
+        assert_eq!(doc.text(), "hello world\n");
+    }
 
     /// UC-005 BR-004: edits can be undone and redone.
     #[test]
