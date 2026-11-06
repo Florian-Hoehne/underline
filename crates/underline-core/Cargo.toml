@@ -1,6 +1,6 @@
 [package]
 name = "underline-core"
-description = "Note model and local storage for Underline"
+description = "Workspaces, notes, settings, and git for Underline"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,5 @@ rust-version.workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+serde_norway.workspace = true
+directories.workspace = true

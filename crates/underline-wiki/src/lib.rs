@@ -2,7 +2,7 @@
 //!
 //! GitHub and GitLab both store a project's wiki as a separate git
 //! repository of Markdown pages. This crate maps a project to that
-//! repository so a notebook can be cloned, pulled and pushed with git.
+//! repository so a workspace can be cloned, pulled and pushed with git.
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ pub enum WikiError {
     UnsupportedUrl(String),
 }
 
-/// A project wiki that a notebook syncs with.
+/// A project wiki that a workspace syncs with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WikiRemote {
     pub provider: Provider,

@@ -41,17 +41,19 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 |---------|-------------------------------------------------------|----------|
 | ADR-001 | Rust with egui/eframe, crate layout, CI checks        | Accepted |
 | ADR-002 | MCP server over stdio (`underline mcp <dir>`)         | Accepted |
-| ADR-003 | Facade engine with one format module per note format  | Proposed |
-| ADR-004 | Layered YAML settings in `underline.yaml`             | Proposed |
-| ADR-005 | Atomic, debounced autosave                            | Proposed |
-| ADR-006 | Git through the user's credential helper and SSH agent | Proposed |
+| ADR-003 | Facade engine crate, comrak and own AsciiDoc parser   | Accepted |
+| ADR-004 | Layered YAML settings in `underline.yaml`             | Accepted |
+| ADR-005 | Atomic writes of every file, debounced autosave       | Accepted |
+| ADR-006 | Git through the installed git program                 | Accepted |
+| ADR-007 | App state (workspaces, tabs, recent notes) in a state file | Superseded |
+| ADR-008 | Workspace state in `.underline/`, ignored by git by itself | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
 ## Code conventions
 
-- Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-wiki`,
-  `crates/underline-mcp`); `apps/underline-desktop` only wires them to the window and the command line.
+- Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-facade`,
+  `crates/underline-wiki`, `crates/underline-mcp`); `apps/underline-desktop` only wires them to the window and the command line.
 - Unit tests sit next to the code in `#[cfg(test)] mod tests`.
 - Errors are typed with `thiserror` in the library crates.
 

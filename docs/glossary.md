@@ -4,11 +4,13 @@
 |-------------------------|------------------------------------------------------------------------------------------------------------------------------------|-------------------|
 | User                    | The person who works with Underline on their notes.                                                                                |                   |
 | Agent                   | An AI tool, such as Claude Code or Cursor, that reads and writes notes through the MCP server on the user's behalf.               | Bot, Bearbeiter   |
+| Underline folder        | The hidden folder `.underline` in a workspace in which Underline remembers its open tabs and recently opened notes; git ignores it by itself. |                   |
+| Recently opened workspaces | The workspaces the user opened or created before, listed with the most recently opened first when opening a workspace. |                   |
 | Workspace               | A local directory whose Markdown and AsciiDoc files Underline shows as notes; it may be a git repository.                         | Notebook, Vault   |
 | Note                    | One Markdown or AsciiDoc file in a workspace, shown and edited in a tab.                                                           | Notiz             |
-| Home note               | The note titled Home that every new workspace starts with; the start page when the workspace is a wiki.                          |                   |
+| Home note               | The note titled Home that every new workspace starts with; the start page when the workspace is a GitHub wiki.                   |                   |
 | Note format             | The markup a note is stored in, given by its file extension: Markdown (`.md`) or AsciiDoc (`.adoc`).                               |                   |
-| Default format          | The note format a workspace gives to new notes, chosen when the workspace is created; Markdown unless the user picks another.     |                   |
+| Default format          | The note format a workspace gives to new notes: chosen when the workspace is created, otherwise the format most of its notes have; Markdown unless the user picks another. |                   |
 | Facade                  | The editing view that shows a note rendered and lets the user edit it the same way whatever its note format is.                  | WYSIWYG, Fassade  |
 | Facade engine           | The part of Underline that stores every edit in the note format of the note, whichever way the user or the agent made it. |                   |
 | Format indicator        | The mark in the facade that names the note format of the active note.                                                             |                   |
