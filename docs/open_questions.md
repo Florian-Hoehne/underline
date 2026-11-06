@@ -28,8 +28,11 @@ set automatically; (c) a reminder date on which Underline notifies the user.
 **Element:** FR-017
 **Raised by:** /requirements, 2026-11-06
 **Blocking:** No
-**Status:** Open
-**Assumed:** All notes of the workspace, with the recently opened notes listed first.
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), step 7 and BR-008
+
+Answer: reading (a): all notes of the workspace, the recently opened ones first (most recent on top), then the others
+by title from A to Z.
 
 The brief says "Übersicht der Notizen (aktuelle Notizen)". Readings: (a) all notes, recent first; (b) only the
 recently opened notes; (c) the folder tree of the workspace with a separate list of recent notes.
@@ -325,3 +328,33 @@ Answer: The system offers to open the outer workspace instead or the directory a
 **Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), steps 2–3, A1, A2, BR-006
 
 Answer: From the recently opened workspaces, most recent first, or any other directory; a directory named at start opens directly.
+
+## OQ-034: Do the notes of a workspace inside another workspace belong to both?
+
+**Element:** UC-002 A5, UC-001 BR-006
+**Raised by:** spec review UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), BR-003, BR-007
+
+Answer: No; a folder that is a known workspace of its own is left out of the workspace around it.
+
+## OQ-035: Can the home directory be opened as a workspace?
+
+**Element:** UC-002 step 4
+**Raised by:** spec review UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), A11, BR-007
+
+Answer: No; it holds the user settings file and all of the user's files, so the system asks for another directory.
+
+## OQ-036: What happens when the Underline folder cannot be written or read?
+
+**Element:** UC-002 step 8
+**Raised by:** spec review UC-002, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), A12
+
+Answer: The workspace opens anyway; the status bar says once that its tabs and recent notes cannot be remembered or could not be read.

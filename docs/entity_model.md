@@ -50,6 +50,8 @@ One Markdown or AsciiDoc file in a workspace.
 #### Constraints
 
 - Two notes in the same folder of a workspace never have the same title; notes in different folders may.
+- A note belongs to exactly one workspace: a folder that is a workspace of its own is not part of the workspace
+  around it.
 - The note format matches the extension of the path: `.md` for Markdown, `.adoc` for AsciiDoc.
 
 ### GIT_REMOTE

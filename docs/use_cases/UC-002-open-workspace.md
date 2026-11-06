@@ -20,12 +20,12 @@ _None — a workspace may be open or not._
 1. The user asks to open a workspace.
 2. The system lists the recently opened workspaces, the most recently opened first, and offers to choose any other directory.
 3. The user chooses a recently opened workspace or a directory.
-4. The system checks that the directory exists, can be read, and does not lie inside a known workspace.
+4. The system checks that the directory exists, can be read, is not the home directory, and does not lie inside a known workspace.
 5. The system closes the workspace that was open before, if any, keeping its open tabs for the next time it is opened.
 6. The system reads the workspace settings file of the directory, if there is one, and takes the default format from it or derives it from the notes.
-7. The system lists the notes of the workspace in the note overview, the recently opened ones first.
-8. The system opens the tabs the workspace had open the last time, or, when it is opened for the first time, the first note.
-9. The system remembers the workspace as the last opened one, shows its directory in the status bar, and reports that it was opened.
+7. The system lists the notes of the workspace in the note overview: the recently opened ones first, the most recent on top, then the others by title from A to Z.
+8. The system opens the tabs the workspace had open the last time, leaving out notes that are gone, or, when it is opened for the first time, the first note.
+9. The system remembers the workspace as the last opened one, shows its directory and, for a git repository with a git remote, the state of the last git sync in the status bar, and reports that the workspace was opened.
 
 ## Alternative Flows
 
@@ -49,7 +49,7 @@ _None — a workspace may be open or not._
 **Trigger:** The chosen directory does not exist (step 4)  
 **Flow:**
 
-1. The system tells the user that the directory does not exist and offers to create a new workspace there instead; a recently opened workspace that is gone is removed from the list.
+1. The system tells the user that the directory does not exist and offers to create a new workspace there instead; a recently opened workspace that is gone is removed from the list. This check comes before the others of step 4.
 2. The user chooses another directory.
 3. Use case continues at step 4.
 
@@ -58,7 +58,7 @@ _None — a workspace may be open or not._
 **Trigger:** The user accepts the offer to create a new workspace in the directory that does not exist (A3 step 1)  
 **Flow:**
 
-1. The system creates the workspace in that directory (UC-001, from its step 3).
+1. The system creates the workspace in that directory (UC-001, from its step 2, which also refuses a directory inside a workspace).
 2. Use case ends.
 
 ### A5: Directory inside a workspace
@@ -68,7 +68,7 @@ _None — a workspace may be open or not._
 
 1. The system tells the user that the directory lies inside that workspace and offers to open that workspace instead or to open the directory anyway.
 2. The user chooses to open the directory anyway.
-3. Use case continues at step 5.
+3. Use case continues at step 5. From now on the outer workspace leaves this directory out of its notes (BR-003).
 
 ### A6: Open the outer workspace
 
@@ -97,7 +97,7 @@ _None — a workspace may be open or not._
 
 ### A9: Workspace already open
 
-**Trigger:** The chosen directory is the workspace that is open (step 4)  
+**Trigger:** The chosen directory, or the outer workspace chosen in A6, is the workspace that is open (step 4, A6)  
 **Flow:**
 
 1. The system keeps the workspace and its tabs as they are and closes the dialog.
@@ -105,11 +105,37 @@ _None — a workspace may be open or not._
 
 ### A10: User cancels
 
-**Trigger:** The user cancels instead of choosing (step 3, A3 step 2, A5 step 2, A7 step 2)  
+**Trigger:** The user cancels instead of choosing (step 3, A3 step 2, A5 step 2, A7 step 2, A11 step 2)  
 **Flow:**
 
 1. The system closes the dialog; the workspace that was open stays open.
 2. Use case ends.
+
+### A11: Home directory
+
+**Trigger:** The chosen directory is the user's home directory (step 4)  
+**Flow:**
+
+1. The system tells the user that the home directory cannot be a workspace, because it holds the user settings file and all of the user's files.
+2. The user chooses another directory.
+3. Use case continues at step 4.
+
+### A12: Remembered tabs cannot be kept
+
+**Trigger:** The system cannot write the Underline folder, for example in a directory the user may only read, or cannot read what it remembered there (step 8)  
+**Flow:**
+
+1. The system opens the workspace as if for the first time when it cannot read what it remembered, and sets the unreadable record aside.
+2. The system says once in the status bar that the tabs and recently opened notes of this workspace cannot be remembered, or that what was remembered could not be read.
+3. Use case continues at step 9.
+
+### A13: Some files cannot be read
+
+**Trigger:** A folder or note of the workspace cannot be read while the notes are listed (step 7)  
+**Flow:**
+
+1. The system lists the other notes and names in the status bar what it could not read.
+2. Use case continues at step 8.
 
 ## Postconditions
 
@@ -138,7 +164,7 @@ A workspace whose settings file names no default format gives new notes the note
 
 ### BR-003: Which files are notes
 
-Every Markdown (`.md`) and AsciiDoc (`.adoc`) file in the workspace directory and its folders is a note, except files in hidden folders and files the git repository of the workspace is told to ignore. Each note keeps the note format of its file extension (FR-004).
+Every Markdown (`.md`) and AsciiDoc (`.adoc`) file in the workspace directory and its folders is a note, except hidden files, files in hidden folders, files the git repository of the workspace is told to ignore, and files in a folder that is a known workspace of its own (BR-007). So every note belongs to exactly one workspace. Each note keeps the note format of its file extension (FR-004).
 
 ### BR-004: Titles unique per folder
 
@@ -151,3 +177,11 @@ A workspace opened for the first time opens its Home note in a tab. Without a Ho
 ### BR-006: Recently opened workspaces
 
 The system remembers every workspace the user opens or creates, with when it was last opened. A workspace whose directory is gone is no longer listed. The tabs and recently opened notes of a workspace are remembered in its Underline folder and go wherever the directory goes.
+
+### BR-007: Known workspaces
+
+A directory is a known workspace when the system remembers it (BR-006), or when it holds a workspace settings file or an Underline folder. The user settings file in the home directory makes no workspace, and the home directory itself can never be a workspace.
+
+### BR-008: Order of the note overview
+
+The note overview lists the recently opened notes first, the most recently opened on top, and then all other notes by title from A to Z. A title that occurs more than once is shown with its folder (BR-004).

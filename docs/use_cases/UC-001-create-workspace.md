@@ -41,7 +41,7 @@ _None — no workspace or other state needs to exist before._
 **Trigger:** The user accepts the offer to open the non-empty directory as a workspace (A1 step 1)  
 **Flow:**
 
-1. The system opens the directory as an existing workspace (UC-002).
+1. The system opens the directory as an existing workspace (UC-002, from its step 4).
 2. Use case ends.
 
 ### A3: Create as git repository
