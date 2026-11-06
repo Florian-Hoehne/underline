@@ -355,7 +355,10 @@ impl SourceView {
     /// The laid-out text of `line`, cached by its text and colors.
     fn galley(&mut self, ui: &egui::Ui, font: &FontId, line: usize) -> Arc<Galley> {
         let doc = &self.doc;
-        let spans = match self.highlight.spans_by(line, |i| doc.line(i), self.deadline) {
+        let spans = match self
+            .highlight
+            .spans_by(line, |i| doc.line(i), self.deadline)
+        {
             Some(spans) => spans,
             None => {
                 self.uncolored = true;
@@ -438,11 +441,7 @@ fn layout_job(text: &str, spans: &[Span], font: &FontId, plain: Color32) -> Layo
         end = stop;
     }
     if end < text.len() {
-        job.append(
-            &text[end..],
-            0.0,
-            TextFormat::simple(font.clone(), plain),
-        );
+        job.append(&text[end..], 0.0, TextFormat::simple(font.clone(), plain));
     }
     job.wrap.max_width = f32::INFINITY;
     job

@@ -98,7 +98,10 @@ fn adr012_typing_in_10000_lines_within_16_ms() {
     harness.view.set_cursor(at);
     let first = harness.frame(vec![]);
     println!("first frame at line 5,000: {first:?}");
-    assert!(first < FRAME_BUDGET * 2, "the first frame does not wait for the colors");
+    assert!(
+        first < FRAME_BUDGET * 2,
+        "the first frame does not wait for the colors"
+    );
     let mut frames = 1;
     while !harness.view.is_colored() {
         harness.frame(vec![]);
@@ -148,7 +151,10 @@ fn adr012_scrolling_keeps_60_frames_per_second() {
             break;
         }
     }
-    println!("coloring all 10,000 lines: {frames} frames, {:?}", start.elapsed());
+    println!(
+        "coloring all 10,000 lines: {frames} frames, {:?}",
+        start.elapsed()
+    );
 
     let mut times = Vec::new();
     for step in 0..200 {
