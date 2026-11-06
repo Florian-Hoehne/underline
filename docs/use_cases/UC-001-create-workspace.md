@@ -21,9 +21,8 @@ _None — no workspace or other state needs to exist before._
 2. The system checks that the directory is new or empty.
 3. The system asks for the default format, with Markdown preselected, and offers to create the workspace as a git repository.
 4. The user confirms a default format and leaves the git repository option off.
-5. The system creates the directory if it does not exist yet and records the workspace with its default format in the workspace settings file.
-6. The system creates the Home note in the default format.
-7. The system opens the workspace, lists the Home note in the note overview, opens it in a tab, and reports in the status bar that the workspace was created.
+5. The system creates the directory if it does not exist yet, records the default format in the workspace settings file, and creates the Home note in the default format.
+6. The system opens the workspace, lists the Home note in the note overview, opens it in a tab, and reports in the status bar that the workspace was created.
 
 ## Alternative Flows
 
@@ -51,8 +50,8 @@ _None — no workspace or other state needs to exist before._
 
 1. The system asks for the address of a git remote; the address is optional.
 2. The user enters a git remote address or leaves it empty and confirms.
-3. The system creates the directory if it does not exist yet, makes it a git repository, links the git remote when an address was given, and records the workspace with its default format in the workspace settings file.
-4. Use case continues at step 6.
+3. The system creates the directory if it does not exist yet, makes it a git repository, links the git remote when an address was given, records the default format in the workspace settings file, and creates the Home note in the default format.
+4. Use case continues at step 6; when any of this fails, A5 applies.
 
 ### A4: User cancels
 
@@ -62,12 +61,12 @@ _None — no workspace or other state needs to exist before._
 1. The system closes the dialog without creating anything.
 2. Use case ends.
 
-### A5: Directory cannot be written
+### A5: Workspace cannot be created
 
-**Trigger:** The system cannot create the directory or write into it (step 5)  
+**Trigger:** The system cannot create the directory, the git repository, the workspace settings file, or the Home note (step 5)  
 **Flow:**
 
-1. The system reports in the status bar that the workspace could not be created and why, for example missing permission.
+1. The system reports in the status bar that the workspace could not be created and why, for example missing permission or a full disk.
 2. The system removes whatever it had created for this workspace.
 3. Use case ends.
 
@@ -99,9 +98,9 @@ A workspace is created only in a directory that does not exist yet or holds no f
 
 Every new workspace starts with one note titled Home, empty except for its title as heading, stored in the default format. Home is the first page of a GitHub or GitLab wiki, so a workspace pushed to a wiki shows it as the start page.
 
-### BR-004: Git remote not contacted
+### BR-004: Git remote named origin, not contacted
 
-The git remote address is recorded as given. The system does not contact the git remote while creating the workspace; the first git sync (UC-014) shows whether it is reachable.
+The git remote address is recorded as given, under the name origin. The system does not contact the git remote while creating the workspace; the first git sync (UC-014) shows whether it is reachable.
 
 ### BR-005: Default format applies to new notes only
 

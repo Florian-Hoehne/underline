@@ -10,7 +10,7 @@ erDiagram
     WORKSPACE ||--o{ NOTE : "holds"
     WORKSPACE ||--o| GIT_REMOTE : "syncs with"
     WORKSPACE ||--o{ TODO : "holds"
-    WORKSPACE ||--o| SETTINGS : "overrides with"
+    WORKSPACE ||--|| SETTINGS : "overrides with"
     TODO ||--o{ TODO_LINK : "points to notes by"
     NOTE ||--o{ TODO_LINK : "is linked by"
     WORKSPACE ||--o{ OPEN_TAB : "remembers"
@@ -25,7 +25,6 @@ A local directory whose Markdown and AsciiDoc files Underline shows as notes.
 |-------------------|----------------------------------------------------------------|-----------|------------------|------------------------------|
 | directory         | Location of the workspace directory on the local disk          | String    | 500              | Primary Key                  |
 | name              | Name shown to the user, the directory name unless changed      | String    | 100              | Not Null                     |
-| default_format    | Note format given to new notes, chosen when creating it        | String    | 20               | Not Null, Values: Markdown, AsciiDoc |
 | is_git_repository | Whether the workspace is a git repository                      | Boolean   | 1                | Not Null                     |
 | current_branch    | The git branch the workspace is on                             | String    | 250              | Optional                     |
 | last_opened       | When the user last opened the workspace                        | DateTime  | -                | Optional                     |
@@ -60,7 +59,7 @@ The git repository elsewhere that a workspace pulls from and pushes to.
 | Attribute        | Description                                          | Data Type | Length/Precision | Validation Rules                            |
 |------------------|------------------------------------------------------|-----------|------------------|---------------------------------------------|
 | workspace        | The workspace that syncs with this remote            | String    | 500              | Primary Key, Foreign Key (WORKSPACE.directory) |
-| name             | Name of the remote in the repository, such as origin | String    | 100              | Not Null                                    |
+| name             | Name of the remote in the repository, origin by default | String | 100              | Not Null                                    |
 | address          | Address of the remote repository                     | String    | 500              | Not Null                                    |
 | last_sync        | When the last git sync ran                           | DateTime  | -                | Optional                                    |
 | last_sync_result | Outcome of the last git sync                         | String    | 20               | Optional, Values: Success, Conflict, Failed |
@@ -115,6 +114,7 @@ The settings of the user settings file or of one workspace settings file.
 | id                 | Identifier of the set of settings                                  | Long      | 19               | Primary Key, Sequence |
 | scope              | Whether these are the user settings or the settings of a workspace | String    | 20               | Not Null, Values: User, Workspace |
 | workspace          | The workspace these settings belong to                             | String    | 500              | Optional, Unique, Foreign Key (WORKSPACE.directory) |
+| default_format     | Note format given to new notes of the workspace                    | String    | 20               | Optional, Values: Markdown, AsciiDoc |
 | theme              | Theme of the interface                                             | String    | 30               | Optional, Values: Light, Dark, GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Night Owl, Ubuntu, Nord, Dracula, Gruvbox |
 | input_mode         | Input mode of the editor                                           | String    | 20               | Optional, Values: Normal, Vim, Nano |
 | show_line_numbers  | Whether line numbers are shown                                     | Boolean   | 1                | Optional |
@@ -128,7 +128,9 @@ The settings of the user settings file or of one workspace settings file.
 #### Constraints
 
 - There is exactly one set of settings with the scope User, and it has no workspace.
-- A set of settings with the scope Workspace has a workspace.
+- A set of settings with the scope Workspace has a workspace, and every workspace has exactly one such set.
+- The default format is given in the settings of every workspace, chosen when the workspace is created, and never in
+  the user settings.
 - In the user settings every setting has a value; the built-in default fills any value the user never set (theme
   Light, input mode Normal, line numbers shown on the left, copy on select on, git sync every 5 minutes, MCP server
   off).
