@@ -1,0 +1,91 @@
+@startuml Use Cases Overview
+left to right direction
+
+actor "User" as user
+actor "Agent" as agent
+actor "Git Remote" as remote
+
+rectangle "Underline" {
+    usecase "UC-001\nCreate Workspace" as UC001
+    usecase "UC-002\nOpen Workspace" as UC002
+    usecase "UC-003\nCreate Note" as UC003
+    usecase "UC-004\nRead Note" as UC004
+    usecase "UC-005\nEdit Note" as UC005
+    usecase "UC-006\nRename Note" as UC006
+    usecase "UC-007\nDelete Note" as UC007
+    usecase "UC-008\nFind Note" as UC008
+    usecase "UC-009\nExport Note" as UC009
+    usecase "UC-010\nAdjust Settings" as UC010
+    usecase "UC-011\nReview Changes" as UC011
+    usecase "UC-012\nCommit Changes" as UC012
+    usecase "UC-013\nManage Branches" as UC013
+    usecase "UC-014\nSynchronize with Remote" as UC014
+    usecase "UC-015\nResolve Sync Conflict" as UC015
+    usecase "UC-016\nInstall MCP Server" as UC016
+    usecase "UC-017\nControl Agent Access" as UC017
+    usecase "UC-018\nLook Up Notes" as UC018
+    usecase "UC-019\nWrite Note as Agent" as UC019
+    usecase "UC-020\nManage Todos" as UC020
+    usecase "UC-021\nWork Through Todo List" as UC021
+}
+
+user --> UC001
+user --> UC002
+user --> UC003
+user --> UC004
+user --> UC005
+user --> UC006
+user --> UC007
+user --> UC008
+user --> UC009
+user --> UC010
+user --> UC011
+user --> UC012
+user --> UC013
+user --> UC014
+user --> UC015
+user --> UC016
+user --> UC017
+user --> UC020
+user --> UC021
+
+agent --> UC018
+agent --> UC019
+
+UC014 --> remote
+UC016 --> agent
+
+UC015 .> UC014 : <<extend>>
+
+note right of UC014
+  Also runs on its own at the
+  git sync interval (FR-045).
+end note
+
+' Traceability: use case -> functional requirements
+' UC-001 Create Workspace ........ FR-001, FR-072
+' UC-002 Open Workspace .......... FR-002
+' UC-003 Create Note ............. FR-003
+' UC-004 Read Note ............... FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037,
+'                                  FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-057, FR-058
+' UC-005 Edit Note ............... FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025,
+'                                  FR-026, FR-031, FR-033, FR-034, FR-044
+' UC-006 Rename Note ............. FR-005
+' UC-007 Delete Note ............. FR-006
+' UC-008 Find Note ............... FR-007
+' UC-009 Export Note ............. FR-014, FR-015, FR-016
+' UC-010 Adjust Settings ......... FR-022, FR-028, FR-029, FR-032, FR-069, FR-070, FR-071
+' UC-011 Review Changes .......... FR-047, FR-048, FR-049
+' UC-012 Commit Changes .......... FR-051
+' UC-013 Manage Branches ......... FR-050
+' UC-014 Synchronize with Remote . FR-020, FR-045, FR-052, FR-053
+' UC-015 Resolve Sync Conflict ... FR-046
+' UC-016 Install MCP Server ...... FR-060, FR-061
+' UC-017 Control Agent Access .... FR-058, FR-059
+' UC-018 Look Up Notes ........... FR-054, FR-055
+' UC-019 Write Note as Agent ..... FR-056, FR-057
+' UC-020 Manage Todos ............ FR-062, FR-063, FR-064, FR-065, FR-066, FR-068
+' UC-021 Work Through Todo List .. FR-066, FR-067
+' Not in the diagram: FR-013 (Deferred)
+
+@enduml
