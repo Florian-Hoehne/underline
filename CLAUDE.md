@@ -45,6 +45,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-004 | Layered YAML settings in `underline.yaml`             | Accepted |
 | ADR-005 | Atomic writes of every file, debounced autosave       | Accepted |
 | ADR-006 | Git through the installed git program                 | Accepted |
+| ADR-007 | App state (workspaces, tabs, recent notes) in a state file | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
