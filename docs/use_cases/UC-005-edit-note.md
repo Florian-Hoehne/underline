@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user changes a note in the source view or in the facade, with the keys and tools they prefer, and every change is stored without them having to save.  
 **Trigger:** The user types, formats, pastes, or drops something into the note of the active tab.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-032, FR-033, FR-034, FR-044, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012](../requirements.md)
 
