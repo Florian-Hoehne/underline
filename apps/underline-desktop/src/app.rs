@@ -4,9 +4,10 @@ use std::time::Instant;
 use eframe::egui;
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace,
-    note_overview, now, user_settings_dir, CreateProblem, DirectoryProblem, EditingView, Git,
-    GitRepositoryOption, NewWorkspace, Note, NoteFormat, NoteId, OpenProblem, OverviewEntry,
-    StateNotice, StateStore, Surroundings, Workspace, HOME_TITLE, STATE_WRITE_DELAY,
+    heading_title, note_overview, now, user_settings_dir, CreateProblem, DirectoryProblem,
+    EditingView, Git, GitRepositoryOption, NewNote, NewNoteProblem, NewWorkspace, Note, NoteFormat,
+    NoteId, OpenProblem, OverviewEntry, StateNotice, StateStore, Surroundings, Workspace,
+    HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -22,11 +23,14 @@ pub struct UnderlineApp {
     /// State of the last git sync for the status bar (UC-002 step 9).
     git_state: Option<String>,
     current: Option<Note>,
-    new_page: String,
+    /// Put the cursor at the end of the note once, below the title of a new
+    /// note (UC-003 step 6).
+    cursor_to_end: bool,
     wiki_url: String,
     status: String,
     create: Option<CreateDialog>,
     open: Option<OpenDialog>,
+    new_note: Option<NoteDialog>,
     /// Workspaces, tabs, and recent notes kept between starts (ADR-008).
     state: StateStore,
 }
@@ -51,6 +55,25 @@ enum CreateDialog {
         format: NoteFormat,
         address: String,
     },
+}
+
+/// The dialog of UC-003 Create Note (steps 2–3).
+struct NoteDialog {
+    title: String,
+    folder: String,
+    format: NoteFormat,
+    /// Why the last confirmation was refused (A1, A2, A4).
+    problem: Option<String>,
+    /// A2: the existing note the user may open instead (A3).
+    existing: Option<NoteId>,
+}
+
+/// What the user did in the note dialog this frame.
+enum NoteAction {
+    None,
+    Cancel,
+    Create,
+    OpenExisting(NoteId),
 }
 
 /// The dialog of UC-002 Open Workspace (steps 2–3).
@@ -99,11 +122,12 @@ impl UnderlineApp {
             overview: Vec::new(),
             git_state: None,
             current: None,
-            new_page: String::new(),
+            cursor_to_end: false,
             wiki_url: String::new(),
             status: String::new(),
             create: None,
             open: None,
+            new_note: None,
             state,
         };
         if let Some(notice) = notice {
@@ -539,6 +563,136 @@ impl UnderlineApp {
         self.refresh_overview();
     }
 
+    /// UC-003 step 2: the folder of the active note and the default format
+    /// are preselected.
+    fn start_new_note(&mut self) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let folder = self
+            .current
+            .as_ref()
+            .and_then(|note| note.id.folder())
+            .unwrap_or_default()
+            .to_owned();
+        self.new_note = Some(NoteDialog {
+            title: String::new(),
+            folder,
+            format: workspace.default_format(),
+            problem: None,
+            existing: None,
+        });
+    }
+
+    fn show_note_dialog(&mut self, ctx: &egui::Context) {
+        let (Some(dialog), Some(workspace)) = (&mut self.new_note, &self.workspace) else {
+            return;
+        };
+        let mut action = NoteAction::None;
+        egui::Window::new("New note")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Title:");
+                let edit = ui.text_edit_singleline(&mut dialog.title);
+                if dialog.title.is_empty() && dialog.problem.is_none() {
+                    edit.request_focus();
+                }
+                ui.label("Folder (empty for the top folder, new folders are created):");
+                ui.text_edit_singleline(&mut dialog.folder);
+                ui.horizontal(|ui| {
+                    ui.label("Note format:");
+                    for option in NoteFormat::ALL {
+                        ui.radio_value(&mut dialog.format, option, option.name());
+                    }
+                });
+                // Step 2: the file name the note will get, while the user types.
+                let new = NewNote {
+                    folder: dialog.folder.clone(),
+                    title: dialog.title.clone(),
+                    format: dialog.format,
+                };
+                if let Ok(id) = workspace.plan_note(&new) {
+                    ui.weak(format!("File: {}", id.file_name(dialog.format)));
+                }
+                if let Some(problem) = &dialog.problem {
+                    ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+                }
+                if let Some(existing) = &dialog.existing {
+                    if ui.button("Open the existing note").clicked() {
+                        action = NoteAction::OpenExisting(existing.clone());
+                    }
+                }
+                ui.horizontal(|ui| {
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Create").clicked() || enter {
+                        action = NoteAction::Create;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        action = NoteAction::Cancel;
+                    }
+                });
+            });
+
+        match action {
+            NoteAction::None => {}
+            // A6: nothing is created.
+            NoteAction::Cancel => self.new_note = None,
+            // A3: the existing note opens unchanged.
+            NoteAction::OpenExisting(id) => {
+                self.new_note = None;
+                self.open_note(&id);
+                self.refresh_overview();
+            }
+            NoteAction::Create => self.create_note(),
+        }
+    }
+
+    /// UC-003 steps 4–6.
+    fn create_note(&mut self) {
+        let (Some(dialog), Some(workspace)) = (&mut self.new_note, &mut self.workspace) else {
+            return;
+        };
+        let new = NewNote {
+            folder: dialog.folder.clone(),
+            title: dialog.title.clone(),
+            format: dialog.format,
+        };
+        let content = self
+            .formats
+            .new_note(new.format, &heading_title(&new.title));
+        match workspace.create_note(&new, &content) {
+            Ok(id) => {
+                self.new_note = None;
+                self.open_note(&id);
+                self.cursor_to_end = true;
+                self.refresh_overview();
+                self.status = format!("Created the note {}", id.title());
+            }
+            Err(NewNoteProblem::Exists(id)) => {
+                dialog.problem = Some(format!(
+                    "The note {} exists. Change the title or the folder, or open it.",
+                    id.title()
+                ));
+                dialog.existing = Some(id);
+            }
+            // A5: reported in the status bar; nothing is left behind.
+            Err(problem @ NewNoteProblem::Io { .. }) => {
+                self.new_note = None;
+                self.status = format!("The note could not be created: {problem}");
+            }
+            // A1 and A4: the dialog keeps what the user entered.
+            Err(problem) => {
+                let mut text = problem.to_string();
+                if let Some(first) = text.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                dialog.problem = Some(format!("{text}."));
+                dialog.existing = None;
+            }
+        }
+    }
+
     fn start_create(&mut self) {
         if self.create.is_none() {
             self.open = None;
@@ -566,6 +720,7 @@ impl eframe::App for UnderlineApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.show_open_dialog(ctx);
         self.show_create_dialog(ctx);
+        self.show_note_dialog(ctx);
         self.write_state(ctx);
 
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -620,12 +775,10 @@ impl eframe::App for UnderlineApp {
         }
 
         egui::SidePanel::left("pages").show(ctx, |ui| {
-            ui.heading("Notes");
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.new_page);
-                if ui.button("New").clicked() && !self.new_page.trim().is_empty() {
-                    self.current = Some(Note::new(&self.new_page, ""));
-                    self.new_page.clear();
+                ui.heading("Notes");
+                if ui.button("New note…").clicked() {
+                    self.start_new_note();
                 }
             });
             ui.separator();
@@ -656,10 +809,22 @@ impl eframe::App for UnderlineApp {
                 }
             });
             if let Some(note) = &mut self.current {
-                ui.add_sized(
+                let id = egui::Id::new("note-editor");
+                let response = ui.add_sized(
                     ui.available_size(),
-                    egui::TextEdit::multiline(&mut note.body).code_editor(),
+                    egui::TextEdit::multiline(&mut note.body)
+                        .id(id)
+                        .code_editor(),
                 );
+                if std::mem::take(&mut self.cursor_to_end) {
+                    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+                    let end = egui::text::CCursor::new(note.body.chars().count());
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                    state.store(ctx, id);
+                    response.request_focus();
+                }
             }
         });
     }

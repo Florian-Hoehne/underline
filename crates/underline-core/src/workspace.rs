@@ -42,8 +42,9 @@ pub struct Listing {
 /// A local directory whose Markdown and AsciiDoc files are shown as notes.
 #[derive(Debug, Clone)]
 pub struct Workspace {
-    root: PathBuf,
-    default_format: NoteFormat,
+    pub(crate) root: PathBuf,
+    /// The default format of the workspace settings file, if it names one.
+    recorded_format: Option<NoteFormat>,
     settings_problem: Option<String>,
     excluded: Vec<PathBuf>,
     listing: Listing,
@@ -89,15 +90,12 @@ impl Workspace {
             .collect();
         let mut workspace = Self {
             root,
-            default_format: NoteFormat::Markdown,
+            recorded_format: settings.default_format,
             settings_problem,
             excluded,
             listing: Listing::default(),
         };
         workspace.rescan();
-        workspace.default_format = settings
-            .default_format
-            .unwrap_or_else(|| derived_format(&workspace.listing.notes));
         Ok(workspace)
     }
 
@@ -105,9 +103,12 @@ impl Workspace {
         &self.root
     }
 
-    /// Note format given to new notes of this workspace.
+    /// Note format given to new notes of this workspace: the one recorded in
+    /// the workspace settings file, else the one most notes have (UC-002
+    /// BR-002, UC-003 BR-005).
     pub fn default_format(&self) -> NoteFormat {
-        self.default_format
+        self.recorded_format
+            .unwrap_or_else(|| derived_format(&self.listing.notes))
     }
 
     /// Why the workspace settings file could not be read, if it could not
@@ -171,7 +172,7 @@ impl Workspace {
     pub fn write(&self, note: &Note) -> Result<(), WorkspaceError> {
         let path = match self.existing_path(&note.id)? {
             Some(path) => path,
-            None => self.root.join(note.id.file_name(self.default_format)),
+            None => self.root.join(note.id.file_name(self.default_format())),
         };
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;

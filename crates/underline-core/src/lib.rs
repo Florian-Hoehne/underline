@@ -8,13 +8,14 @@ mod atomic;
 mod create;
 mod format;
 mod git;
+mod new_note;
 mod note;
 mod open;
 mod settings;
 mod state;
 mod workspace;
 
-pub use atomic::write_atomic;
+pub use atomic::{write_atomic, write_new_atomic};
 pub use create::{
     check_directory, create_workspace, CreateError, CreateProblem, DirectoryProblem,
     GitRepositoryOption, NewWorkspace, Surroundings, FALLBACK_BRANCH, FIRST_COMMIT_MESSAGE,
@@ -22,6 +23,10 @@ pub use create::{
 };
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
+pub use new_note::{
+    check_name, heading_title, page_name, NameProblem, NewNote, NewNoteProblem,
+    FORBIDDEN_CHARACTERS, MAX_PATH_CHARS, MAX_TITLE_CHARS,
+};
 pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
 pub use settings::{user_settings_dir, SettingsError, WorkspaceSettings, SETTINGS_FILE_NAME};

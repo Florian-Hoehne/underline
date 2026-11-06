@@ -117,6 +117,19 @@ impl Git {
         }
     }
 
+    /// Whether the git repository around `dir` ignores `path` (relative to
+    /// `dir`), also when it does not exist yet (UC-003 BR-006). `false`
+    /// outside a git repository or without git.
+    pub fn is_ignored(&self, dir: &Path, path: &str) -> bool {
+        Command::new(&self.program)
+            .args(["check-ignore", "--quiet", "--", path])
+            .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
     /// The git remotes of the repository at `dir`, or `None` when `dir` is
     /// not in a git repository or git is not installed (UC-002 step 9).
     pub fn remotes(&self, dir: &Path) -> Option<Vec<String>> {

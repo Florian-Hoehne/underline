@@ -458,3 +458,17 @@ Answer: No; both give the file name Pre-Release.md. The check compares file name
 **Resolved in:** [UC-003](use_cases/UC-003-create-note.md), A4, BR-006
 
 Answer: No; such a folder is refused like a hidden one, because the note would not be listed.
+
+## OQ-047: Do 250 characters always fit into a file name?
+
+**Element:** UC-003 BR-002
+**Raised by:** implementation of UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Open
+**Assumed:** The limit stays at 250 characters. A title of letters such as "ü" or "中" can still be too long for the
+file system (Linux and macOS allow 255 bytes per file name, which can be fewer than 250 such letters); then A5
+applies and the status bar says that the file name is too long.
+
+Readings: (a) keep 250 characters and report the rare case through A5; (b) lower the limit so that every title fits
+on every file system (about 60 characters of any script); (c) count the limit in the units of the file system and
+say so in the message.
