@@ -4,6 +4,7 @@
 |-------------------------|------------------------------------------------------------------------------------------------------------------------------------|-------------------|
 | User                    | The person who works with Underline on their notes.                                                                                |                   |
 | Agent                   | An AI tool, such as Claude Code or Cursor, that reads and writes notes through the MCP server on the user's behalf.               | Bot, Bearbeiter   |
+| Underline folder        | The hidden folder `.underline` in a workspace in which Underline remembers its open tabs and recently opened notes; git ignores it by itself. |                   |
 | Recently opened workspaces | The workspaces the user opened or created before, listed with the most recently opened first when opening a workspace. |                   |
 | Workspace               | A local directory whose Markdown and AsciiDoc files Underline shows as notes; it may be a git repository.                         | Notebook, Vault   |
 | Note                    | One Markdown or AsciiDoc file in a workspace, shown and edited in a tab.                                                           | Notiz             |

@@ -20,7 +20,7 @@ pub struct UnderlineApp {
     wiki_url: String,
     status: String,
     create: Option<CreateDialog>,
-    /// Workspaces, tabs, and recent notes kept between starts (ADR-007).
+    /// Workspaces, tabs, and recent notes kept between starts (ADR-008).
     state: StateStore,
 }
 
@@ -87,14 +87,18 @@ impl UnderlineApp {
     /// Makes `workspace` the open one; the previous one is closed (UC-001 step 6).
     ///
     /// The workspace is remembered as the last opened one, and the note of its
-    /// remembered active tab is opened again (ADR-007).
+    /// remembered active tab is opened again (ADR-008).
     fn switch_to(&mut self, workspace: Workspace) {
         self.workspace = workspace;
         self.current = None;
         self.state.workspace_opened(self.workspace.root(), now());
         self.refresh();
-        if let Some(note) = self.state.active_note(self.workspace.root()) {
+        let root = self.workspace.root().to_owned();
+        if let Some(note) = self.state.active_note(&root) {
             self.open(&note);
+        }
+        for notice in self.state.take_notices() {
+            self.status = format!("Note: {notice}");
         }
     }
 
@@ -147,7 +151,7 @@ impl UnderlineApp {
         }
     }
 
-    /// Writes the app state when a change is due (ADR-007, NFR-009).
+    /// Writes the app state when a change is due (ADR-008, NFR-009).
     fn write_state(&mut self, ctx: &egui::Context) {
         if let Err(err) = self.state.write_if_due(Instant::now()) {
             self.status = err.to_string();

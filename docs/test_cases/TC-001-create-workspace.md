@@ -35,7 +35,7 @@
 | 2    | Choose the new directory `notes-a`.                                 | The system asks for the default format with Markdown preselected and shows the git repository option switched off. |
 | 3    | Confirm without changing anything.                                  | The directory `notes-a` exists.                                                                 |
 | 4    | Look at the window.                                                 | The note overview lists Home; Home is open in a tab in the facade and shows only the heading Home; the status bar reports that the workspace was created. |
-| 5    | Look at the directory `notes-a` with another program.               | It holds exactly `Home.md` and the workspace settings file `underline.yaml`, which names Markdown as default format. |
+| 5    | Look at the directory `notes-a` with another program.               | It holds `Home.md`, the workspace settings file `underline.yaml`, which names Markdown as default format, and the hidden Underline folder `.underline`. |
 | 6    | Restart Underline.                                                  | The workspace `notes-a` opens as the last opened workspace.                                     |
 
 ## TC-001-02: Create an AsciiDoc workspace
@@ -47,7 +47,7 @@
 |------|------------------------------------------------------------|----------------------------------------------------------------------------------|
 | 1    | Ask to create a new workspace and choose `notes-b`.        | Markdown is preselected as default format.                                       |
 | 2    | Choose AsciiDoc and confirm.                               | Home is open in a tab in the facade.                                             |
-| 3    | Look at the directory `notes-b` with another program.      | It holds exactly `Home.adoc` and `underline.yaml`, which names AsciiDoc as default format. |
+| 3    | Look at the directory `notes-b` with another program.      | It holds `Home.adoc`, `underline.yaml`, which names AsciiDoc as default format, and the hidden Underline folder. |
 | 4    | Ask to create another workspace in a new directory `notes-c`. | Markdown is preselected again; the earlier choice of AsciiDoc is not carried over. |
 
 ## TC-001-03: Create a workspace in an existing empty directory
@@ -58,7 +58,7 @@
 | Step | Action                                                         | Expected result                                            |
 |------|----------------------------------------------------------------|------------------------------------------------------------|
 | 1    | Ask to create a new workspace, choose `notes-d`, and confirm.  | The workspace is created and Home is open in a tab.        |
-| 2    | Look at `notes-d` with another program.                        | It holds exactly `Home.md` and `underline.yaml`.           |
+| 2    | Look at `notes-d` with another program.                        | It holds `Home.md`, `underline.yaml`, and the hidden Underline folder. |
 
 ## TC-001-04: The previous workspace is closed and its tabs are kept
 
@@ -113,7 +113,7 @@
 |------|-------------------------------------------------------------------------|---------------------------------------------------------------------------------|
 | 1    | Ask to create a new workspace in `notes-g` and switch the git repository option on. | The system asks for the address of a git remote and marks it as optional. |
 | 2    | Leave the address empty and confirm.                                    | Home is open in a tab in the facade; the status bar reports that the workspace was created. |
-| 3    | Look at the git state of the workspace.                                 | The current branch is `trunk`; there are no uncommitted changes; the workspace has no git remote. |
+| 3    | Look at the git state of the workspace.                                 | The current branch is `trunk`; there are no uncommitted changes and no untracked files, although the Underline folder exists; the workspace has no git remote. |
 | 4    | Look at the history of the workspace.                                   | It holds exactly one commit, titled "Create workspace", with `Home.md` and `underline.yaml`. |
 | 5    | Repeat steps 1–3 in `notes-h` with a git setup that names no default branch. | The current branch is `main`.                                           |
 

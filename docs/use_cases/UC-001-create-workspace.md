@@ -5,7 +5,7 @@
 **Use Case ID:** UC-001  
 **Use Case Name:** Create Workspace  
 **Primary Actor:** User  
-**Goal:** The user has a new workspace that holds only its Home note, in the default format of their choice, optionally as a git repository, and can start writing in the Home note.  
+**Goal:** The user has a new workspace that holds only its Home note besides its workspace settings file and the Underline folder, in the default format of their choice, optionally as a git repository, and can start writing in the Home note.  
 **Trigger:** The user asks to create a new workspace.  
 **Status:** Reviewed  
 
@@ -97,7 +97,7 @@ _None — no workspace or other state needs to exist before._
 - The workspace holds the Home note in the default format, and it is open in a tab in the facade.
 - When the user chose the git repository option, the workspace is a git repository on the user's default branch, its first commit holds the Home note and the workspace settings file, and it is linked to the git remote when an address was given.
 - The workspace that was open before is closed, and its open tabs are remembered.
-- The new workspace is the open workspace and is remembered as the last opened one.
+- The new workspace is the open workspace and is remembered as the last opened one; its open tab is remembered in its Underline folder, which git ignores.
 
 ### Failure Postconditions
 

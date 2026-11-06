@@ -1,6 +1,6 @@
 # ADR-007: Keep the app state in a state file in the user's data directory
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-008](ADR-008-workspace-state-in-underline-folder.md)
 **Date:** 2026-11-06
 **Requirements:** FR-071, NFR-009, NFR-001, C-002, C-006
 

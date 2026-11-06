@@ -119,18 +119,18 @@ _None — a workspace may be open or not._
 - The tabs the workspace had open the last time are open again, or, at the first opening, its first note.
 - The workspace is remembered as the last opened one and listed first among the recently opened workspaces.
 - The workspace that was open before is closed, and its open tabs are remembered.
-- The directory and its files are unchanged.
+- The notes and settings files of the directory are unchanged; only the Underline folder may have been added.
 
 ### Failure Postconditions
 
 - When no workspace could be opened, the workspace that was open before stays open with its tabs.
-- No directory or file is created, changed, or removed.
+- No note, settings file, or directory is created, changed, or removed.
 
 ## Business Rules
 
 ### BR-001: Opening changes nothing
 
-Opening a workspace never adds, changes, or removes a file in its directory. In particular, no workspace settings file is written; one appears only when the user changes a workspace setting (UC-010).
+Opening a workspace never adds, changes, or removes a note or a settings file in its directory; no workspace settings file is written, one appears only when the user changes a workspace setting (UC-010). The only thing opening adds is the Underline folder, in which the system remembers the open tabs and recently opened notes of the workspace; a git repository ignores that folder by itself, so it never shows as a change.
 
 ### BR-002: Derived default format
 
@@ -150,4 +150,4 @@ A workspace opened for the first time opens its Home note in a tab. Without a Ho
 
 ### BR-006: Recently opened workspaces
 
-The system remembers every workspace the user opens or creates, with when it was last opened. A workspace whose directory is gone is no longer listed.
+The system remembers every workspace the user opens or creates, with when it was last opened. A workspace whose directory is gone is no longer listed. The tabs and recently opened notes of a workspace are remembered in its Underline folder and go wherever the directory goes.

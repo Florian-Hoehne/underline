@@ -1,7 +1,7 @@
 //! Underline desktop app.
 //!
 //! `underline [WORKSPACE_DIR]` opens the workspace in a window; without a
-//! directory it opens the last opened workspace (ADR-007).
+//! directory it opens the last opened workspace (ADR-008).
 //! `underline mcp [WORKSPACE_DIR]` serves the workspace to an AI agent over
 //! MCP on stdin and stdout.
 
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return serve_stdio(underline_mcp::Server::new(workspace));
     }
 
-    // ADR-007: without a directory on the command line, the last opened
+    // ADR-008: without a directory on the command line, the last opened
     // workspace opens again (UC-001 postcondition).
     let (state, notice) = match StateStore::default_path() {
         Some(path) => StateStore::load(path),

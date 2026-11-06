@@ -10,7 +10,7 @@ together with an AI agent.
 | Path | What it holds |
 | --- | --- |
 | `apps/underline-desktop` | The `underline` binary: the desktop window (egui/eframe) and the `mcp` subcommand |
-| `crates/underline-core` | Workspaces (directories of `<Page>.md` and `<Page>.adoc` files), settings in `underline.yaml`, the app state between starts, atomic writes, git through the installed `git` |
+| `crates/underline-core` | Workspaces (directories of `<Page>.md` and `<Page>.adoc` files), settings in `underline.yaml`, the state between starts (per workspace in a hidden `.underline/` folder that git ignores by itself), atomic writes, git through the installed `git` |
 | `crates/underline-facade` | Facade engine: one format module per note format (Markdown, AsciiDoc) |
 | `crates/underline-wiki` | GitHub and GitLab wiki remotes (project URL to `.wiki.git` repository) |
 | `crates/underline-mcp` | Model Context Protocol server with `list_notes`, `read_note` and `write_note` tools |
