@@ -10,7 +10,7 @@ use crate::format::NoteFormat;
 use crate::git::{Git, GitError};
 use crate::note::NoteId;
 use crate::settings::{SettingsError, WorkspaceSettings, SETTINGS_FILE_NAME};
-use crate::workspace::{Workspace, WorkspaceError};
+use crate::workspace::{is_workspace_directory, Workspace, WorkspaceError};
 
 /// Title of the note every new workspace starts with (UC-001 BR-003).
 pub const HOME_TITLE: &str = "Home";
@@ -103,7 +103,11 @@ fn check_new_or_empty(directory: &Path) -> Result<(), DirectoryProblem> {
     }
 }
 
-fn enclosing_workspace(directory: &Path, around: &Surroundings) -> Option<PathBuf> {
+/// The known workspace `directory` lies inside, if any (UC-001 BR-006,
+/// UC-002 BR-007): a remembered one, or an enclosing directory that holds a
+/// workspace settings file or an Underline folder. The user's home directory
+/// is never a workspace.
+pub(crate) fn enclosing_workspace(directory: &Path, around: &Surroundings) -> Option<PathBuf> {
     for known in &around.known_workspaces {
         let known = absolute(known);
         if directory != known && directory.starts_with(&known) {
@@ -115,12 +119,12 @@ fn enclosing_workspace(directory: &Path, around: &Surroundings) -> Option<PathBu
         .ancestors()
         .skip(1)
         .filter(|ancestor| Some(*ancestor) != user_dir.as_deref())
-        .find(|ancestor| ancestor.join(SETTINGS_FILE_NAME).is_file())
+        .find(|ancestor| is_workspace_directory(ancestor))
         .map(Path::to_owned)
 }
 
 /// The absolute, lexically normalized form of `path`.
-fn absolute(path: &Path) -> PathBuf {
+pub(crate) fn absolute(path: &Path) -> PathBuf {
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
     let mut normal = PathBuf::new();
     for component in path.components() {

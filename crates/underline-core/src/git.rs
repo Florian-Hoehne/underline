@@ -93,6 +93,38 @@ impl Git {
             .map(|out| out.trim().to_owned())
     }
 
+    /// Paths, relative to `dir`, that the git repository around `dir` is told
+    /// to ignore; a folder stands for everything in it. Empty when `dir` is
+    /// not in a git repository (UC-002 BR-003).
+    pub fn ignored_paths(&self, dir: &Path) -> Result<Vec<PathBuf>, GitError> {
+        let args = [
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ];
+        match self.run(dir, &args) {
+            Ok(out) => Ok(out
+                .split('\0')
+                .map(|entry| entry.trim_end_matches('/'))
+                .filter(|entry| !entry.is_empty())
+                .map(PathBuf::from)
+                .collect()),
+            Err(GitError::Failed { .. }) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// The git remotes of the repository at `dir`, or `None` when `dir` is
+    /// not in a git repository or git is not installed (UC-002 step 9).
+    pub fn remotes(&self, dir: &Path) -> Option<Vec<String>> {
+        self.run(dir, &["remote"])
+            .ok()
+            .map(|out| out.lines().map(str::to_owned).collect())
+    }
+
     fn run(&self, dir: &Path, args: &[&str]) -> Result<String, GitError> {
         let output = Command::new(&self.program)
             .args(args)

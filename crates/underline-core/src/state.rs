@@ -102,6 +102,10 @@ pub enum StateNotice {
     /// The file could not be read; it was set aside under this name and
     /// Underline continues with an empty state.
     SetAside(PathBuf),
+    /// The Underline folder of this workspace cannot be written, so its tabs
+    /// and recently opened notes are not remembered (UC-002 A12). Given once
+    /// per workspace.
+    CannotRemember(PathBuf),
 }
 
 impl std::fmt::Display for StateNotice {
@@ -112,6 +116,11 @@ impl std::fmt::Display for StateNotice {
                 "the remembered workspaces and tabs could not be read and were set aside as {}",
                 path.display()
             ),
+            StateNotice::CannotRemember(dir) => write!(
+                f,
+                "the tabs and recently opened notes of {} cannot be remembered, because its Underline folder cannot be written",
+                dir.display()
+            ),
         }
     }
 }
@@ -121,6 +130,8 @@ impl std::fmt::Display for StateNotice {
 struct Loaded {
     state: WorkspaceState,
     changed_at: Option<Instant>,
+    /// Writing failed before and the user was told (UC-002 A12).
+    unwritable: bool,
 }
 
 /// The state with the files it is kept in.
@@ -180,6 +191,24 @@ impl StateStore {
     /// Notices about state files of workspaces read since the last call.
     pub fn take_notices(&mut self) -> Vec<StateNotice> {
         std::mem::take(&mut self.notices)
+    }
+
+    /// UC-002 step 2: the known workspaces, the most recently opened first.
+    pub fn recent_workspaces(&self) -> Vec<PathBuf> {
+        let mut known: Vec<_> = self.state.workspaces.iter().collect();
+        known.sort_by_key(|w| std::cmp::Reverse(w.last_opened));
+        known.into_iter().map(|w| w.directory.clone()).collect()
+    }
+
+    /// UC-002 A3: forgets a workspace whose directory is gone.
+    pub fn forget_workspace(&mut self, directory: &Path) {
+        let key = key(directory);
+        let before = self.state.workspaces.len();
+        self.state.workspaces.retain(|w| w.directory != key);
+        self.workspaces.remove(&key);
+        if self.state.workspaces.len() != before {
+            self.changed_at.get_or_insert_with(Instant::now);
+        }
     }
 
     /// The workspace opened most recently.
@@ -294,9 +323,14 @@ impl StateStore {
             return Ok(());
         };
         for (directory, loaded) in &mut self.workspaces {
-            if loaded.changed_at.is_some() {
-                write_workspace_state(directory, &loaded.state)?;
-                loaded.changed_at = None;
+            if loaded.changed_at.take().is_some()
+                && write_workspace_state(directory, &loaded.state).is_err()
+                && !loaded.unwritable
+            {
+                // UC-002 A12: the workspace stays open; the user is told once.
+                loaded.unwritable = true;
+                self.notices
+                    .push(StateNotice::CannotRemember(directory.clone()));
             }
         }
         if self.changed_at.is_some() {
@@ -317,6 +351,7 @@ impl StateStore {
                 return Loaded {
                     state: WorkspaceState::default(),
                     changed_at: None,
+                    unwritable: false,
                 };
             }
             let file = key.join(UNDERLINE_FOLDER).join(STATE_FILE_NAME);
@@ -326,6 +361,7 @@ impl StateStore {
             Loaded {
                 state,
                 changed_at: pruned.then(Instant::now),
+                unwritable: false,
             }
         })
     }
@@ -556,6 +592,95 @@ mod tests {
         store.workspace_opened(Path::new("/nowhere"), 1);
         store.write().unwrap();
         assert!(!store.has_unwritten_changes());
+    }
+}
+
+#[cfg(test)]
+mod uc002_tests {
+    use super::*;
+
+    fn sandbox(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "underline-state-uc002-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// TC-002-01 / TC-002-13: the recently opened workspaces, most recent
+    /// first; a gone one is forgotten.
+    #[test]
+    fn uc002_tc01_tc13_lists_and_forgets_recent_workspaces() {
+        let root = sandbox("recent");
+        let (alpha, beta) = (root.join("alpha"), root.join("beta"));
+        fs::create_dir_all(&alpha).unwrap();
+        fs::create_dir_all(&beta).unwrap();
+        let (mut store, _) = StateStore::load(root.join("data").join(STATE_FILE_NAME));
+        store.workspace_opened(&alpha, 1);
+        store.workspace_opened(&beta, 2);
+        assert_eq!(store.recent_workspaces(), [beta.clone(), alpha.clone()]);
+        store.workspace_opened(&alpha, 3);
+        assert_eq!(store.recent_workspaces(), [alpha.clone(), beta.clone()]);
+        store.forget_workspace(&beta);
+        assert_eq!(store.recent_workspaces(), [alpha]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TC-002-20: an Underline folder that cannot be written is reported
+    /// once, and the store keeps working (A12).
+    #[test]
+    fn uc002_tc20_reports_an_unwritable_underline_folder_once() {
+        let root = sandbox("unwritable");
+        let workspace = root.join("readonly");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("Home.md"), "").unwrap();
+        // A file where the folder should be cannot be written into, also as root.
+        fs::write(workspace.join(UNDERLINE_FOLDER), "").unwrap();
+        let (mut store, _) = StateStore::load(root.join("data").join(STATE_FILE_NAME));
+
+        store.workspace_opened(&workspace, 1);
+        store.note_opened(
+            &workspace,
+            &NoteId::from_title("Home"),
+            EditingView::Source,
+            2,
+        );
+        store.write().unwrap();
+        assert_eq!(
+            store.take_notices(),
+            [StateNotice::CannotRemember(workspace.clone())]
+        );
+        store.note_opened(
+            &workspace,
+            &NoteId::from_title("Home"),
+            EditingView::Source,
+            3,
+        );
+        store.write().unwrap();
+        assert!(store.take_notices().is_empty());
+        assert_eq!(store.last_workspace(), Some(workspace.as_path()));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// TC-002-20: a damaged record in the Underline folder is set aside and
+    /// the workspace opens as if for the first time (A12).
+    #[test]
+    fn uc002_tc20_sets_a_damaged_workspace_record_aside() {
+        let root = sandbox("damaged");
+        let workspace = root.join("damaged");
+        fs::create_dir_all(workspace.join(UNDERLINE_FOLDER)).unwrap();
+        fs::write(workspace.join("Home.md"), "").unwrap();
+        let record = workspace.join(UNDERLINE_FOLDER).join(STATE_FILE_NAME);
+        fs::write(&record, "tabs: [broken").unwrap();
+        let (mut store, _) = StateStore::load(root.join("data").join(STATE_FILE_NAME));
+
+        assert_eq!(store.active_note(&workspace), None);
+        let notices = store.take_notices();
+        assert!(matches!(notices.as_slice(), [StateNotice::SetAside(_)]));
+        assert!(!record.exists());
+        fs::remove_dir_all(&root).unwrap();
     }
 }
 

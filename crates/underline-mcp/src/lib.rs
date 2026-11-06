@@ -129,6 +129,7 @@ mod tests {
     fn server(name: &str) -> Server {
         let dir = std::env::temp_dir().join(format!("underline-mcp-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         Server::new(Workspace::open(dir).unwrap())
     }
 

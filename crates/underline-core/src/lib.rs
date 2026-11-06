@@ -9,6 +9,7 @@ mod create;
 mod format;
 mod git;
 mod note;
+mod open;
 mod settings;
 mod state;
 mod workspace;
@@ -22,9 +23,13 @@ pub use create::{
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
 pub use note::{Note, NoteId};
+pub use open::{check_open_directory, check_readable_directory, OpenProblem};
 pub use settings::{user_settings_dir, SettingsError, WorkspaceSettings, SETTINGS_FILE_NAME};
 pub use state::{
     now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,
     Timestamp, WorkspaceState, STATE_FILE_NAME, STATE_WRITE_DELAY,
 };
-pub use workspace::{Workspace, WorkspaceError};
+pub use workspace::{
+    is_workspace_directory, note_overview, Listing, NoteEntry, OverviewEntry, Workspace,
+    WorkspaceError,
+};
