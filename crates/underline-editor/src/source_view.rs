@@ -32,11 +32,21 @@ pub struct SourceView {
     scroll_to_cursor: bool,
     focus: bool,
     galleys: HashMap<u64, Arc<Galley>>,
-    widest: f32,
     /// Until when this frame may color lines.
     deadline: Option<std::time::Instant>,
     /// Whether a line was shown without its colors this frame.
     uncolored: bool,
+    /// Rows each line takes when wrapped at `layout_width`: exact for lines
+    /// laid out, estimated from the character count for the others.
+    rows: Vec<u32>,
+    /// Top of each line from the top of the text; one more entry for the end.
+    tops: Vec<f32>,
+    layout_width: f32,
+    layout_revision: Option<u64>,
+    row_height: f32,
+    /// An edit since the last layout: its first line and the lines it added
+    /// (negative when removed), so only these rows are estimated again.
+    pending_edit: Option<(usize, isize)>,
 }
 
 impl SourceView {
@@ -53,9 +63,14 @@ impl SourceView {
             scroll_to_cursor: false,
             focus: false,
             galleys: HashMap::new(),
-            widest: 0.0,
             deadline: None,
             uncolored: false,
+            rows: Vec::new(),
+            tops: vec![0.0],
+            layout_width: 0.0,
+            layout_revision: None,
+            row_height: FONT_SIZE,
+            pending_edit: None,
         }
     }
 
@@ -91,6 +106,7 @@ impl SourceView {
         self.highlight = DocumentHighlight::new(set, format);
         self.highlight.invalidate_from(0, self.doc.len_lines());
         self.galleys.clear();
+        self.layout_revision = None;
         self.cursor = self.at_line(line, column);
         self.anchor = self.cursor;
     }
@@ -106,24 +122,31 @@ impl SourceView {
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let font = FontId::monospace(FONT_SIZE);
         let row_height = ui.fonts(|f| f.row_height(&font));
+        let char_width = ui.fonts(|f| f.glyph_width(&font, 'x'));
         let (foreground, background) = self.highlight.colors();
         let foreground = color(foreground);
+        let numbers = foreground.gamma_multiply(0.45);
         let mut changed = false;
         self.deadline = Some(std::time::Instant::now() + COLORING_BUDGET);
         self.uncolored = false;
 
-        egui::ScrollArea::both()
+        egui::ScrollArea::vertical()
             .id_salt(self.id.with("scroll"))
             .auto_shrink(false)
             .show_viewport(ui, |ui, viewport| {
                 let lines = self.doc.len_lines();
-                let size = Vec2::new(
-                    (self.widest + 2.0 * PADDING).max(ui.available_width()),
-                    lines as f32 * row_height + 2.0 * PADDING,
-                );
+                // Line numbers on the left (FR-028; their settings come with
+                // UC-010).
+                let digits = lines.max(1).ilog10() as f32 + 1.0;
+                let gutter = digits * char_width + 2.0 * PADDING;
+                let width = ui.available_width();
+                let wrap_width = (width - gutter - 2.0 * PADDING).max(char_width * 8.0);
+                self.update_layout(wrap_width, char_width, row_height);
+
+                let size = Vec2::new(width, self.tops[lines] + 2.0 * PADDING);
                 let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
                 let response = ui.interact(rect, self.id, Sense::click_and_drag());
-                let origin = rect.min + Vec2::splat(PADDING);
+                let origin = rect.min + Vec2::new(gutter, PADDING);
                 if std::mem::take(&mut self.focus) {
                     response.request_focus();
                 }
@@ -132,7 +155,7 @@ impl SourceView {
                 if response.is_pointer_button_down_on() || response.clicked() {
                     response.request_focus();
                     if let Some(pos) = response.interact_pointer_pos() {
-                        let at = self.char_at(ui, &font, origin, row_height, pos);
+                        let at = self.char_at(ui, &font, origin, pos);
                         let extend = response.dragged() || ui.input(|i| i.modifiers.shift);
                         self.cursor = at;
                         if !extend {
@@ -155,44 +178,75 @@ impl SourceView {
                     });
                     let page = (viewport.height() / row_height).floor().max(1.0) as usize;
                     changed = self.handle_keys(ui, page);
+                    if changed {
+                        self.update_layout(wrap_width, char_width, row_height);
+                    }
                 }
 
                 let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
                 painter.rect_filled(painter.clip_rect(), 0.0, color(background));
-                let first = ((viewport.min.y - PADDING) / row_height).floor().max(0.0) as usize;
-                let last =
-                    (((viewport.max.y - PADDING) / row_height).ceil() as usize + 1).min(lines);
+                let lines = self.doc.len_lines();
+                let first = self.line_at(viewport.min.y - PADDING);
+                let last = (self.line_at(viewport.max.y - PADDING) + 1).min(lines);
                 let (selection_start, selection_end) = self.selection();
                 let selection_color = ui.visuals().selection.bg_fill;
+                let mut exact_changed = false;
                 for line in first..last {
                     let galley = self.galley(ui, &font, line);
-                    let top = origin + Vec2::new(0.0, line as f32 * row_height);
-                    self.widest = self.widest.max(galley.size().x);
-                    // Selection behind the text.
+                    let rows = galley.rows.len().max(1) as u32;
+                    if self.rows[line] != rows {
+                        self.rows[line] = rows;
+                        exact_changed = true;
+                    }
+                    let top = origin + Vec2::new(0.0, self.tops[line]);
+                    painter.text(
+                        Pos2::new(origin.x - PADDING, top.y),
+                        egui::Align2::RIGHT_TOP,
+                        (line + 1).to_string(),
+                        font.clone(),
+                        numbers,
+                    );
+                    // Selection behind the text, row by row.
                     let line_start = self.doc.rope().line_to_char(line);
                     let line_len = self.doc.line_text(line).chars().count();
                     let from = selection_start.max(line_start);
                     let to = selection_end.min(line_start + line_len + 1);
                     if selection_start != selection_end && from < to {
-                        let x0 = galley
-                            .pos_from_ccursor(CCursor::new(from - line_start))
-                            .min
-                            .x;
-                        let x1 = if to > line_start + line_len {
-                            galley.size().x + 6.0
+                        let start = galley.pos_from_ccursor(CCursor::new(from - line_start));
+                        let end = if to > line_start + line_len {
+                            let last = galley.pos_from_ccursor(CCursor::new(line_len));
+                            Rect::from_min_size(last.min + Vec2::new(6.0, 0.0), last.size())
                         } else {
-                            galley.pos_from_ccursor(CCursor::new(to - line_start)).min.x
+                            galley.pos_from_ccursor(CCursor::new(to - line_start))
                         };
-                        painter.rect_filled(
-                            Rect::from_min_max(
-                                top + Vec2::new(x0, 0.0),
-                                top + Vec2::new(x1, row_height),
-                            ),
-                            0.0,
-                            selection_color,
-                        );
+                        let row_of = |y: f32| (y / row_height).round() as usize;
+                        let (first_row, last_row) = (row_of(start.min.y), row_of(end.min.y));
+                        for row in first_row..=last_row {
+                            let x0 = if row == first_row { start.min.x } else { 0.0 };
+                            let x1 = if row == last_row {
+                                end.min.x
+                            } else {
+                                galley
+                                    .rows
+                                    .get(row)
+                                    .map_or(wrap_width, |r| r.rect.max.x + 6.0)
+                            };
+                            let y = row as f32 * row_height;
+                            painter.rect_filled(
+                                Rect::from_min_max(
+                                    top + Vec2::new(x0, y),
+                                    top + Vec2::new(x1, y + row_height),
+                                ),
+                                0.0,
+                                selection_color,
+                            );
+                        }
                     }
                     painter.galley(top, galley, foreground);
+                }
+                if exact_changed {
+                    self.recompute_tops();
+                    ui.ctx().request_repaint();
                 }
 
                 // Cursor.
@@ -214,6 +268,82 @@ impl SourceView {
             ui.ctx().request_repaint();
         }
         changed
+    }
+
+    /// Estimates the rows of every line for `wrap_width` when the width or
+    /// the text changed; lines laid out later correct their estimate.
+    fn update_layout(&mut self, wrap_width: f32, char_width: f32, row_height: f32) {
+        let revision = self.doc.revision();
+        let same_width = (self.layout_width - wrap_width).abs() < 0.5;
+        if self.layout_revision == Some(revision) && same_width {
+            return;
+        }
+        let columns = (wrap_width / char_width).floor().max(1.0) as usize;
+        let rope = self.doc.rope();
+        let lines = self.doc.len_lines();
+        let estimate = |line: usize| {
+            let chars = rope.line(line).len_chars().saturating_sub(1);
+            chars.div_ceil(columns).max(1) as u32
+        };
+        match self.pending_edit.take() {
+            // Only the edited lines are estimated again; the others shift.
+            Some((line, added)) if same_width && self.layout_revision.is_some() => {
+                let line = line.min(self.rows.len());
+                if added > 0 {
+                    let at = (line + 1).min(self.rows.len());
+                    self.rows
+                        .splice(at..at, std::iter::repeat(1).take(added as usize));
+                } else if added < 0 {
+                    let from = (line + 1).min(self.rows.len());
+                    let to = (from + added.unsigned_abs()).min(self.rows.len());
+                    self.rows.drain(from..to);
+                }
+                self.rows.resize(lines, 1);
+                let last = (line as isize + added.max(0)) as usize;
+                for l in line..=last.min(lines.saturating_sub(1)) {
+                    self.rows[l] = estimate(l);
+                }
+            }
+            _ => {
+                self.rows.clear();
+                self.rows.extend((0..lines).map(estimate));
+            }
+        }
+        self.layout_width = wrap_width;
+        self.layout_revision = Some(revision);
+        self.row_height = row_height;
+        self.recompute_tops();
+    }
+
+    /// Remembers an edit at `line` that added `added` lines, for the next
+    /// layout; a second edit before it falls back to a full estimate.
+    fn note_edit(&mut self, line: usize, added: isize) {
+        if self.pending_edit.is_some() || self.layout_revision.is_none() {
+            self.pending_edit = None;
+            self.layout_revision = None;
+        } else {
+            self.pending_edit = Some((line, added));
+        }
+    }
+
+    fn recompute_tops(&mut self) {
+        self.tops.clear();
+        self.tops.reserve(self.rows.len() + 1);
+        let mut y = 0.0;
+        for rows in &self.rows {
+            self.tops.push(y);
+            y += *rows as f32 * self.row_height;
+        }
+        self.tops.push(y);
+    }
+
+    /// The line at height `y` from the top of the text.
+    fn line_at(&self, y: f32) -> usize {
+        let lines = self.rows.len();
+        self.tops[..lines]
+            .partition_point(|top| *top <= y)
+            .saturating_sub(1)
+            .min(lines.saturating_sub(1))
     }
 
     /// Applies the keys, text, and clipboard events of this frame.
@@ -344,6 +474,7 @@ impl SourceView {
         self.anchor = self.cursor;
         let added = self.doc.len_lines() as isize - lines_before as isize;
         self.highlight.edited(line, added, self.doc.len_lines());
+        self.note_edit(line, added);
         self.scroll_to_cursor = true;
     }
 
@@ -361,6 +492,9 @@ impl SourceView {
         let Some((cursor, line)) = result else {
             return false;
         };
+        // Undo and redo can change any number of lines: estimate everything.
+        self.layout_revision = None;
+        self.pending_edit = None;
         self.cursor = cursor;
         self.anchor = cursor;
         self.highlight.invalidate_from(line, self.doc.len_lines());
@@ -385,6 +519,7 @@ impl SourceView {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut hasher);
         spans.hash(&mut hasher);
+        self.layout_width.to_bits().hash(&mut hasher);
         let key = hasher.finish();
         if let Some(galley) = self.galleys.get(&key) {
             return Arc::clone(galley);
@@ -393,26 +528,18 @@ impl SourceView {
             self.galleys.clear();
         }
         let (foreground, _) = self.highlight.colors();
-        let job = layout_job(&text, &spans, font, color(foreground));
+        let mut job = layout_job(&text, &spans, font, color(foreground));
+        job.wrap.max_width = self.layout_width;
         let galley = ui.fonts(|f| f.layout_job(job));
         self.galleys.insert(key, Arc::clone(&galley));
         galley
     }
 
-    fn char_at(
-        &mut self,
-        ui: &egui::Ui,
-        font: &FontId,
-        origin: Pos2,
-        row_height: f32,
-        pos: Pos2,
-    ) -> usize {
-        let lines = self.doc.len_lines();
-        let line = (((pos.y - origin.y) / row_height).floor().max(0.0) as usize)
-            .min(lines.saturating_sub(1));
+    fn char_at(&mut self, ui: &egui::Ui, font: &FontId, origin: Pos2, pos: Pos2) -> usize {
+        let line = self.line_at(pos.y - origin.y);
         let galley = self.galley(ui, font, line);
         let column = galley
-            .cursor_from_pos(Vec2::new(pos.x - origin.x, row_height / 2.0))
+            .cursor_from_pos(pos - origin - Vec2::new(0.0, self.tops[line]))
             .ccursor
             .index;
         self.doc.rope().line_to_char(line) + column
@@ -422,8 +549,8 @@ impl SourceView {
         let line = self.doc.rope().char_to_line(self.cursor);
         let column = self.cursor - self.doc.rope().line_to_char(line);
         let galley = self.galley(ui, font, line);
-        let x = galley.pos_from_ccursor(CCursor::new(column)).min.x;
-        let top = origin + Vec2::new(x, line as f32 * row_height);
+        let at = galley.pos_from_ccursor(CCursor::new(column)).min;
+        let top = origin + Vec2::new(at.x, self.tops[line.min(self.tops.len() - 1)] + at.y);
         Rect::from_min_size(top, Vec2::new(2.0, row_height))
     }
 }
@@ -459,7 +586,6 @@ fn layout_job(text: &str, spans: &[Span], font: &FontId, plain: Color32) -> Layo
     if end < text.len() {
         job.append(&text[end..], 0.0, TextFormat::simple(font.clone(), plain));
     }
-    job.wrap.max_width = f32::INFINITY;
     job
 }
 

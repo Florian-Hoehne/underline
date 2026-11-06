@@ -64,6 +64,11 @@ struct OpenTab {
     /// The version from outside last kept as a copy (UC-004 A9), so one
     /// change is kept once, however many events report it.
     kept_outside: Option<String>,
+    /// What the file held when Underline last read or stored it; a file
+    /// that holds anything else was changed outside (ADR-011).
+    on_disk: String,
+    /// The text a running background save writes.
+    saving_text: Option<String>,
 }
 
 impl OpenTab {
@@ -424,7 +429,9 @@ impl UnderlineApp {
             return false;
         };
         let was_deleted = std::mem::take(&mut tab.deleted);
-        if content == tab.view.document().text() {
+        // Only a file that holds something else than Underline last read or
+        // stored was changed outside; unstored edits make no difference.
+        if content == tab.on_disk || tab.saving_text.as_deref() == Some(content.as_str()) {
             return was_deleted;
         }
         if tab.autosave.is_unstored() || tab.saving {
@@ -452,6 +459,7 @@ impl UnderlineApp {
             return true;
         }
         tab.view.reload(&content);
+        tab.on_disk = content;
         self.status = format!("{} was changed outside", tab.title);
         was_deleted
     }
@@ -781,6 +789,8 @@ impl UnderlineApp {
                 error: None,
                 deleted: false,
                 kept_outside: None,
+                on_disk: note.body.clone(),
+                saving_text: None,
             });
             // UC-004 A6: the tab used longest ago was closed; its changes
             // are stored first.
@@ -819,8 +829,10 @@ impl UnderlineApp {
             return Ok(());
         }
         let started = Instant::now();
-        match self.saver.save_now(&tab.path, &tab.view.document().text()) {
+        let text = tab.view.document().text();
+        match self.saver.save_now(&tab.path, &text) {
             Ok(()) => {
+                tab.on_disk = text;
                 tab.autosave.stored(started);
                 tab.error = None;
                 tab.deleted = false;
@@ -873,9 +885,11 @@ impl UnderlineApp {
         let mut busy = false;
         for (_, tab) in self.tabs.iter_mut() {
             if !tab.saving && tab.autosave.is_due(now) {
+                let text = tab.view.document().text();
+                tab.saving_text = Some(text.clone());
                 self.saver.save(SaveJob {
                     path: tab.path.clone(),
-                    text: tab.view.document().text(),
+                    text,
                     started: now,
                 });
                 tab.saving = true;
@@ -891,6 +905,9 @@ impl UnderlineApp {
                 Ok(()) => {
                     tab.autosave.stored(result.started);
                     tab.error = None;
+                    if let Some(text) = tab.saving_text.take() {
+                        tab.on_disk = text;
+                    }
                     if std::mem::take(&mut tab.deleted) {
                         // UC-005 A15: a note deleted outside is stored again.
                         self.status = format!("Stored {} again at its place", tab.title);
@@ -899,6 +916,7 @@ impl UnderlineApp {
                     }
                 }
                 Err(err) => {
+                    tab.saving_text = None;
                     tab.autosave.failed(Instant::now());
                     self.status = format!("{} could not be stored: {err}", tab.title);
                     tab.error = Some(err);
