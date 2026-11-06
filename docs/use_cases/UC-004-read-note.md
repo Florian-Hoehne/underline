@@ -9,7 +9,7 @@
 **Trigger:** The user chooses a note in the note overview, follows a local link, or a workspace opens with remembered tabs.  
 **Status:** Draft  
 
-**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-057, FR-058, FR-071, NFR-004, NFR-007, NFR-008, NFR-014, C-003, C-004, C-005](../requirements.md)
+**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, C-003, C-004, C-005](../requirements.md)
 
 ## Preconditions
 
@@ -18,7 +18,7 @@
 ## Main Success Scenario
 
 1. The user chooses a note in the note overview.
-2. The system opens the note in a new tab in the facade, makes it the active tab, and lists it first in the note overview.
+2. The system opens the note in a new tab in the facade, placed right of the active tab, makes it the active tab, and lists it first in the note overview.
 3. The system shows the note as its note format is shown on GitHub and GitLab: headings, paragraphs, lists, checklists, tables, links, and images, code blocks highlighted for their language, and PlantUML and Mermaid diagrams as pictures, all in the colors of the active theme.
 4. The system shows in the tool panel the properties of the note (its place in the workspace, note format, size, and last change), its outline, its code index, and its figure index, and beside the editor a minimap of the note.
 5. The user reads the note: they scroll, jump to a heading, a code block, or a figure through the tool panel or to a place through the minimap, fold and expand sections, and enlarge diagrams and images.
@@ -40,7 +40,8 @@
 **Flow:**
 
 1. When the link points to a heading of the same note, the system scrolls to that heading; use case continues at step 5.
-2. Otherwise the system opens the linked note, at the heading the link names if it names one; use case continues at step 2 with that note.
+2. Otherwise the system opens the linked note, at the heading the link names if it names one; use case continues at step 2 with that note, or at A1 when it is open already, or at A10 when it cannot be read.
+3. When the named heading does not exist, the system shows the note from its start and says in the status bar that the heading was not found.
 
 ### A3: Linked note does not exist
 
@@ -79,7 +80,7 @@
 
 ### A7: Note changed outside
 
-**Trigger:** An open note is changed by another program or by git, and has no changes in Underline that are not stored yet (any step)  
+**Trigger:** An open note is changed by another program, by git, or by an agent, and all changes made to it in Underline are stored (any step)  
 **Flow:**
 
 1. Within 1 second the system shows the new content in the tab, keeps the reading position as far as the content allows, and says in the status bar that the note was changed outside.
@@ -93,7 +94,16 @@
 1. The system keeps the tab open with the last content, marks it as deleted, and removes the note from the note overview.
 2. Use case continues at the step it was in.
 
-### A9: Note cannot be read
+### A9: Note changed outside while a change is not stored yet
+
+**Trigger:** An open note is changed outside Underline while it holds a change the user made that autosave has not stored yet (any step)  
+**Flow:**
+
+1. The system overwrites neither version: the tab keeps the user's text, which autosave stores as usual, and the version from outside is kept as a copy next to the note, whose title names the note and the time of the change.
+2. The system says in the status bar that the note was changed outside and offers to show both versions side by side (FR-046).
+3. Use case continues at the step it was in.
+
+### A10: Note cannot be read
 
 **Trigger:** The note cannot be read, or its file holds no readable text (step 2)  
 **Flow:**
@@ -101,7 +111,7 @@
 1. The system says in the status bar why the note cannot be read and opens no tab; the file is left as it is.
 2. Use case ends.
 
-### A10: Diagram cannot be rendered
+### A11: Diagram cannot be rendered
 
 **Trigger:** A diagram of the note has an error in its source (step 3)  
 **Flow:**
@@ -109,26 +119,17 @@
 1. The system shows the source of that diagram with the error in its place and renders the rest of the note.
 2. Use case continues at step 4.
 
-### A11: Agent connected
-
-**Trigger:** An agent is connected through the MCP server and reads or writes the active note (any step)  
-**Flow:**
-
-1. The system shows the agent cursor at the place where the agent reads or writes, next to the user cursor, and shows the agent's changes within 1 second.
-2. When the MCP server is switched off or no agent is connected any more, the system hides the agent cursor.
-3. Use case continues at the step it was in.
-
 ## Postconditions
 
 ### Success Postconditions
 
 - The note is open in its own tab, which is the active tab, and is listed first in the note overview.
-- The open tabs, their order and editing views, and the active tab are remembered for the next time the workspace is opened.
+- The open tabs, their order and editing views, and the active tab are remembered for the next time the workspace is opened. Tabs opened again when a workspace opens (UC-002 step 8) do not change the order of the note overview.
 - The note and its file are unchanged.
 
 ### Failure Postconditions
 
-- No file is created, changed, or removed; a note that cannot be read gets no tab.
+- No file is created, changed, or removed, except the copy of an outside version kept in A9; a note that cannot be read gets no tab.
 
 ## Business Rules
 
@@ -138,7 +139,7 @@ A note is open in at most one tab of its workspace. Opening a note that is open 
 
 ### BR-002: Reading changes nothing
 
-Opening, reading, and closing a note never changes its file (NFR-007), in either editing view, also when a diagram cannot be rendered or a link is followed.
+Opening, reading, and closing a note never changes its file (NFR-007), in either editing view, also when a diagram cannot be rendered or a link is followed. A change from outside never overwrites a change of the user, nor the other way round (A9).
 
 ### BR-003: Editing view per tab
 
@@ -146,7 +147,7 @@ A note opens in the facade. A tab keeps the editing view the user switches it to
 
 ### BR-004: Rendering
 
-A note is rendered as the GitHub and GitLab web interfaces show its note format (C-003, C-004). Code blocks are highlighted for the language they name; PlantUML and Mermaid diagrams written in the note (C-005) are shown as pictures. Code and diagrams follow the colors of the active theme (FR-038). Rendering needs no network connection (NFR-014). The text of a note is readable at once; a diagram of up to 200 elements appears within 2 seconds (NFR-004).
+A note is rendered as the GitHub and GitLab web interfaces show its note format (C-003, C-004). Code blocks are highlighted for the language they name; PlantUML and Mermaid diagrams written in the note (C-005) are shown as pictures. Code and diagrams follow the colors of the active theme (FR-038). Rendering needs no network connection (NFR-014). An image from a web address is loaded and shown as GitHub shows it; without a network connection a placeholder names its address. Loading it sends no note content (NFR-015). The text of a note is readable at once; a diagram of up to 200 elements appears within 2 seconds (NFR-004).
 
 ### BR-005: Local links
 
@@ -162,16 +163,12 @@ A web address opens in the default browser after the user agreed once in the ses
 
 ### BR-008: Tabs
 
-At most 100 tabs are open in a workspace. Opening one more closes the tab that was used longest ago. Since every change is stored right away (UC-005), closing a tab never loses a change.
+At most 100 tabs are open in a workspace. A new tab is placed right of the active tab. Opening one more than 100 closes the tab that was used longest ago. Closing a tab first stores any change autosave has not stored yet (NFR-005), so closing never loses a change.
 
 ### BR-009: Changes from outside
 
-A change to an open note from another program, from git, or from an agent appears in its tab within 1 second (NFR-008). The tab keeps its reading position as far as the new content allows.
+A change to an open note from another program, from git, or from an agent appears in its tab within 1 second (NFR-008). The tab keeps its reading position as far as the new content allows. The agent cursor that shows where an agent reads or writes belongs to UC-018 and UC-019.
 
 ### BR-010: Note properties
 
 The properties of the active note are its place in the workspace with its file name, its note format, its size, and when it was last saved (FR-019).
-
-### BR-011: Agent cursor
-
-The agent cursor is shown only while the MCP server is switched on and an agent is connected (FR-057, FR-058). It never moves the user cursor or the user's reading position.

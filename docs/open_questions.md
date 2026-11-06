@@ -72,7 +72,7 @@ Readings: (a) copy into the workspace; (b) link to the original location outside
 **Raised by:** /requirements, 2026-11-06
 **Blocking:** No
 **Status:** Resolved
-**Resolved in:** [Requirements](requirements.md), FR-058; [UC-004](use_cases/UC-004-read-note.md), A11 and BR-011
+**Resolved in:** [Requirements](requirements.md), FR-058 (agent cursor moved to UC-019 in the review of UC-004)
 
 Answer: as FR-058 states: while the MCP server is switched off or no agent is connected.
 ## OQ-008: Which themes besides the named ones?
@@ -532,7 +532,7 @@ Answer: It offers to create the note through UC-003, with title and folder from 
 **Raised by:** /use-case-spec UC-004, 2026-11-06
 **Blocking:** No
 **Status:** Resolved
-**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A7, A8, BR-009
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A7, A8, A9, BR-009
 
 Answer: The tab shows the new content within 1 second and keeps its reading position; a deleted note stays open, marked as deleted.
 
@@ -542,7 +542,7 @@ Answer: The tab shows the new content within 1 second and keeps its reading posi
 **Raised by:** /use-case-spec UC-004, 2026-11-06
 **Blocking:** No
 **Status:** Resolved
-**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A9
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A10
 
 Answer: The status bar says why; no tab opens; the file is left as it is.
 
@@ -555,3 +555,43 @@ Answer: The status bar says why; no tab opens; the file is left as it is.
 **Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A6, BR-008
 
 Answer: 100; one more closes the tab used longest ago.
+
+## OQ-056: Does the agent cursor belong to reading a note?
+
+**Element:** UC-004 A11, FR-057, FR-058
+**Raised by:** spec review UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), use case diagram traceability
+
+Answer: No; it moves to UC-019 (and UC-018), whose agent causes it. UC-004 keeps only that outside changes appear within 1 second.
+
+## OQ-057: What happens when a note is changed outside while a change of the user is not stored yet?
+
+**Element:** UC-004 A7
+**Raised by:** spec review UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A9, BR-002
+
+Answer: Neither version is overwritten: the tab keeps the user's text, the outside version is kept as a copy next to the note, and the status bar offers to compare them.
+
+## OQ-058: Are images from web addresses loaded?
+
+**Element:** UC-004 BR-004
+**Raised by:** spec review UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), BR-004
+
+Answer: Yes, as on GitHub; offline a placeholder names the address.
+
+## OQ-059: Where does a new tab appear?
+
+**Element:** UC-004 step 2
+**Raised by:** spec review UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), step 2, BR-008
+
+Answer: Right of the active tab.
