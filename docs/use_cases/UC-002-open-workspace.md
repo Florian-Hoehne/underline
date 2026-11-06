@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user works on the notes of an existing directory, for example a git repository, with its notes listed and the notes they had open shown again.  
 **Trigger:** The user asks to open a workspace, or starts Underline.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-002, FR-004, FR-017, FR-018, FR-020, FR-070, FR-071, NFR-001, NFR-003, C-002, C-006](../requirements.md)
 
