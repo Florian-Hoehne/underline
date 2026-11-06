@@ -50,13 +50,14 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-009 | Offline diagrams: pure-Rust Mermaid, PlantUML TeaVM build in QuickJS (spike), Java fallback | Accepted |
 | ADR-010 | Code and markup highlighting with syntect, palettes per theme | Accepted |
 | ADR-011 | Watch the workspace with notify, poll as fallback | Accepted |
+| ADR-012 | Own editor widget on egui (rope, block facade, key maps), prototype first | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
 ## Code conventions
 
 - Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-facade`,
-  `crates/underline-wiki`, `crates/underline-mcp`); `apps/underline-desktop` only wires them to the window and the command line.
+  `crates/underline-editor`, `crates/underline-wiki`, `crates/underline-mcp`); `apps/underline-desktop` only wires them to the window and the command line.
 - Unit tests sit next to the code in `#[cfg(test)] mod tests`.
 - Errors are typed with `thiserror` in the library crates.
 
