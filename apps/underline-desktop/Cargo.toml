@@ -1,0 +1,18 @@
+[package]
+name = "underline-desktop"
+description = "Underline desktop app for Linux, Windows and macOS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "underline"
+path = "src/main.rs"
+
+[dependencies]
+underline-core.workspace = true
+underline-mcp.workspace = true
+underline-wiki.workspace = true
+eframe.workspace = true
