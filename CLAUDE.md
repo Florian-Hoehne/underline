@@ -49,6 +49,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-008 | Workspace state in `.underline/`, ignored by git by itself | Accepted |
 | ADR-009 | Offline diagrams: pure-Rust Mermaid, PlantUML TeaVM build in QuickJS (spike), Java fallback | Accepted |
 | ADR-010 | Code and markup highlighting with syntect, palettes per theme | Accepted |
+| ADR-011 | Watch the workspace with notify, poll as fallback | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
