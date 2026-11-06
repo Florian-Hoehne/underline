@@ -358,3 +358,83 @@ Answer: No; it holds the user settings file and all of the user's files, so the 
 **Resolved in:** [UC-002](use_cases/UC-002-open-workspace.md), A12
 
 Answer: The workspace opens anyway; the status bar says once that its tabs and recent notes cannot be remembered or could not be read.
+
+## OQ-037: In which folder is a new note created?
+
+**Element:** UC-003 step 2
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), step 2, BR-006
+
+Answer: In the folder of the note in the active tab (the top folder without one); the user may choose another folder.
+
+## OQ-038: What does a new note contain?
+
+**Element:** UC-003 step 5
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), BR-004
+
+Answer: Only its title as heading, like the Home note.
+
+## OQ-039: How does the title of a new note become its file name?
+
+**Element:** UC-003 BR-001
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), BR-001, BR-002
+
+Answer: Runs of spaces become one dash; characters a file name cannot hold are refused.
+
+## OQ-040: May a single note get another note format than the default format?
+
+**Element:** UC-003 step 3
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), BR-005
+
+Answer: Yes; the default format is preselected and stays unchanged.
+
+## OQ-041: What happens when a note with the same title exists in the folder?
+
+**Element:** UC-003 step 4
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), A2, A3, BR-003
+
+Answer: The system refuses and offers to open the existing note; case and note format do not make a title different.
+
+## OQ-042: When is a new note written to the disk?
+
+**Element:** UC-003 step 5
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), BR-007
+
+Answer: At once, when it is created; later changes by autosave.
+
+## OQ-043: May a new folder be created together with a note?
+
+**Element:** UC-003 step 3
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), BR-006, A4
+
+Answer: Yes, also several levels deep, inside the workspace; not hidden and not inside another workspace.
+
+## OQ-044: In which editing view does a new note open?
+
+**Element:** UC-003 step 6
+**Raised by:** /use-case-spec UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), step 6
+
+Answer: In the facade.

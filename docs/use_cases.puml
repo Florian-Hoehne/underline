@@ -67,7 +67,7 @@ end note
 ' Traceability: use case -> functional requirements
 ' UC-001 Create Workspace ........ FR-001, FR-072
 ' UC-002 Open Workspace .......... FR-002, FR-004, FR-017, FR-018, FR-070, FR-071
-' UC-003 Create Note ............. FR-003
+' UC-003 Create Note ............. FR-003, FR-004
 ' UC-004 Read Note ............... FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037,
 '                                  FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-057, FR-058
 ' UC-005 Edit Note ............... FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025,
