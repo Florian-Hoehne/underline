@@ -58,6 +58,7 @@ UC016 --> agent
 UC015 .> UC014 : <<extend>>
 UC002 .> UC001 : <<extend>>
 UC001 .> UC002 : <<extend>>
+UC003 .> UC004 : <<extend>>
 
 note right of UC014
   Also runs on its own at the

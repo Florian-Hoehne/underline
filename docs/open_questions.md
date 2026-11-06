@@ -71,9 +71,10 @@ Readings: (a) copy into the workspace; (b) link to the original location outside
 **Element:** FR-058
 **Raised by:** /requirements, 2026-11-06
 **Blocking:** No
-**Status:** Open
-**Assumed:** When the user has switched the MCP server off, or when no agent is connected to it.
+**Status:** Resolved
+**Resolved in:** [Requirements](requirements.md), FR-058; [UC-004](use_cases/UC-004-read-note.md), A11 and BR-011
 
+Answer: as FR-058 states: while the MCP server is switched off or no agent is connected.
 ## OQ-008: Which themes besides the named ones?
 
 **Element:** FR-022
@@ -88,8 +89,10 @@ dark), Night Owl, and Ubuntu.
 **Element:** NFR-014
 **Raised by:** /requirements, 2026-11-06
 **Blocking:** No
-**Status:** Open
-**Assumed:** Yes: diagram rendering and export work offline, like every function except git push, pull, and sync.
+**Status:** Resolved
+**Resolved in:** [Requirements](requirements.md), NFR-014; [UC-004](use_cases/UC-004-read-note.md), BR-004
+
+Answer: yes; NFR-014 names diagram rendering among the functions that work offline.
 
 PlantUML diagrams are often rendered by an online service; working offline rules that out.
 
@@ -472,3 +475,83 @@ applies and the status bar says that the file name is too long.
 Readings: (a) keep 250 characters and report the rare case through A5; (b) lower the limit so that every title fits
 on every file system (about 60 characters of any script); (c) count the limit in the units of the file system and
 say so in the message.
+
+## OQ-048: What does a click on a note in the note overview open?
+
+**Element:** UC-004 step 2
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), step 2, A1, BR-001
+
+Answer: A tab of its own; a note that is open already gets its tab activated.
+
+## OQ-049: In which editing view does an existing note open?
+
+**Element:** UC-004 step 2
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), BR-003
+
+Answer: In the facade; a tab keeps the view the user switched it to, also after a restart.
+
+## OQ-050: How is a local link followed, given a click also places the cursor?
+
+**Element:** UC-004 A2
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), BR-006
+
+Answer: By Ctrl+click (Cmd+click on macOS) in both views; pointing at a link shows where it leads.
+
+## OQ-051: What happens with links to web addresses and other files?
+
+**Element:** UC-004 A4
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A4, BR-007
+
+Answer: Web addresses open in the default browser after the user agreed once in the session; other files of the workspace open with the system's program.
+
+## OQ-052: What does following a link to a missing note do?
+
+**Element:** UC-004 A3
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A3
+
+Answer: It offers to create the note through UC-003, with title and folder from the link filled in.
+
+## OQ-053: What happens when an open note is changed outside Underline?
+
+**Element:** UC-004 A7
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A7, A8, BR-009
+
+Answer: The tab shows the new content within 1 second and keeps its reading position; a deleted note stays open, marked as deleted.
+
+## OQ-054: What happens with a note that cannot be read?
+
+**Element:** UC-004 A9
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A9
+
+Answer: The status bar says why; no tab opens; the file is left as it is.
+
+## OQ-055: How many tabs may be open?
+
+**Element:** UC-004 step 2, Entity: OPEN_TAB.position
+**Raised by:** /use-case-spec UC-004, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), A6, BR-008
+
+Answer: 100; one more closes the tab used longest ago.
