@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user has a new note with the title they chose, in the folder and note format they chose, open in a tab and ready to write in.  
 **Trigger:** The user asks to create a new note.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-003, FR-004, FR-018, FR-021, FR-071, NFR-006, NFR-013, C-002](../requirements.md)
 
