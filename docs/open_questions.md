@@ -438,3 +438,23 @@ Answer: Yes, also several levels deep, inside the workspace; not hidden and not 
 **Resolved in:** [UC-003](use_cases/UC-003-create-note.md), step 6
 
 Answer: In the facade.
+
+## OQ-045: Are 'Pre-Release' and 'Pre Release' two titles?
+
+**Element:** UC-003 BR-001
+**Raised by:** spec review UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), BR-001, BR-003, step 2
+
+Answer: No; both give the file name Pre-Release.md. The check compares file names, the dialog shows the file name, and a dash is shown as a space as in GitHub wikis.
+
+## OQ-046: May a note be created in a folder that git ignores?
+
+**Element:** UC-003 step 4
+**Raised by:** spec review UC-003, 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-003](use_cases/UC-003-create-note.md), A4, BR-006
+
+Answer: No; such a folder is refused like a hidden one, because the note would not be listed.
