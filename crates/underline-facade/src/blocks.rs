@@ -50,6 +50,9 @@ pub enum BlockKind {
         language: String,
     },
     ThematicBreak,
+    /// A paragraph set apart with a label: `NOTE`, `TIP`, `IMPORTANT`,
+    /// `WARNING` or `CAUTION`.
+    Admonition(String),
     /// A block the facade shows and edits as its markup (UC-005 BR-008).
     Markup,
 }
@@ -231,9 +234,7 @@ pub fn heading_offset(
 pub fn parse_blocks(source: &str, format: NoteFormat) -> Vec<Block> {
     match format {
         NoteFormat::Markdown => markdown_blocks(source),
-        // The own AsciiDoc parser comes later (ADR-003); until then every
-        // paragraph of an AsciiDoc note is shown and edited as markup.
-        NoteFormat::AsciiDoc => markup_paragraphs(source),
+        NoteFormat::AsciiDoc => crate::asciidoc::asciidoc_blocks(source),
     }
 }
 
@@ -400,28 +401,6 @@ fn markup_block(source: &str, span: Range<usize>) -> Block {
         runs: vec![identity_run(&text, span.start, end, Style::default())],
         span,
     }
-}
-
-fn markup_paragraphs(source: &str) -> Vec<Block> {
-    let mut blocks = Vec::new();
-    let mut start = None;
-    let mut offset = 0;
-    for line in source.split_inclusive('\n') {
-        let blank = line.trim().is_empty();
-        match (start, blank) {
-            (None, false) => start = Some(offset),
-            (Some(s), true) => {
-                blocks.push(markup_block(source, s..offset));
-                start = None;
-            }
-            _ => {}
-        }
-        offset += line.len();
-    }
-    if let Some(s) = start {
-        blocks.push(markup_block(source, s..source.len()));
-    }
-    blocks
 }
 
 fn identity_run(text: &str, start: usize, end: usize, style: Style) -> Run {
@@ -688,16 +667,5 @@ mod tests {
         assert_eq!(link_at(&blocks, note.find("now").unwrap()), None);
         let slug = |t: &str| t.to_lowercase().replace(' ', "-");
         assert_eq!(heading_offset(&blocks, "getting-started", slug), Some(2));
-    }
-
-    #[test]
-    fn asciidoc_paragraphs_are_markup_blocks() {
-        let blocks = parse_blocks(
-            "= Title\n\nSome text\nmore\n\n* item\n",
-            NoteFormat::AsciiDoc,
-        );
-        assert_eq!(blocks.len(), 3);
-        assert!(blocks.iter().all(|b| b.kind == BlockKind::Markup));
-        assert_eq!(blocks[1].text(), "Some text\nmore");
     }
 }

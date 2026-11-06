@@ -4,13 +4,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use underline_core::{
-    check_directory, check_open_directory, check_readable_directory, create_workspace, embed_file,
-    heading_anchor, heading_title, note_overview, now, outside_copy_path, relative, resolve_link,
-    user_settings_dir, Autosave, CreateProblem, DirectoryProblem, EditingView, EmbedError, Git,
-    GitRepositoryOption, LinkTarget, NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId,
-    NoteSaver, OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore,
-    Surroundings, TabList, TabState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
-    STATE_WRITE_DELAY,
+    asciidoc_anchor, check_directory, check_open_directory, check_readable_directory,
+    create_workspace, embed_file, heading_anchor, heading_title, note_overview, now,
+    outside_copy_path, relative, resolve_link, user_settings_dir, Autosave, CreateProblem,
+    DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget, NewNote,
+    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry,
+    OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState, Workspace,
+    WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_editor::{FacadeView, SourceView, Tool};
 use underline_facade::blocks::{heading_offset, parse_blocks};
@@ -1013,8 +1013,13 @@ impl UnderlineApp {
             return;
         };
         let text = tab.view.document().text();
-        let blocks = parse_blocks(&text, tab.view.document_format());
-        match heading_offset(&blocks, anchor, heading_anchor) {
+        let format = tab.view.document_format();
+        let blocks = parse_blocks(&text, format);
+        let slug = match format {
+            NoteFormat::Markdown => heading_anchor,
+            NoteFormat::AsciiDoc => asciidoc_anchor,
+        };
+        match heading_offset(&blocks, anchor, slug) {
             Some(offset) => {
                 tab.view.jump_to_byte(offset);
                 tab.facade.request_focus();

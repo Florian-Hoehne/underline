@@ -13,7 +13,7 @@ use eframe::egui::{
     Rect, Sense, Stroke, TextFormat, Vec2,
 };
 use underline_core::NoteFormat;
-use underline_facade::blocks::{insert_typed, parse_blocks, Block, BlockKind, ListMarker};
+use underline_facade::blocks::{insert_typed, link_at, parse_blocks, Block, BlockKind, ListMarker};
 use underline_facade::highlight::highlight_code;
 
 use crate::{fonts, SourceView, Tool};
@@ -174,6 +174,16 @@ impl FacadeView {
                                     Stroke::new(3.0_f32, theme.weak),
                                 );
                             }
+                        }
+                        BlockKind::Admonition(_) => {
+                            let x = top.x + 4.0;
+                            painter.line_segment(
+                                [
+                                    Pos2::new(x, top.y),
+                                    Pos2::new(x, top.y + laid.galley.size().y),
+                                ],
+                                Stroke::new(3.0_f32, theme.link),
+                            );
                         }
                         BlockKind::ThematicBreak => {
                             let y = top.y + 8.0;
@@ -477,13 +487,23 @@ impl FacadeView {
         let position = self.cursor_position(source);
         let (raw, fast) = match position {
             Some((index, at)) => match &self.blocks[index].kind {
-                BlockKind::Code { .. } => (text.to_owned(), markdown && !text.contains(['`', '~'])),
+                BlockKind::Code { .. } if markdown => (text.to_owned(), !text.contains(['`', '~'])),
                 BlockKind::Markup => (text.to_owned(), false),
                 _ if markdown => (escape_markdown(text, at == 0), at > 0),
-                _ => (text.to_owned(), false),
+                // AsciiDoc has no escape that always works; plain text away
+                // from markup joins its block, anything else parses again.
+                _ => {
+                    let rope = source.document().rope();
+                    let near = |i: usize| (i < rope.len_chars()).then(|| rope.char(i));
+                    let before = cursor.checked_sub(1).and_then(near);
+                    let plain = asciidoc_plain(before, near(cursor), text);
+                    (text.to_owned(), at > 0 && plain)
+                }
             },
             None => (text.to_owned(), false),
         };
+        // A typed character can change where a bare link ends.
+        let fast = fast && link_at(&self.blocks, byte).is_none();
         source.replace(cursor..cursor, &raw);
         // Typing cannot change the structure of the blocks, so the new
         // characters join their block without parsing again (ADR-012).
@@ -620,7 +640,9 @@ impl FacadeView {
                 let line = &text[block.span.clone()];
                 format!("\n{}", next_marker(line.lines().next().unwrap_or("")))
             }
-            BlockKind::Quote(depth) => format!("\n\n{} ", ">".repeat(*depth)),
+            BlockKind::Quote(depth) if source.format() == NoteFormat::Markdown => {
+                format!("\n\n{} ", ">".repeat(*depth))
+            }
             _ => "\n\n".to_owned(),
         };
         let (cursor, _) = source.cursor_anchor();
@@ -794,6 +816,11 @@ fn prefix_text(kind: &BlockKind) -> String {
             }
         }
         BlockKind::Quote(depth) => prefix.push_str(&"    ".repeat(*depth)),
+        BlockKind::Admonition(label) => {
+            prefix.push_str("    ");
+            prefix.push_str(label);
+            prefix.push_str("  ");
+        }
         _ => {}
     }
     prefix
@@ -853,21 +880,40 @@ fn escape_markdown(text: &str, at_block_start: bool) -> String {
     out
 }
 
+/// Whether typing `text` between the characters `before` and `after` of an
+/// AsciiDoc note keeps the blocks as they are: no character that could
+/// start markup, and plain text or spaces on both sides, so no formatting
+/// begins or ends there.
+fn asciidoc_plain(before: Option<char>, after: Option<char>, text: &str) -> bool {
+    let plain = |c: char| c.is_alphanumeric() || c == ' ';
+    text.chars().all(|c| plain(c) || ",;!?".contains(c))
+        && before.is_some_and(plain)
+        && after.map_or(true, |c| plain(c) || c == '\n')
+}
+
 /// The marker of the next list item after the item line `line`: same
-/// indent, same bullet, the next number, and an open task box for tasks.
+/// indent, same bullet (`**` in AsciiDoc for the second level), the next
+/// number, and an open task box for tasks.
 fn next_marker(line: &str) -> String {
     let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
     let rest = &line[indent.len()..];
     let task = |after: &str| {
-        if after.starts_with("[ ] ") || after.starts_with("[x] ") || after.starts_with("[X] ") {
+        let boxes = ["[ ] ", "[x] ", "[X] ", "[*] "];
+        if boxes.iter().any(|b| after.starts_with(b)) {
             "[ ] "
         } else {
             ""
         }
     };
-    if let Some(bullet) = rest.chars().next().filter(|c| matches!(c, '-' | '*' | '+')) {
-        let after = rest.get(2..).unwrap_or("");
-        return format!("{indent}{bullet} {}", task(after));
+    if let Some(bullet) = rest
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '-' | '*' | '+' | '.'))
+    {
+        let count = rest.chars().take_while(|&c| c == bullet).count();
+        let marker = &rest[..count];
+        let after = rest.get(count + 1..).unwrap_or("");
+        return format!("{indent}{marker} {}", task(after));
     }
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
     if let Ok(number) = digits.parse::<usize>() {
@@ -896,12 +942,16 @@ mod tests {
 
     impl Harness {
         fn new(text: &str) -> Self {
+            Self::with_format(text, NoteFormat::Markdown)
+        }
+
+        fn with_format(text: &str, format: NoteFormat) -> Self {
             let set = Arc::new(HighlightSet::new(true));
             let ctx = egui::Context::default();
             fonts::install(&ctx);
             let mut harness = Self {
                 ctx,
-                source: SourceView::new("t", text, NoteFormat::Markdown, set),
+                source: SourceView::new("t", text, format, set),
                 facade: FacadeView::new("t"),
             };
             harness.facade.request_focus();
@@ -975,6 +1025,37 @@ mod tests {
         h.key(Key::Enter);
         h.frame(vec![Event::Text("Next".into())]);
         assert_eq!(h.text(), "1. first\n2. second\n\nPara\n\nNext\n");
+    }
+
+    /// UC-005, ADR-003: in an AsciiDoc note, typed text joins its block
+    /// as a new parse would see it, and Enter continues a list with its
+    /// marker.
+    #[test]
+    fn uc005_typing_and_enter_in_asciidoc() {
+        let note = "== Plan\n\nSome *bold* text and https://x.org now.\n\n* one\n** inner\n\nNOTE: Mind it.\n";
+        let mut h = Harness::with_format(note, NoteFormat::AsciiDoc);
+        for (after, typed) in [
+            ("Some *bo", "ld"),
+            ("* te", "x t"),
+            ("https://x.org", "/a"),
+            ("Mind", " all of"),
+        ] {
+            h.cursor_after(after);
+            h.frame(vec![Event::Text(typed.into())]);
+            let fresh = parse_blocks(&h.text(), NoteFormat::AsciiDoc);
+            assert_eq!(h.facade.blocks(), &fresh[..], "after {after:?}");
+        }
+        assert!(
+            h.text()
+                .contains("Some *boldld* tex txt and https://x.org/a now."),
+            "{}",
+            h.text()
+        );
+        assert!(h.text().contains("NOTE: Mind all of it."));
+        h.cursor_after("** inner");
+        h.key(Key::Enter);
+        h.frame(vec![Event::Text("deeper".into())]);
+        assert!(h.text().contains("** inner\n** deeper\n"), "{}", h.text());
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and

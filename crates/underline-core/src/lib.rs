@@ -33,7 +33,7 @@ pub use embed::{
 };
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
-pub use links::{heading_anchor, resolve_link, LinkTarget};
+pub use links::{asciidoc_anchor, heading_anchor, resolve_link, LinkTarget};
 pub use new_note::{
     check_name, heading_title, page_name, NameProblem, NewNote, NewNoteProblem,
     FORBIDDEN_CHARACTERS, MAX_PATH_CHARS, MAX_TITLE_CHARS,

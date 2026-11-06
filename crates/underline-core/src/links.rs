@@ -101,6 +101,22 @@ pub fn heading_anchor(heading: &str) -> String {
         .collect()
 }
 
+/// The id Asciidoctor gives a section title: `_`, then the title in lower
+/// case with every run of other characters as one `_`.
+pub fn asciidoc_anchor(heading: &str) -> String {
+    let mut id = String::from("_");
+    for c in heading.trim().to_lowercase().chars() {
+        if c.is_alphanumeric() {
+            id.push(c);
+        } else if !id.ends_with('_') {
+            id.push('_');
+        }
+    }
+    let trimmed = id.trim_end_matches('_').len().max(1);
+    id.truncate(trimmed);
+    id
+}
+
 /// `path` without `.` and `..`, or `None` when it climbs above its root.
 fn normalize(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
@@ -216,5 +232,11 @@ mod tests {
         assert_eq!(heading_anchor("Getting Started!"), "getting-started");
         assert_eq!(heading_anchor("Setup > Linux"), "setup--linux");
         assert_eq!(heading_anchor("Über uns"), "über-uns");
+    }
+
+    #[test]
+    fn heading_anchors_as_asciidoctor_makes_them() {
+        assert_eq!(asciidoc_anchor("Getting Started!"), "_getting_started");
+        assert_eq!(asciidoc_anchor("Setup > Linux"), "_setup_linux");
     }
 }
