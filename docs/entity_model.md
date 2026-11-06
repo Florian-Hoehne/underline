@@ -135,6 +135,8 @@ The settings of the user settings file or of one workspace settings file.
   Light, input mode Normal, line numbers shown on the left, copy on select on, git sync every 5 minutes, MCP server
   off).
 - In workspace settings an empty value means that the user setting applies.
+- A setting the user changes in the interface is stored in the workspace settings when they already give it a value,
+  otherwise in the user settings.
 
 ### OPEN_TAB
 

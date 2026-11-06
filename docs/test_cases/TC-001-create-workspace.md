@@ -22,6 +22,7 @@
 | TC-001-13 | A7 Directory inside a workspace      | BR-006                   |
 | TC-001-14 | Directory fills up before confirming (step 5) | BR-002          |
 | TC-001-15 | Default format applies to new notes only | BR-005, FR-070       |
+| TC-001-16 | A5 Git cannot make the first commit  | FR-072, C-007            |
 
 ## TC-001-01: Create a Markdown workspace in a new directory
 
@@ -193,3 +194,15 @@
 | 1    | Change the default format of `notes-o` to AsciiDoc (UC-010). | The workspace settings file names AsciiDoc as default format.    |
 | 2    | Create a new note `Plan` (UC-003).                           | The note is stored as `Plan.adoc`.                                |
 | 3    | Look at the Home note.                                       | It is still `Home.md`, unchanged.                                 |
+
+## TC-001-16: Report when git cannot make the first commit
+
+**Flow:** A5, BR-007  
+**Preconditions:** git is installed but has no user name and email set. The directory `notes-p` does not exist. Workspace `old` is open.
+
+| Step | Action                                                                                  | Expected result                                                                                             |
+|------|-----------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| 1    | Create a new workspace in `notes-p` with the git repository option on and no remote.    | The status bar reports that the workspace could not be created because git has no user name and email, and says how to set them in git. |
+| 2    | Look at the file system.                                                                | `notes-p` does not exist.                                                                                   |
+| 3    | Look at the window.                                                                     | `old` is still the open workspace.                                                                          |
+| 4    | Make git unavailable on the machine and repeat step 1.                                  | The status bar reports that git is not installed; `notes-p` does not exist.                                |

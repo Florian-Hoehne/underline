@@ -39,8 +39,10 @@ recently opened notes; (c) the folder tree of the workspace with a separate list
 **Element:** FR-071
 **Raised by:** /requirements, 2026-11-06
 **Blocking:** No
-**Status:** Open
-**Assumed:** To the workspace settings file when that file already sets the changed setting, otherwise to the user
+**Status:** Resolved
+**Resolved in:** [Entity model](entity_model.md), SETTINGS constraints
+
+Answer: to the workspace settings file when that file already sets the changed setting, otherwise to the user
 settings file.
 
 ## OQ-005: Where does a dropped image or file go?
@@ -239,3 +241,14 @@ Answer: the note stays titled Home with its title as heading; BR-003 claims the 
 **Resolved in:** [UC-001](use_cases/UC-001-create-workspace.md), A6
 
 Answer: the status bar names what is left, so the user can delete it by hand.
+
+## OQ-026: What happens when git cannot make the first commit of a new workspace?
+
+**Element:** UC-001 A5
+**Raised by:** architecture review (ADR-006), 2026-11-06
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-001](use_cases/UC-001-create-workspace.md), A5
+
+Answer: A5 applies. The status bar says why, for example that git is not installed or has no user name and email, and
+how to set them in git. Underline keeps no identity of its own.

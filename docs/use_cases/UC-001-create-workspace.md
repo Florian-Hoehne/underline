@@ -68,7 +68,7 @@ _None — no workspace or other state needs to exist before._
 **Trigger:** The system cannot create the directory, the workspace settings file, or the Home note (step 5), or the git repository, the git remote link, or the first commit (A3 steps 3–4)  
 **Flow:**
 
-1. The system reports in the status bar that the workspace could not be created and why, for example missing permission or a full disk.
+1. The system reports in the status bar that the workspace could not be created and why, for example missing permission, a full disk, git not being installed, or git having no user name and email to make the first commit with; for a git problem it says how to fix it in git.
 2. The system removes whatever it had created for this workspace.
 3. Use case ends.
 
