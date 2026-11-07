@@ -39,6 +39,8 @@ pub struct UnderlineApp {
     diagrams: Arc<Diagrams>,
     /// Loads the images of the open notes (UC-004 step 3).
     images: Arc<Images>,
+    /// Whether the editors show their minimap (FR-030, UC-004 BR-013).
+    minimap: bool,
     /// Stores changed notes in the background (UC-005 BR-001).
     saver: NoteSaver,
     /// A close that waits for the user, because changes could not be stored
@@ -232,6 +234,7 @@ impl UnderlineApp {
                 let ctx = ctx.clone();
                 Arc::new(Diagrams::start(move || ctx.request_repaint()))
             },
+            minimap: true,
             images: {
                 let ctx = ctx.clone();
                 Arc::new(Images::start(move || ctx.request_repaint()))
@@ -1712,6 +1715,10 @@ impl eframe::App for UnderlineApp {
                         tool_used = Some(tool);
                     }
                 }
+                ui.separator();
+                // UC-004 BR-013: the minimap, shown or hidden for all tabs.
+                ui.toggle_value(&mut self.minimap, "Minimap")
+                    .on_hover_text("Show or hide the minimap beside the editor");
             });
             if let Some(tool) = tool_used {
                 if tab.view.apply_tool(tool) {
@@ -1728,6 +1735,8 @@ impl eframe::App for UnderlineApp {
                     EditingView::Source => tab.view.focus_cursor(),
                 }
             }
+            tab.facade.set_minimap(self.minimap);
+            tab.view.set_minimap(self.minimap);
             let changed = match tab.editing_view {
                 EditingView::Facade => tab.facade.show(ui, &mut tab.view),
                 EditingView::Source => tab.view.show(ui),

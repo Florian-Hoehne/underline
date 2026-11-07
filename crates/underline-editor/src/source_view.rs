@@ -14,12 +14,17 @@ use underline_core::NoteFormat;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use crate::document::Document;
+use crate::minimap::{self, Mark};
 use crate::Tool;
 use underline_facade::blocks::{link_at, parse_blocks};
 use underline_facade::formatting::{apply_format, Format};
 use underline_facade::sections::{section_at, sections, Section, SectionKey};
 
 const FONT_SIZE: f32 = 14.0;
+/// How often the minimap is drawn anew while the text changes.
+pub(crate) const MARKS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
+/// How often typing finds the sections again while nothing is folded.
+const SECTIONS_EVERY: std::time::Duration = std::time::Duration::from_millis(300);
 const PADDING: f32 = 6.0;
 const MAX_CACHED_GALLEYS: usize = 4096;
 /// Time a frame may spend on coloring lines (ADR-010); lines not colored yet
@@ -60,12 +65,25 @@ pub struct SourceView {
     /// The folded sections, shared with the facade of the tab (UC-004
     /// BR-012).
     folds: HashSet<SectionKey>,
-    /// The sections of the text and the revision they were found in.
+    /// The sections of the text, the revision they were found in, and
+    /// when they were found.
     sections: Option<(u64, Vec<Section>)>,
+    sections_found: std::time::Instant,
     /// Counts the changes of the folded sections, so views lay out again.
     fold_version: u64,
     /// The fold version the line tops were computed for.
     tops_folds: u64,
+    /// Whether the minimap is shown (FR-030), its bars, the part of the
+    /// content in view, a scroll offset it asked for, and the characters
+    /// a wrapped row holds.
+    minimap: bool,
+    marks: Vec<Mark>,
+    /// The bars are older than the layout, and when they were built.
+    marks_dirty: bool,
+    marks_built: std::time::Instant,
+    visible: (f32, f32),
+    scroll_to: Option<f32>,
+    columns: usize,
 }
 
 impl SourceView {
@@ -94,8 +112,16 @@ impl SourceView {
             followed: None,
             folds: HashSet::new(),
             sections: None,
+            sections_found: std::time::Instant::now(),
             fold_version: 0,
             tops_folds: 0,
+            minimap: true,
+            marks: Vec::new(),
+            marks_dirty: true,
+            marks_built: std::time::Instant::now(),
+            visible: (0.0, 0.0),
+            scroll_to: None,
+            columns: 80,
         }
     }
 
@@ -212,14 +238,35 @@ impl SourceView {
         self.scroll_to_cursor = true;
     }
 
-    /// The sections of the text (UC-004 BR-012), found again when it changed.
+    /// The sections of the text (UC-004 BR-012), found again when it
+    /// changed. While nothing is folded, typing finds them again at most
+    /// every [`SECTIONS_EVERY`], so typing stays fast in long notes
+    /// (NFR-002); until then the arrows may stand a little off.
     pub(crate) fn sections(&mut self) -> &[Section] {
         let revision = self.doc.revision();
-        if self.sections.as_ref().is_none_or(|(r, _)| *r != revision) {
+        let stale = self.sections.as_ref().is_none_or(|(r, _)| *r != revision);
+        let due = self.sections.is_none()
+            || !self.folds.is_empty()
+            || self.sections_found.elapsed() >= SECTIONS_EVERY;
+        if stale && due {
             let found = sections(&self.doc.text(), self.highlight.format());
             self.sections = Some((revision, found));
+            self.sections_found = std::time::Instant::now();
         }
         &self.sections.as_ref().expect("sections").1
+    }
+
+    /// The text revision the known sections were found in.
+    pub(crate) fn sections_revision(&self) -> Option<u64> {
+        self.sections.as_ref().map(|(r, _)| *r)
+    }
+
+    /// Whether the known sections are older than the text, so the view
+    /// must look again soon.
+    fn sections_stale(&self) -> bool {
+        self.sections
+            .as_ref()
+            .is_some_and(|(r, _)| *r != self.doc.revision())
     }
 
     /// The bytes hidden by folded sections, in order and not overlapping.
@@ -336,8 +383,48 @@ impl SourceView {
         }
     }
 
-    /// Draws the view and handles its input. Returns whether the text changed.
+    /// Shows or hides the minimap (FR-030).
+    pub fn set_minimap(&mut self, shown: bool) {
+        self.minimap = shown;
+    }
+
+    /// Draws the view with its minimap and handles their input. Returns
+    /// whether the text changed.
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
+        let (editor, strip) = minimap::split(ui, self.minimap);
+        let changed = ui
+            .allocate_new_ui(egui::UiBuilder::new().max_rect(editor), |ui| {
+                self.show_editor(ui)
+            })
+            .inner;
+        if let Some(strip) = strip {
+            if self.marks_dirty {
+                if self.marks.is_empty() || self.marks_built.elapsed() >= MARKS_EVERY {
+                    self.build_marks();
+                } else {
+                    ui.ctx().request_repaint_after(MARKS_EVERY);
+                }
+            }
+            let content = self.tops.last().copied().unwrap_or(0.0) + 2.0 * PADDING;
+            let (_, background) = self.highlight.colors();
+            if let Some(offset) = minimap::show(
+                ui,
+                self.id,
+                strip,
+                &self.marks,
+                content,
+                self.visible,
+                color(background).gamma_multiply(0.9),
+            ) {
+                self.scroll_to = Some(offset);
+                ui.ctx().request_repaint();
+            }
+        }
+        changed
+    }
+
+    /// Draws the view itself.
+    fn show_editor(&mut self, ui: &mut egui::Ui) -> bool {
         let font = FontId::monospace(FONT_SIZE);
         let row_height = ui.fonts(|f| f.row_height(&font));
         let char_width = ui.fonts(|f| f.glyph_width(&font, 'x'));
@@ -349,211 +436,215 @@ impl SourceView {
         self.uncolored = false;
         self.unfold_at_cursor();
 
-        egui::ScrollArea::vertical()
+        let mut area = egui::ScrollArea::vertical()
             .id_salt(self.id.with("scroll"))
-            .auto_shrink(false)
-            .show_viewport(ui, |ui, viewport| {
-                let lines = self.doc.len_lines();
-                // Line numbers on the left (FR-028; their settings come with
-                // UC-010).
-                let digits = lines.max(1).ilog10() as f32 + 1.0;
-                let gutter = digits * char_width + 2.0 * PADDING + FOLD_ARROW;
-                let width = ui.available_width();
-                let wrap_width = (width - gutter - 2.0 * PADDING).max(char_width * 8.0);
-                self.update_layout(wrap_width, char_width, row_height);
+            .auto_shrink(false);
+        if let Some(offset) = self.scroll_to.take() {
+            area = area.vertical_scroll_offset(offset);
+        }
+        area.show_viewport(ui, |ui, viewport| {
+            self.visible = (viewport.min.y, viewport.max.y);
+            let lines = self.doc.len_lines();
+            // Line numbers on the left (FR-028; their settings come with
+            // UC-010).
+            let digits = lines.max(1).ilog10() as f32 + 1.0;
+            let gutter = digits * char_width + 2.0 * PADDING + FOLD_ARROW;
+            let width = ui.available_width();
+            let wrap_width = (width - gutter - 2.0 * PADDING).max(char_width * 8.0);
+            self.update_layout(wrap_width, char_width, row_height);
+            if self.tops_folds != self.fold_version {
+                self.recompute_tops();
+            }
+
+            let size = Vec2::new(width, self.tops[lines] + 2.0 * PADDING);
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            let response = ui.interact(rect, self.id, Sense::click_and_drag());
+            let origin = rect.min + Vec2::new(gutter, PADDING);
+            if std::mem::take(&mut self.focus) {
+                response.request_focus();
+            }
+
+            // Pointer: place the cursor, extend the selection by dragging.
+            // UC-004 BR-006: Ctrl+click (Cmd+click) follows a link.
+            if response.clicked() && ui.input(|i| i.modifiers.command) {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let at = self.char_at(ui, &font, origin, pos);
+                    let byte = self.doc.rope().char_to_byte(at);
+                    let blocks = parse_blocks(&self.doc.text(), self.highlight.format());
+                    if let Some(link) = link_at(&blocks, byte) {
+                        self.followed = Some(link);
+                    }
+                }
+            }
+            if response.is_pointer_button_down_on() || response.clicked() {
+                response.request_focus();
+                if let Some(pos) = response.interact_pointer_pos() {
+                    let at = self.char_at(ui, &font, origin, pos);
+                    let extend = response.dragged() || ui.input(|i| i.modifiers.shift);
+                    self.cursor = at;
+                    if !extend {
+                        self.anchor = at;
+                    }
+                }
+            }
+
+            if response.has_focus() {
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(
+                        self.id,
+                        EventFilter {
+                            tab: true,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            escape: false,
+                        },
+                    )
+                });
+                let page = (viewport.height() / row_height).floor().max(1.0) as usize;
+                changed = self.handle_keys(ui, page);
+                self.unfold_at_cursor();
+                if changed {
+                    self.update_layout(wrap_width, char_width, row_height);
+                }
                 if self.tops_folds != self.fold_version {
                     self.recompute_tops();
                 }
+            }
 
-                let size = Vec2::new(width, self.tops[lines] + 2.0 * PADDING);
-                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-                let response = ui.interact(rect, self.id, Sense::click_and_drag());
-                let origin = rect.min + Vec2::new(gutter, PADDING);
-                if std::mem::take(&mut self.focus) {
-                    response.request_focus();
+            let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
+            painter.rect_filled(painter.clip_rect(), 0.0, color(background));
+            let lines = self.doc.len_lines();
+            let first = self.line_at(viewport.min.y - PADDING);
+            let last = (self.line_at(viewport.max.y - PADDING) + 1).min(lines);
+            let (selection_start, selection_end) = self.selection();
+            let selection_color = ui.visuals().selection.bg_fill;
+            let mut exact_changed = false;
+            // UC-004 BR-012: the arrows of the section headings shown.
+            let heading_lines: HashMap<usize, Section> = {
+                let rope = self.doc.rope().clone();
+                self.sections()
+                    .iter()
+                    .map(|s| (rope.byte_to_line(s.heading.start), s.clone()))
+                    .filter(|(line, _)| (first..last).contains(line))
+                    .collect()
+            };
+            let pointer = ui.input(|i| i.pointer.hover_pos());
+            let mut toggle = None;
+            for line in first..last {
+                if self.is_hidden_line(line) {
+                    continue;
                 }
-
-                // Pointer: place the cursor, extend the selection by dragging.
-                // UC-004 BR-006: Ctrl+click (Cmd+click) follows a link.
-                if response.clicked() && ui.input(|i| i.modifiers.command) {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let at = self.char_at(ui, &font, origin, pos);
-                        let byte = self.doc.rope().char_to_byte(at);
-                        let blocks = parse_blocks(&self.doc.text(), self.highlight.format());
-                        if let Some(link) = link_at(&blocks, byte) {
-                            self.followed = Some(link);
-                        }
+                if let Some(section) = heading_lines.get(&line) {
+                    let top = origin.y + self.tops[line];
+                    let arrow = Rect::from_min_size(
+                        Pos2::new(rect.min.x + 2.0, top),
+                        Vec2::new(FOLD_ARROW - 2.0, row_height),
+                    );
+                    let folded = self.is_folded(&section.key);
+                    let hovered = pointer
+                        .is_some_and(|p| p.y >= top && p.y < top + row_height && rect.contains(p));
+                    let click = ui.interact(arrow, self.id.with(("fold", line)), Sense::click());
+                    if folded || hovered || click.hovered() {
+                        paint_fold_arrow(&painter, arrow, folded, numbers);
                     }
-                }
-                if response.is_pointer_button_down_on() || response.clicked() {
-                    response.request_focus();
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let at = self.char_at(ui, &font, origin, pos);
-                        let extend = response.dragged() || ui.input(|i| i.modifiers.shift);
-                        self.cursor = at;
-                        if !extend {
-                            self.anchor = at;
-                        }
-                    }
-                }
-
-                if response.has_focus() {
-                    ui.memory_mut(|m| {
-                        m.set_focus_lock_filter(
-                            self.id,
-                            EventFilter {
-                                tab: true,
-                                horizontal_arrows: true,
-                                vertical_arrows: true,
-                                escape: false,
-                            },
-                        )
-                    });
-                    let page = (viewport.height() / row_height).floor().max(1.0) as usize;
-                    changed = self.handle_keys(ui, page);
-                    self.unfold_at_cursor();
-                    if changed {
-                        self.update_layout(wrap_width, char_width, row_height);
-                    }
-                    if self.tops_folds != self.fold_version {
-                        self.recompute_tops();
+                    if click.clicked() {
+                        toggle = Some(section.clone());
                     }
                 }
-
-                let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
-                painter.rect_filled(painter.clip_rect(), 0.0, color(background));
-                let lines = self.doc.len_lines();
-                let first = self.line_at(viewport.min.y - PADDING);
-                let last = (self.line_at(viewport.max.y - PADDING) + 1).min(lines);
-                let (selection_start, selection_end) = self.selection();
-                let selection_color = ui.visuals().selection.bg_fill;
-                let mut exact_changed = false;
-                // UC-004 BR-012: the arrows of the section headings shown.
-                let heading_lines: HashMap<usize, Section> = {
-                    let rope = self.doc.rope().clone();
-                    self.sections()
-                        .iter()
-                        .map(|s| (rope.byte_to_line(s.heading.start), s.clone()))
-                        .filter(|(line, _)| (first..last).contains(line))
-                        .collect()
-                };
-                let pointer = ui.input(|i| i.pointer.hover_pos());
-                let mut toggle = None;
-                for line in first..last {
-                    if self.is_hidden_line(line) {
-                        continue;
-                    }
-                    if let Some(section) = heading_lines.get(&line) {
-                        let top = origin.y + self.tops[line];
-                        let arrow = Rect::from_min_size(
-                            Pos2::new(rect.min.x + 2.0, top),
-                            Vec2::new(FOLD_ARROW - 2.0, row_height),
+                let galley = self.galley(ui, &font, line);
+                let rows = galley.rows.len().max(1) as u32;
+                if self.rows[line] != rows {
+                    self.rows[line] = rows;
+                    exact_changed = true;
+                }
+                let top = origin + Vec2::new(0.0, self.tops[line]);
+                painter.text(
+                    Pos2::new(origin.x - PADDING, top.y),
+                    egui::Align2::RIGHT_TOP,
+                    (line + 1).to_string(),
+                    font.clone(),
+                    numbers,
+                );
+                // Selection behind the text, row by row.
+                let line_start = self.doc.rope().line_to_char(line);
+                let line_len = self.doc.line_text(line).chars().count();
+                let from = selection_start.max(line_start);
+                let to = selection_end.min(line_start + line_len + 1);
+                if selection_start != selection_end && from < to {
+                    let start = galley.pos_from_ccursor(CCursor::new(from - line_start));
+                    let end = if to > line_start + line_len {
+                        let last = galley.pos_from_ccursor(CCursor::new(line_len));
+                        Rect::from_min_size(last.min + Vec2::new(6.0, 0.0), last.size())
+                    } else {
+                        galley.pos_from_ccursor(CCursor::new(to - line_start))
+                    };
+                    let row_of = |y: f32| (y / row_height).round() as usize;
+                    let (first_row, last_row) = (row_of(start.min.y), row_of(end.min.y));
+                    for row in first_row..=last_row {
+                        let x0 = if row == first_row { start.min.x } else { 0.0 };
+                        let x1 = if row == last_row {
+                            end.min.x
+                        } else {
+                            galley
+                                .rows
+                                .get(row)
+                                .map_or(wrap_width, |r| r.rect.max.x + 6.0)
+                        };
+                        let y = row as f32 * row_height;
+                        painter.rect_filled(
+                            Rect::from_min_max(
+                                top + Vec2::new(x0, y),
+                                top + Vec2::new(x1, y + row_height),
+                            ),
+                            0.0,
+                            selection_color,
                         );
-                        let folded = self.is_folded(&section.key);
-                        let hovered = pointer.is_some_and(|p| {
-                            p.y >= top && p.y < top + row_height && rect.contains(p)
-                        });
-                        let click =
-                            ui.interact(arrow, self.id.with(("fold", line)), Sense::click());
-                        if folded || hovered || click.hovered() {
-                            paint_fold_arrow(&painter, arrow, folded, numbers);
-                        }
-                        if click.clicked() {
-                            toggle = Some(section.clone());
-                        }
                     }
-                    let galley = self.galley(ui, &font, line);
-                    let rows = galley.rows.len().max(1) as u32;
-                    if self.rows[line] != rows {
-                        self.rows[line] = rows;
-                        exact_changed = true;
-                    }
-                    let top = origin + Vec2::new(0.0, self.tops[line]);
+                }
+                let folded_heading = heading_lines
+                    .get(&line)
+                    .is_some_and(|s| self.is_folded(&s.key));
+                if folded_heading {
+                    let end = galley.rect.right_bottom();
                     painter.text(
-                        Pos2::new(origin.x - PADDING, top.y),
-                        egui::Align2::RIGHT_TOP,
-                        (line + 1).to_string(),
+                        top + Vec2::new(end.x + 8.0, end.y),
+                        egui::Align2::LEFT_BOTTOM,
+                        "…",
                         font.clone(),
                         numbers,
                     );
-                    // Selection behind the text, row by row.
-                    let line_start = self.doc.rope().line_to_char(line);
-                    let line_len = self.doc.line_text(line).chars().count();
-                    let from = selection_start.max(line_start);
-                    let to = selection_end.min(line_start + line_len + 1);
-                    if selection_start != selection_end && from < to {
-                        let start = galley.pos_from_ccursor(CCursor::new(from - line_start));
-                        let end = if to > line_start + line_len {
-                            let last = galley.pos_from_ccursor(CCursor::new(line_len));
-                            Rect::from_min_size(last.min + Vec2::new(6.0, 0.0), last.size())
-                        } else {
-                            galley.pos_from_ccursor(CCursor::new(to - line_start))
-                        };
-                        let row_of = |y: f32| (y / row_height).round() as usize;
-                        let (first_row, last_row) = (row_of(start.min.y), row_of(end.min.y));
-                        for row in first_row..=last_row {
-                            let x0 = if row == first_row { start.min.x } else { 0.0 };
-                            let x1 = if row == last_row {
-                                end.min.x
-                            } else {
-                                galley
-                                    .rows
-                                    .get(row)
-                                    .map_or(wrap_width, |r| r.rect.max.x + 6.0)
-                            };
-                            let y = row as f32 * row_height;
-                            painter.rect_filled(
-                                Rect::from_min_max(
-                                    top + Vec2::new(x0, y),
-                                    top + Vec2::new(x1, y + row_height),
-                                ),
-                                0.0,
-                                selection_color,
-                            );
-                        }
-                    }
-                    let folded_heading = heading_lines
-                        .get(&line)
-                        .is_some_and(|s| self.is_folded(&s.key));
-                    if folded_heading {
-                        let end = galley.rect.right_bottom();
-                        painter.text(
-                            top + Vec2::new(end.x + 8.0, end.y),
-                            egui::Align2::LEFT_BOTTOM,
-                            "…",
-                            font.clone(),
-                            numbers,
-                        );
-                    }
-                    painter.galley(top, galley, foreground);
                 }
-                if let Some(section) = toggle {
-                    self.toggle_fold(&section);
-                    self.recompute_tops();
-                    ui.ctx().request_repaint();
-                }
-                if exact_changed {
-                    self.recompute_tops();
-                    ui.ctx().request_repaint();
-                }
+                painter.galley(top, galley, foreground);
+            }
+            if let Some(section) = toggle {
+                self.toggle_fold(&section);
+                self.recompute_tops();
+                ui.ctx().request_repaint();
+            }
+            if exact_changed {
+                self.recompute_tops();
+                ui.ctx().request_repaint();
+            }
 
-                // Cursor.
-                let cursor_rect = self.cursor_rect(ui, &font, origin, row_height);
-                if response.has_focus() {
-                    painter.line_segment(
-                        [cursor_rect.center_top(), cursor_rect.center_bottom()],
-                        Stroke::new(2.0_f32, foreground),
-                    );
-                    ui.ctx().output_mut(|o| {
-                        o.ime = Some(egui::output::IMEOutput { rect, cursor_rect })
-                    });
-                }
-                if std::mem::take(&mut self.scroll_to_cursor) {
-                    ui.scroll_to_rect(cursor_rect.expand(row_height), None);
-                }
-            });
+            // Cursor.
+            let cursor_rect = self.cursor_rect(ui, &font, origin, row_height);
+            if response.has_focus() {
+                painter.line_segment(
+                    [cursor_rect.center_top(), cursor_rect.center_bottom()],
+                    Stroke::new(2.0_f32, foreground),
+                );
+                ui.ctx()
+                    .output_mut(|o| o.ime = Some(egui::output::IMEOutput { rect, cursor_rect }));
+            }
+            if std::mem::take(&mut self.scroll_to_cursor) {
+                ui.scroll_to_rect(cursor_rect.expand(row_height), None);
+            }
+        });
         if self.uncolored {
             ui.ctx().request_repaint();
+        }
+        if self.sections_stale() {
+            ui.ctx().request_repaint_after(SECTIONS_EVERY);
         }
         changed
     }
@@ -567,6 +658,7 @@ impl SourceView {
             return;
         }
         let columns = (wrap_width / char_width).floor().max(1.0) as usize;
+        self.columns = columns;
         let rope = self.doc.rope();
         let lines = self.doc.len_lines();
         let estimate = |line: usize| {
@@ -630,6 +722,7 @@ impl SourceView {
                 .collect()
         };
         self.tops_folds = self.fold_version;
+        self.marks_dirty = true;
         self.tops.clear();
         self.tops.reserve(self.rows.len() + 1);
         let mut y = 0.0;
@@ -645,6 +738,45 @@ impl SourceView {
             y += *rows as f32 * self.row_height;
         }
         self.tops.push(y);
+    }
+
+    /// FR-030: the bars of the minimap, one per shown line, as long as the
+    /// line, headings stronger.
+    fn build_marks(&mut self) {
+        let heading_lines: HashSet<usize> = {
+            let rope = self.doc.rope().clone();
+            self.sections()
+                .iter()
+                .map(|s| rope.byte_to_line(s.heading.start))
+                .collect()
+        };
+        let (foreground, _) = self.highlight.colors();
+        let (text, strong) = (color(foreground).gamma_multiply(0.4), color(foreground));
+        let mut marks = Vec::with_capacity(self.rows.len());
+        let rope = self.doc.rope();
+        for (line, slice) in rope
+            .lines()
+            .enumerate()
+            .take(self.tops.len().saturating_sub(1))
+        {
+            let height = self.tops[line + 1] - self.tops[line];
+            let chars = slice.len_chars().saturating_sub(1);
+            if height > 0.0 && chars > 0 {
+                marks.push(Mark {
+                    top: PADDING + self.tops[line],
+                    height: height * 0.7,
+                    width: (chars as f32 / self.columns.max(1) as f32).min(1.0),
+                    color: if heading_lines.contains(&line) {
+                        strong
+                    } else {
+                        text
+                    },
+                });
+            }
+        }
+        self.marks = marks;
+        self.marks_dirty = false;
+        self.marks_built = std::time::Instant::now();
     }
 
     /// The line at height `y` from the top of the text.

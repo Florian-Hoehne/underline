@@ -23,7 +23,8 @@ use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
 use underline_facade::sections::Section;
 
 use crate::enlarged::{Enlarged, Shown};
-use crate::source_view::paint_fold_arrow;
+use crate::minimap::{self, Mark};
+use crate::source_view::{paint_fold_arrow, MARKS_EVERY};
 use crate::{fonts, SourceView, Tool};
 
 const PADDING: f32 = 12.0;
@@ -68,9 +69,21 @@ pub struct FacadeView {
     /// Blocks hidden by folded sections, and the section of each heading
     /// block (UC-004 BR-012).
     hidden: Vec<bool>,
-    heading_sections: HashMap<usize, Section>,
-    /// The fold version and text revision `hidden` was made for.
-    folds_seen: Option<(u64, u64)>,
+    /// The sections by the start of their heading, and the revision of the
+    /// sections they were taken from.
+    section_starts: HashMap<usize, Section>,
+    sections_seen: Option<u64>,
+    /// The fold version, block parse, and sections `hidden` was made for.
+    folds_seen: Option<(u64, Option<u64>, Option<u64>)>,
+    /// Whether the minimap is shown (FR-030), its bars, the part of the
+    /// content in view, and a scroll offset it asked for.
+    minimap: bool,
+    marks: Vec<Mark>,
+    /// The bars are older than the layout, and when they were built.
+    marks_dirty: bool,
+    marks_built: std::time::Instant,
+    visible: (f32, f32),
+    scroll_to: Option<f32>,
 }
 
 /// What a block shows besides its text: the marker before it, in chars, and
@@ -134,8 +147,15 @@ impl FacadeView {
             enlarged: None,
             reveal: None,
             hidden: Vec::new(),
-            heading_sections: HashMap::new(),
+            section_starts: HashMap::new(),
+            sections_seen: None,
             folds_seen: None,
+            minimap: true,
+            marks: Vec::new(),
+            marks_dirty: true,
+            marks_built: std::time::Instant::now(),
+            visible: (0.0, 0.0),
+            scroll_to: None,
         }
     }
 
@@ -157,30 +177,34 @@ impl FacadeView {
     /// each heading, when the folds or the text changed.
     fn update_folds(&mut self, source: &mut SourceView) {
         source.unfold_at_cursor();
-        let seen = (source.fold_version(), source.document().revision());
+        source.sections();
+        let sections = source.sections_revision();
+        if sections != self.sections_seen {
+            self.sections_seen = sections;
+            self.section_starts = source
+                .sections()
+                .iter()
+                .map(|s| (s.heading.start, s.clone()))
+                .collect();
+        }
+        let seen = (source.fold_version(), self.parsed, sections);
         if self.folds_seen == Some(seen) && self.hidden.len() == self.blocks.len() {
             return;
         }
         self.folds_seen = Some(seen);
-        let hidden = source.hidden();
-        let by_heading: HashMap<usize, Section> = source
-            .sections()
-            .iter()
-            .map(|s| (s.heading.start, s.clone()))
-            .collect();
-        self.hidden = self
-            .blocks
-            .iter()
-            .map(|b| hidden.iter().any(|r| r.contains(&b.span.start)))
-            .collect();
-        self.heading_sections = self
-            .blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| matches!(b.kind, BlockKind::Heading(_)))
-            .filter_map(|(i, b)| by_heading.get(&b.span.start).map(|s| (i, s.clone())))
-            .collect();
-        self.tops.clear();
+        let hidden_ranges = source.hidden();
+        let hidden: Vec<bool> = if hidden_ranges.is_empty() {
+            vec![false; self.blocks.len()]
+        } else {
+            self.blocks
+                .iter()
+                .map(|b| hidden_ranges.iter().any(|r| r.contains(&b.span.start)))
+                .collect()
+        };
+        if hidden != self.hidden {
+            self.hidden = hidden;
+            self.tops.clear();
+        }
     }
 
     /// The next block from `index` in the direction of `step` that is
@@ -232,9 +256,41 @@ impl FacadeView {
         self.scroll_to_cursor = true;
     }
 
-    /// Draws the facade of `source`'s text and handles its input. Returns
-    /// whether the text changed.
+    /// Shows or hides the minimap (FR-030).
+    pub fn set_minimap(&mut self, shown: bool) {
+        self.minimap = shown;
+    }
+
+    /// Draws the facade of `source`'s text with its minimap and handles
+    /// their input. Returns whether the text changed.
     pub fn show(&mut self, ui: &mut egui::Ui, source: &mut SourceView) -> bool {
+        let (editor, strip) = minimap::split(ui, self.minimap);
+        let changed = ui
+            .allocate_new_ui(egui::UiBuilder::new().max_rect(editor), |ui| {
+                self.show_editor(ui, source)
+            })
+            .inner;
+        if let Some(strip) = strip {
+            let content = self.tops.last().copied().unwrap_or(0.0) + 2.0 * PADDING;
+            let (_, background) = source.colors();
+            if let Some(offset) = minimap::show(
+                ui,
+                self.id,
+                strip,
+                &self.marks,
+                content,
+                self.visible,
+                rgba(background).gamma_multiply(0.9),
+            ) {
+                self.scroll_to = Some(offset);
+                ui.ctx().request_repaint();
+            }
+        }
+        changed
+    }
+
+    /// Draws the facade itself.
+    fn show_editor(&mut self, ui: &mut egui::Ui, source: &mut SourceView) -> bool {
         let (foreground, background) = source.colors();
         let theme = Theme {
             text: rgba(foreground),
@@ -248,325 +304,341 @@ impl FacadeView {
         self.update_editing(source);
         let mut changed = false;
 
-        egui::ScrollArea::vertical()
+        let mut area = egui::ScrollArea::vertical()
             .id_salt(self.id.with("scroll"))
-            .auto_shrink(false)
-            .show_viewport(ui, |ui, viewport| {
-                let width = (ui.available_width() - 2.0 * PADDING).max(80.0);
+            .auto_shrink(false);
+        if let Some(offset) = self.scroll_to.take() {
+            area = area.vertical_scroll_offset(offset);
+        }
+        area.show_viewport(ui, |ui, viewport| {
+            self.visible = (viewport.min.y, viewport.max.y);
+            let width = (ui.available_width() - 2.0 * PADDING).max(80.0);
+            self.layout_all(ui, source, &theme, width);
+            let size = Vec2::new(
+                ui.available_width(),
+                self.tops[self.blocks.len()] + 2.0 * PADDING,
+            );
+            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+            let response = ui.interact(rect, self.id, Sense::click_and_drag());
+            let origin = rect.min + Vec2::splat(PADDING);
+            if std::mem::take(&mut self.focus) {
+                response.request_focus();
+            }
+
+            // UC-004 BR-006: pointing at a link shows where it leads;
+            // Ctrl+click (Cmd+click) follows it.
+            if let Some(pos) = response.hover_pos() {
+                if let Some(link) = self.link_at_pos(ui, source, &theme, origin, pos) {
+                    let key = if cfg!(target_os = "macos") {
+                        "Cmd"
+                    } else {
+                        "Ctrl"
+                    };
+                    response
+                        .clone()
+                        .on_hover_text_at_pointer(format!("{link}\n{key}+click to follow"));
+                    if response.clicked() && ui.input(|i| i.modifiers.command) {
+                        source.follow(link);
+                    }
+                }
+            }
+            // UC-004 BR-011: a double click on a picture enlarges it.
+            if response.double_clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    if let Some((index, _)) = self.picture_at(ui, source, &theme, origin, pos) {
+                        self.enlarge(ui, index);
+                    }
+                }
+            }
+            if response.is_pointer_button_down_on() || response.clicked() {
+                response.request_focus();
+                if let Some(pos) = response.interact_pointer_pos() {
+                    if let Some(at) = self.char_at(ui, source, &theme, origin, pos) {
+                        let (_, anchor) = source.cursor_anchor();
+                        let extend = response.dragged() || ui.input(|i| i.modifiers.shift);
+                        source.set_cursor_anchor(at, if extend { anchor } else { at });
+                    }
+                }
+            }
+
+            if response.has_focus() && self.enlarged.is_none() {
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(
+                        self.id,
+                        EventFilter {
+                            tab: true,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            escape: false,
+                        },
+                    )
+                });
+                changed = self.handle_input(ui, source, &theme);
+                if changed {
+                    self.reparse(source);
+                }
+                self.update_folds(source);
+                self.update_editing(source);
                 self.layout_all(ui, source, &theme, width);
-                let size = Vec2::new(
-                    ui.available_width(),
-                    self.tops[self.blocks.len()] + 2.0 * PADDING,
-                );
-                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-                let response = ui.interact(rect, self.id, Sense::click_and_drag());
-                let origin = rect.min + Vec2::splat(PADDING);
-                if std::mem::take(&mut self.focus) {
-                    response.request_focus();
-                }
+            }
 
-                // UC-004 BR-006: pointing at a link shows where it leads;
-                // Ctrl+click (Cmd+click) follows it.
-                if let Some(pos) = response.hover_pos() {
-                    if let Some(link) = self.link_at_pos(ui, source, &theme, origin, pos) {
-                        let key = if cfg!(target_os = "macos") {
-                            "Cmd"
-                        } else {
-                            "Ctrl"
-                        };
-                        response
-                            .clone()
-                            .on_hover_text_at_pointer(format!("{link}\n{key}+click to follow"));
-                        if response.clicked() && ui.input(|i| i.modifiers.command) {
-                            source.follow(link);
-                        }
-                    }
+            if let Some(offset) = self.reveal.take() {
+                if !self.blocks.is_empty() {
+                    let index = self
+                        .blocks
+                        .iter()
+                        .position(|b| offset < b.span.end)
+                        .unwrap_or(self.blocks.len() - 1);
+                    let top = origin + Vec2::new(0.0, self.tops[index]);
+                    let target =
+                        Rect::from_min_size(top - Vec2::new(0.0, PADDING), Vec2::new(width, 1.0));
+                    ui.scroll_to_rect(target, Some(egui::Align::TOP));
                 }
-                // UC-004 BR-011: a double click on a picture enlarges it.
-                if response.double_clicked() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        if let Some((index, _)) = self.picture_at(ui, source, &theme, origin, pos) {
-                            self.enlarge(ui, index);
-                        }
-                    }
+            }
+            let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
+            painter.rect_filled(painter.clip_rect(), 0.0, rgba(background));
+            let first = self.block_at(viewport.min.y - PADDING);
+            let last = (self.block_at(viewport.max.y - PADDING) + 1).min(self.blocks.len());
+            let (sel_start, sel_end) = source.selection();
+            let rope = source.document().rope().clone();
+            let pointer = ui.input(|i| i.pointer.hover_pos());
+            let mut toggle = None;
+            for index in first..last {
+                if self.hidden.get(index).copied().unwrap_or(false) {
+                    continue;
                 }
-                if response.is_pointer_button_down_on() || response.clicked() {
-                    response.request_focus();
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        if let Some(at) = self.char_at(ui, source, &theme, origin, pos) {
-                            let (_, anchor) = source.cursor_anchor();
-                            let extend = response.dragged() || ui.input(|i| i.modifiers.shift);
-                            source.set_cursor_anchor(at, if extend { anchor } else { at });
-                        }
-                    }
-                }
-
-                if response.has_focus() && self.enlarged.is_none() {
-                    ui.memory_mut(|m| {
-                        m.set_focus_lock_filter(
-                            self.id,
-                            EventFilter {
-                                tab: true,
-                                horizontal_arrows: true,
-                                vertical_arrows: true,
-                                escape: false,
-                            },
-                        )
+                let laid = self.laid(ui, source, &theme, index);
+                let block_top = origin + Vec2::new(0.0, self.tops[index]);
+                // UC-004 BR-012: the arrow before a section heading, and
+                // "…" behind a folded one.
+                if let Some(section) = matches!(self.blocks[index].kind, BlockKind::Heading(_))
+                    .then(|| self.section_starts.get(&self.blocks[index].span.start))
+                    .flatten()
+                {
+                    let row = laid.galley.rows.first().map_or(20.0, |r| r.rect.height());
+                    let arrow = Rect::from_min_size(
+                        Pos2::new(rect.min.x, block_top.y),
+                        Vec2::new(PADDING, row),
+                    );
+                    let folded = source.is_folded(&section.key);
+                    let hovered = pointer.is_some_and(|p| {
+                        p.y >= block_top.y && p.y < block_top.y + row && rect.contains(p)
                     });
-                    changed = self.handle_input(ui, source, &theme);
-                    if changed {
-                        self.reparse(source);
+                    let click = ui.interact(arrow, self.id.with(("fold", index)), Sense::click());
+                    if folded || hovered || click.hovered() {
+                        paint_fold_arrow(&painter, arrow, folded, theme.weak);
                     }
-                    self.update_folds(source);
-                    self.update_editing(source);
-                    self.layout_all(ui, source, &theme, width);
-                }
-
-                if let Some(offset) = self.reveal.take() {
-                    if !self.blocks.is_empty() {
-                        let index = self
-                            .blocks
-                            .iter()
-                            .position(|b| offset < b.span.end)
-                            .unwrap_or(self.blocks.len() - 1);
-                        let top = origin + Vec2::new(0.0, self.tops[index]);
-                        let target = Rect::from_min_size(
-                            top - Vec2::new(0.0, PADDING),
-                            Vec2::new(width, 1.0),
+                    if click.clicked() {
+                        toggle = Some(section.clone());
+                    }
+                    if folded {
+                        let end = laid.galley.rect.right_bottom();
+                        painter.text(
+                            block_top + Vec2::new(end.x + 10.0, end.y),
+                            egui::Align2::LEFT_BOTTOM,
+                            "…",
+                            FontId::proportional(BODY_SIZE),
+                            theme.weak,
                         );
-                        ui.scroll_to_rect(target, Some(egui::Align::TOP));
                     }
                 }
-                let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
-                painter.rect_filled(painter.clip_rect(), 0.0, rgba(background));
-                let first = self.block_at(viewport.min.y - PADDING);
-                let last = (self.block_at(viewport.max.y - PADDING) + 1).min(self.blocks.len());
-                let (sel_start, sel_end) = source.selection();
-                let rope = source.document().rope().clone();
-                let pointer = ui.input(|i| i.pointer.hover_pos());
-                let mut toggle = None;
-                for index in first..last {
-                    if self.hidden.get(index).copied().unwrap_or(false) {
-                        continue;
-                    }
-                    let laid = self.laid(ui, source, &theme, index);
-                    let block_top = origin + Vec2::new(0.0, self.tops[index]);
-                    // UC-004 BR-012: the arrow before a section heading, and
-                    // "…" behind a folded one.
-                    if let Some(section) = self.heading_sections.get(&index) {
-                        let row = laid.galley.rows.first().map_or(20.0, |r| r.rect.height());
-                        let arrow = Rect::from_min_size(
-                            Pos2::new(rect.min.x, block_top.y),
-                            Vec2::new(PADDING, row),
-                        );
-                        let folded = source.is_folded(&section.key);
-                        let hovered = pointer.is_some_and(|p| {
-                            p.y >= block_top.y && p.y < block_top.y + row && rect.contains(p)
-                        });
-                        let click =
-                            ui.interact(arrow, self.id.with(("fold", index)), Sense::click());
-                        if folded || hovered || click.hovered() {
-                            paint_fold_arrow(&painter, arrow, folded, theme.weak);
-                        }
-                        if click.clicked() {
-                            toggle = Some(section.clone());
-                        }
-                        if folded {
-                            let end = laid.galley.rect.right_bottom();
-                            painter.text(
-                                block_top + Vec2::new(end.x + 10.0, end.y),
-                                egui::Align2::LEFT_BOTTOM,
-                                "…",
-                                FontId::proportional(BODY_SIZE),
-                                theme.weak,
-                            );
-                        }
-                    }
-                    let top = block_top + laid.offset;
-                    let block = &self.blocks[index];
-                    match &laid.figure {
-                        Some(Figure::Picture(texture, size)) => {
-                            painter.image(
-                                *texture,
-                                Rect::from_min_size(block_top, *size),
-                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
-                        }
-                        Some(Figure::Message(message)) => {
-                            painter.galley(block_top, Arc::clone(message), theme.weak);
-                        }
-                        Some(Figure::Table(table)) => {
-                            paint_table(&painter, table, block_top, &theme);
-                        }
-                        None => {}
-                    }
-                    if let Some((caption_top, caption)) = &laid.caption {
-                        painter.galley(
-                            block_top + Vec2::new(0.0, *caption_top),
-                            Arc::clone(caption),
-                            theme.text,
+                let top = block_top + laid.offset;
+                let block = &self.blocks[index];
+                match &laid.figure {
+                    Some(Figure::Picture(texture, size)) => {
+                        painter.image(
+                            *texture,
+                            Rect::from_min_size(block_top, *size),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
                         );
                     }
-                    match &block.kind {
-                        BlockKind::Code { .. }
-                        | BlockKind::Markup
-                        | BlockKind::Image { .. }
-                        | BlockKind::Table(_)
-                            if laid.text_shown =>
-                        {
-                            painter.rect_filled(
-                                Rect::from_min_size(
-                                    top - Vec2::splat(4.0),
-                                    Vec2::new(width + 8.0, laid.galley.size().y + 8.0),
-                                ),
-                                4.0,
-                                theme.code_bg,
-                            );
-                        }
-                        BlockKind::Quote(depth) => {
-                            for d in 0..*depth {
-                                let x = top.x + 4.0 + d as f32 * 14.0;
-                                painter.line_segment(
-                                    [
-                                        Pos2::new(x, top.y),
-                                        Pos2::new(x, top.y + laid.galley.size().y),
-                                    ],
-                                    Stroke::new(3.0_f32, theme.weak),
-                                );
-                            }
-                        }
-                        BlockKind::Admonition(_) => {
-                            let x = top.x + 4.0;
+                    Some(Figure::Message(message)) => {
+                        painter.galley(block_top, Arc::clone(message), theme.weak);
+                    }
+                    Some(Figure::Table(table)) => {
+                        paint_table(&painter, table, block_top, &theme);
+                    }
+                    None => {}
+                }
+                if let Some((caption_top, caption)) = &laid.caption {
+                    painter.galley(
+                        block_top + Vec2::new(0.0, *caption_top),
+                        Arc::clone(caption),
+                        theme.text,
+                    );
+                }
+                match &block.kind {
+                    BlockKind::Code { .. }
+                    | BlockKind::Markup
+                    | BlockKind::Image { .. }
+                    | BlockKind::Table(_)
+                        if laid.text_shown =>
+                    {
+                        painter.rect_filled(
+                            Rect::from_min_size(
+                                top - Vec2::splat(4.0),
+                                Vec2::new(width + 8.0, laid.galley.size().y + 8.0),
+                            ),
+                            4.0,
+                            theme.code_bg,
+                        );
+                    }
+                    BlockKind::Quote(depth) => {
+                        for d in 0..*depth {
+                            let x = top.x + 4.0 + d as f32 * 14.0;
                             painter.line_segment(
                                 [
                                     Pos2::new(x, top.y),
                                     Pos2::new(x, top.y + laid.galley.size().y),
                                 ],
-                                Stroke::new(3.0_f32, theme.link),
+                                Stroke::new(3.0_f32, theme.weak),
                             );
                         }
-                        BlockKind::ThematicBreak => {
-                            let y = top.y + 8.0;
-                            painter.line_segment(
-                                [Pos2::new(top.x, y), Pos2::new(top.x + width, y)],
-                                Stroke::new(1.0_f32, theme.weak),
+                    }
+                    BlockKind::Admonition(_) => {
+                        let x = top.x + 4.0;
+                        painter.line_segment(
+                            [
+                                Pos2::new(x, top.y),
+                                Pos2::new(x, top.y + laid.galley.size().y),
+                            ],
+                            Stroke::new(3.0_f32, theme.link),
+                        );
+                    }
+                    BlockKind::ThematicBreak => {
+                        let y = top.y + 8.0;
+                        painter.line_segment(
+                            [Pos2::new(top.x, y), Pos2::new(top.x + width, y)],
+                            Stroke::new(1.0_f32, theme.weak),
+                        );
+                    }
+                    _ => {}
+                }
+                // Selection behind the text.
+                if sel_start != sel_end && laid.text_shown {
+                    let to_char = |offset: usize| rope.byte_to_char(offset.min(rope.len_bytes()));
+                    let count = block.text().chars().count();
+                    let mut from = None;
+                    let mut to = None;
+                    for i in 0..=count {
+                        let at = to_char(block.source_offset(i));
+                        if from.is_none() && at >= sel_start {
+                            from = Some(i);
+                        }
+                        if at <= sel_end {
+                            to = Some(i);
+                        }
+                    }
+                    if let (Some(from), Some(to)) = (from, to) {
+                        if from < to {
+                            paint_selection(
+                                &painter,
+                                &laid,
+                                top,
+                                from,
+                                to,
+                                ui.visuals().selection.bg_fill,
                             );
                         }
-                        _ => {}
-                    }
-                    // Selection behind the text.
-                    if sel_start != sel_end && laid.text_shown {
-                        let to_char =
-                            |offset: usize| rope.byte_to_char(offset.min(rope.len_bytes()));
-                        let count = block.text().chars().count();
-                        let mut from = None;
-                        let mut to = None;
-                        for i in 0..=count {
-                            let at = to_char(block.source_offset(i));
-                            if from.is_none() && at >= sel_start {
-                                from = Some(i);
-                            }
-                            if at <= sel_end {
-                                to = Some(i);
-                            }
-                        }
-                        if let (Some(from), Some(to)) = (from, to) {
-                            if from < to {
-                                paint_selection(
-                                    &painter,
-                                    &laid,
-                                    top,
-                                    from,
-                                    to,
-                                    ui.visuals().selection.bg_fill,
-                                );
-                            }
-                        }
-                    }
-                    if laid.text_shown {
-                        painter.galley(top, Arc::clone(&laid.galley), theme.text);
                     }
                 }
+                if laid.text_shown {
+                    painter.galley(top, Arc::clone(&laid.galley), theme.text);
+                }
+            }
 
-                if let Some(section) = toggle {
-                    source.toggle_fold(&section);
-                    self.update_folds(source);
-                    self.layout_all(ui, source, &theme, width);
-                    ui.ctx().request_repaint();
-                }
+            if let Some(section) = toggle {
+                source.toggle_fold(&section);
+                self.update_folds(source);
+                self.layout_all(ui, source, &theme, width);
+                ui.ctx().request_repaint();
+            }
 
-                // UC-004 BR-011: the magnifier at the corner of the picture
-                // under the pointer enlarges it.
-                // The pointer is asked directly: over the button, the facade
-                // itself is not hovered.
-                let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| {
-                    rect.contains(*p)
-                        && ui.layer_id() == ui.ctx().layer_id_at(*p).unwrap_or(ui.layer_id())
-                });
-                if let Some(pos) = pointer.filter(|_| self.enlarged.is_none()) {
-                    if let Some((index, picture)) = self.picture_at(ui, source, &theme, origin, pos)
-                    {
-                        let button = Rect::from_min_size(
-                            picture.right_top() + Vec2::new(-30.0, 6.0),
-                            Vec2::splat(24.0),
-                        );
-                        let magnifier =
-                            ui.interact(button, self.id.with("magnifier"), Sense::click());
-                        let hovered = magnifier.hovered();
-                        painter.rect_filled(
-                            button,
-                            4.0,
-                            Color32::from_black_alpha(if hovered { 200 } else { 140 }),
-                        );
-                        let glass = button.center() - Vec2::splat(2.0);
-                        painter.circle_stroke(glass, 6.0, Stroke::new(2.0_f32, Color32::WHITE));
-                        painter.line_segment(
-                            [glass + Vec2::splat(4.5), glass + Vec2::splat(9.0)],
-                            Stroke::new(2.5_f32, Color32::WHITE),
-                        );
-                        let magnifier = magnifier.on_hover_text("Enlarge (double click)");
-                        if magnifier.clicked() {
-                            self.enlarge(ui, index);
-                        }
-                    }
-                }
-                if let Some(enlarged) = &mut self.enlarged {
-                    let open =
-                        enlarged.show(ui.ctx(), self.diagrams.as_deref(), self.images.as_deref());
-                    if !open {
-                        self.enlarged = None;
-                        response.request_focus();
-                    }
-                }
-
-                // Cursor, and the format indicator (FR-011).
-                if let Some(cursor_rect) = self.cursor_rect(ui, source, &theme, origin) {
-                    if response.has_focus() {
-                        painter.line_segment(
-                            [cursor_rect.center_top(), cursor_rect.center_bottom()],
-                            Stroke::new(2.0_f32, theme.text),
-                        );
-                        ui.ctx().output_mut(|o| {
-                            o.ime = Some(egui::output::IMEOutput { rect, cursor_rect })
-                        });
-                    }
-                    if std::mem::take(&mut self.scroll_to_cursor) {
-                        ui.scroll_to_rect(cursor_rect.expand(24.0), None);
-                    }
-                }
-                let indicator = match source.format() {
-                    NoteFormat::Markdown => "Markdown",
-                    NoteFormat::AsciiDoc => "AsciiDoc",
-                };
-                painter.text(
-                    Pos2::new(rect.right() - 6.0, viewport.min.y + rect.top() + 4.0),
-                    egui::Align2::RIGHT_TOP,
-                    indicator,
-                    FontId::proportional(11.0),
-                    theme.weak,
-                );
+            // UC-004 BR-011: the magnifier at the corner of the picture
+            // under the pointer enlarges it.
+            // The pointer is asked directly: over the button, the facade
+            // itself is not hovered.
+            let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| {
+                rect.contains(*p)
+                    && ui.layer_id() == ui.ctx().layer_id_at(*p).unwrap_or(ui.layer_id())
             });
+            if let Some(pos) = pointer.filter(|_| self.enlarged.is_none()) {
+                if let Some((index, picture)) = self.picture_at(ui, source, &theme, origin, pos) {
+                    let button = Rect::from_min_size(
+                        picture.right_top() + Vec2::new(-30.0, 6.0),
+                        Vec2::splat(24.0),
+                    );
+                    let magnifier = ui.interact(button, self.id.with("magnifier"), Sense::click());
+                    let hovered = magnifier.hovered();
+                    painter.rect_filled(
+                        button,
+                        4.0,
+                        Color32::from_black_alpha(if hovered { 200 } else { 140 }),
+                    );
+                    let glass = button.center() - Vec2::splat(2.0);
+                    painter.circle_stroke(glass, 6.0, Stroke::new(2.0_f32, Color32::WHITE));
+                    painter.line_segment(
+                        [glass + Vec2::splat(4.5), glass + Vec2::splat(9.0)],
+                        Stroke::new(2.5_f32, Color32::WHITE),
+                    );
+                    let magnifier = magnifier.on_hover_text("Enlarge (double click)");
+                    if magnifier.clicked() {
+                        self.enlarge(ui, index);
+                    }
+                }
+            }
+            if let Some(enlarged) = &mut self.enlarged {
+                let open =
+                    enlarged.show(ui.ctx(), self.diagrams.as_deref(), self.images.as_deref());
+                if !open {
+                    self.enlarged = None;
+                    response.request_focus();
+                }
+            }
+
+            // Cursor, and the format indicator (FR-011).
+            if let Some(cursor_rect) = self.cursor_rect(ui, source, &theme, origin) {
+                if response.has_focus() {
+                    painter.line_segment(
+                        [cursor_rect.center_top(), cursor_rect.center_bottom()],
+                        Stroke::new(2.0_f32, theme.text),
+                    );
+                    ui.ctx().output_mut(|o| {
+                        o.ime = Some(egui::output::IMEOutput { rect, cursor_rect })
+                    });
+                }
+                if std::mem::take(&mut self.scroll_to_cursor) {
+                    ui.scroll_to_rect(cursor_rect.expand(24.0), None);
+                }
+            }
+            let indicator = match source.format() {
+                NoteFormat::Markdown => "Markdown",
+                NoteFormat::AsciiDoc => "AsciiDoc",
+            };
+            painter.text(
+                Pos2::new(rect.right() - 6.0, viewport.min.y + rect.top() + 4.0),
+                egui::Align2::RIGHT_TOP,
+                indicator,
+                FontId::proportional(11.0),
+                theme.weak,
+            );
+        });
+        if self.minimap && self.marks_dirty {
+            if self.marks.is_empty() || self.marks_built.elapsed() >= MARKS_EVERY {
+                let (foreground, _) = source.colors();
+                let theme = Theme {
+                    text: rgba(foreground),
+                    strong: ui.visuals().strong_text_color(),
+                    link: ui.visuals().hyperlink_color,
+                    code_bg: ui.visuals().code_bg_color,
+                    weak: rgba(foreground).gamma_multiply(0.55),
+                };
+                self.build_marks(ui, source, &theme);
+            } else {
+                ui.ctx().request_repaint_after(MARKS_EVERY);
+            }
+        }
         changed
     }
 
@@ -611,6 +683,51 @@ impl FacadeView {
         }
         tops.push(y);
         self.tops = tops;
+        self.marks_dirty = true;
+    }
+
+    /// FR-030: the bars of the minimap, row by row for text, an area for a
+    /// picture or table.
+    fn build_marks(&mut self, ui: &egui::Ui, source: &SourceView, theme: &Theme) {
+        let width = self.width;
+        let mut marks = Vec::new();
+        for index in 0..self.blocks.len() {
+            if self.hidden.get(index).copied().unwrap_or(false) || index + 1 >= self.tops.len() {
+                continue;
+            }
+            let y = self.tops[index];
+            let laid = self.laid(ui, source, theme, index);
+            // FR-030: the bars of the minimap, row by row for text.
+            let kind = &self.blocks[index].kind;
+            let color = match kind {
+                BlockKind::Heading(_) => theme.strong,
+                BlockKind::Code { .. } | BlockKind::Markup => theme.weak.gamma_multiply(0.6),
+                _ => theme.text.gamma_multiply(0.45),
+            };
+            let top = PADDING + y;
+            if laid.figure.is_some() {
+                let shown = laid.offset.y.max(1.0);
+                marks.push(Mark {
+                    top,
+                    height: shown,
+                    width: 0.8,
+                    color: theme.link.gamma_multiply(0.45),
+                });
+            }
+            if laid.text_shown {
+                for row in &laid.galley.rows {
+                    marks.push(Mark {
+                        top: top + laid.offset.y + row.rect.min.y,
+                        height: row.rect.height() * 0.7,
+                        width: (row.rect.width() / width.max(1.0)).max(0.05),
+                        color,
+                    });
+                }
+            }
+        }
+        self.marks = marks;
+        self.marks_dirty = false;
+        self.marks_built = std::time::Instant::now();
     }
 
     fn block_at(&self, y: f32) -> usize {

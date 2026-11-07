@@ -188,3 +188,10 @@ its section, shown while pointing at the heading and always at a folded one, in 
 the source view beside its line number; the keyboard folds and expands the section the cursor is in. A folded heading
 shows that something is hidden behind it. When the cursor moves into a folded section, the section expands. Both
 editing views of a tab share the folded sections, which stay folded while the tab is open (step 6).
+
+### BR-013: Minimap
+
+The minimap is a narrow strip beside the editor that shows the whole note scaled down, each line or block as a bar in
+the shape and color of what it is, headings stronger than text, and code, tables, and figures as areas; the visible
+part is marked (FR-030). A click puts that place in view, and dragging moves the view along. It shows the note as the
+active editing view shows it, folded sections left out. A switch hides it and shows it again, for all tabs.

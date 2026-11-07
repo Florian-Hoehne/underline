@@ -6,6 +6,7 @@ mod document;
 mod enlarged;
 mod facade_view;
 pub mod fonts;
+mod minimap;
 mod source_view;
 mod toolbar;
 

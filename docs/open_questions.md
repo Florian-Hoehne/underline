@@ -761,3 +761,14 @@ edited there; editing the cells in place may follow later.
 
 Answer: By an arrow before each heading and by keys for the section at the cursor; the facade and the source view of a
 tab share the folded sections.
+
+## OQ-076: How does the minimap look, and can it be hidden?
+
+**Element:** FR-030, UC-004 step 4
+**Raised by:** implementation of the minimap, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), BR-013
+
+Answer: Bars in the shape of the lines and blocks rather than tiny text; a click jumps, dragging moves along; a switch
+hides it for all tabs.

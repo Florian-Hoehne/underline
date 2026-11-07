@@ -78,3 +78,8 @@ top of the measured CPU time.
 - **Alternatives considered:** egui's `TextEdit` (lays out the whole text every frame and cannot edit formatted
   content); a live preview that shows the markup of the block under the cursor (simpler, but the user sees markup in
   the facade, against FR-009); another UI toolkit or a web view with a ready editor (reopens ADR-001).
+
+**Measured again on 2026-11-07, with the minimap and folding** (release build, the same 10,000-line note): typing in
+the source view median 0.58 ms, p99 1.2 ms; typing in the facade median 1.3 ms, p99 1.4 ms; scrolling 50 lines per
+frame median 0.56 ms, p99 0.69 ms. The minimap's bars are built at most every 150 ms while the text changes, and the
+sections at most every 300 ms while nothing is folded, so typing stays far below one frame.
