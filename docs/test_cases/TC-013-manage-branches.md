@@ -57,11 +57,11 @@
 ## TC-013-04: Open tabs after a switch
 
 **Flow:** BR-004, FR-018  
-**Preconditions:** On `drafts`, tabs of "Plan" and "Sketch" are open; "Plan" has a word typed and not yet saved; `main` does not hold "Sketch".
+**Preconditions:** On `drafts`, tabs of "Plan" and "Sketch" are open; "Plan" has a word typed and not yet saved; `main` holds the same committed "Plan" as `drafts` and does not hold "Sketch".
 
 | Step | Action               | Expected result                                                                         |
 |------|----------------------|-----------------------------------------------------------------------------------------|
-| 1    | Switch to `main`.    | "Plan" was saved first; the switch is refused as A3 if `main`'s "Plan" differs, else the tab of "Sketch" closes and the report names it. |
+| 1    | Switch to `main`.    | "Plan" was saved first and its tab still shows the typed word, carried along; the tab of "Sketch" closes and the report names it. |
 
 ## TC-013-05: Create a branch
 
