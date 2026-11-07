@@ -140,6 +140,7 @@ The settings of the user settings file or of one workspace settings file.
   Light, input mode Normal, line numbers shown on the left, minimap shown, copy on select on, git sync every 5
   minutes, MCP server off, note overview 200 and tool panel 240 pixels wide).
 - In workspace settings an empty value means that the user setting applies.
+- Workspace settings can switch the MCP server off but never on; only the user settings can switch it on.
 - A setting the user changes in the interface is stored in the workspace settings when they already give it a value,
   otherwise in the user settings.
 

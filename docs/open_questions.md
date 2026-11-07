@@ -823,3 +823,43 @@ Answer: The last settings that could be read stay in effect (the built-in defaul
 **Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
 
 Answer: Yes, a setting of its own, shown by default.
+
+## OQ-082: May a workspace settings file, often shared through git, switch the MCP server on?
+
+**Element:** UC-010 BR-008, FR-059, NFR-016
+**Raised by:** spec review UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: No; only the user settings switch it on. A workspace can only switch it off, and a workspace file that switches it on is not followed.
+
+## OQ-083: Does "This workspace" say that its values are shared through git?
+
+**Element:** UC-010 BR-007
+**Raised by:** spec review UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: Yes, when the workspace is a git repository that does not ignore its workspace settings file.
+
+## OQ-084: Where do line numbers apply?
+
+**Element:** UC-010 BR-001, FR-028, FR-029
+**Raised by:** spec review UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: In the source view only; the facade's lines are not lines of the file.
+
+## OQ-085: How are the settings opened?
+
+**Element:** UC-010 BR-006, NFR-011
+**Raised by:** spec review UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: With Ctrl+, (Cmd+, on macOS) and a settings button in the top bar.

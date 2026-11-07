@@ -9,7 +9,7 @@
 **Trigger:** The user opens the settings, uses a quick switch of the toolbar, or changes the size of a panel.  
 **Status:** Draft  
 
-**Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-069, FR-070, FR-071, NFR-009, NFR-010, NFR-011, NFR-013, C-006](../requirements.md)
+**Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-059, FR-069, FR-070, FR-071, NFR-009, NFR-010, NFR-011, NFR-013, NFR-015, NFR-016, C-006](../requirements.md)
 
 ## Preconditions
 
@@ -17,8 +17,8 @@
 
 ## Main Success Scenario
 
-1. The user opens the settings.
-2. The system shows the settings in two parts: "For me", the user settings that apply in every workspace, and "This workspace", the settings of the open workspace. Each setting shows its value, and in "This workspace" whether the workspace has a value of its own or uses the user setting.
+1. The user opens the settings, with the settings button or the keyboard (BR-006).
+2. The system shows the settings in two parts: "For me", the user settings that apply in every workspace, and "This workspace", the settings of the open workspace. Each setting shows its value; in "This workspace" also whether the workspace has a value of its own or uses the user setting, and in "For me" a note on every setting the open workspace has a value of its own for. When the workspace is a git repository that does not ignore its workspace settings file, "This workspace" says that its values are shared with everyone who uses the repository (BR-007).
 3. The user changes a setting in "For me".
 4. The system applies the change at once to every open tab and to the whole window (BR-004), unless the open workspace has a value of its own for that setting, and stores it in the user settings file within 1 second (BR-005).
 5. The user closes the settings; the changes stay.
@@ -88,7 +88,8 @@
 **Flow:**
 
 1. The system stores it in the workspace settings file; notes created afterwards get the new note format (UC-003). Existing notes keep their format and are not converted (UC-001 BR-005).
-2. Use case continues at step 5.
+2. A workspace without a default format of its own shows the format it derives from its notes (UC-002 BR-002); choosing "Follow the notes" removes the default format from the workspace settings file again.
+3. Use case continues at step 5.
 
 ### A9: No workspace open
 
@@ -127,17 +128,17 @@
 |------------------------|------------------------------------------------------------------------|------------------|
 | Theme                  | Light, Dark, GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Night Owl, Ubuntu, Nord, Dracula, Gruvbox | Light |
 | Input mode             | Normal, Vim, Nano                                                      | Normal           |
-| Line numbers           | Shown or hidden                                                        | Shown            |
+| Line numbers           | Shown or hidden, in the source view                                    | Shown            |
 | Line number side       | Left or right                                                          | Left             |
 | Minimap                | Shown or hidden                                                        | Shown            |
 | Copy on select         | On or off                                                              | On               |
 | Git sync interval      | 1 to 60 minutes                                                        | 5 minutes        |
-| MCP server             | On or off                                                              | Off              |
+| MCP server             | On or off; a workspace can only switch it off (BR-008)                 | Off              |
 | Note overview width    | 100 to 1,000 pixels                                                    | 200 pixels       |
 | Tool panel width       | 100 to 1,000 pixels                                                    | 240 pixels       |
 | Default format         | Markdown or AsciiDoc; only for a workspace (UC-001 BR-005)             | —                |
 
-What git sync and the MCP server do is described in UC-014 and UC-017; this use case only sets them.
+What git sync and the MCP server do is described in UC-014 and UC-017; this use case only sets them. The git sync interval applies only to a workspace that is a git repository with a remote. Line numbers are shown only in the source view; the lines of the facade are not lines of the note's file.
 
 ### BR-002: Two levels
 
@@ -157,4 +158,12 @@ A changed setting is written to its settings file within 1 second (NFR-009), nev
 
 ### BR-006: Keyboard
 
-The settings can be opened and every setting changed by keyboard alone (NFR-011).
+The settings open with `Ctrl+,` (`Cmd+,` on macOS) and with a settings button in the top bar; every setting can be changed by keyboard alone (NFR-011).
+
+### BR-007: Shared workspace settings
+
+The workspace settings file lies in the workspace, so when the workspace is a git repository its values reach everyone who uses the repository. "This workspace" says so whenever the repository does not ignore that file.
+
+### BR-008: The MCP server only with the user's consent
+
+Only the user settings can switch the MCP server on (FR-059). A workspace can switch it off for itself, but a workspace settings file that switches it on is not followed and the status bar says so, so a workspace taken from someone else, for example by cloning a repository, never gives an agent access to the notes (NFR-015, NFR-016).
