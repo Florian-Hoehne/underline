@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user works on the line of notes they chose: a new branch they created, or another branch they switched to, without losing a change.  
 **Trigger:** The user opens the branch menu in the status bar.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-050, FR-047, FR-018, NFR-006, NFR-011, NFR-014](../requirements.md)
 
