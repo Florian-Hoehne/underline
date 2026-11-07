@@ -128,6 +128,39 @@ pub fn embed_file(
     unreachable!("some number is free")
 }
 
+/// UC-005 A12: the link a dropped item stands for, if it is one: a web
+/// address handed over as the dropped item, or a shortcut file of Windows
+/// (`.url`) or macOS (`.webloc`) that a browser makes when a link is
+/// dragged. Gives the address and, for a shortcut, its name as the text.
+pub fn dropped_link(item: &Path) -> Option<(String, Option<String>)> {
+    let text = item.to_string_lossy();
+    if ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| text.starts_with(scheme))
+    {
+        return Some((text.into_owned(), None));
+    }
+    let extension = item.extension()?.to_str()?.to_ascii_lowercase();
+    let label = item.file_stem().map(|s| s.to_string_lossy().into_owned());
+    let content = match extension.as_str() {
+        "url" | "webloc" => fs::read_to_string(item).ok()?,
+        _ => return None,
+    };
+    let address = if extension == "url" {
+        content
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("URL="))
+            .map(str::trim)?
+            .to_owned()
+    } else {
+        let after = &content[content.find("<key>URL</key>")?..];
+        let start = after.find("<string>")? + "<string>".len();
+        let end = after[start..].find("</string>")? + start;
+        after[start..end].trim().replace("&amp;", "&")
+    };
+    (!address.is_empty()).then_some((address, label))
+}
+
 /// The place of `to` relative to the folder `from`, with `/`.
 pub fn relative(from: &Path, to: &Path) -> String {
     let from: Vec<Component> = from.components().collect();
@@ -224,6 +257,40 @@ mod tests {
         let arch = embed_file(&root, &note, &s.path("ws/img/arch.png"), false).unwrap();
         assert_eq!(arch.place, "../img/arch.png");
         assert!(!s.path("ws/guide/arch.png").exists());
+    }
+
+    /// TC-005-21: a dropped address, and the link shortcuts browsers make.
+    #[test]
+    fn uc005_tc21_dropped_links() {
+        let s = Sandbox::new("links");
+        assert_eq!(
+            dropped_link(Path::new("https://doc.rust-lang.org/book/")),
+            Some(("https://doc.rust-lang.org/book/".into(), None))
+        );
+        let url = s.path("outside/Rust Book.url");
+        fs::write(
+            &url,
+            "[InternetShortcut]\r\nURL=https://doc.rust-lang.org/book/\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            dropped_link(&url),
+            Some((
+                "https://doc.rust-lang.org/book/".into(),
+                Some("Rust Book".into())
+            ))
+        );
+        let webloc = s.path("outside/Rust Book.webloc");
+        fs::write(
+            &webloc,
+            "<?xml version=\"1.0\"?><plist><dict><key>URL</key><string>https://doc.rust-lang.org/book/?a=1&amp;b=2</string></dict></plist>",
+        )
+        .unwrap();
+        assert_eq!(
+            dropped_link(&webloc).unwrap().0,
+            "https://doc.rust-lang.org/book/?a=1&b=2"
+        );
+        assert_eq!(dropped_link(&s.path("ws/guide/Setup.md")), None);
     }
 
     /// TC-005-22 / TC-005-28: folders are refused, large files asked about.

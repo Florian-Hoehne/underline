@@ -53,7 +53,7 @@ pub struct SourceView {
     tops: Vec<f32>,
     layout_width: f32,
     layout_revision: Option<u64>,
-    row_height: f32,
+    pub(crate) row_height: f32,
     /// An edit since the last layout: its first line and the lines it added
     /// (negative when removed), so only these rows are estimated again.
     pending_edit: Option<(usize, isize)>,
@@ -84,6 +84,9 @@ pub struct SourceView {
     visible: (f32, f32),
     scroll_to: Option<f32>,
     columns: usize,
+    /// Where the text was drawn last, on the screen: the top left of its
+    /// first line, and the part of the screen it covers.
+    pub(crate) drawn: Option<(Pos2, Rect)>,
 }
 
 impl SourceView {
@@ -122,6 +125,7 @@ impl SourceView {
             visible: (0.0, 0.0),
             scroll_to: None,
             columns: 80,
+            drawn: None,
         }
     }
 
@@ -460,6 +464,10 @@ impl SourceView {
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             let response = ui.interact(rect, self.id, Sense::click_and_drag());
             let origin = rect.min + Vec2::new(gutter, PADDING);
+            self.drawn = Some((
+                origin,
+                rect.intersect(viewport.translate(rect.min.to_vec2())),
+            ));
             if std::mem::take(&mut self.focus) {
                 response.request_focus();
             }
@@ -921,6 +929,28 @@ impl SourceView {
     fn insert(&mut self, text: &str) {
         let (start, end) = self.selection();
         self.replace(start..end, text);
+    }
+
+    /// Inserts `text` as it is at the cursor, replacing the selection, as a
+    /// dropped file's name in a code block (UC-005 A9 step 2).
+    pub fn insert_text(&mut self, text: &str) {
+        self.insert(text);
+    }
+
+    /// UC-005 A9: puts the cursor at the place under `pos` on the screen,
+    /// where something is dropped. False when `pos` is not over the text.
+    pub fn place_cursor_at(&mut self, ui: &egui::Ui, pos: Pos2) -> bool {
+        let Some((origin, area)) = self.drawn else {
+            return false;
+        };
+        if !area.contains(pos) {
+            return false;
+        }
+        let font = FontId::monospace(FONT_SIZE);
+        let at = self.char_at(ui, &font, origin, pos);
+        self.cursor = at;
+        self.anchor = at;
+        true
     }
 
     /// Replaces the chars in `range` by `text` and puts the cursor after it;

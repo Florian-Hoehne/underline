@@ -84,6 +84,9 @@ pub struct FacadeView {
     marks_built: std::time::Instant,
     visible: (f32, f32),
     scroll_to: Option<f32>,
+    /// Where the blocks were drawn last, on the screen: the top left of the
+    /// first block, and the part of the screen they cover.
+    drawn: Option<(Pos2, Rect)>,
 }
 
 /// What a block shows besides its text: the marker before it, in chars, and
@@ -156,6 +159,7 @@ impl FacadeView {
             marks_built: std::time::Instant::now(),
             visible: (0.0, 0.0),
             scroll_to: None,
+            drawn: None,
         }
     }
 
@@ -321,6 +325,10 @@ impl FacadeView {
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             let response = ui.interact(rect, self.id, Sense::click_and_drag());
             let origin = rect.min + Vec2::splat(PADDING);
+            self.drawn = Some((
+                origin,
+                rect.intersect(viewport.translate(rect.min.to_vec2())),
+            ));
             if std::mem::take(&mut self.focus) {
                 response.request_focus();
             }
@@ -1005,6 +1013,40 @@ impl FacadeView {
     pub fn current_blocks(&mut self, source: &SourceView) -> &[Block] {
         self.reparse(source);
         &self.blocks
+    }
+
+    /// UC-005 A9: puts the cursor at the place under `pos` on the screen,
+    /// where something is dropped. False when `pos` is not over the note.
+    pub fn place_cursor_at(&mut self, ui: &egui::Ui, source: &mut SourceView, pos: Pos2) -> bool {
+        let Some((origin, area)) = self.drawn else {
+            return false;
+        };
+        if !area.contains(pos) {
+            return false;
+        }
+        let (foreground, _) = source.colors();
+        let theme = Theme {
+            text: rgba(foreground),
+            strong: ui.visuals().strong_text_color(),
+            link: ui.visuals().hyperlink_color,
+            code_bg: ui.visuals().code_bg_color,
+            weak: rgba(foreground).gamma_multiply(0.55),
+        };
+        match self.char_at(ui, source, &theme, origin, pos) {
+            Some(at) => {
+                source.set_cursor_anchor(at, at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the cursor is in a code block, where a dropped file is
+    /// inserted by its name only (UC-005 A9 step 2).
+    pub fn cursor_in_code(&mut self, source: &SourceView) -> bool {
+        self.reparse(source);
+        self.cursor_position(source)
+            .is_some_and(|(index, _)| matches!(self.blocks[index].kind, BlockKind::Code { .. }))
     }
 
     /// Whether a picture is shown enlarged.
@@ -2230,6 +2272,72 @@ mod tests {
         h.cursor_after("apt");
         h.frame(vec![]);
         assert!(h.facade.hidden.iter().all(|hidden| !hidden));
+    }
+
+    /// UC-005 A9 step 2: a drop puts the cursor where the pointer is; in a
+    /// code block a dropped file goes in by its name only.
+    #[test]
+    fn uc005_a9_drop_places_the_cursor() {
+        let note = "First paragraph\n\n```\ncode here\n```\n\nLast\n";
+        let mut h = Harness::new(note);
+        h.cursor_after("Last");
+        h.frame(vec![]);
+        assert!(!h.facade.cursor_in_code(&h.source));
+        let (origin, _) = h.facade.drawn.expect("drawn");
+        let code_top = h.facade.tops[1];
+        let ctx = h.ctx.clone();
+        let mut placed = false;
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let pos = origin + Vec2::new(30.0, code_top + 6.0);
+                placed = h.facade.place_cursor_at(ui, &mut h.source, pos);
+            });
+        });
+        assert!(placed);
+        assert!(h.facade.cursor_in_code(&h.source));
+        h.source.insert_text("shot.png");
+        assert!(h.text().contains("shot.png"), "{}", h.text());
+        assert!(h.text().find("shot.png").unwrap() > h.text().find("```").unwrap());
+        // Outside the note nothing is placed.
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                placed = h
+                    .facade
+                    .place_cursor_at(ui, &mut h.source, Pos2::new(-50.0, -50.0));
+            });
+        });
+        assert!(!placed);
+    }
+
+    /// UC-005 A9: the source view puts the cursor at the drop point too.
+    #[test]
+    fn uc005_a9_drop_in_the_source_view() {
+        let mut h = Harness::new("one\ntwo\nthree\n");
+        let ctx = h.ctx.clone();
+        let run = |h: &mut Harness, drop: Option<Pos2>| {
+            let mut placed = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        h.source.show(ui);
+                        if let Some(pos) = drop {
+                            placed = h.source.place_cursor_at(ui, pos);
+                        }
+                    });
+                },
+            );
+            placed
+        };
+        run(&mut h, None);
+        let (origin, _) = h.source.drawn.expect("drawn");
+        let row = h.source.row_height;
+        assert!(run(&mut h, Some(origin + Vec2::new(200.0, row * 1.5))));
+        // The end of the second line.
+        assert_eq!(h.source.cursor(), "one\ntwo".chars().count());
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and

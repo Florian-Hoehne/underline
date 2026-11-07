@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 use eframe::egui;
 use underline_core::{
     asciidoc_anchor, check_directory, check_open_directory, check_readable_directory,
-    create_workspace, embed_file, heading_anchor, heading_title, note_overview, now,
+    create_workspace, dropped_link, embed_file, heading_anchor, heading_title, note_overview, now,
     outside_copy_path, relative, resolve_link, user_settings_dir, Autosave, CreateProblem,
     DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget, NewNote,
     NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteProperties, NoteSaver, OpenProblem,
@@ -126,6 +126,8 @@ enum ToolDialog {
 /// The answer of the link or image dialog.
 enum ToolAnswer {
     Address(String),
+    /// A dropped link with the text it carries (UC-005 A12).
+    Link(String, Option<String>),
     Note(NoteId),
     /// A file to embed; `true` when the user agreed to copy a large one.
     File(PathBuf, bool),
@@ -1278,6 +1280,58 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-005 A9 to A13, BR-012: inserts what was dropped at the cursor,
+    /// which the editor put at the drop position: a file from outside is
+    /// copied next to the note, a file of the workspace is referred to, a
+    /// link becomes a link; in a code block a file is inserted by its name
+    /// only. A folder or a file that cannot be read is refused in the
+    /// status bar.
+    fn drop_items(&mut self, items: Vec<egui::DroppedFile>) {
+        let Some(root) = self.workspace.as_ref().map(|w| w.root().to_owned()) else {
+            return;
+        };
+        for (n, item) in items.into_iter().enumerate() {
+            let path = item
+                .path
+                .clone()
+                .or_else(|| (!item.name.is_empty()).then(|| PathBuf::from(&item.name)));
+            let Some(path) = path else {
+                self.status = "This cannot be dropped into a note".into();
+                continue;
+            };
+            if n > 0 {
+                if let Some((_, tab)) = self.tabs.active_mut() {
+                    tab.view.insert_text(" ");
+                }
+            }
+            if let Some((address, label)) = dropped_link(&path) {
+                self.answer_tool(ToolAnswer::Link(address, label));
+                continue;
+            }
+            let Some((_, tab)) = self.tabs.active_mut() else {
+                return;
+            };
+            if tab.facade.cursor_in_code(&tab.view) {
+                match embed_file(&root, &tab.path, &path, false) {
+                    Ok(embedded) => {
+                        tab.view.insert_text(&embedded.place);
+                        tab.autosave.changed(Instant::now());
+                        if embedded.renamed {
+                            self.status =
+                                format!("Copied as {}, since the name was taken", embedded.place);
+                        }
+                    }
+                    Err(EmbedError::Large { .. }) => {
+                        self.answer_tool(ToolAnswer::File(path, false));
+                    }
+                    Err(err) => self.status = err.to_string(),
+                }
+                continue;
+            }
+            self.answer_tool(ToolAnswer::File(path, false));
+        }
+    }
+
     /// Applies the answer of the link or image dialog to the active tab.
     fn answer_tool(&mut self, answer: ToolAnswer) {
         let Some(workspace) = &self.workspace else {
@@ -1289,6 +1343,7 @@ impl UnderlineApp {
                 address,
                 label: None,
             },
+            ToolAnswer::Link(address, label) => Format::Link { address, label },
             ToolAnswer::Note(id) => {
                 let (Ok(target), Some((_, tab))) = (workspace.note_path(&id), self.tabs.active())
                 else {
@@ -1643,6 +1698,7 @@ impl eframe::App for UnderlineApp {
         let mut persist = false;
         let mut ask_tool = None;
         let mut followed = None;
+        let mut dropped = Vec::new();
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
@@ -1742,6 +1798,21 @@ impl eframe::App for UnderlineApp {
                 EditingView::Source => tab.view.show(ui),
             };
             persist |= switched;
+            // UC-005 A9 to A13: what is dropped goes where the pointer is.
+            let drops = ui.ctx().input(|i| i.raw.dropped_files.clone());
+            if !drops.is_empty() {
+                if let Some(pos) = ui.ctx().input(|i| i.pointer.latest_pos()) {
+                    match tab.editing_view {
+                        EditingView::Facade => {
+                            tab.facade.place_cursor_at(ui, &mut tab.view, pos);
+                        }
+                        EditingView::Source => {
+                            tab.view.place_cursor_at(ui, pos);
+                        }
+                    }
+                }
+                dropped = drops;
+            }
             if let Some(link) = tab.view.take_followed_link() {
                 followed = Some((link, tab.path.clone()));
             }
@@ -1754,6 +1825,12 @@ impl eframe::App for UnderlineApp {
         }
         if let Some((link, note)) = followed {
             self.follow_link(&link, &note);
+        }
+        if !dropped.is_empty() {
+            self.drop_items(dropped);
+        }
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            self.status = "Drop to insert at the place under the pointer".into();
         }
         if let Some(tool) = ask_tool {
             self.tool_dialog = Some(match tool {

@@ -30,7 +30,8 @@ pub use create::{
     HOME_TITLE, REMOTE_NAME,
 };
 pub use embed::{
-    embed_file, is_image, relative, EmbedError, Embedded, IMAGE_EXTENSIONS, LARGE_FILE,
+    dropped_link, embed_file, is_image, relative, EmbedError, Embedded, IMAGE_EXTENSIONS,
+    LARGE_FILE,
 };
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
