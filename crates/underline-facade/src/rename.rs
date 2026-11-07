@@ -482,6 +482,40 @@ pub fn rename_note(
     Ok(renamed)
 }
 
+/// UC-007 BR-001: how many links in how many other notes of the workspace
+/// lead to the note `id`, as the question before deleting it names them.
+pub fn links_to_note(workspace: &Workspace, id: &NoteId) -> (usize, usize) {
+    let Some(format) = workspace.format_of(id) else {
+        return (0, 0);
+    };
+    let target = NoteMove {
+        from: id.clone(),
+        to: id.clone(),
+        format,
+        title: id.title(),
+    };
+    let page = id.as_str().rsplit('/').next().unwrap_or_default();
+    let (mut links, mut notes) = (0, 0);
+    for entry in workspace.listing().notes.iter().filter(|e| &e.id != id) {
+        let file = entry.id.file_name(entry.format);
+        let Ok(text) = std::fs::read_to_string(workspace.root().join(&file)) else {
+            continue;
+        };
+        if !text.contains(page) && !text.contains('%') {
+            continue;
+        }
+        let found = link_spans(&text, entry.format)
+            .iter()
+            .filter(|span| target.links_to(&file, &text[span.target.clone()]))
+            .count();
+        if found > 0 {
+            links += found;
+            notes += 1;
+        }
+    }
+    (links, notes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,6 +780,29 @@ mod tests {
         assert_eq!(renamed.notes, 1);
         assert_eq!(tab.1, [(4..11, "Road-Map.md".to_owned())]);
         assert_eq!(sandbox.read("Ideas.md"), "[p](Plan.md)\n");
+    }
+
+    /// TC-007-03: the question before deleting counts the links to the note.
+    #[test]
+    fn uc007_tc03_counts_the_links_to_a_note() {
+        let sandbox = Sandbox::new(
+            "tc703",
+            &[
+                ("Plan.md", "[self](Plan.md)\n"),
+                ("Ideas.md", "[a](Plan.md) [b](Plan#goals) [c](Other.md)\n"),
+                ("team/Review.md", "[p](../Plan.md)\n"),
+                ("Other.md", "Plan\n"),
+            ],
+        );
+        let workspace = Workspace::open(&sandbox.0).unwrap();
+        assert_eq!(
+            links_to_note(&workspace, &NoteId::from_relative("Plan")),
+            (3, 2)
+        );
+        assert_eq!(
+            links_to_note(&workspace, &NoteId::from_relative("team/Review")),
+            (0, 0)
+        );
     }
 
     /// TC-006-17: renaming back gives every file as it was.

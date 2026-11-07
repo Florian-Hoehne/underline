@@ -324,6 +324,15 @@ impl StateStore {
         loaded.changed_at.get_or_insert_with(Instant::now);
     }
 
+    /// UC-007 step 5: the note `note` of the workspace at `directory` was
+    /// deleted; it is no longer a remembered tab or recently opened note.
+    pub fn note_deleted(&mut self, directory: &Path, note: &NoteId) {
+        let loaded = self.workspace(directory);
+        loaded.state.notes.retain(|n| &n.note != note);
+        loaded.state.tabs.retain(|t| &t.note != note);
+        loaded.changed_at.get_or_insert_with(Instant::now);
+    }
+
     /// Remembers the open tabs of the workspace at `directory`, left to
     /// right (UC-004 step 6, A5); positions start at 1.
     pub fn set_tabs(&mut self, directory: &Path, tabs: Vec<TabState>) {
@@ -427,20 +436,23 @@ fn prune(directory: &Path, state: &mut WorkspaceState) -> bool {
 /// Writes the state of a workspace into its Underline folder, creating the
 /// folder and the `.gitignore` that makes git ignore it (ADR-008).
 fn write_workspace_state(directory: &Path, state: &WorkspaceState) -> Result<(), StateError> {
-    let folder = directory.join(UNDERLINE_FOLDER);
-    let gitignore = folder.join(".gitignore");
-    let prepare = || -> io::Result<()> {
-        fs::create_dir_all(&folder)?;
-        if fs::read_to_string(&gitignore).ok().as_deref() != Some(UNDERLINE_FOLDER_GITIGNORE) {
-            write_atomic(&gitignore, UNDERLINE_FOLDER_GITIGNORE.as_bytes())?;
-        }
-        Ok(())
-    };
-    prepare().map_err(|source| StateError::Write {
-        path: gitignore.clone(),
+    let folder = underline_folder(directory).map_err(|source| StateError::Write {
+        path: directory.join(UNDERLINE_FOLDER).join(".gitignore"),
         source,
     })?;
     write_yaml(&folder.join(STATE_FILE_NAME), state)
+}
+
+/// The Underline folder of the workspace at `directory`, created with the
+/// `.gitignore` that makes git ignore it when it is missing (ADR-008).
+pub(crate) fn underline_folder(directory: &Path) -> io::Result<PathBuf> {
+    let folder = directory.join(UNDERLINE_FOLDER);
+    let gitignore = folder.join(".gitignore");
+    fs::create_dir_all(&folder)?;
+    if fs::read_to_string(&gitignore).ok().as_deref() != Some(UNDERLINE_FOLDER_GITIGNORE) {
+        write_atomic(&gitignore, UNDERLINE_FOLDER_GITIGNORE.as_bytes())?;
+    }
+    Ok(folder)
 }
 
 fn write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<(), StateError> {

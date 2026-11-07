@@ -7,6 +7,7 @@
 mod atomic;
 mod autosave;
 mod create;
+mod deleted;
 mod embed;
 mod format;
 mod git;
@@ -30,6 +31,7 @@ pub use create::{
     GitRepositoryOption, NewWorkspace, Surroundings, FALLBACK_BRANCH, FIRST_COMMIT_MESSAGE,
     HOME_TITLE, REMOTE_NAME,
 };
+pub use deleted::{DeleteProblem, DeletedNote, DELETED_FOLDER, KEEP_DELETED_MS};
 pub use embed::{
     dropped_link, embed_file, is_image, relative, store_pasted_image, EmbedError, Embedded,
     IMAGE_EXTENSIONS, LARGE_FILE,

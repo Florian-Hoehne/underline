@@ -6,13 +6,14 @@ use crate::settings::SettingsState;
 use eframe::egui;
 use underline_core::{
     asciidoc_anchor, check_directory, check_open_directory, check_readable_directory,
-    create_workspace, dropped_link, embed_file, heading_anchor, heading_title, note_overview, now,
-    outside_copy_path, relative, resolve_link, store_pasted_image, user_settings_dir, Autosave,
-    CreateProblem, DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget,
-    NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteMove, NoteProperties, NoteSaver,
-    OpenProblem, OverviewEntry, OwnWrites, Rename, SaveJob, SettingKey, StateNotice, StateStore,
-    Surroundings, TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher,
-    HOME_TITLE, STATE_WRITE_DELAY,
+    create_workspace, dropped_link, embed_file, format_local_time, heading_anchor, heading_title,
+    note_overview, now, outside_copy_path, relative, resolve_link, store_pasted_image,
+    user_settings_dir, Autosave, CreateProblem, DeleteProblem, DeletedNote, DirectoryProblem,
+    EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget, NewNote, NewNoteProblem,
+    NewWorkspace, NoteFormat, NoteId, NoteMove, NoteProperties, NoteSaver, OpenProblem,
+    OverviewEntry, OwnWrites, Rename, SaveJob, SettingKey, StateNotice, StateStore, Surroundings,
+    TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
+    STATE_WRITE_DELAY,
 };
 use underline_editor::{
     ClipImage, EditorCommand, FacadeView, InputMode, SharedClipboard, SourceView, SystemClipboard,
@@ -24,7 +25,7 @@ use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::images::{encode_png, Images};
 use underline_facade::index::{indexes, Indexes};
-use underline_facade::rename::{rename_note, Edit, OpenNotes, Renamed};
+use underline_facade::rename::{links_to_note, rename_note, Edit, OpenNotes, Renamed};
 use underline_facade::themes::Palette;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -70,6 +71,15 @@ pub struct UnderlineApp {
     open: Option<OpenDialog>,
     new_note: Option<NoteDialog>,
     rename: Option<RenameDialog>,
+    /// UC-007: the question before deleting, the undo offered right after
+    /// it, the deleted notes, and the dialogs to restore and remove them.
+    delete: Option<DeleteDialog>,
+    /// The note chosen in the note overview while it has the keyboard.
+    overview_chosen: Option<NoteId>,
+    undo_delete: Option<UndoDelete>,
+    deleted: Vec<DeletedNote>,
+    restore: Option<RestoreDialog>,
+    purge: Option<Purge>,
     /// The question a link or image tool asks (UC-005 A2).
     tool_dialog: Option<ToolDialog>,
     /// The user agreed to open web addresses in this session (UC-004 A4).
@@ -201,6 +211,39 @@ struct RenameDialog {
     select: bool,
 }
 
+/// The question of UC-007 step 2, or of A8 when the note cannot be kept.
+struct DeleteDialog {
+    id: NoteId,
+    /// Links in other notes that lead to the note, and in how many notes.
+    links: usize,
+    notes: usize,
+    /// A8: why the note cannot be kept; the user confirms deleting for good.
+    cannot_keep: Option<String>,
+}
+
+/// The undo offered right after deleting (UC-007 A4), while the status bar
+/// still shows the report.
+struct UndoDelete {
+    deleted: DeletedNote,
+    reopen: bool,
+    status: String,
+}
+
+/// UC-007 A6: the place of a note to restore is taken.
+struct RestoreDialog {
+    deleted: DeletedNote,
+    reopen: bool,
+    title: String,
+    folder: String,
+    problem: Option<String>,
+}
+
+/// UC-007 A7: what is about to be removed for good.
+enum Purge {
+    One(DeletedNote),
+    All,
+}
+
 /// What the user did in the rename dialog this frame.
 enum RenameAction {
     None,
@@ -327,6 +370,12 @@ impl UnderlineApp {
             open: None,
             new_note: None,
             rename: None,
+            delete: None,
+            overview_chosen: None,
+            undo_delete: None,
+            deleted: Vec::new(),
+            restore: None,
+            purge: None,
             tool_dialog: None,
             web_allowed: false,
             web_confirm: None,
@@ -489,6 +538,12 @@ impl UnderlineApp {
         }
         self.persist_tabs();
         self.refresh_overview();
+        // UC-007 BR-005: notes deleted more than 30 days ago go for good.
+        if let Some(workspace) = &self.workspace {
+            workspace.purge_deleted(now());
+        }
+        self.undo_delete = None;
+        self.refresh_deleted();
         if polling {
             self.status =
                 "Changes from outside may show up later in the note overview; this system delivers no change events"
@@ -1938,6 +1993,310 @@ impl UnderlineApp {
         self.status = status;
     }
 
+    /// UC-007 steps 1–2: asks before deleting `id`.
+    fn start_delete(&mut self, id: NoteId) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        if self.delete.is_some() {
+            return;
+        }
+        let (links, notes) = links_to_note(workspace, &id);
+        self.delete = Some(DeleteDialog {
+            id,
+            links,
+            notes,
+            cannot_keep: None,
+        });
+    }
+
+    fn show_delete_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &self.delete else {
+            return;
+        };
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Window::new("Delete note")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Delete the note {}?", dialog.id.title()));
+                if dialog.links == 0 {
+                    ui.label("No links in other notes lead to it.");
+                } else {
+                    ui.label(format!(
+                        "{} in {} lead to it and will lead nowhere.",
+                        count(dialog.links, "link"),
+                        count(dialog.notes, "note")
+                    ));
+                }
+                // BR-010: the start page of a GitHub wiki.
+                if dialog.id.as_str() == HOME_TITLE {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "This is the Home note, the start page of a GitHub wiki. Deleted, the wiki has no start page.",
+                    );
+                }
+                match &dialog.cannot_keep {
+                    // A8: the second question.
+                    Some(reason) => ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("The note cannot be kept among the deleted notes ({reason}), so it cannot be restored. Delete it for good?"),
+                    ),
+                    None => ui.weak("It is kept among the deleted notes for 30 days."),
+                };
+                ui.horizontal(|ui| {
+                    let label = if dialog.cannot_keep.is_some() {
+                        "Delete for good"
+                    } else {
+                        "Delete"
+                    };
+                    confirm = ui.button(label).clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                });
+            });
+        if cancel {
+            // A1: nothing is changed.
+            self.delete = None;
+        } else if confirm {
+            self.delete_note();
+        }
+    }
+
+    /// UC-007 steps 4–5, A3, A8.
+    fn delete_note(&mut self) {
+        let Some(dialog) = &self.delete else {
+            return;
+        };
+        let id = dialog.id.clone();
+        let for_good = dialog.cannot_keep.is_some();
+        // Step 4: unsaved changes are saved first, so they are kept too.
+        if let Some(index) = self.tabs.find(&id) {
+            let mut tabs = std::mem::take(&mut self.tabs);
+            let result = self.flush_tab_now(tabs.get_mut(index));
+            self.tabs = tabs;
+            if let Err(err) = result {
+                self.delete = None;
+                self.status = format!("The note could not be deleted, because {err}");
+                return;
+            }
+        }
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let result = if for_good {
+            workspace.delete_note_for_good(&id).map(|()| None)
+        } else {
+            workspace.delete_note(&id, now()).map(Some)
+        };
+        match result {
+            Ok(deleted) => {
+                self.delete = None;
+                self.deleted_note(&id, deleted);
+            }
+            Err(DeleteProblem::CannotKeep(err)) => {
+                if let Some(dialog) = &mut self.delete {
+                    dialog.cannot_keep = Some(err.to_string());
+                }
+            }
+            Err(problem) => {
+                // A3: the note and its tab stay.
+                self.delete = None;
+                self.status = format!("The note could not be deleted: {problem}");
+            }
+        }
+    }
+
+    /// UC-007 step 5: the tab closes, the note is forgotten, and the report
+    /// offers to undo when the note is kept.
+    fn deleted_note(&mut self, id: &NoteId, deleted: Option<DeletedNote>) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let reopen = match self.tabs.find(id) {
+            Some(index) => {
+                self.tabs.close(index);
+                true
+            }
+            None => false,
+        };
+        self.state.note_deleted(&root, id);
+        self.persist_tabs();
+        self.refresh_overview();
+        self.refresh_deleted();
+        self.status = format!("Deleted {}", id.title());
+        self.undo_delete = deleted.map(|deleted| UndoDelete {
+            deleted,
+            reopen,
+            status: self.status.clone(),
+        });
+    }
+
+    fn refresh_deleted(&mut self) {
+        self.deleted = self
+            .workspace
+            .as_ref()
+            .map(Workspace::deleted_notes)
+            .unwrap_or_default();
+    }
+
+    /// UC-007 A4, A5: puts a deleted note back at its place; asks for
+    /// another title or folder when it is taken (A6).
+    fn restore_deleted(&mut self, deleted: DeletedNote, reopen: bool) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        match workspace.restore_note(&deleted, None) {
+            Ok(id) => self.restored(&id, reopen),
+            Err(NewNoteProblem::Exists(existing)) => {
+                self.restore = Some(RestoreDialog {
+                    title: deleted.id.title(),
+                    folder: deleted.id.folder().unwrap_or_default().to_owned(),
+                    problem: Some(format!(
+                        "A note named {} exists in that folder. Choose another title or folder.",
+                        existing.title()
+                    )),
+                    deleted,
+                    reopen,
+                });
+            }
+            Err(problem) => {
+                self.status = format!("The note could not be restored: {problem}");
+            }
+        }
+    }
+
+    fn restored(&mut self, id: &NoteId, reopen: bool) {
+        self.restore = None;
+        self.undo_delete = None;
+        if reopen {
+            self.open_note(id);
+        }
+        self.refresh_overview();
+        self.refresh_deleted();
+        self.status = format!("Restored {}", id.title());
+    }
+
+    /// UC-007 A6.
+    fn show_restore_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.restore else {
+            return;
+        };
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Window::new("Restore note")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Title:");
+                let title = ui.text_edit_singleline(&mut dialog.title);
+                ui.label("Folder (empty for the top folder, new folders are created):");
+                let folder = ui.text_edit_singleline(&mut dialog.folder);
+                if let Some(problem) = &dialog.problem {
+                    ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+                }
+                ui.horizontal(|ui| {
+                    let enter = (title.lost_focus() || folder.lost_focus())
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    confirm = ui.button("Restore").clicked() || enter;
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                });
+            });
+        if cancel {
+            // A6 step 2: the note stays deleted.
+            self.restore = None;
+            return;
+        }
+        if !confirm {
+            return;
+        }
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let instead = Rename {
+            folder: dialog.folder.clone(),
+            title: dialog.title.clone(),
+        };
+        match workspace.restore_note(&dialog.deleted, Some(&instead)) {
+            Ok(id) => {
+                let reopen = dialog.reopen;
+                self.restored(&id, reopen);
+            }
+            Err(NewNoteProblem::Exists(existing)) => {
+                dialog.problem = Some(format!(
+                    "A note named {} exists in that folder. Choose another title or folder.",
+                    existing.title()
+                ));
+            }
+            Err(problem) => {
+                let mut text = problem.to_string();
+                if let Some(first) = text.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                dialog.problem = Some(format!("{text}."));
+            }
+        }
+    }
+
+    /// UC-007 A7: asks before removing deleted notes for good.
+    fn show_purge_dialog(&mut self, ctx: &egui::Context) {
+        let Some(purge) = &self.purge else {
+            return;
+        };
+        let n = match purge {
+            Purge::One(_) => 1,
+            Purge::All => self.deleted.len(),
+        };
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Window::new("Remove deleted notes")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Remove {} for good? They cannot be restored afterwards.",
+                    count(n, "deleted note")
+                ));
+                ui.horizontal(|ui| {
+                    confirm = ui.button("Remove").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                });
+            });
+        if cancel {
+            self.purge = None;
+        }
+        if !confirm {
+            return;
+        }
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let targets: Vec<DeletedNote> = match self.purge.take() {
+            Some(Purge::One(deleted)) => vec![deleted],
+            _ => self.deleted.clone(),
+        };
+        let failed = targets
+            .iter()
+            .filter(|d| workspace.forget_deleted(d).is_err())
+            .count();
+        if self
+            .undo_delete
+            .as_ref()
+            .is_some_and(|u| targets.contains(&u.deleted))
+        {
+            self.undo_delete = None;
+        }
+        self.refresh_deleted();
+        self.status = if failed == 0 {
+            format!("Removed {} for good", count(targets.len(), "deleted note"))
+        } else {
+            format!("{} could not be removed", count(failed, "deleted note"))
+        };
+    }
+
     fn start_create(&mut self) {
         if self.create.is_none() {
             self.open = None;
@@ -1979,6 +2338,9 @@ impl eframe::App for UnderlineApp {
         self.show_create_dialog(ctx);
         self.show_note_dialog(ctx);
         self.show_rename_dialog(ctx);
+        self.show_delete_dialog(ctx);
+        self.show_restore_dialog(ctx);
+        self.show_purge_dialog(ctx);
         self.show_tool_dialog(ctx);
         // UC-006 step 1: F2 renames the note of the active tab.
         if self.rename.is_none()
@@ -2034,7 +2396,29 @@ impl eframe::App for UnderlineApp {
             if !self.status.is_empty() {
                 parts.push(self.status.clone());
             }
-            ui.label(parts.join("  |  "));
+            let mut undo = false;
+            ui.horizontal(|ui| {
+                ui.label(parts.join("  |  "));
+                // UC-007 A4: offered while the report of the deletion shows.
+                match &self.undo_delete {
+                    Some(offer) if offer.status == self.status => {
+                        undo = ui.small_button("Undo").clicked();
+                    }
+                    _ => {}
+                }
+            });
+            if self
+                .undo_delete
+                .as_ref()
+                .is_some_and(|offer| offer.status != self.status)
+            {
+                self.undo_delete = None;
+            }
+            if undo {
+                if let Some(offer) = self.undo_delete.take() {
+                    self.restore_deleted(offer.deleted, offer.reopen);
+                }
+            }
             // FR-026: the input mode and its most important commands.
             if let Some(status) = self
                 .tabs
@@ -2078,12 +2462,16 @@ impl eframe::App for UnderlineApp {
                 ui.separator();
                 let mut selected = None;
                 let mut renaming = None;
+                let mut deleting = None;
+                let mut restoring = None;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for entry in &self.overview {
                         let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
                         let label = ui.selectable_label(active, &entry.label);
                         if label.clicked() {
                             selected = Some(entry.id.clone());
+                            // The keyboard leaves the editor for the overview.
+                            label.request_focus();
                         }
                         // UC-006 step 1: the context menu of the note.
                         label.context_menu(|ui| {
@@ -2091,17 +2479,90 @@ impl eframe::App for UnderlineApp {
                                 renaming = Some(entry.id.clone());
                                 ui.close_menu();
                             }
+                            if ui.button("Delete…").clicked() {
+                                deleting = Some(entry.id.clone());
+                                ui.close_menu();
+                            }
+                        });
+                        // UC-007 BR-007: the Delete key in the note overview.
+                        if label.has_focus() {
+                            self.overview_chosen = Some(entry.id.clone());
+                        }
+                    }
+                    // UC-007 A5: the deleted notes, at the end of the overview.
+                    if !self.deleted.is_empty() {
+                        ui.separator();
+                        egui::CollapsingHeader::new(format!(
+                            "Deleted notes ({})",
+                            self.deleted.len()
+                        ))
+                        .id_salt("deleted notes")
+                        .show(ui, |ui| {
+                            for deleted in &self.deleted {
+                                let time = std::time::UNIX_EPOCH
+                                    + Duration::from_millis(deleted.deleted_at);
+                                ui.label(deleted.id.title()).on_hover_text(format!(
+                                    "{} · deleted {}",
+                                    deleted.id.folder().unwrap_or("top folder"),
+                                    format_local_time(time)
+                                ));
+                                ui.horizontal(|ui| {
+                                    ui.weak(format_local_time(time));
+                                    if ui.small_button("Restore").clicked() {
+                                        restoring = Some(deleted.clone());
+                                    }
+                                    if ui.small_button("Remove").clicked() {
+                                        self.purge = Some(Purge::One(deleted.clone()));
+                                    }
+                                });
+                            }
+                            if ui.button("Empty the deleted notes").clicked() {
+                                self.purge = Some(Purge::All);
+                            }
                         });
                     }
                 });
                 if let Some(id) = selected {
                     self.open_note(&id);
                     self.refresh_overview();
+                    self.overview_chosen = Some(id);
                 }
                 if let Some(id) = renaming {
                     self.start_rename(id);
                 }
+                if let Some(id) = deleting {
+                    self.start_delete(id);
+                }
+                if let Some(deleted) = restoring {
+                    self.restore_deleted(deleted, false);
+                }
             });
+        // UC-007 BR-007: the Delete key deletes the note chosen in the note
+        // overview while the overview has the keyboard: chosen by a click or
+        // by moving the focus there, until the user clicks elsewhere or
+        // another widget takes the keyboard.
+        let pointer_elsewhere = ctx.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !pages.response.rect.contains(pos))
+        });
+        let other_focus = ctx
+            .memory(|m| m.focused())
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|focused| !pages.response.rect.contains(focused.rect.center()));
+        if pointer_elsewhere || other_focus {
+            self.overview_chosen = None;
+        }
+        if self.delete.is_none()
+            && self.rename.is_none()
+            && self.overview_chosen.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+        {
+            if let Some(id) = self.overview_chosen.clone() {
+                self.start_delete(id);
+            }
+        }
         // UC-010 A4: a width the user dragged is kept once they let go.
         let resizing = ctx.is_being_dragged(egui::Id::new(("pages", generation)).with("__resize"));
         let released = std::mem::replace(&mut self.resizing[0], resizing) && !resizing;
@@ -2127,6 +2588,7 @@ impl eframe::App for UnderlineApp {
             let mut activate = None;
             let mut close = None;
             let mut renaming = None;
+            let mut deleting = None;
             egui::ScrollArea::horizontal()
                 .id_salt("tabs")
                 .show(ui, |ui| {
@@ -2143,6 +2605,10 @@ impl eframe::App for UnderlineApp {
                             label.context_menu(|ui| {
                                 if ui.button("Rename…  F2").clicked() {
                                     renaming = Some(id.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Delete…").clicked() {
+                                    deleting = Some(id.clone());
                                     ui.close_menu();
                                 }
                             });
@@ -2168,6 +2634,9 @@ impl eframe::App for UnderlineApp {
             }
             if let Some(id) = renaming {
                 self.start_rename(id);
+            }
+            if let Some(id) = deleting {
+                self.start_delete(id);
             }
             ui.separator();
             let Some((_, tab)) = self.tabs.active_mut() else {
