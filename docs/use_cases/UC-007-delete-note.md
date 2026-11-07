@@ -59,15 +59,6 @@
 1. The system restores the note as in A5 and opens it again in a tab if it was open.
 2. Use case ends.
 
-### A8: Deleted notes cannot be kept
-
-**Trigger:** The Underline folder of the workspace cannot be written, so the note cannot be kept among the deleted notes (step 4)  
-**Flow:**
-
-1. The system says that the note cannot be restored afterwards and asks the user to confirm deleting it for good.
-2. When the user confirms, the system saves the note if needed and removes it for good; use case continues at step 5 without the offer to undo.
-3. When the user cancels, nothing is changed; use case ends.
-
 ### A5: Restore a deleted note
 
 **Trigger:** The user opens the deleted notes from the end of the note overview and chooses to restore one (any time)  
@@ -95,6 +86,15 @@
 1. The system asks the user to confirm, naming how many notes will be removed for good.
 2. When the user confirms, the system removes them for good.
 3. Use case ends.
+
+### A8: Deleted notes cannot be kept
+
+**Trigger:** The Underline folder of the workspace cannot be written, so the note cannot be kept among the deleted notes (step 4)  
+**Flow:**
+
+1. The system says that the note cannot be restored afterwards and asks the user to confirm deleting it for good.
+2. When the user confirms, the system saves the note if needed and removes it for good; use case continues at step 5 without the offer to undo.
+3. When the user cancels, nothing is changed; use case ends.
 
 ## Postconditions
 
