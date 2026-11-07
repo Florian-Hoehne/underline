@@ -933,3 +933,32 @@ Answer: The linked notes and files stay where they are; the note's relative link
 **Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
 
 Answer: Yes, when it shows exactly the old title; otherwise the content stays.
+
+## OQ-093: What happens when the Home note is renamed?
+
+**Element:** UC-006 BR-009
+**Raised by:** spec review UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: The dialog warns that the wiki then has no start page; the user may still confirm.
+
+## OQ-094: Can a rename be undone?
+
+**Element:** UC-006 BR-010
+**Raised by:** spec review UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: No separate undo; renaming back updates the links again, and git can revert it like any other change.
+
+## OQ-095: Can a whole folder be renamed or moved, with the links to its notes updated?
+
+**Element:** UC-006 BR-011, FR-005
+**Raised by:** spec review UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Open
+
+No requirement covers renaming folders. Renaming them by hand outside Underline breaks the links to their notes.

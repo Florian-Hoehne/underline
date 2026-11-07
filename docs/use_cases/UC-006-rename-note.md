@@ -19,11 +19,11 @@
 ## Main Success Scenario
 
 1. The user asks to rename a note, from the context menu of the note in the note overview or of its tab, or with F2 for the note in the active tab.
-2. The system asks for the new title and folder, with the current title selected and the current folder preselected, keeps the note format, and shows the file name the note will get while the user types.
+2. The system asks for the new title and folder, with the current title selected and the current folder preselected, keeps the note format, shows the file name the note will get while the user types, and warns when the note is the Home note of the workspace (BR-009).
 3. The user enters a title, keeps or changes the folder, and confirms.
 4. The system checks that the title is allowed, that the folder can take a note, and that the folder holds no other note with that file name.
 5. The system saves the note if it has unsaved changes, renames and moves it without ever replacing a file that is there, and changes its first heading to the new title when it showed exactly the old title.
-6. The system updates every local link to the note in the other notes of the workspace and every todo link to it; when the note moved to another folder, it also updates the local links in the note itself so they lead to the same notes and files as before.
+6. The system updates every local link to the note in the notes of the workspace, the note itself included, and every todo link to it; when the note moved to another folder, it also updates the local links in the note itself so they lead to the same notes and files as before.
 7. The system shows the new title in the note overview and in the tab, keeps the note open where it was, and reports in the status bar that the note was renamed and how many links in how many notes were updated.
 
 ## Alternative Flows
@@ -129,7 +129,7 @@ When the first heading of the note shows exactly the old title, as it does in a 
 
 ### BR-005: Links of a moved note
 
-When the note moves to another folder, the notes and files it links to stay where they are. Its local links, which name places relative to the note, are changed so they lead to the same notes and files from the new folder; links to headings of the note itself, web addresses, and links by full place stay unchanged.
+When the note moves to another folder, the notes and files it links to stay where they are. Its local links, which name places relative to the note, are changed so they lead to the same notes and files from the new folder. A link of the note to itself that names its place leads to its new place (BR-003); links that name only a heading of the note, web addresses, and links by full place stay unchanged.
 
 ### BR-006: Todo links
 
@@ -142,3 +142,15 @@ The status bar reports the new title and how many links in how many notes were u
 ### BR-008: Never half done
 
 The note is renamed as a whole or not at all (NFR-006): its old file disappears only when the new one is complete. Each linking note is written whole, as autosave writes it. When some linking notes cannot be written (A6), the rename stays, and the status bar names those notes so the user can fix their links.
+
+### BR-009: Home note
+
+The Home note of the workspace (UC-001 BR-003) is the start page of a GitHub wiki. When it is renamed or moved, the dialog warns that the wiki then has no start page; the user may still confirm.
+
+### BR-010: Renaming back
+
+There is no separate undo for a rename. Renaming the note back to its old title and folder updates the links again; when the workspace is a git repository, the rename can also be reverted there like any other change.
+
+### BR-011: Folders
+
+Only a single note is renamed or moved. Renaming or moving a whole folder with its notes is not part of this use case (OQ-095).
