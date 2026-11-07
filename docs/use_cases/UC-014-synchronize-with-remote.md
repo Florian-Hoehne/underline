@@ -8,7 +8,7 @@
 **Secondary Actor:** Git remote  
 **Goal:** The notes of the workspace are backed up on its remote and hold the changes made elsewhere, at a regular interval and whenever the user asks.  
 **Trigger:** The sync interval passed, the workspace was opened, a commit was made, Underline is closing, or the user asks to sync, pull, or push.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-020, FR-045, FR-052, FR-053, NFR-002, NFR-006, NFR-014, NFR-015](../requirements.md)
 
