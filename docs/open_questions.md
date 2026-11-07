@@ -1449,3 +1449,63 @@ Answer: No; it always starts from the current commit with the current changes.
 **Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
 
 Answer: Yes, with the next synchronization, which then follows it.
+
+## OQ-145: Are changes that are not committed committed before a sync?
+
+**Element:** UC-014 step 2, BR-002
+**Raised by:** /use-case-spec UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: Yes, with the message UC-012 proposes; changes the user left out stay out.
+
+## OQ-146: How are the remote's changes joined with local commits?
+
+**Element:** UC-014 BR-003
+**Raised by:** /use-case-spec UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: As the user's git setup says, by merging by default.
+
+## OQ-147: How are pull and push offered on demand?
+
+**Element:** UC-014 step 1, A1
+**Raised by:** /use-case-spec UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: "Sync now" in the status bar, and Pull and Push in the branch menu.
+
+## OQ-148: What does the status bar show of the sync?
+
+**Element:** UC-014 BR-004
+**Raised by:** /use-case-spec UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: Syncing, the time of the last sync, offline or failed with the reason, and commits waiting to be pushed or pulled.
+
+## OQ-149: What happens when the remote asks to sign in and git has no sign-in?
+
+**Element:** UC-014 A5, BR-005
+**Raised by:** /use-case-spec UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: The status bar says so and how to set up a sign-in in git; Underline asks for no password.
+
+## OQ-150: When does Underline sync besides the interval?
+
+**Element:** UC-014 BR-001
+**Raised by:** /use-case-spec UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: When the workspace opens, after every commit, and when Underline closes.
