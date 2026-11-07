@@ -16,9 +16,10 @@ use underline_core::{
     HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_core::{
-    branch_name, changed_lines, diff as diff_lines, proposed_message, restore_committed,
-    BranchState, Branches, ChangeKind, ChangeTracker, Changes, Distance, FileChange, Hunk,
-    LineKind, OnlyDiffers, SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
+    branch_name, changed_lines, conflict_places, diff as diff_lines, proposed_message,
+    resolve_place, restore_committed, BranchState, Branches, ChangeKind, ChangeTracker, Changes,
+    Choice, CompleteError, Distance, FileChange, Hunk, Joining, LineKind, OnlyDiffers, Side,
+    SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::FOUND_COLOR;
@@ -122,6 +123,10 @@ pub struct UnderlineApp {
     /// UC-014: the syncer of the workspace and what the status bar shows.
     syncer: Option<Syncer>,
     sync: SyncView,
+    /// UC-015: the open place of the active note the conflict bar shows,
+    /// and the question before aborting the sync.
+    conflict_cursor: usize,
+    abort_confirm: bool,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -590,6 +595,10 @@ enum ChangeAction {
     Discard(FileChange),
     /// UC-012 step 4.
     Commit,
+    /// UC-015 A2: one side for a whole file.
+    Side(FileChange, Side),
+    /// UC-015 A3: keep (true) or delete a note deleted on one side.
+    Keep(FileChange, bool),
     /// A line of the diff, by its number in the note now.
     Line(usize),
 }
@@ -600,6 +609,7 @@ fn change_color(letter: char) -> egui::Color32 {
         'N' => egui::Color32::from_rgb(63, 185, 80),
         'D' => egui::Color32::from_rgb(248, 81, 73),
         'R' => egui::Color32::from_rgb(88, 166, 255),
+        'C' => egui::Color32::from_rgb(255, 110, 40),
         _ => egui::Color32::from_rgb(210, 153, 34),
     }
 }
@@ -754,8 +764,36 @@ fn changes_ui(
                 if row.clicked() {
                     action = Some(ChangeAction::Choose(change.clone()));
                 }
-                if change.note().is_some() && ui.small_button("Discard…").clicked() {
-                    action = Some(ChangeAction::Discard(change.clone()));
+                match &change.kind {
+                    // UC-015 A2: a file that is not a note.
+                    ChangeKind::Conflict { deleted: None } if change.note().is_none() => {
+                        if ui.small_button("Keep here").clicked() {
+                            action = Some(ChangeAction::Side(change.clone(), Side::Here));
+                        }
+                        if ui.small_button("Keep remote").clicked() {
+                            action = Some(ChangeAction::Side(change.clone(), Side::Remote));
+                        }
+                    }
+                    // UC-015 A3: deleted on one side.
+                    ChangeKind::Conflict {
+                        deleted: Some(side),
+                    } => {
+                        ui.weak(match side {
+                            Side::Here => "deleted here",
+                            Side::Remote => "deleted on the remote",
+                        });
+                        if ui.small_button("Keep").clicked() {
+                            action = Some(ChangeAction::Keep(change.clone(), true));
+                        }
+                        if ui.small_button("Delete").clicked() {
+                            action = Some(ChangeAction::Keep(change.clone(), false));
+                        }
+                    }
+                    ChangeKind::Conflict { .. } => {}
+                    _ if change.note().is_some() && ui.small_button("Discard…").clicked() => {
+                        action = Some(ChangeAction::Discard(change.clone()));
+                    }
+                    _ => {}
                 }
             });
         }
@@ -1010,6 +1048,8 @@ impl UnderlineApp {
             branch_menu: None,
             syncer: None,
             sync: SyncView::default(),
+            conflict_cursor: 0,
+            abort_confirm: false,
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -2163,6 +2203,65 @@ impl UnderlineApp {
             }
             Some(ChangeAction::Discard(change)) => self.start_discard(change),
             Some(ChangeAction::Commit) => self.commit_changes(),
+            Some(ChangeAction::Side(change, side)) => {
+                let Some(workspace) = &self.workspace else {
+                    return;
+                };
+                let root = workspace.root().to_owned();
+                let joining = self.git.joining(&root).unwrap_or(Joining::Merge);
+                match self.git.take_side(&root, &change.path, side, joining) {
+                    Ok(copy) => {
+                        self.status =
+                            format!("Kept one version of {}; the other is {copy}", change.path);
+                        self.after_resolving();
+                    }
+                    Err(err) => {
+                        self.status = format!("{} could not be resolved: {err}", change.path)
+                    }
+                }
+            }
+            Some(ChangeAction::Keep(change, keep)) => {
+                let Some(workspace) = &mut self.workspace else {
+                    return;
+                };
+                let root = workspace.root().to_owned();
+                let mut result = Ok(());
+                if !keep {
+                    result = match change.note() {
+                        Some((id, _)) if root.join(&change.path).exists() => workspace
+                            .delete_note(&id, now())
+                            .map(drop)
+                            .map_err(|e| e.to_string()),
+                        _ => match std::fs::remove_file(root.join(&change.path)) {
+                            Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                                Err(err.to_string())
+                            }
+                            _ => Ok(()),
+                        },
+                    };
+                }
+                match result.and_then(|()| {
+                    self.git
+                        .mark_resolved(&root, &change.path)
+                        .map_err(|e| e.to_string())
+                }) {
+                    Ok(()) => {
+                        if !keep {
+                            if let Some((id, _)) = change.note() {
+                                if let Some(index) = self.tabs.find(&id) {
+                                    self.tabs.close(index);
+                                }
+                                self.state.note_deleted(&root, &id);
+                            }
+                            self.refresh_deleted();
+                        }
+                        self.after_resolving();
+                    }
+                    Err(err) => {
+                        self.status = format!("{} could not be resolved: {err}", change.path)
+                    }
+                }
+            }
             Some(ChangeAction::Line(line)) => {
                 if self.chosen_change.is_some() {
                     return;
@@ -2251,6 +2350,315 @@ impl UnderlineApp {
             }
             // A4.
             Err(err) => self.status = format!("The commit failed: {err}"),
+        }
+    }
+
+    /// UC-015 steps 3–4, A1, BR-006: the open places of the active note,
+    /// one at a time with both versions side by side; returns the choice
+    /// made (`None` place for the whole note).
+    fn conflict_bar(&mut self, ui: &mut egui::Ui) -> Option<(Option<usize>, Choice)> {
+        let joining = self
+            .workspace
+            .as_ref()
+            .and_then(|w| self.git.joining(w.root()))?;
+        let (id, tab) = self.tabs.active()?;
+        if !self.in_conflict(id) {
+            return None;
+        }
+        let places = conflict_places(&tab.view.document().text(), joining);
+        if places.is_empty() {
+            return None;
+        }
+        let rope = tab.view.document().rope().clone();
+        self.conflict_cursor = self.conflict_cursor.min(places.len() - 1);
+        let mut chosen = None;
+        let mut jump = None;
+        // BR-006: F7, Shift+F7, Alt+H, Alt+R, Alt+B.
+        let (next, previous, here, remote, both) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::F7),
+                i.consume_key(egui::Modifiers::SHIFT, egui::Key::F7),
+                i.consume_key(egui::Modifiers::ALT, egui::Key::H),
+                i.consume_key(egui::Modifiers::ALT, egui::Key::R),
+                i.consume_key(egui::Modifiers::ALT, egui::Key::B),
+            )
+        });
+        if next {
+            self.conflict_cursor = (self.conflict_cursor + 1).min(places.len() - 1);
+            jump = Some(self.conflict_cursor);
+        }
+        if previous {
+            self.conflict_cursor = self.conflict_cursor.saturating_sub(1);
+            jump = Some(self.conflict_cursor);
+        }
+        let at = self.conflict_cursor;
+        let place = &places[at];
+        egui::Frame::group(ui.style())
+            .stroke(egui::Stroke::new(1.0_f32, change_color('C')))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(
+                        change_color('C'),
+                        format!(
+                            "Conflict: place {} of {} open (line {})",
+                            at + 1,
+                            places.len(),
+                            rope.byte_to_line(place.range.start.min(rope.len_bytes())) + 1
+                        ),
+                    );
+                    if ui
+                        .small_button("Previous")
+                        .on_hover_text("Shift+F7")
+                        .clicked()
+                    {
+                        self.conflict_cursor = at.saturating_sub(1);
+                        jump = Some(self.conflict_cursor);
+                    }
+                    if ui.small_button("Next").on_hover_text("F7").clicked() {
+                        self.conflict_cursor = (at + 1).min(places.len() - 1);
+                        jump = Some(self.conflict_cursor);
+                    }
+                    if ui.small_button("All: Here").clicked() {
+                        chosen = Some((None, Choice::Here));
+                    }
+                    if ui.small_button("All: Remote").clicked() {
+                        chosen = Some((None, Choice::Remote));
+                    }
+                    if ui.small_button("Abort the sync").clicked() {
+                        self.abort_confirm = true;
+                    }
+                });
+                let font = egui::TextStyle::Monospace.resolve(ui.style());
+                ui.columns(2, |columns| {
+                    for (column, (title, text)) in columns
+                        .iter_mut()
+                        .zip([("Here", &place.here), ("Remote", &place.remote)])
+                    {
+                        column.strong(title);
+                        egui::ScrollArea::vertical()
+                            .id_salt(("conflict", title))
+                            .max_height(160.0)
+                            .show(column, |ui| {
+                                ui.label(egui::RichText::new(text.trim_end()).font(font.clone()));
+                            });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Here").on_hover_text("Alt+H").clicked() || here {
+                        chosen = Some((Some(at), Choice::Here));
+                    }
+                    if ui.button("Remote").on_hover_text("Alt+R").clicked() || remote {
+                        chosen = Some((Some(at), Choice::Remote));
+                    }
+                    if ui
+                        .button("Both")
+                        .on_hover_text("Alt+B: here first, then remote")
+                        .clicked()
+                        || both
+                    {
+                        chosen = Some((Some(at), Choice::Both));
+                    }
+                    ui.weak("Or edit the place in the note.");
+                });
+            });
+        if let Some(index) = jump {
+            if let Some((_, tab)) = self.tabs.active_mut() {
+                let offset = places[index].range.start;
+                match tab.editing_view {
+                    EditingView::Facade => tab.facade.reveal(offset),
+                    EditingView::Source => {
+                        tab.view.jump_to_byte(offset);
+                        tab.view.focus_cursor();
+                    }
+                }
+            }
+        }
+        chosen
+    }
+
+    /// The notes and files in conflict (UC-015 BR-005).
+    fn conflicts(&self) -> Vec<FileChange> {
+        match &self.changes {
+            Some(Ok(changes)) => changes
+                .files
+                .iter()
+                .filter(|f| matches!(f.kind, ChangeKind::Conflict { .. }))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether the note `id` is in conflict (UC-015 BR-007).
+    fn in_conflict(&self, id: &NoteId) -> bool {
+        self.conflicts()
+            .iter()
+            .any(|c| c.note().is_some_and(|(n, _)| &n == id))
+    }
+
+    /// UC-015 steps 4–6, A1: replaces one place of the active note, or all
+    /// with a side, saves it, and marks it resolved when no place is left.
+    fn resolve_active(&mut self, place: Option<usize>, choice: Choice) {
+        let root = match &self.workspace {
+            Some(w) => w.root().to_owned(),
+            None => return,
+        };
+        let joining = self.git.joining(&root).unwrap_or(Joining::Merge);
+        let Some((_, tab)) = self.tabs.active_mut() else {
+            return;
+        };
+        let text = tab.view.document().text();
+        let places = conflict_places(&text, joining);
+        let chosen: Vec<_> = match place {
+            Some(index) => places.get(index).cloned().into_iter().collect(),
+            None => places,
+        };
+        let edits: Vec<(std::ops::Range<usize>, String)> = chosen
+            .iter()
+            .map(|p| {
+                let resolved = resolve_place(
+                    &text[p.range.clone()],
+                    &underline_core::ConflictPlace {
+                        range: 0..p.range.len(),
+                        here: p.here.clone(),
+                        remote: p.remote.clone(),
+                    },
+                    choice,
+                );
+                (p.range.clone(), resolved)
+            })
+            .collect();
+        tab.view.apply_edits(&edits);
+        tab.quiet_save = false;
+        tab.autosave.changed(Instant::now());
+        self.check_resolved();
+    }
+
+    /// UC-015 step 6–7: a conflict note without open places is saved and
+    /// marked resolved; with no conflict left, the joining is completed and
+    /// the sync goes on.
+    fn check_resolved(&mut self) {
+        let conflicts = self.conflicts();
+        if conflicts.is_empty() {
+            return;
+        }
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let joining = self.git.joining(&root).unwrap_or(Joining::Merge);
+        let mut resolved = false;
+        let mut tabs = std::mem::take(&mut self.tabs);
+        for (id, tab) in tabs.iter_mut() {
+            let in_conflict = conflicts.iter().any(|c| {
+                c.note().is_some_and(|(n, _)| &n == id)
+                    && matches!(c.kind, ChangeKind::Conflict { deleted: None })
+            });
+            if !in_conflict || !conflict_places(&tab.view.document().text(), joining).is_empty() {
+                continue;
+            }
+            if self.flush_tab_now(tab).is_ok() {
+                let path = relative(&root, &tab.path);
+                resolved |= self.git.mark_resolved(&root, &path).is_ok();
+            }
+        }
+        self.tabs = tabs;
+        if resolved {
+            self.after_resolving();
+        }
+    }
+
+    /// UC-015 step 7, A6, A7: completes the joining once nothing is in
+    /// conflict any more, then syncs.
+    fn after_resolving(&mut self) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let open = self.git.changes(&root).map(|c| {
+            c.files
+                .iter()
+                .filter(|f| matches!(f.kind, ChangeKind::Conflict { .. }))
+                .count()
+        });
+        if let Ok(changes) = self.git.changes(&root) {
+            self.changes = Some(Ok(changes));
+            self.changes_generation += 1;
+        }
+        if open.unwrap_or(1) > 0 {
+            return;
+        }
+        match self.git.complete_joining(&root) {
+            Ok(()) => {
+                self.status = "The conflicts are resolved; syncing".into();
+                // The joining is complete: the sync may go on (step 7).
+                if let Ok(changes) = self.git.changes(&root) {
+                    self.changes = Some(Ok(changes));
+                    self.changes_generation += 1;
+                }
+                self.reload_tabs();
+                self.refresh_overview();
+                self.request_sync(SyncMode::Full, false);
+            }
+            // A6: the next local commit conflicts too.
+            Err(CompleteError::MoreConflicts(files)) => {
+                self.status = format!("The next commit conflicts too: {}", files.join(", "));
+                self.reload_tabs();
+                self.refresh_overview();
+            }
+            // A7.
+            Err(CompleteError::Git(err)) => {
+                self.status = format!("Completing the sync failed: {err}");
+            }
+        }
+    }
+
+    /// Open tabs show their notes as the files hold them now.
+    fn reload_tabs(&mut self) {
+        let paths: Vec<PathBuf> = self.tabs.iter().map(|(_, t)| t.path.clone()).collect();
+        for path in paths {
+            if path.exists() {
+                self.outside_change(&path);
+            }
+        }
+        if let Some(workspace) = &mut self.workspace {
+            workspace.rescan();
+        }
+    }
+
+    /// UC-015 A5: asks, then puts the workspace back as before the sync.
+    fn show_abort_confirm(&mut self, ctx: &egui::Context) {
+        if !self.abort_confirm {
+            return;
+        }
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Window::new("Abort the sync")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("The workspace goes back to how it was before the sync; places you resolved are lost. Your commits and the changes you left out stay.");
+                ui.horizontal(|ui| {
+                    confirm = ui.button("Abort the sync").clicked();
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                });
+            });
+        if cancel {
+            self.abort_confirm = false;
+        } else if confirm {
+            self.abort_confirm = false;
+            let Some(workspace) = &self.workspace else {
+                return;
+            };
+            let root = workspace.root().to_owned();
+            match self.git.abort_joining(&root) {
+                Ok(()) => {
+                    self.reload_tabs();
+                    self.refresh_overview();
+                    self.status = "The sync was aborted; the workspace is as before it".into();
+                }
+                Err(err) => self.status = format!("The sync could not be aborted: {err}"),
+            }
         }
     }
 
@@ -3231,6 +3639,14 @@ impl UnderlineApp {
         if self.rename.is_some() || self.workspace.is_none() {
             return;
         }
+        // UC-015 BR-007.
+        if self.in_conflict(&id) {
+            self.status = format!(
+                "{} is in conflict; resolve it before renaming it",
+                id.title()
+            );
+            return;
+        }
         self.rename = Some(RenameDialog {
             title: id.title(),
             folder: id.folder().unwrap_or_default().to_owned(),
@@ -3413,6 +3829,14 @@ impl UnderlineApp {
 
     /// UC-007 steps 1–2: asks before deleting `id`.
     fn start_delete(&mut self, id: NoteId) {
+        // UC-015 BR-007.
+        if self.in_conflict(&id) {
+            self.status = format!(
+                "{} is in conflict; resolve it before deleting it",
+                id.title()
+            );
+            return;
+        }
         let Some(workspace) = &self.workspace else {
             return;
         };
@@ -3900,6 +4324,7 @@ impl UnderlineApp {
             ChangeKind::Changed | ChangeKind::Deleted => {
                 restore_committed(&self.git, &root, &change.path).map_err(|e| e.to_string())
             }
+            ChangeKind::Conflict { .. } => Err("it is in conflict; resolve it first".into()),
         };
         match result {
             Ok(()) => {
@@ -3932,6 +4357,14 @@ impl UnderlineApp {
     /// UC-009 step 1: the kinds of export of `id`; with `kind`, that one.
     fn start_export(&mut self, id: NoteId, kind: Option<ExportKind>) {
         if self.export.is_some() || self.workspace.is_none() {
+            return;
+        }
+        // UC-015 BR-007.
+        if self.in_conflict(&id) {
+            self.status = format!(
+                "{} is in conflict; resolve it before exporting it",
+                id.title()
+            );
             return;
         }
         match kind {
@@ -4308,6 +4741,11 @@ impl eframe::App for UnderlineApp {
             self.open_branch_menu();
         }
         self.show_branch_menu(ctx);
+        self.show_abort_confirm(ctx);
+        // UC-015 step 6: a note whose places were edited away by hand.
+        if !self.conflicts().is_empty() {
+            self.check_resolved();
+        }
         // UC-011 BR-007: Ctrl+Shift+G opens the changes.
         if ctx.input_mut(|i| {
             i.consume_key(
@@ -4448,6 +4886,21 @@ impl eframe::App for UnderlineApp {
                     }
                     None => {}
                 }
+                // UC-015 step 1: how many conflicts wait.
+                let waiting = self.conflicts().len();
+                if waiting > 0 {
+                    ui.colored_label(
+                        change_color('C'),
+                        if waiting == 1 {
+                            "1 conflict".to_owned()
+                        } else {
+                            format!("{waiting} conflicts")
+                        },
+                    );
+                    if ui.small_button("Abort the sync").clicked() {
+                        self.abort_confirm = true;
+                    }
+                }
                 // UC-014 BR-004: the state of the syncs and Sync now.
                 if self.syncer.is_some() {
                     let sync = &self.sync;
@@ -4506,8 +4959,12 @@ impl eframe::App for UnderlineApp {
                     if behind > 0 {
                         ui.weak(format!("{behind} to pull"));
                     }
+                    // UC-014 A10: no sync while conflicts wait.
                     if ui
-                        .add_enabled(!sync.running, egui::Button::new("Sync now").small())
+                        .add_enabled(
+                            !sync.running && waiting == 0,
+                            egui::Button::new("Sync now").small(),
+                        )
                         .clicked()
                     {
                         sync_now = true;
@@ -4954,6 +5411,11 @@ impl eframe::App for UnderlineApp {
             }
             if let Some(action) = find_action {
                 self.find_in_note(action);
+            }
+            // UC-015 steps 3–5, A1, BR-006: the conflict bar of the note.
+            let conflict_choice = self.conflict_bar(ui);
+            if let Some((place, choice)) = conflict_choice {
+                self.resolve_active(place, choice);
             }
             let Some((_, tab)) = self.tabs.active_mut() else {
                 ui.label("Select or create a note.");

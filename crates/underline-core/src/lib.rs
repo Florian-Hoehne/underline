@@ -8,6 +8,7 @@ mod atomic;
 mod autosave;
 mod branches;
 mod changes;
+mod conflict;
 mod create;
 mod deleted;
 mod embed;
@@ -34,6 +35,9 @@ pub use branches::{branch_name, BranchNameProblem, Branches, SwitchError};
 pub use changes::{
     changed_lines, diff, proposed_message, restore_committed, BranchState, ChangeKind,
     ChangeTracker, Changes, DiffLine, DiscardError, FileChange, Hunk, LineKind, OnlyDiffers,
+};
+pub use conflict::{
+    conflict_places, copy_name, resolve_place, Choice, CompleteError, ConflictPlace, Joining, Side,
 };
 pub use create::{
     check_directory, create_workspace, CreateError, CreateProblem, DirectoryProblem,

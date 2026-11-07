@@ -138,6 +138,29 @@ impl Git {
             .map(|out| out.lines().map(str::to_owned).collect())
     }
 
+    /// Like `run`, for output that may not be text, such as an image.
+    pub(crate) fn run_bytes(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
+        let output = Command::new(&self.program)
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("LC_ALL", "C")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .output()
+            .map_err(|err| match err.kind() {
+                io::ErrorKind::NotFound => GitError::NotInstalled,
+                _ => GitError::Io(err),
+            })?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(GitError::Failed {
+                command: args.first().copied().unwrap_or_default().to_owned(),
+                message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            })
+        }
+    }
+
     pub(crate) fn run(&self, dir: &Path, args: &[&str]) -> Result<String, GitError> {
         let output = Command::new(&self.program)
             .args(args)

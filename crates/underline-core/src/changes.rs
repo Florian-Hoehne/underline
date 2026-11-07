@@ -35,6 +35,11 @@ pub enum ChangeKind {
     Renamed {
         from: String,
     },
+    /// UC-015: changed here and on the remote in the same places, or
+    /// deleted on the side given and changed on the other.
+    Conflict {
+        deleted: Option<crate::conflict::Side>,
+    },
 }
 
 impl ChangeKind {
@@ -45,6 +50,7 @@ impl ChangeKind {
             Self::Changed => 'M',
             Self::Deleted => 'D',
             Self::Renamed { .. } => 'R',
+            Self::Conflict { .. } => 'C',
         }
     }
 }
@@ -154,7 +160,15 @@ impl Git {
                 Some("u") => {
                     let fields: Vec<&str> = entry.splitn(11, ' ').collect();
                     let Some(path) = fields.get(10) else { continue };
-                    (ChangeKind::Changed, (*path).to_owned())
+                    // `DU`: deleted by "us", `UD`: by "them"; which is here
+                    // depends on how the sync joins (UC-015).
+                    let rebase = self.joining(dir) == Some(crate::conflict::Joining::Rebase);
+                    let deleted = match (fields[1], rebase) {
+                        ("DU", false) | ("UD", true) => Some(crate::conflict::Side::Here),
+                        ("UD", false) | ("DU", true) => Some(crate::conflict::Side::Remote),
+                        _ => None,
+                    };
+                    (ChangeKind::Conflict { deleted }, (*path).to_owned())
                 }
                 _ => continue,
             };
@@ -170,13 +184,15 @@ impl Git {
             _ => BranchState::Detached(String::new()),
         };
         self.pair_renames(dir, &mut files);
+        // UC-015 BR-005: conflicts first, then notes, then other files.
         files.sort_by(|a, b| {
-            (a.note().is_none(), a.path.to_lowercase())
-                .cmp(&(b.note().is_none(), b.path.to_lowercase()))
+            let conflict = |f: &FileChange| !matches!(f.kind, ChangeKind::Conflict { .. });
+            conflict(a).cmp(&conflict(b)).then_with(|| {
+                (a.note().is_none(), a.path.to_lowercase())
+                    .cmp(&(b.note().is_none(), b.path.to_lowercase()))
+            })
         });
-        let merging = self
-            .run(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
-            .is_ok();
+        let merging = self.joining(dir).is_some();
         let amendable = match branch {
             BranchState::Branch(_) | BranchState::Detached(_) => self.amendable(dir),
             BranchState::NoCommit(_) => None,
@@ -272,7 +288,7 @@ pub fn proposed_message(changes: &[&FileChange]) -> String {
             continue;
         };
         match &change.kind {
-            ChangeKind::Changed => updated.push(id.title()),
+            ChangeKind::Changed | ChangeKind::Conflict { .. } => updated.push(id.title()),
             ChangeKind::New => added.push(id.title()),
             ChangeKind::Deleted => deleted.push(id.title()),
             ChangeKind::Renamed { from } => {
