@@ -7,6 +7,7 @@ mod document;
 mod enlarged;
 mod facade_view;
 pub mod fonts;
+mod keys;
 mod minimap;
 mod source_view;
 mod toolbar;
@@ -16,6 +17,7 @@ pub use clipboard::{
 };
 pub use document::{Document, Edit};
 pub use facade_view::FacadeView;
+pub use keys::{EditorCommand, InputMode};
 pub use source_view::SourceView;
 pub use toolbar::Tool;
 

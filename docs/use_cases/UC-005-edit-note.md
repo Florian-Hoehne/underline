@@ -243,6 +243,11 @@ and edited there, and the table follows each change.
 
 The Vim input mode offers the normal, insert, and visual mode; motions, the operators delete, change, yank, and put; counts; undo and redo; search with `/` and `n`; `:q` to close the tab; and `:w` to store at once. The status bar shows the active mode and its most important commands (FR-026).
 
+In the facade a line of the Vim keys is a block: `dd`, `yy`, and `p` delete, copy, and put a paragraph, list item, or
+heading with its markup, and `j` and `k` move by a shown line; keys that work on characters work on the text the
+facade shows. Copied and deleted text goes into a register of its own and leaves the clipboard alone; `"+` before
+`y`, `d`, or `p` uses the clipboard instead.
+
 ### BR-010: Nano keys
 
 The Nano input mode offers the Nano keys to move, cut and paste lines, search, undo, and redo, and `Ctrl+X` to close the tab. The status bar shows the most important commands (FR-026).

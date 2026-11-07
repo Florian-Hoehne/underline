@@ -772,3 +772,14 @@ tab share the folded sections.
 
 Answer: Bars in the shape of the lines and blocks rather than tiny text; a click jumps, dragging moves along; a switch
 hides it for all tabs.
+
+## OQ-077: What is a line of the Vim keys in the facade, and where does yanked text go?
+
+**Element:** UC-005 A6, BR-009, FR-024
+**Raised by:** implementation of the Vim input mode, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-009
+
+Answer: In the facade a line is a block (paragraph, list item, heading); yanked and deleted text goes into a register
+of its own, and `"+` uses the clipboard.

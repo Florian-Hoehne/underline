@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,6 +25,7 @@ use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
 use underline_facade::sections::Section;
 
 use crate::enlarged::{Enlarged, Shown};
+use crate::keys::{EditorCommand, InputMode, Target};
 use crate::minimap::{self, Mark};
 use crate::source_view::{paint_fold_arrow, Pasted, MARKS_EVERY};
 use crate::{fonts, SourceView, Tool};
@@ -371,6 +373,7 @@ impl FacadeView {
             }
 
             if response.has_focus() && self.enlarged.is_none() {
+                let vim_escape = source.keys.mode == InputMode::Vim;
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
                         self.id,
@@ -378,7 +381,8 @@ impl FacadeView {
                             tab: true,
                             horizontal_arrows: true,
                             vertical_arrows: true,
-                            escape: false,
+                            // Vim needs Esc for itself (BR-009).
+                            escape: vim_escape,
                         },
                     )
                 });
@@ -1090,9 +1094,13 @@ impl FacadeView {
 
     /// Where the cursor is: the block holding it and the facade index in it.
     fn cursor_position(&self, source: &SourceView) -> Option<(usize, usize)> {
+        self.position_at(source, source.cursor_anchor().0)
+    }
+
+    /// The block holding char `char` of the text, and the facade index in it.
+    fn position_at(&self, source: &SourceView, char: usize) -> Option<(usize, usize)> {
         let rope = source.document().rope();
-        let (cursor, _) = source.cursor_anchor();
-        let byte = rope.char_to_byte(cursor);
+        let byte = rope.char_to_byte(char.min(rope.len_chars()));
         let index = self
             .blocks
             .iter()
@@ -1201,53 +1209,76 @@ impl FacadeView {
     }
 
     fn handle_input(&mut self, ui: &egui::Ui, source: &mut SourceView, theme: &Theme) -> bool {
-        let events = ui.input(|i| i.events.clone());
+        let raw_events = ui.input(|i| i.events.clone());
         let mut changed = false;
-        for event in events {
-            match event {
-                Event::Text(text) => {
-                    changed |= self.type_text(source, &text);
-                }
-                // UC-005 A17, BR-014: formatting is kept, as markup of the
-                // note format; Ctrl+Shift+V pastes plain text.
-                Event::Paste(text) => {
-                    let plain = ui.input(|i| i.modifiers.shift);
-                    changed |= if source.has_clipboard() {
-                        let pasted = source.paste(!plain);
-                        self.paste(source, pasted)
-                    } else {
-                        self.type_text(source, &text)
-                    };
-                }
-                Event::Ime(egui::ImeEvent::Commit(text)) => {
-                    changed |= self.type_text(source, &text);
-                }
-                Event::Copy | Event::Cut => {
-                    let text = source.selected_text();
-                    if !text.is_empty() {
-                        if source.has_clipboard() {
-                            let html = self.selection_html(source);
-                            source.copy(text, Some(html));
+        // FR-024, FR-025: each event goes to the Vim or Nano keys first, in
+        // order, the same as in the source view; a line is a block here
+        // (OQ-077). What they leave is handled as usual right after.
+        for raw in raw_events {
+            let events = if source.keys.mode == InputMode::Normal {
+                vec![raw]
+            } else {
+                self.reparse(source);
+                let mut keys = std::mem::take(&mut source.keys);
+                let mut target = FacadeTarget {
+                    facade: self,
+                    source,
+                    ui,
+                    theme,
+                };
+                let (rest, edited) = keys.handle(vec![raw], &mut target);
+                source.keys = keys;
+                changed |= edited;
+                self.scroll_to_cursor = true;
+                self.reparse(source);
+                rest
+            };
+            for event in events {
+                match event {
+                    Event::Text(text) => {
+                        changed |= self.type_text(source, &text);
+                    }
+                    // UC-005 A17, BR-014: formatting is kept, as markup of the
+                    // note format; Ctrl+Shift+V pastes plain text.
+                    Event::Paste(text) => {
+                        let plain = ui.input(|i| i.modifiers.shift);
+                        changed |= if source.has_clipboard() {
+                            let pasted = source.paste(!plain);
+                            self.paste(source, pasted)
                         } else {
-                            ui.ctx().copy_text(text);
-                        }
-                        if event == Event::Cut {
-                            changed |= self.delete_selection(source);
+                            self.type_text(source, &text)
+                        };
+                    }
+                    Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        changed |= self.type_text(source, &text);
+                    }
+                    Event::Copy | Event::Cut => {
+                        let text = source.selected_text();
+                        if !text.is_empty() {
+                            if source.has_clipboard() {
+                                let html = self.selection_html(source);
+                                source.copy(text, Some(html));
+                            } else {
+                                ui.ctx().copy_text(text);
+                            }
+                            if event == Event::Cut {
+                                changed |= self.delete_selection(source);
+                            }
                         }
                     }
+                    Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        changed |= self.key(ui, source, theme, key, modifiers);
+                    }
+                    _ => {}
                 }
-                Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } => {
-                    changed |= self.key(ui, source, theme, key, modifiers);
+                if changed {
+                    self.reparse(source);
                 }
-                _ => {}
-            }
-            if changed {
-                self.reparse(source);
             }
         }
         // UC-005 A18: a paste egui did not report, as of an image alone.
@@ -1431,7 +1462,10 @@ impl FacadeView {
                     self.char_of(source, index, count)
                 });
             }
-            Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End => {
+            Key::ArrowUp | Key::ArrowDown => {
+                target = Some(self.vertical(ui, source, theme, index, at, key == Key::ArrowUp));
+            }
+            Key::Home | Key::End => {
                 let laid = self.laid(ui, source, theme, index);
                 let galley = &laid.galley;
                 let current = galley.from_ccursor(CCursor::new(laid.prefix + at));
@@ -1471,6 +1505,40 @@ impl FacadeView {
 
     /// Enter: a new paragraph, a new list item with the same marker, or a
     /// new line in code and markup.
+    /// One shown row up or down from facade index `at` of block `index`;
+    /// from the first or last row into the block before or after.
+    fn vertical(
+        &mut self,
+        ui: &egui::Ui,
+        source: &SourceView,
+        theme: &Theme,
+        index: usize,
+        at: usize,
+        up: bool,
+    ) -> usize {
+        let count = self.blocks[index].text().chars().count();
+        let laid = self.laid(ui, source, theme, index);
+        let galley = &laid.galley;
+        let current = galley.from_ccursor(CCursor::new(laid.prefix + at));
+        let moved = if up {
+            galley.cursor_up_one_row(&current)
+        } else {
+            galley.cursor_down_one_row(&current)
+        };
+        let same_row = moved.rcursor.row == current.rcursor.row;
+        let step = if up { -1 } else { 1 };
+        match self.next_visible(index, step).filter(|_| same_row) {
+            Some(other) => {
+                let count = self.blocks[other].text().chars().count();
+                self.char_of(source, other, at.min(count))
+            }
+            None => {
+                let at = moved.ccursor.index.saturating_sub(laid.prefix).min(count);
+                self.char_of(source, index, at)
+            }
+        }
+    }
+
     fn enter(&mut self, source: &mut SourceView, index: usize, _at: usize) -> bool {
         self.delete_selection(source);
         self.reparse(source);
@@ -1931,10 +1999,209 @@ fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
+/// The facade for the Vim and Nano keys: a line is a block (OQ-077), and
+/// moving goes by the characters and rows the facade shows.
+struct FacadeTarget<'a> {
+    facade: &'a mut FacadeView,
+    source: &'a mut SourceView,
+    ui: &'a egui::Ui,
+    theme: &'a Theme,
+}
+
+impl FacadeTarget<'_> {
+    /// The block at char `at` and the facade index in it, from blocks that
+    /// match the text.
+    fn position(&mut self, at: usize) -> Option<(usize, usize)> {
+        self.facade.reparse(self.source);
+        self.facade.position_at(self.source, at)
+    }
+
+    fn char_of_byte(&self, byte: usize) -> usize {
+        let rope = self.source.document().rope();
+        rope.byte_to_char(byte.min(rope.len_bytes()))
+    }
+}
+
+impl Target for FacadeTarget<'_> {
+    fn len(&self) -> usize {
+        self.source.document().len_chars()
+    }
+
+    fn char_at(&self, at: usize) -> Option<char> {
+        let rope = self.source.document().rope();
+        (at < rope.len_chars()).then(|| rope.char(at))
+    }
+
+    fn cursor(&self) -> (usize, usize) {
+        self.source.cursor_anchor()
+    }
+
+    fn set_cursor(&mut self, cursor: usize, anchor: usize) {
+        let len = self.len();
+        self.source
+            .set_cursor_anchor(cursor.min(len), anchor.min(len));
+        self.facade.scroll_to_cursor = true;
+    }
+
+    fn left(&mut self, at: usize) -> usize {
+        let Some((index, i)) = self.position(at) else {
+            return at;
+        };
+        if i > 0 {
+            return self.facade.char_of(self.source, index, i - 1);
+        }
+        match self.facade.next_visible(index, -1) {
+            Some(previous) => {
+                let count = self.facade.blocks[previous].text().chars().count();
+                self.facade.char_of(self.source, previous, count)
+            }
+            None => at,
+        }
+    }
+
+    fn right(&mut self, at: usize) -> usize {
+        let Some((index, i)) = self.position(at) else {
+            return at;
+        };
+        let count = self.facade.blocks[index].text().chars().count();
+        if i < count {
+            return self.facade.char_of(self.source, index, i + 1);
+        }
+        match self.facade.next_visible(index, 1) {
+            Some(next) => self.facade.char_of(self.source, next, 0),
+            None => at,
+        }
+    }
+
+    fn up(&mut self, at: usize) -> usize {
+        match self.position(at) {
+            Some((index, i)) => {
+                self.facade
+                    .vertical(self.ui, self.source, self.theme, index, i, true)
+            }
+            None => at,
+        }
+    }
+
+    fn down(&mut self, at: usize) -> usize {
+        match self.position(at) {
+            Some((index, i)) => {
+                self.facade
+                    .vertical(self.ui, self.source, self.theme, index, i, false)
+            }
+            None => at,
+        }
+    }
+
+    fn line(&mut self, at: usize) -> Range<usize> {
+        let Some((index, _)) = self.position(at) else {
+            return at..at;
+        };
+        let count = self.facade.blocks[index].text().chars().count();
+        self.facade.char_of(self.source, index, 0)..self.facade.char_of(self.source, index, count)
+    }
+
+    fn whole_line(&mut self, at: usize) -> Range<usize> {
+        let Some((index, _)) = self.position(at) else {
+            return at..at;
+        };
+        let start = self.char_of_byte(self.facade.blocks[index].span.start);
+        let end = match self.facade.next_visible(index, 1) {
+            Some(next) => self.char_of_byte(self.facade.blocks[next].span.start),
+            None => self.len(),
+        };
+        start..end
+    }
+
+    fn separator(&mut self, at: usize) -> &'static str {
+        match self.position(at) {
+            Some((index, _))
+                if matches!(self.facade.blocks[index].kind, BlockKind::ListItem { .. }) =>
+            {
+                "\n"
+            }
+            _ => "\n\n",
+        }
+    }
+
+    fn text(&self, range: Range<usize>) -> String {
+        let len = self.len();
+        self.source
+            .document()
+            .rope()
+            .slice(range.start.min(len)..range.end.min(len))
+            .to_string()
+    }
+
+    fn replace(&mut self, range: Range<usize>, text: &str) {
+        self.source.replace(range, text);
+        self.facade.reparse(self.source);
+    }
+
+    fn undo(&mut self) {
+        self.source.undo();
+        self.facade.reparse(self.source);
+    }
+
+    fn redo(&mut self) {
+        self.source.redo();
+        self.facade.reparse(self.source);
+    }
+
+    fn open_line(&mut self, at: usize, below: bool) {
+        let Some((index, _)) = self.position(at) else {
+            return;
+        };
+        if below {
+            // Enter at the end of the block: a list goes on with its marker.
+            let count = self.facade.blocks[index].text().chars().count();
+            let end = self.facade.char_of(self.source, index, count);
+            self.source.set_cursor_anchor(end, end);
+            self.facade.enter(self.source, index, count);
+        } else {
+            let block = &self.facade.blocks[index];
+            let start = block.span.start;
+            let content = block.source_offset(0).max(start);
+            let text = self.source.document().text();
+            let list = matches!(block.kind, BlockKind::ListItem { .. });
+            let (insert, cursor) = if list {
+                let marker = text[start..content].to_owned();
+                (format!("{marker}\n"), marker.chars().count())
+            } else {
+                ("\n\n".to_owned(), 0)
+            };
+            let at = self.char_of_byte(start);
+            self.source.replace(at..at, &insert);
+            self.source.set_cursor_anchor(at + cursor, at + cursor);
+        }
+        self.facade.reparse(self.source);
+    }
+
+    fn find(&self, pattern: &str, from: usize, forward: bool) -> Option<usize> {
+        self.source.find(pattern, from, forward)
+    }
+
+    fn clipboard_read(&mut self) -> Option<String> {
+        match self.source.paste(false) {
+            Pasted::Text(text) | Pasted::Markup(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    fn clipboard_write(&mut self, text: &str) {
+        self.source.copy(text.to_owned(), None);
+    }
+
+    fn command(&mut self, command: EditorCommand) {
+        self.source.push_command(command);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clipboard::{ClipContent, ClipImage, MemoryClipboard};
+    use crate::keys::{EditorCommand, InputMode};
     use std::time::{Duration, Instant};
     use underline_facade::highlight::HighlightSet;
 
@@ -2571,6 +2838,176 @@ mod tests {
         h.frame(vec![press(true), Event::Text("v".into()), press(false)]);
         assert_eq!(h.source.take_pasted_image(), None);
         assert_eq!(h.text(), "vText\n");
+    }
+
+    /// Events for keys written as Vim writes them: plain characters,
+    /// `<Esc>`, `<CR>`, `<Down>`, `<C-r>`, `<M-u>`.
+    fn keys(spec: &str) -> Vec<Event> {
+        let mut events = Vec::new();
+        let mut rest = spec;
+        while let Some(c) = rest.chars().next() {
+            if c == '<' {
+                if let Some(end) = rest.find('>') {
+                    let name = &rest[1..end];
+                    rest = &rest[end + 1..];
+                    let (modifiers, key) = match name.split_once('-') {
+                        Some(("C", k)) => (
+                            egui::Modifiers {
+                                ctrl: true,
+                                command: true,
+                                ..Default::default()
+                            },
+                            k,
+                        ),
+                        Some(("M", k)) => (
+                            egui::Modifiers {
+                                alt: true,
+                                ..Default::default()
+                            },
+                            k,
+                        ),
+                        _ => (egui::Modifiers::default(), name),
+                    };
+                    let key = match key {
+                        "Esc" => Key::Escape,
+                        "CR" => Key::Enter,
+                        "Down" => Key::ArrowDown,
+                        other => Key::from_name(&other.to_uppercase()).expect("key"),
+                    };
+                    events.push(Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    });
+                    continue;
+                }
+            }
+            events.push(Event::Text(c.to_string()));
+            rest = &rest[c.len_utf8()..];
+        }
+        events
+    }
+
+    /// One frame of the source view (not the facade) with `events`.
+    fn source_frame(h: &mut Harness, events: Vec<Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            events,
+            ..Default::default()
+        };
+        let source = &mut h.source;
+        let _ = h.ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                source.show(ui);
+            });
+        });
+    }
+
+    /// TC-005-14 steps 1 to 7, 9, 10: the Vim keys in the source view.
+    #[test]
+    fn uc005_tc14_vim_in_the_source_view() {
+        let mut h = Harness::new("alpha\nbeta\ngamma\n");
+        h.source.set_input_mode(InputMode::Vim);
+        h.source.set_cursor_anchor(0, 0);
+        h.source.focus_cursor();
+        source_frame(&mut h, vec![]);
+        source_frame(&mut h, vec![]);
+        let vim = |h: &mut Harness, spec: &str| source_frame(h, keys(spec));
+        assert!(h.source.input_status().unwrap().contains("NORMAL"));
+        vim(&mut h, "jdd");
+        assert_eq!(h.text(), "alpha\ngamma\n");
+        vim(&mut h, "p");
+        assert_eq!(h.text(), "alpha\ngamma\nbeta\n");
+        vim(&mut h, "u");
+        assert_eq!(h.text(), "alpha\ngamma\n");
+        vim(&mut h, "<C-r>");
+        assert_eq!(h.text(), "alpha\ngamma\nbeta\n");
+        vim(&mut h, "gg2dd");
+        assert_eq!(h.text(), "beta\n");
+        vim(&mut h, "inew");
+        assert!(h.source.input_status().unwrap().contains("INSERT"));
+        vim(&mut h, "<Esc>");
+        assert!(h.source.input_status().unwrap().contains("NORMAL"));
+        assert_eq!(h.text(), "newbeta\n");
+        vim(&mut h, "0ve");
+        assert!(h.source.input_status().unwrap().contains("VISUAL"));
+        vim(&mut h, "y");
+        assert_eq!(h.text(), "newbeta\n");
+        vim(&mut h, "$P");
+        assert_eq!(h.text(), "newbetnewbetaa\n");
+        // From the end, `/new` goes round to the first, `n` to the next.
+        vim(&mut h, "/new<CR>");
+        assert_eq!(h.source.cursor(), 0);
+        vim(&mut h, "n");
+        assert_eq!(h.source.cursor(), 6);
+        vim(&mut h, "dw");
+        assert_eq!(h.text(), "newbet\n");
+        vim(&mut h, ":w<CR>");
+        assert_eq!(h.source.take_commands(), [EditorCommand::Store]);
+        vim(&mut h, ":q<CR>");
+        assert_eq!(h.source.take_commands(), [EditorCommand::Close]);
+    }
+
+    /// TC-005-14 step 8: the same keys in the facade, where a line is a
+    /// block (OQ-077).
+    #[test]
+    fn uc005_tc14_vim_in_the_facade() {
+        let mut h = Harness::new("alpha\n\nbeta\n\ngamma\n");
+        h.source.set_input_mode(InputMode::Vim);
+        h.source.set_cursor_anchor(0, 0);
+        h.facade.request_focus();
+        h.frame(vec![]);
+        let vim = |h: &mut Harness, spec: &str| h.frame(keys(spec));
+        vim(&mut h, "jdd");
+        assert_eq!(h.text(), "alpha\n\ngamma\n");
+        vim(&mut h, "p");
+        assert_eq!(h.text(), "alpha\n\ngamma\n\nbeta\n");
+        vim(&mut h, "u");
+        assert_eq!(h.text(), "alpha\n\ngamma\n");
+        vim(&mut h, "<C-r>");
+        assert_eq!(h.text(), "alpha\n\ngamma\n\nbeta\n");
+        // A list item is a line of its own; words are the shown words.
+        let mut list = Harness::new("- one **two**\n- three\n");
+        list.source.set_input_mode(InputMode::Vim);
+        list.facade.request_focus();
+        list.source.set_cursor_anchor(2, 2);
+        list.frame(vec![]);
+        list.frame(keys("wcwTWO<Esc>"));
+        assert_eq!(list.text(), "- one **TWO**\n- three\n");
+        list.frame(keys("yyjp"));
+        assert_eq!(list.text(), "- one **TWO**\n- three\n- one **TWO**\n");
+    }
+
+    /// TC-005-15: the Nano keys in the source view and in the facade.
+    #[test]
+    fn uc005_tc15_nano_keys() {
+        let mut h = Harness::new("one\ntwo\nthree\n");
+        h.source.set_input_mode(InputMode::Nano);
+        h.source.set_cursor_anchor(4, 4);
+        h.source.focus_cursor();
+        source_frame(&mut h, vec![]);
+        source_frame(&mut h, vec![]);
+        assert!(h.source.input_status().unwrap().contains("^K Cut"));
+        source_frame(&mut h, keys("<C-k><Down><C-u>"));
+        assert_eq!(h.text(), "one\nthree\ntwo\n");
+        source_frame(&mut h, keys("<C-w>thr<CR>"));
+        assert_eq!(h.source.cursor(), 4);
+        source_frame(&mut h, keys("<M-u>"));
+        assert_eq!(h.text(), "one\nthree\n");
+        source_frame(&mut h, keys("<M-e>"));
+        assert_eq!(h.text(), "one\nthree\ntwo\n");
+        source_frame(&mut h, keys("<C-x>"));
+        assert_eq!(h.source.take_commands(), [EditorCommand::Close]);
+
+        let mut f = Harness::new("one\n\ntwo\n\nthree\n\nfour\n");
+        f.source.set_input_mode(InputMode::Nano);
+        f.facade.request_focus();
+        f.cursor_after("tw");
+        f.frame(vec![]);
+        f.frame(keys("<C-k><Down><C-u>"));
+        assert_eq!(f.text(), "one\n\nthree\n\ntwo\n\nfour\n");
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and

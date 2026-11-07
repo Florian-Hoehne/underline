@@ -15,6 +15,7 @@ use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
 use crate::document::Document;
+use crate::keys::{EditorCommand, InputMode, Keys, Target};
 use crate::minimap::{self, Mark};
 use crate::Tool;
 use underline_facade::blocks::{link_at, parse_blocks};
@@ -105,6 +106,10 @@ pub struct SourceView {
     paste_key_down: bool,
     /// A pasted image for the window to store next to the note (A18).
     pasted_image: Option<ClipImage>,
+    /// The input mode and its state, shared with the facade (FR-024 to
+    /// FR-026), and what its keys ask of the window.
+    pub(crate) keys: Keys,
+    commands: Vec<EditorCommand>,
 }
 
 /// What a paste brings.
@@ -163,6 +168,8 @@ impl SourceView {
             pasted_at: None,
             paste_key_down: false,
             pasted_image: None,
+            keys: Keys::default(),
+            commands: Vec::new(),
         }
     }
 
@@ -429,6 +436,45 @@ impl SourceView {
         self.minimap = shown;
     }
 
+    /// Chooses the input mode: normal, Vim, or Nano (FR-024, FR-025).
+    pub fn set_input_mode(&mut self, mode: InputMode) {
+        self.keys.mode = mode;
+    }
+
+    /// FR-026: the active input mode and its most important commands, for
+    /// the status bar.
+    pub fn input_status(&self) -> Option<String> {
+        self.keys.status()
+    }
+
+    /// What the keys asked of the window: store at once, close the tab.
+    pub fn take_commands(&mut self) -> Vec<EditorCommand> {
+        std::mem::take(&mut self.commands)
+    }
+
+    pub(crate) fn push_command(&mut self, command: EditorCommand) {
+        self.commands.push(command);
+    }
+
+    /// Searches `pattern` in the text after (or before) char `from`, going
+    /// round at the end; gives its char index.
+    pub(crate) fn find(&self, pattern: &str, from: usize, forward: bool) -> Option<usize> {
+        let text = self.doc.text();
+        let rope = self.doc.rope();
+        let at = rope.char_to_byte((from + usize::from(forward)).min(rope.len_chars()));
+        let byte = if forward {
+            text[at..]
+                .find(pattern)
+                .map(|i| at + i)
+                .or_else(|| text.find(pattern))
+        } else {
+            text[..rope.char_to_byte(from)]
+                .rfind(pattern)
+                .or_else(|| text.rfind(pattern))
+        }?;
+        Some(rope.byte_to_char(byte))
+    }
+
     /// Uses `clipboard` for copying and pasting with formats (ADR-014).
     pub fn set_clipboard(&mut self, clipboard: SharedClipboard) {
         self.clipboard = Some(clipboard);
@@ -674,6 +720,7 @@ impl SourceView {
             }
 
             if response.has_focus() {
+                let vim_escape = self.keys.mode == InputMode::Vim;
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
                         self.id,
@@ -681,7 +728,8 @@ impl SourceView {
                             tab: true,
                             horizontal_arrows: true,
                             vertical_arrows: true,
-                            escape: false,
+                            // Vim needs Esc for itself (BR-009).
+                            escape: vim_escape,
                         },
                     )
                 });
@@ -977,51 +1025,65 @@ impl SourceView {
 
     /// Applies the keys, text, and clipboard events of this frame.
     fn handle_keys(&mut self, ui: &mut egui::Ui, page: usize) -> bool {
-        let events = ui.input(|i| i.events.clone());
+        let raw_events = ui.input(|i| i.events.clone());
         let mut changed = false;
-        for event in events {
-            match event {
-                Event::Text(text) => {
-                    self.insert(&text);
-                    changed = true;
-                }
-                // UC-005 A17, BR-014: the source view pastes plain text.
-                Event::Paste(text) => {
-                    match self.clipboard.is_some().then(|| self.paste(false)) {
-                        Some(Pasted::Text(text) | Pasted::Markup(text)) => self.insert(&text),
-                        Some(Pasted::Image(image)) => self.pasted_image = Some(image),
-                        Some(Pasted::Nothing) => {}
-                        None => self.insert(&text),
+        // FR-024, FR-025: each event goes to the Vim or Nano keys first, in
+        // order; what they leave is handled as usual right after.
+        for raw in raw_events {
+            let events = if self.keys.mode == InputMode::Normal {
+                vec![raw]
+            } else {
+                let mut keys = std::mem::take(&mut self.keys);
+                let (rest, edited) = keys.handle(vec![raw], &mut SourceTarget(self));
+                self.keys = keys;
+                changed |= edited;
+                self.scroll_to_cursor = true;
+                rest
+            };
+            for event in events {
+                match event {
+                    Event::Text(text) => {
+                        self.insert(&text);
+                        changed = true;
                     }
-                    changed = true;
-                }
-                Event::Ime(egui::ImeEvent::Commit(text)) => {
-                    self.insert(&text);
-                    changed = true;
-                }
-                Event::Copy | Event::Cut => {
-                    let text = self.selected_text();
-                    if !text.is_empty() {
-                        if self.clipboard.is_some() {
-                            self.copy(text, None);
-                        } else {
-                            ui.ctx().copy_text(text);
+                    // UC-005 A17, BR-014: the source view pastes plain text.
+                    Event::Paste(text) => {
+                        match self.clipboard.is_some().then(|| self.paste(false)) {
+                            Some(Pasted::Text(text) | Pasted::Markup(text)) => self.insert(&text),
+                            Some(Pasted::Image(image)) => self.pasted_image = Some(image),
+                            Some(Pasted::Nothing) => {}
+                            None => self.insert(&text),
                         }
-                        if event == Event::Cut {
-                            self.insert("");
-                            changed = true;
+                        changed = true;
+                    }
+                    Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        self.insert(&text);
+                        changed = true;
+                    }
+                    Event::Copy | Event::Cut => {
+                        let text = self.selected_text();
+                        if !text.is_empty() {
+                            if self.clipboard.is_some() {
+                                self.copy(text, None);
+                            } else {
+                                ui.ctx().copy_text(text);
+                            }
+                            if event == Event::Cut {
+                                self.insert("");
+                                changed = true;
+                            }
                         }
                     }
+                    Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        changed |= self.key(key, modifiers, page);
+                    }
+                    _ => {}
                 }
-                Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } => {
-                    changed |= self.key(key, modifiers, page);
-                }
-                _ => {}
             }
         }
         // UC-005 A18: a paste egui did not report, as of an image alone.
@@ -1331,4 +1393,128 @@ pub(crate) fn paint_fold_arrow(painter: &egui::Painter, rect: Rect, folded: bool
 
 fn color([r, g, b, a]: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+/// The source view for the Vim and Nano keys: a line is a line of markup.
+struct SourceTarget<'a>(&'a mut SourceView);
+
+impl Target for SourceTarget<'_> {
+    fn len(&self) -> usize {
+        self.0.doc.len_chars()
+    }
+
+    fn char_at(&self, at: usize) -> Option<char> {
+        let rope = self.0.doc.rope();
+        (at < rope.len_chars()).then(|| rope.char(at))
+    }
+
+    fn cursor(&self) -> (usize, usize) {
+        (self.0.cursor, self.0.anchor)
+    }
+
+    fn set_cursor(&mut self, cursor: usize, anchor: usize) {
+        let len = self.len();
+        self.0.cursor = cursor.min(len);
+        self.0.anchor = anchor.min(len);
+        self.0.scroll_to_cursor = true;
+    }
+
+    fn left(&mut self, at: usize) -> usize {
+        at.saturating_sub(1)
+    }
+
+    fn right(&mut self, at: usize) -> usize {
+        (at + 1).min(self.len())
+    }
+
+    fn up(&mut self, at: usize) -> usize {
+        let rope = self.0.doc.rope();
+        let line = rope.char_to_line(at);
+        let column = at - rope.line_to_char(line);
+        let up = self.0.visible_line(line.saturating_sub(1), -1);
+        self.0.at_line(up, column)
+    }
+
+    fn down(&mut self, at: usize) -> usize {
+        let rope = self.0.doc.rope();
+        let line = rope.char_to_line(at);
+        let column = at - rope.line_to_char(line);
+        let down = self
+            .0
+            .visible_line((line + 1).min(self.0.doc.len_lines() - 1), 1);
+        self.0.at_line(down, column)
+    }
+
+    fn line(&mut self, at: usize) -> Range<usize> {
+        let rope = self.0.doc.rope();
+        let line = rope.char_to_line(at.min(rope.len_chars()));
+        let start = rope.line_to_char(line);
+        start..start + self.0.doc.line_text(line).chars().count()
+    }
+
+    fn whole_line(&mut self, at: usize) -> Range<usize> {
+        let rope = self.0.doc.rope();
+        let line = rope.char_to_line(at.min(rope.len_chars()));
+        let start = rope.line_to_char(line);
+        let end = if line + 1 < rope.len_lines() {
+            rope.line_to_char(line + 1)
+        } else {
+            rope.len_chars()
+        };
+        start..end
+    }
+
+    fn separator(&mut self, _at: usize) -> &'static str {
+        "\n"
+    }
+
+    fn text(&self, range: Range<usize>) -> String {
+        let len = self.len();
+        self.0
+            .doc
+            .rope()
+            .slice(range.start.min(len)..range.end.min(len))
+            .to_string()
+    }
+
+    fn replace(&mut self, range: Range<usize>, text: &str) {
+        self.0.replace(range, text);
+    }
+
+    fn undo(&mut self) {
+        self.0.undo();
+    }
+
+    fn redo(&mut self) {
+        self.0.redo();
+    }
+
+    fn open_line(&mut self, at: usize, below: bool) {
+        let line = self.line(at);
+        if below {
+            self.0.replace(line.end..line.end, "\n");
+        } else {
+            self.0.replace(line.start..line.start, "\n");
+            self.set_cursor(line.start, line.start);
+        }
+    }
+
+    fn find(&self, pattern: &str, from: usize, forward: bool) -> Option<usize> {
+        self.0.find(pattern, from, forward)
+    }
+
+    fn clipboard_read(&mut self) -> Option<String> {
+        match self.0.paste(false) {
+            Pasted::Text(text) | Pasted::Markup(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    fn clipboard_write(&mut self, text: &str) {
+        self.0.copy(text.to_owned(), None);
+    }
+
+    fn command(&mut self, command: EditorCommand) {
+        self.0.push_command(command);
+    }
 }

@@ -12,7 +12,10 @@ use underline_core::{
     OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList,
     TabState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
-use underline_editor::{ClipImage, FacadeView, SharedClipboard, SourceView, SystemClipboard, Tool};
+use underline_editor::{
+    ClipImage, EditorCommand, FacadeView, InputMode, SharedClipboard, SourceView, SystemClipboard,
+    Tool,
+};
 use underline_facade::blocks::{heading_offset, parse_blocks};
 use underline_facade::diagram::Diagrams;
 use underline_facade::formatting::Format;
@@ -45,6 +48,9 @@ pub struct UnderlineApp {
     /// whether a selection goes onto it at once (FR-031, FR-032).
     clipboard: SharedClipboard,
     copy_on_select: bool,
+    /// The keys the editors follow: normal, Vim, or Nano (FR-024, FR-025),
+    /// until the settings of UC-010 hold it.
+    input_mode: InputMode,
     /// Stores changed notes in the background (UC-005 BR-001).
     saver: NoteSaver,
     /// A close that waits for the user, because changes could not be stored
@@ -243,6 +249,7 @@ impl UnderlineApp {
             minimap: true,
             clipboard: SystemClipboard::shared(),
             copy_on_select: true,
+            input_mode: InputMode::Normal,
             images: {
                 let ctx = ctx.clone();
                 Arc::new(Images::start(move || ctx.request_repaint()))
@@ -1291,6 +1298,33 @@ impl UnderlineApp {
         }
     }
 
+    /// What the Vim and Nano keys ask: store the active note at once, or
+    /// close its tab (UC-005 BR-009, BR-010).
+    fn key_command(&mut self, command: EditorCommand) {
+        let Some(index) = self.tabs.active_index() else {
+            return;
+        };
+        match command {
+            EditorCommand::Store => {
+                let mut tabs = std::mem::take(&mut self.tabs);
+                if let Some((_, tab)) = tabs.iter_mut().nth(index) {
+                    tab.autosave.changed(Instant::now());
+                    self.status = match self.flush_tab_now(tab) {
+                        Ok(()) => format!("Stored {}", tab.title),
+                        Err(err) => format!("{} could not be stored: {err}", tab.title),
+                    };
+                }
+                self.tabs = tabs;
+            }
+            EditorCommand::Close => {
+                let id = self.tabs.iter().nth(index).map(|(id, _)| id.clone());
+                if let Some(id) = id {
+                    self.close_tab(&id, false);
+                }
+            }
+        }
+    }
+
     /// UC-005 A18, BR-014: stores a pasted image as a PNG next to the note,
     /// named after the note and the time, and inserts it at the cursor.
     fn paste_image(&mut self, image: ClipImage) {
@@ -1684,6 +1718,14 @@ impl eframe::App for UnderlineApp {
                 parts.push(self.status.clone());
             }
             ui.label(parts.join("  |  "));
+            // FR-026: the input mode and its most important commands.
+            if let Some(status) = self
+                .tabs
+                .active()
+                .and_then(|(_, tab)| tab.view.input_status())
+            {
+                ui.label(egui::RichText::new(status).monospace());
+            }
         });
 
         if self.workspace.is_none() {
@@ -1733,6 +1775,7 @@ impl eframe::App for UnderlineApp {
         let mut followed = None;
         let mut dropped = Vec::new();
         let mut pasted_image = None;
+        let mut key_commands = Vec::new();
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
@@ -1809,6 +1852,14 @@ impl eframe::App for UnderlineApp {
                 // UC-004 BR-013: the minimap, shown or hidden for all tabs.
                 ui.toggle_value(&mut self.minimap, "Minimap")
                     .on_hover_text("Show or hide the minimap beside the editor");
+                // FR-024, FR-025: the input mode, until the settings hold it.
+                egui::ComboBox::from_id_salt("input-mode")
+                    .selected_text(format!("Keys: {}", self.input_mode.label()))
+                    .show_ui(ui, |ui| {
+                        for mode in InputMode::ALL {
+                            ui.selectable_value(&mut self.input_mode, mode, mode.label());
+                        }
+                    });
                 // FR-032: copy on select, until the settings hold it (UC-010).
                 ui.toggle_value(&mut self.copy_on_select, "Copy on select")
                     .on_hover_text("Put a selection on the clipboard as soon as it is made");
@@ -1831,6 +1882,7 @@ impl eframe::App for UnderlineApp {
             tab.facade.set_minimap(self.minimap);
             tab.view.set_minimap(self.minimap);
             tab.view.set_copy_on_select(self.copy_on_select);
+            tab.view.set_input_mode(self.input_mode);
             let changed = match tab.editing_view {
                 EditingView::Facade => tab.facade.show(ui, &mut tab.view),
                 EditingView::Source => tab.view.show(ui),
@@ -1854,6 +1906,7 @@ impl eframe::App for UnderlineApp {
             if let Some(image) = tab.view.take_pasted_image() {
                 pasted_image = Some(image);
             }
+            key_commands = tab.view.take_commands();
             if let Some(link) = tab.view.take_followed_link() {
                 followed = Some((link, tab.path.clone()));
             }
@@ -1872,6 +1925,11 @@ impl eframe::App for UnderlineApp {
         }
         if let Some(image) = pasted_image {
             self.paste_image(image);
+        }
+        // UC-005 A6, A7: `:w` and Ctrl+O store at once, `:q` and Ctrl+X
+        // close the tab.
+        for command in key_commands {
+            self.key_command(command);
         }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             self.status = "Drop to insert at the place under the pointer".into();
