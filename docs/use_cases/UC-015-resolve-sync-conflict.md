@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** Notes changed both here and on the remote in the same places hold what the user chose from both versions, and the sync completes without a change lost.  
 **Trigger:** A sync stopped because notes or files are in conflict (UC-014 A3).  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-046, FR-045, NFR-006, NFR-011](../requirements.md)
 
