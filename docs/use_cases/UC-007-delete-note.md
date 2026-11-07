@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** A note the user no longer needs is gone from the workspace after they confirmed it, and can be restored for 30 days.  
 **Trigger:** The user asks to delete a note.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-006, FR-017, FR-018, NFR-006, NFR-011](../requirements.md)
 
