@@ -266,6 +266,12 @@ impl FacadeView {
     }
 
     /// Puts the keyboard focus on the facade at the next frame.
+    /// Scrolls the cursor into view at the next frame, without taking the
+    /// keyboard, as a place found (UC-008 A6).
+    pub fn scroll_to_cursor(&mut self) {
+        self.scroll_to_cursor = true;
+    }
+
     pub fn request_focus(&mut self) {
         self.focus = true;
         self.scroll_to_cursor = true;
@@ -421,6 +427,8 @@ impl FacadeView {
             let first = self.block_at(viewport.min.y - PADDING);
             let last = (self.block_at(viewport.max.y - PADDING) + 1).min(self.blocks.len());
             let (sel_start, sel_end) = source.selection();
+            // UC-008 BR-008: the words of the search, as char ranges.
+            let found = source.found_ranges().to_vec();
             let rope = source.document().rope().clone();
             let pointer = ui.input(|i| i.pointer.hover_pos());
             let mut toggle = None;
@@ -536,31 +544,36 @@ impl FacadeView {
                     }
                     _ => {}
                 }
-                // Selection behind the text.
-                if sel_start != sel_end && laid.text_shown {
+                // Found words and the selection behind the text.
+                if laid.text_shown {
                     let to_char = |offset: usize| rope.byte_to_char(offset.min(rope.len_bytes()));
                     let count = block.text().chars().count();
-                    let mut from = None;
-                    let mut to = None;
-                    for i in 0..=count {
-                        let at = to_char(block.source_offset(i));
-                        if from.is_none() && at >= sel_start {
-                            from = Some(i);
-                        }
-                        if at <= sel_end {
-                            to = Some(i);
-                        }
-                    }
-                    if let (Some(from), Some(to)) = (from, to) {
-                        if from < to {
-                            paint_selection(
-                                &painter,
-                                &laid,
-                                top,
-                                from,
-                                to,
-                                ui.visuals().selection.bg_fill,
-                            );
+                    let (first, last) = (
+                        to_char(block.source_offset(0)),
+                        to_char(block.source_offset(count)),
+                    );
+                    let marks: Vec<(usize, usize, Color32)> = found
+                        .iter()
+                        .filter(|r| r.end > first && r.start < last)
+                        .map(|r| (r.start, r.end, crate::source_view::FOUND_COLOR))
+                        .chain((sel_start != sel_end).then_some((
+                            sel_start,
+                            sel_end,
+                            ui.visuals().selection.bg_fill,
+                        )))
+                        .collect();
+                    if !marks.is_empty() {
+                        let ats: Vec<usize> = (0..=count)
+                            .map(|i| to_char(block.source_offset(i)))
+                            .collect();
+                        for (start, end, fill) in marks {
+                            let from = ats.iter().position(|&at| at >= start);
+                            let to = ats.iter().rposition(|&at| at <= end);
+                            if let (Some(from), Some(to)) = (from, to) {
+                                if from < to {
+                                    paint_selection(&painter, &laid, top, from, to, fill);
+                                }
+                            }
                         }
                     }
                 }
@@ -2217,6 +2230,22 @@ mod tests {
         ctx: egui::Context,
         source: SourceView,
         facade: FacadeView,
+    }
+
+    /// TC-008-01 / TC-008-12: the words of a search are found as char
+    /// ranges, again after the text changes, and none without a search.
+    #[test]
+    fn uc008_found_words_follow_the_text() {
+        let set = Arc::new(HighlightSet::new(true));
+        let mut view = SourceView::new("t", "Ünï ferry and FERRY", NoteFormat::Markdown, set);
+        view.set_search(Some(underline_core::Query::parse("ferry")));
+        assert_eq!(view.found_ranges(), [4..9, 14..19]);
+        view.insert_text("ferry ");
+        assert_eq!(view.found_ranges().len(), 3);
+        view.select_chars(4..9);
+        assert_eq!(view.selection_range(), 4..9);
+        view.set_search(None);
+        assert!(view.found_ranges().is_empty());
     }
 
     /// TC-006-13: links changed by a rename in an open note keep the typed

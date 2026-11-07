@@ -10,7 +10,7 @@ use eframe::egui::{
     self, text::CCursor, text::LayoutJob, Color32, Event, EventFilter, FontId, Galley, Key, Pos2,
     Rect, Sense, Stroke, TextFormat, Vec2,
 };
-use underline_core::{LineSide, NoteFormat};
+use underline_core::{LineSide, NoteFormat, Query};
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
@@ -24,6 +24,8 @@ use underline_facade::formatting::{apply_format, Format};
 use underline_facade::sections::{section_at, sections, Section, SectionKey};
 
 const FONT_SIZE: f32 = 14.0;
+/// The mark of a word found by a search (UC-008 BR-008), behind the text.
+pub const FOUND_COLOR: Color32 = Color32::from_rgba_premultiplied(110, 85, 0, 110);
 /// How often the minimap is drawn anew while the text changes.
 pub(crate) const MARKS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
 /// How often typing finds the sections again while nothing is folded.
@@ -112,6 +114,10 @@ pub struct SourceView {
     commands: Vec<EditorCommand>,
     /// Whether line numbers are shown, and on which side (UC-010).
     line_numbers: (bool, LineSide),
+    /// UC-008 BR-008: the search whose words are marked, and their places
+    /// for the revision of the text they were found in.
+    search: Option<Query>,
+    found: (Option<u64>, Vec<Range<usize>>),
 }
 
 /// What a paste brings.
@@ -173,7 +179,55 @@ impl SourceView {
             keys: Keys::default(),
             commands: Vec::new(),
             line_numbers: (true, LineSide::Left),
+            search: None,
+            found: (None, Vec::new()),
         }
+    }
+
+    /// UC-008 BR-008: marks every occurrence of the words of `query`, or
+    /// none without one.
+    pub fn set_search(&mut self, query: Option<Query>) {
+        if self.search != query {
+            self.search = query;
+            self.found.0 = None;
+        }
+    }
+
+    /// The occurrences of the search words in the text, as char ranges,
+    /// sorted; worked out again when the text changed.
+    pub fn found_ranges(&mut self) -> &[std::ops::Range<usize>] {
+        let revision = self.doc.revision();
+        if self.found.0 != Some(revision) {
+            let ranges = match &self.search {
+                Some(query) => {
+                    let text = self.doc.text();
+                    let rope = self.doc.rope();
+                    query
+                        .occurrences(&text)
+                        .into_iter()
+                        .map(|r| rope.byte_to_char(r.start)..rope.byte_to_char(r.end))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            self.found = (Some(revision), ranges);
+        }
+        &self.found.1
+    }
+
+    /// Selects the chars in `range` and scrolls them into view, as a place
+    /// found (UC-008 step 4, A6).
+    pub fn select_chars(&mut self, range: std::ops::Range<usize>) {
+        let len = self.doc.len_chars();
+        self.anchor = range.start.min(len);
+        self.cursor = range.end.min(len);
+        self.scroll_to_cursor = true;
+    }
+
+    /// The selection as char indices, start before end.
+    pub fn selection_range(&self) -> std::ops::Range<usize> {
+        let (start, end) = self.selection();
+        start..end
     }
 
     /// Whether every visible line has its colors (ADR-010).
@@ -806,6 +860,7 @@ impl SourceView {
             let last = (self.line_at(viewport.max.y - PADDING) + 1).min(lines);
             let (selection_start, selection_end) = self.selection();
             let selection_color = ui.visuals().selection.bg_fill;
+            let found = self.found_ranges().to_vec();
             let mut exact_changed = false;
             // UC-004 BR-012: the arrows of the section headings shown.
             let heading_lines: HashMap<usize, Section> = {
@@ -860,12 +915,15 @@ impl SourceView {
                         numbers,
                     );
                 }
-                // Selection behind the text, row by row.
+                // Selection and found words behind the text, row by row.
                 let line_start = self.doc.rope().line_to_char(line);
                 let line_len = self.doc.line_text(line).chars().count();
-                let from = selection_start.max(line_start);
-                let to = selection_end.min(line_start + line_len + 1);
-                if selection_start != selection_end && from < to {
+                let paint_span = |from: usize, to: usize, fill: Color32| {
+                    let from = from.max(line_start);
+                    let to = to.min(line_start + line_len + 1);
+                    if from >= to {
+                        return;
+                    }
                     let start = galley.pos_from_ccursor(CCursor::new(from - line_start));
                     let end = if to > line_start + line_len {
                         let last = galley.pos_from_ccursor(CCursor::new(line_len));
@@ -892,9 +950,20 @@ impl SourceView {
                                 top + Vec2::new(x1, y + row_height),
                             ),
                             0.0,
-                            selection_color,
+                            fill,
                         );
                     }
+                };
+                // UC-008 BR-008: the words of the search, marked.
+                let first_found = found.partition_point(|r| r.end <= line_start);
+                for range in found[first_found..]
+                    .iter()
+                    .take_while(|r| r.start <= line_start + line_len)
+                {
+                    paint_span(range.start, range.end, FOUND_COLOR);
+                }
+                if selection_start != selection_end {
+                    paint_span(selection_start, selection_end, selection_color);
                 }
                 let folded_heading = heading_lines
                     .get(&line)

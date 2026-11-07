@@ -414,7 +414,7 @@ mod tests {
         let words: Vec<&str> = found.iter().map(|r| &text[r.clone()]).collect();
         assert_eq!(words, ["FERRY", "ferry", "Ferry"]);
         let overlapping = q("ab bc").occurrences("abc");
-        assert_eq!(overlapping, [0..3]);
+        assert_eq!((overlapping.len(), overlapping[0].clone()), (1, 0..3));
     }
 
     /// TC-008-11: five lines shown, the long one shortened around the word.

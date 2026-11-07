@@ -15,6 +15,8 @@ use underline_core::{
     TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
     STATE_WRITE_DELAY,
 };
+use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
+use underline_editor::FOUND_COLOR;
 use underline_editor::{
     ClipImage, EditorCommand, FacadeView, InputMode, SharedClipboard, SourceView, SystemClipboard,
     Tool,
@@ -74,6 +76,19 @@ pub struct UnderlineApp {
     /// UC-007: the question before deleting, the undo offered right after
     /// it, the deleted notes, and the dialogs to restore and remove them.
     delete: Option<DeleteDialog>,
+    /// UC-008: the search text, the searcher of the workspace, its newest
+    /// answer, what it was last asked, the found entry chosen with the
+    /// keyboard, and whether the search field is to take the focus.
+    search_text: String,
+    searcher: Option<Searcher>,
+    search_result: Option<SearchResult>,
+    search_asked: Option<(String, u64)>,
+    search_cursor: Option<usize>,
+    focus_search: bool,
+    /// Counts the changes of the note overview, so a search runs again.
+    overview_generation: u64,
+    /// UC-008 A6: the find field of the active tab.
+    find: Option<FindBar>,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -221,6 +236,30 @@ struct DeleteDialog {
     cannot_keep: Option<String>,
 }
 
+/// The find field of the active tab (UC-008 A6).
+struct FindBar {
+    text: String,
+    focus: bool,
+    /// The text the selection was last moved for.
+    sought: String,
+}
+
+/// What the user did in the find field this frame.
+#[derive(PartialEq)]
+enum FindAction {
+    None,
+    Next,
+    Previous,
+    Close,
+}
+
+/// A found note or line chosen in the search results (UC-008 step 3).
+struct FoundChoice {
+    id: NoteId,
+    /// The bytes of the first word found in the line, or `None` for a note.
+    place: Option<std::ops::Range<usize>>,
+}
+
 /// The undo offered right after deleting (UC-007 A4), while the status bar
 /// still shows the report.
 struct UndoDelete {
@@ -276,6 +315,113 @@ impl OpenNotes for TabEdits<'_> {
             tab.autosave.changed(Instant::now());
         }
     }
+}
+
+/// The choice of a found note, or of one of its lines.
+fn choice(note: &underline_core::FoundNote, line: Option<usize>) -> FoundChoice {
+    let line = line.or((!note.lines.is_empty()).then_some(0));
+    FoundChoice {
+        id: note.id.clone(),
+        place: line
+            .and_then(|l| note.lines.get(l))
+            .map(|l| l.first.clone()),
+    }
+}
+
+/// UC-008 step 2, A1, A4, A5: the found notes in place of the note
+/// overview; returns the note or line the user clicked. `cursor` is the
+/// entry chosen with the keyboard.
+fn found_list(
+    ui: &mut egui::Ui,
+    result: Option<&SearchResult>,
+    text: &str,
+    cursor: Option<(usize, Option<usize>)>,
+) -> Option<FoundChoice> {
+    let Some(result) = result else {
+        ui.weak("Searching…");
+        return None;
+    };
+    let mut clicked = None;
+    if result.found.is_empty() {
+        ui.weak(format!("No note holds “{}”.", text.trim()));
+    }
+    for (n, note) in result.found.iter().enumerate() {
+        let places = match note.places {
+            0 => "in the title or folder".to_owned(),
+            1 => "1 place".to_owned(),
+            p => format!("{p} places"),
+        };
+        let header = ui
+            .selectable_label(
+                cursor == Some((n, None)),
+                egui::RichText::new(note.id.title()).strong(),
+            )
+            .on_hover_text(format!(
+                "{} · {places}",
+                note.id.folder().unwrap_or("top folder")
+            ));
+        if header.clicked() {
+            clicked = Some(choice(note, None));
+        }
+        if cursor == Some((n, None)) {
+            header.scroll_to_me(None);
+        }
+        ui.weak(format!(
+            "{}{places}",
+            note.id
+                .folder()
+                .map(|f| format!("{f} · "))
+                .unwrap_or_default()
+        ));
+        for (l, line) in note.lines.iter().enumerate() {
+            let mut job = egui::text::LayoutJob::default();
+            let font = egui::TextStyle::Small.resolve(ui.style());
+            let color = ui.visuals().text_color();
+            let mut at = 0;
+            for mark in &line.marks {
+                job.append(
+                    &line.shown[at..mark.start],
+                    if at == 0 { 8.0 } else { 0.0 },
+                    egui::TextFormat::simple(font.clone(), color),
+                );
+                job.append(
+                    &line.shown[mark.clone()],
+                    0.0,
+                    egui::TextFormat {
+                        background: FOUND_COLOR,
+                        ..egui::TextFormat::simple(font.clone(), color)
+                    },
+                );
+                at = mark.end;
+            }
+            job.append(
+                &line.shown[at..],
+                0.0,
+                egui::TextFormat::simple(font.clone(), color),
+            );
+            job.wrap.max_rows = 2;
+            job.wrap.max_width = ui.available_width();
+            let row = ui.selectable_label(cursor == Some((n, Some(l))), job);
+            if row.clicked() {
+                clicked = Some(choice(note, Some(l)));
+            }
+            if cursor == Some((n, Some(l))) {
+                row.scroll_to_me(None);
+            }
+        }
+        if note.places > note.lines.len() {
+            ui.weak(format!("    and {} more", note.places - note.lines.len()));
+        }
+        ui.add_space(4.0);
+    }
+    if result.unreadable > 0 {
+        ui.separator();
+        ui.weak(format!(
+            "{} could not be searched.",
+            count(result.unreadable, "note")
+        ));
+    }
+    clicked
 }
 
 /// `n` things, as "1 link" or "3 links".
@@ -371,6 +517,14 @@ impl UnderlineApp {
             new_note: None,
             rename: None,
             delete: None,
+            search_text: String::new(),
+            searcher: None,
+            search_result: None,
+            search_asked: None,
+            search_cursor: None,
+            focus_search: false,
+            overview_generation: 0,
+            find: None,
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -516,6 +670,13 @@ impl UnderlineApp {
         );
         let polling = watcher.is_polling();
         self.watcher = Some(watcher);
+        let wake = self.ctx.clone();
+        self.searcher = Some(Searcher::start(root.clone(), move || {
+            wake.request_repaint()
+        }));
+        self.search_result = None;
+        self.search_asked = None;
+        self.find = None;
         self.settings.open_workspace(&root, &self.git);
         self.workspace = Some(workspace);
         self.tabs = TabList::default();
@@ -671,6 +832,143 @@ impl UnderlineApp {
         let notes = workspace.listing().notes.clone();
         let state = &mut self.state;
         self.overview = note_overview(&notes, |id| state.note_last_opened(&root, id));
+        self.overview_generation += 1;
+    }
+
+    /// UC-008 step 2, A3: asks the searcher again when the search text,
+    /// the notes, or a text open in a tab changed, takes in its answer, and
+    /// marks the words in the open notes (BR-008).
+    fn run_search(&mut self) {
+        let text = self.search_text.trim().to_owned();
+        let global = (!text.is_empty()).then(|| Query::parse(&text));
+        let active = self.tabs.active_index();
+        let find = self
+            .find
+            .as_ref()
+            .filter(|f| !f.text.trim().is_empty())
+            .map(|f| Query::parse(&f.text));
+        for (index, (_, tab)) in self.tabs.iter_mut().enumerate() {
+            let query = match &find {
+                Some(query) if Some(index) == active => Some(query.clone()),
+                _ => global.clone(),
+            };
+            tab.view.set_search(query);
+        }
+        let (Some(searcher), Some(workspace)) = (&self.searcher, &self.workspace) else {
+            return;
+        };
+        if let Some(result) = searcher.poll() {
+            if result.text == text {
+                self.search_result = Some(result);
+            }
+        }
+        if text.is_empty() {
+            self.search_result = None;
+            self.search_asked = None;
+            self.search_cursor = None;
+            return;
+        }
+        let revisions = self
+            .tabs
+            .iter()
+            .fold(self.overview_generation, |sum, (_, tab)| {
+                sum.wrapping_mul(31)
+                    .wrapping_add(tab.view.document().revision())
+            });
+        let stamp = (text.clone(), revisions);
+        if self.search_asked.as_ref() == Some(&stamp) {
+            return;
+        }
+        let formats: std::collections::HashMap<&NoteId, NoteFormat> = workspace
+            .listing()
+            .notes
+            .iter()
+            .map(|n| (&n.id, n.format))
+            .collect();
+        let notes = self
+            .overview
+            .iter()
+            .filter_map(|entry| {
+                formats.get(&entry.id).map(|format| NoteEntry {
+                    id: entry.id.clone(),
+                    format: *format,
+                })
+            })
+            .collect();
+        let open = self
+            .tabs
+            .iter()
+            .map(|(id, tab)| (id.clone(), tab.view.document().text()))
+            .collect();
+        searcher.search(SearchRequest { text, notes, open });
+        self.search_asked = Some(stamp);
+    }
+
+    /// UC-008 step 4: opens a found note at the place found.
+    fn open_found(&mut self, choice: FoundChoice) {
+        self.open_note(&choice.id);
+        let Some((id, tab)) = self.tabs.active_mut() else {
+            return;
+        };
+        if *id != choice.id {
+            return;
+        }
+        if let Some(place) = choice.place {
+            let rope = tab.view.document().rope();
+            let len = rope.len_bytes();
+            let chars =
+                rope.byte_to_char(place.start.min(len))..rope.byte_to_char(place.end.min(len));
+            tab.view.select_chars(chars);
+        }
+        match tab.editing_view {
+            EditingView::Facade => tab.facade.request_focus(),
+            EditingView::Source => tab.view.focus_cursor(),
+        }
+    }
+
+    /// UC-008 A6: moves the selection of the active tab to an occurrence of
+    /// the find text: the first from the cursor on when the text changed,
+    /// else the next or the previous one, wrapping around.
+    fn find_in_note(&mut self, action: FindAction) {
+        let Some(find) = &mut self.find else {
+            return;
+        };
+        if action == FindAction::Close {
+            self.find = None;
+            if let Some((_, tab)) = self.tabs.active_mut() {
+                match tab.editing_view {
+                    EditingView::Facade => tab.facade.request_focus(),
+                    EditingView::Source => tab.view.focus_cursor(),
+                }
+            }
+            return;
+        }
+        let changed = find.sought != find.text;
+        if !changed && action == FindAction::None {
+            return;
+        }
+        find.sought = find.text.clone();
+        let query = Query::parse(&find.text);
+        let Some((_, tab)) = self.tabs.active_mut() else {
+            return;
+        };
+        tab.view.set_search((!query.is_empty()).then_some(query));
+        let found = tab.view.found_ranges().to_vec();
+        if found.is_empty() {
+            return;
+        }
+        let at = tab.view.selection_range().start;
+        let chosen = match action {
+            FindAction::Previous => found.iter().rev().find(|r| r.start < at).or(found.last()),
+            FindAction::Next => found.iter().find(|r| r.start > at).or(found.first()),
+            _ => found.iter().find(|r| r.start >= at).or(found.first()),
+        };
+        if let Some(range) = chosen.cloned() {
+            tab.view.select_chars(range);
+            if tab.editing_view == EditingView::Facade {
+                tab.facade.scroll_to_cursor();
+            }
+        }
     }
 
     /// UC-001 step 2: check the chosen directory, then ask for the options.
@@ -2342,6 +2640,34 @@ impl eframe::App for UnderlineApp {
         self.show_restore_dialog(ctx);
         self.show_purge_dialog(ctx);
         self.show_tool_dialog(ctx);
+        // UC-008 BR-007: Ctrl+Shift+F into the search field; A6: Ctrl+F finds
+        // in the active note where the input mode gives it no meaning.
+        if ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::F,
+            )
+        }) {
+            self.focus_search = true;
+        } else if self.settings.effective.input_mode == Keys::Normal
+            && self.tabs.active().is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+        {
+            let selected = self.tabs.active().map(|(_, tab)| {
+                let range = tab.view.selection_range();
+                tab.view.document().rope().slice(range).to_string()
+            });
+            let text = selected
+                .filter(|s| !s.is_empty() && !s.contains('\n'))
+                .or_else(|| self.find.as_ref().map(|f| f.text.clone()))
+                .unwrap_or_default();
+            self.find = Some(FindBar {
+                text,
+                focus: true,
+                sought: String::new(),
+            });
+        }
+        self.run_search();
         // UC-006 step 1: F2 renames the note of the active tab.
         if self.rename.is_none()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2))
@@ -2459,13 +2785,82 @@ impl eframe::App for UnderlineApp {
                         self.start_new_note();
                     }
                 });
+                // UC-008 step 1: the search field above the note overview.
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut self.search_text)
+                        .hint_text(if cfg!(target_os = "macos") {
+                            "Search notes  Cmd+Shift+F"
+                        } else {
+                            "Search notes  Ctrl+Shift+F"
+                        })
+                        .desired_width(f32::INFINITY),
+                );
+                if std::mem::take(&mut self.focus_search) {
+                    field.request_focus();
+                }
+                let searching = !self.search_text.trim().is_empty();
+                let mut found_choice = None;
+                // BR-007: arrows, Enter, and Escape in the search field.
+                let entries: Vec<(usize, Option<usize>)> = self
+                    .search_result
+                    .iter()
+                    .flat_map(|r| r.found.iter().enumerate())
+                    .flat_map(|(n, note)| {
+                        std::iter::once((n, None))
+                            .chain((0..note.lines.len()).map(move |l| (n, Some(l))))
+                    })
+                    .collect();
+                if field.has_focus() || field.lost_focus() {
+                    let (down, up, enter, escape) = ui.input(|i| {
+                        (
+                            i.key_pressed(egui::Key::ArrowDown),
+                            i.key_pressed(egui::Key::ArrowUp),
+                            i.key_pressed(egui::Key::Enter),
+                            i.key_pressed(egui::Key::Escape),
+                        )
+                    });
+                    if escape {
+                        // A2: the search is cleared.
+                        self.search_text.clear();
+                        self.search_cursor = None;
+                    } else if !entries.is_empty() {
+                        let last = entries.len() - 1;
+                        if down {
+                            self.search_cursor =
+                                Some(self.search_cursor.map_or(0, |c| (c + 1).min(last)));
+                            field.request_focus();
+                        }
+                        if up {
+                            self.search_cursor =
+                                Some(self.search_cursor.map_or(0, |c| c.saturating_sub(1)));
+                            field.request_focus();
+                        }
+                        if enter {
+                            let (n, line) = entries[self.search_cursor.unwrap_or(0).min(last)];
+                            found_choice = self
+                                .search_result
+                                .as_ref()
+                                .map(|r| choice(&r.found[n], line));
+                        }
+                    }
+                }
                 ui.separator();
                 let mut selected = None;
                 let mut renaming = None;
                 let mut deleting = None;
                 let mut restoring = None;
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for entry in &self.overview {
+                    if searching {
+                        if let Some(clicked) = found_list(
+                            ui,
+                            self.search_result.as_ref(),
+                            &self.search_text,
+                            self.search_cursor.and_then(|c| entries.get(c).copied()),
+                        ) {
+                            found_choice = Some(clicked);
+                        }
+                    }
+                    for entry in self.overview.iter().filter(|_| !searching) {
                         let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
                         let label = ui.selectable_label(active, &entry.label);
                         if label.clicked() {
@@ -2490,7 +2885,7 @@ impl eframe::App for UnderlineApp {
                         }
                     }
                     // UC-007 A5: the deleted notes, at the end of the overview.
-                    if !self.deleted.is_empty() {
+                    if !self.deleted.is_empty() && !searching {
                         ui.separator();
                         egui::CollapsingHeader::new(format!(
                             "Deleted notes ({})",
@@ -2535,6 +2930,9 @@ impl eframe::App for UnderlineApp {
                 }
                 if let Some(deleted) = restoring {
                     self.restore_deleted(deleted, false);
+                }
+                if let Some(found) = found_choice {
+                    self.open_found(found);
                 }
             });
         // UC-007 BR-007: the Delete key deletes the note chosen in the note
@@ -2639,6 +3037,62 @@ impl eframe::App for UnderlineApp {
                 self.start_delete(id);
             }
             ui.separator();
+            // UC-008 A6: the find field of the active tab.
+            let mut find_action = None;
+            let found_count =
+                self.find
+                    .as_ref()
+                    .and_then(|_| self.tabs.active_mut())
+                    .map(|(_, tab)| {
+                        let selection = tab.view.selection_range();
+                        let found = tab.view.found_ranges();
+                        let at = found.iter().position(|r| *r == selection);
+                        (at, found.len())
+                    });
+            if let Some(find) = &mut self.find {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Find in note:");
+                    let edit =
+                        ui.add(egui::TextEdit::singleline(&mut find.text).desired_width(200.0));
+                    if std::mem::take(&mut find.focus) {
+                        edit.request_focus();
+                    }
+                    match found_count {
+                        Some((Some(at), n)) => ui.weak(format!("{} of {n}", at + 1)),
+                        Some((None, n)) => ui.weak(format!("{n} found")),
+                        None => ui.weak(""),
+                    };
+                    let keys = ui.input(|i| {
+                        (
+                            i.key_pressed(egui::Key::Enter),
+                            i.key_pressed(egui::Key::F3),
+                            i.modifiers.shift,
+                            i.key_pressed(egui::Key::Escape),
+                        )
+                    });
+                    let in_field = edit.has_focus() || edit.lost_focus();
+                    let previous = ui
+                        .small_button("Previous")
+                        .on_hover_text("Shift+Enter, Shift+F3")
+                        .clicked();
+                    let next = ui.small_button("Next").on_hover_text("Enter, F3").clicked();
+                    let close = ui.small_button("×").on_hover_text("Escape").clicked();
+                    find_action = Some(if close || (in_field && keys.3) {
+                        FindAction::Close
+                    } else if previous || ((in_field && keys.0) || keys.1) && keys.2 {
+                        find.focus = in_field;
+                        FindAction::Previous
+                    } else if next || (in_field && keys.0) || keys.1 {
+                        find.focus = in_field;
+                        FindAction::Next
+                    } else {
+                        FindAction::None
+                    });
+                });
+            }
+            if let Some(action) = find_action {
+                self.find_in_note(action);
+            }
             let Some((_, tab)) = self.tabs.active_mut() else {
                 ui.label("Select or create a note.");
                 return;
