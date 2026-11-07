@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user knows the branch they work on, which notes and files changed since the last commit, and what changed in a note, and can take back the changes of a note.  
 **Trigger:** The user opens a workspace that is a git repository, changes a note, or looks at the changes.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-017, FR-047, FR-048, FR-049, NFR-002, NFR-011, NFR-013](../requirements.md)
 
