@@ -19,7 +19,7 @@
 ## Main Success Scenario
 
 1. The user asks to delete a note, from the context menu of the note in the note overview or of its tab, or with the Delete key for the note chosen in the note overview.
-2. The system asks the user to confirm, naming the note and how many links in how many other notes lead to it and will lead nowhere afterwards.
+2. The system asks the user to confirm, naming the note and how many links in how many other notes lead to it and will lead nowhere afterwards, and warns when the note is the Home note of the workspace (BR-010).
 3. The user confirms.
 4. The system saves the note if it has unsaved changes and moves it with its content into the deleted notes of the workspace, noting its place and when it was deleted.
 5. The system closes the tab of the note if one is open, removes the note from the note overview and from the remembered tabs and recently opened notes, and reports in the status bar that the note was deleted, with an offer to undo it.
@@ -53,11 +53,20 @@
 
 ### A4: Undo right after deleting
 
-**Trigger:** The user chooses to undo in the status bar report (step 5)  
+**Trigger:** The user chooses to undo in the status bar report (step 5), which offers it until another report replaces it  
 **Flow:**
 
 1. The system restores the note as in A5 and opens it again in a tab if it was open.
 2. Use case ends.
+
+### A8: Deleted notes cannot be kept
+
+**Trigger:** The Underline folder of the workspace cannot be written, so the note cannot be kept among the deleted notes (step 4)  
+**Flow:**
+
+1. The system says that the note cannot be restored afterwards and asks the user to confirm deleting it for good.
+2. When the user confirms, the system saves the note if needed and removes it for good; use case continues at step 5 without the offer to undo.
+3. When the user cancels, nothing is changed; use case ends.
 
 ### A5: Restore a deleted note
 
@@ -137,3 +146,12 @@ The note is in the workspace or in the deleted notes, never in neither and never
 ### BR-009: Todo links
 
 A note that a todo links to cannot be deleted until the todo links are removed (entity model, TODO_LINK).
+
+### BR-010: Home note
+
+The Home note of the workspace (UC-001 BR-003) is the start page of a GitHub wiki. When it is deleted, the question warns that the wiki then has no start page; the user may still confirm.
+
+### BR-011: One note at a time
+
+One note is deleted at a time (FR-006); there is no deleting of several notes or of folders at once.
+

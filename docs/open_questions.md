@@ -1032,3 +1032,33 @@ Answer: From the list of deleted notes at the end of the note overview, and with
 **Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
 
 Answer: No; they are kept on this computer only, and git sees the note as deleted.
+
+## OQ-103: What happens when the Home note is deleted?
+
+**Element:** UC-007 BR-010
+**Raised by:** spec review UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: The question warns that the wiki then has no start page; the user may still confirm.
+
+## OQ-104: What if the deleted note cannot be kept because the Underline folder cannot be written?
+
+**Element:** UC-007 A8
+**Raised by:** spec review UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: The user is asked a second time whether to delete the note for good; otherwise nothing changes.
+
+## OQ-105: Can several notes be deleted at once?
+
+**Element:** UC-007 BR-011, FR-006
+**Raised by:** spec review UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: No; one note at a time.
