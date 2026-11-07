@@ -1320,3 +1320,63 @@ Answer: Yes; the words removed and added are marked more strongly than the line.
 **Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
 
 Answer: They are shown as git records them, with a note that only spaces or the line ending differ.
+
+## OQ-132: What does a commit hold?
+
+**Element:** UC-012 BR-001, BR-004
+**Raised by:** /use-case-spec UC-012, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
+
+Answer: Every change listed, chosen by default; single notes and files can be left out and stay changed.
+
+## OQ-133: Where is the commit message written?
+
+**Element:** UC-012 step 2, BR-003
+**Raised by:** /use-case-spec UC-012, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
+
+Answer: In a field above the list of changes in the tool panel, committed with a button or Ctrl+Enter.
+
+## OQ-134: Does Underline propose a commit message?
+
+**Element:** UC-012 BR-002
+**Raised by:** /use-case-spec UC-012, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
+
+Answer: Yes, made from the titles of the changed notes on this computer; the user may rewrite it.
+
+## OQ-135: Does a commit push to the remote?
+
+**Element:** UC-012 BR-007
+**Raised by:** /use-case-spec UC-012, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
+
+Answer: No; the next synchronization (UC-014) does.
+
+## OQ-136: What happens when git does not know the user's name and email?
+
+**Element:** UC-012 A3, BR-005
+**Raised by:** /use-case-spec UC-012, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
+
+Answer: Underline asks for them and keeps them in the user's own git settings for every repository.
+
+## OQ-137: Can the last commit be amended?
+
+**Element:** UC-012 A6, BR-006
+**Raised by:** /use-case-spec UC-012, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
+
+Answer: Yes, while it is not on the remote yet.
