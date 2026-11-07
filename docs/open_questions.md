@@ -1380,3 +1380,52 @@ Answer: Underline asks for them and keeps them in the user's own git settings fo
 **Resolved in:** [UC-012](use_cases/UC-012-commit-changes.md)
 
 Answer: Yes, while it is not on the remote yet.
+
+## OQ-138: Where does the user create and switch branches?
+
+**Element:** UC-013 step 1, BR-002
+**Raised by:** /use-case-spec UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
+
+Answer: In a menu at the branch in the status bar, which also opens the changes.
+
+## OQ-139: What happens to changes that are not committed when switching?
+
+**Element:** UC-013 step 4, A3, BR-003
+**Raised by:** /use-case-spec UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
+
+Answer: They go along when they can, as git carries them; otherwise the switch is refused, offering to commit first.
+
+## OQ-140: Which branches does the list show?
+
+**Element:** UC-013 BR-001, A4
+**Raised by:** /use-case-spec UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
+
+Answer: Local branches first, then branches of the remote without a local one; choosing such a branch creates a local one following it.
+
+## OQ-141: Are deleting and renaming branches part of UC-013?
+
+**Element:** UC-013 BR-007
+**Raised by:** /use-case-spec UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
+
+Answer: No.
+
+## OQ-142: Should Underline delete and rename branches?
+
+**Element:** UC-013 BR-007, FR-050
+**Raised by:** /use-case-spec UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Open
+
+Open. No requirement asks for it yet; git does it.
