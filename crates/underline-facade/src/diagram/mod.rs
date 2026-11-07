@@ -12,6 +12,7 @@ mod service;
 pub use mermaid::Mermaid;
 pub use plantuml::PlantUml;
 pub use raster::{rasterize, Picture};
+pub(crate) use service::renderer;
 pub use service::{DiagramState, Diagrams};
 
 /// The languages diagrams are written in (C-005).

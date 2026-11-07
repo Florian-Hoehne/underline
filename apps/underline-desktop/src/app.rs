@@ -23,6 +23,7 @@ use underline_editor::{
 };
 use underline_facade::blocks::{heading_offset, parse_blocks};
 use underline_facade::diagram::Diagrams;
+use underline_facade::export::{export, ExportKind, ExportRequest, Exported, Paper};
 use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::images::{encode_png, Images};
@@ -89,6 +90,12 @@ pub struct UnderlineApp {
     overview_generation: u64,
     /// UC-008 A6: the find field of the active tab.
     find: Option<FindBar>,
+    /// UC-009: the export being prepared, its result, and the folder of
+    /// the last export.
+    export: Option<ExportStage>,
+    export_done: Option<std::sync::mpsc::Receiver<ExportOutcome>>,
+    export_report: Option<ExportReport>,
+    last_export_folder: Option<PathBuf>,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -242,6 +249,45 @@ struct FindBar {
     focus: bool,
     /// The text the selection was last moved for.
     sought: String,
+}
+
+/// The stages of an export (UC-009 steps 1–3).
+enum ExportStage {
+    /// Step 1: which kind, chosen with the keyboard (BR-008).
+    Choose { id: NoteId, chosen: usize },
+    /// Step 2: the system's file dialog is open; its answer comes here, with
+    /// the time it opened.
+    Dialog {
+        id: NoteId,
+        kind: ExportKind,
+        answer: std::sync::mpsc::Receiver<Option<PathBuf>>,
+        opened: Instant,
+    },
+    /// ADR-016: no file dialog could be shown; the path is typed.
+    Path {
+        id: NoteId,
+        kind: ExportKind,
+        path: String,
+        problem: Option<String>,
+        /// The user agreed to replace the existing file.
+        replace: bool,
+    },
+}
+
+/// What a finished export says (UC-009 step 5).
+struct ExportOutcome {
+    title: String,
+    target: PathBuf,
+    result: Result<Exported, String>,
+}
+
+/// The report of the last export: its file, and the approximated lines
+/// the user can ask to see (A2).
+struct ExportReport {
+    status: String,
+    target: PathBuf,
+    approximated: Vec<usize>,
+    shown: bool,
 }
 
 /// What the user did in the find field this frame.
@@ -424,6 +470,29 @@ fn found_list(
     clicked
 }
 
+/// The note format of `id` among `formats`.
+fn entry_format(
+    formats: &std::collections::HashMap<NoteId, NoteFormat>,
+    id: &NoteId,
+) -> NoteFormat {
+    formats.get(id).copied().unwrap_or(NoteFormat::Markdown)
+}
+
+/// The user's home folder, where the first export is proposed.
+fn home_folder() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+/// The locale of the system, for the paper of a PDF (UC-009 BR-004).
+fn system_locale() -> String {
+    ["LC_ALL", "LC_PAPER", "LANG"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_default()
+}
+
 /// `n` things, as "1 link" or "3 links".
 fn count(n: usize, thing: &str) -> String {
     if n == 1 {
@@ -525,6 +594,10 @@ impl UnderlineApp {
             focus_search: false,
             overview_generation: 0,
             find: None,
+            export: None,
+            export_done: None,
+            export_report: None,
+            last_export_folder: None,
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -2595,6 +2668,319 @@ impl UnderlineApp {
         };
     }
 
+    /// UC-009 step 1: the kinds of export of `id`; with `kind`, that one.
+    fn start_export(&mut self, id: NoteId, kind: Option<ExportKind>) {
+        if self.export.is_some() || self.workspace.is_none() {
+            return;
+        }
+        match kind {
+            Some(kind) => self.ask_export_place(id, kind),
+            None => self.export = Some(ExportStage::Choose { id, chosen: 0 }),
+        }
+    }
+
+    /// UC-009 step 2: the system's file dialog, off the window's thread
+    /// (ADR-016), proposing the title and the folder of the last export.
+    fn ask_export_place(&mut self, id: NoteId, kind: ExportKind) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let format = workspace.format_of(&id).unwrap_or(NoteFormat::Markdown);
+        let extension = kind.extension(format);
+        let name = format!(
+            "{}.{extension}",
+            id.as_str().rsplit('/').next().unwrap_or("note")
+        );
+        let folder = self
+            .last_export_folder
+            .clone()
+            .or_else(home_folder)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let (send, answer) = std::sync::mpsc::channel();
+        let wake = self.ctx.clone();
+        let label = kind.label(format).to_owned();
+        std::thread::spawn(move || {
+            let chosen = rfd::FileDialog::new()
+                .set_title(format!("Export as {label}"))
+                .set_directory(&folder)
+                .set_file_name(&name)
+                .add_filter(&label, &[extension])
+                .save_file();
+            let _ = send.send(chosen);
+            wake.request_repaint();
+        });
+        self.export = Some(ExportStage::Dialog {
+            id,
+            kind,
+            answer,
+            opened: Instant::now(),
+        });
+    }
+
+    /// UC-009 steps 1–3, A1, A5.
+    fn show_export(&mut self, ctx: &egui::Context) {
+        let Some(stage) = &mut self.export else {
+            return;
+        };
+        let format = self
+            .workspace
+            .as_ref()
+            .and_then(|w| match stage {
+                ExportStage::Choose { id, .. }
+                | ExportStage::Dialog { id, .. }
+                | ExportStage::Path { id, .. } => w.format_of(id),
+            })
+            .unwrap_or(NoteFormat::Markdown);
+        let mut start: Option<(NoteId, ExportKind)> = None;
+        let mut target: Option<(NoteId, ExportKind, PathBuf)> = None;
+        let mut cancel = false;
+        match stage {
+            ExportStage::Choose { id, chosen } => {
+                egui::Window::new("Export note")
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.label(format!("Export {} as:", id.title()));
+                        let (down, up, enter, escape) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::ArrowDown),
+                                i.key_pressed(egui::Key::ArrowUp),
+                                i.key_pressed(egui::Key::Enter),
+                                i.key_pressed(egui::Key::Escape),
+                            )
+                        });
+                        if down {
+                            *chosen = (*chosen + 1).min(ExportKind::ALL.len() - 1);
+                        }
+                        if up {
+                            *chosen = chosen.saturating_sub(1);
+                        }
+                        for (n, kind) in ExportKind::ALL.iter().enumerate() {
+                            if ui
+                                .selectable_label(*chosen == n, kind.label(format))
+                                .clicked()
+                            {
+                                start = Some((id.clone(), *kind));
+                            }
+                        }
+                        if enter {
+                            start = Some((id.clone(), ExportKind::ALL[*chosen]));
+                        }
+                        cancel = ui.button("Cancel").clicked() || escape;
+                    });
+            }
+            ExportStage::Dialog {
+                id,
+                kind,
+                answer,
+                opened,
+            } => match answer.try_recv() {
+                Ok(Some(path)) => target = Some((id.clone(), *kind, path)),
+                // ADR-016: an answer at once means no dialog could be shown.
+                Ok(None) if opened.elapsed() < Duration::from_millis(300) => {
+                    let name = format!(
+                        "{}.{}",
+                        id.as_str().rsplit('/').next().unwrap_or("note"),
+                        kind.extension(format)
+                    );
+                    let folder = self
+                        .last_export_folder
+                        .clone()
+                        .or_else(home_folder)
+                        .unwrap_or_default();
+                    *stage = ExportStage::Path {
+                        id: id.clone(),
+                        kind: *kind,
+                        path: folder.join(name).display().to_string(),
+                        problem: None,
+                        replace: false,
+                    };
+                }
+                // A1: cancelled.
+                Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => cancel = true,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            },
+            ExportStage::Path {
+                id,
+                kind,
+                path,
+                problem,
+                replace,
+            } => {
+                egui::Window::new("Export note")
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "Export {} as {} to:",
+                            id.title(),
+                            kind.label(format)
+                        ));
+                        let edit = ui.add(egui::TextEdit::singleline(path).desired_width(420.0));
+                        if let Some(problem) = problem.as_ref() {
+                            ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+                        }
+                        ui.horizontal(|ui| {
+                            let enter =
+                                edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let label = if *replace { "Replace" } else { "Export" };
+                            if ui.button(label).clicked() || enter {
+                                let chosen = PathBuf::from(path.trim());
+                                if chosen.exists() && !*replace {
+                                    *problem =
+                                        Some("The file exists. Export again to replace it.".into());
+                                    *replace = true;
+                                } else {
+                                    target = Some((id.clone(), *kind, chosen));
+                                }
+                            }
+                            cancel = ui.button("Cancel").clicked()
+                                || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        });
+                    });
+            }
+        }
+        if cancel {
+            self.export = None;
+        } else if let Some((id, kind)) = start {
+            self.export = None;
+            self.ask_export_place(id, kind);
+        } else if let Some((id, kind, path)) = target {
+            self.export = None;
+            self.run_export(id, kind, path);
+        }
+    }
+
+    /// UC-009 step 4, A5: the export is made and written in the background.
+    fn run_export(&mut self, id: NoteId, kind: ExportKind, path: PathBuf) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let format = workspace.format_of(&id).unwrap_or(NoteFormat::Markdown);
+        let note = root.join(id.file_name(format));
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        };
+        // A5: a note is never replaced by an export.
+        let same = |a: &Path| {
+            a.canonicalize()
+                .ok()
+                .zip(path.canonicalize().ok())
+                .is_some_and(|(a, b)| a == b)
+        };
+        if same(&note) || self.tabs.iter().any(|(_, tab)| same(&tab.path)) {
+            self.status = "A note cannot be replaced by an export; choose another place".into();
+            self.ask_export_place(id, kind);
+            return;
+        }
+        let text = match self.tabs.find(&id) {
+            Some(index) => self.tabs.get(index).view.document().text(),
+            None => match workspace.read(&id) {
+                Ok(note) => note.body,
+                Err(err) => {
+                    self.status = format!("{} could not be exported: {err}", id.title());
+                    return;
+                }
+            },
+        };
+        self.last_export_folder = path.parent().map(Path::to_owned);
+        let request = ExportRequest {
+            text,
+            format,
+            title: id.title(),
+            root,
+            note,
+            target: path.clone(),
+            paper: Paper::of_region(&system_locale()),
+        };
+        let (send, done) = std::sync::mpsc::channel();
+        let wake = self.ctx.clone();
+        let title = id.title();
+        std::thread::spawn(move || {
+            let result = export(&request, kind)
+                .map_err(|e| e.to_string())
+                .and_then(|exported| {
+                    underline_core::write_atomic(&request.target, &exported.bytes)
+                        .map(|()| exported)
+                        .map_err(|e| e.to_string())
+                });
+            let _ = send.send(ExportOutcome {
+                title,
+                target: request.target,
+                result,
+            });
+            wake.request_repaint();
+        });
+        self.export_done = Some(done);
+        self.status = format!("Exporting {}…", id.title());
+    }
+
+    /// UC-009 step 5, A2–A4: the report of a finished export.
+    fn take_export(&mut self, ctx: &egui::Context) {
+        if let Some(done) = &self.export_done {
+            if let Ok(outcome) = done.try_recv() {
+                self.export_done = None;
+                match outcome.result {
+                    Ok(exported) => {
+                        let mut status =
+                            format!("Exported {} to {}", outcome.title, outcome.target.display());
+                        if !exported.approximated.is_empty() {
+                            status.push_str(&format!(
+                                "; {} only approximated",
+                                count(exported.approximated.len(), "block")
+                            ));
+                        }
+                        if !exported.missing.is_empty() {
+                            status.push_str(&format!("; missing: {}", exported.missing.join(", ")));
+                        }
+                        self.status = status.clone();
+                        self.export_report = Some(ExportReport {
+                            status,
+                            target: outcome.target,
+                            approximated: exported.approximated,
+                            shown: false,
+                        });
+                        if let Some(workspace) = &mut self.workspace {
+                            workspace.rescan();
+                        }
+                        self.refresh_overview();
+                    }
+                    // A4: nothing is left at the place.
+                    Err(err) => {
+                        self.status = format!("{} could not be exported: {err}", outcome.title);
+                    }
+                }
+            }
+        }
+        if self
+            .export_report
+            .as_ref()
+            .is_some_and(|r| r.status != self.status)
+        {
+            self.export_report = None;
+        }
+        let mut close = false;
+        if let Some(report) = self.export_report.as_mut().filter(|r| r.shown) {
+            egui::Window::new("Approximated blocks")
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label("These blocks of the note have no exact counterpart in the export:");
+                    for line in &report.approximated {
+                        ui.label(format!("Line {line}"));
+                    }
+                    close = ui.button("Close").clicked();
+                });
+        }
+        if close {
+            if let Some(report) = &mut self.export_report {
+                report.shown = false;
+            }
+        }
+    }
+
     fn start_create(&mut self) {
         if self.create.is_none() {
             self.open = None;
@@ -2639,6 +3025,21 @@ impl eframe::App for UnderlineApp {
         self.show_delete_dialog(ctx);
         self.show_restore_dialog(ctx);
         self.show_purge_dialog(ctx);
+        self.show_export(ctx);
+        self.take_export(ctx);
+        // UC-009 BR-008: Ctrl+Shift+E exports the note of the active tab.
+        if self.export.is_none()
+            && ctx.input_mut(|i| {
+                i.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::E,
+                )
+            })
+        {
+            if let Some((id, _)) = self.tabs.active() {
+                self.start_export(id.clone(), None);
+            }
+        }
         self.show_tool_dialog(ctx);
         // UC-008 BR-007: Ctrl+Shift+F into the search field; A6: Ctrl+F finds
         // in the active note where the input mode gives it no meaning.
@@ -2723,8 +3124,22 @@ impl eframe::App for UnderlineApp {
                 parts.push(self.status.clone());
             }
             let mut undo = false;
+            let mut opening = None;
             ui.horizontal(|ui| {
                 ui.label(parts.join("  |  "));
+                // UC-009 step 5, A2: open the export, show the approximated blocks.
+                if let Some(report) = self
+                    .export_report
+                    .as_mut()
+                    .filter(|r| r.status == self.status)
+                {
+                    if ui.small_button("Open").clicked() {
+                        opening = Some(report.target.display().to_string());
+                    }
+                    if !report.approximated.is_empty() && ui.small_button("Show").clicked() {
+                        report.shown = true;
+                    }
+                }
                 // UC-007 A4: offered while the report of the deletion shows.
                 match &self.undo_delete {
                     Some(offer) if offer.status == self.status => {
@@ -2739,6 +3154,9 @@ impl eframe::App for UnderlineApp {
                 .is_some_and(|offer| offer.status != self.status)
             {
                 self.undo_delete = None;
+            }
+            if let Some(target) = opening {
+                self.open_with_system(&target);
             }
             if undo {
                 if let Some(offer) = self.undo_delete.take() {
@@ -2849,6 +3267,12 @@ impl eframe::App for UnderlineApp {
                 let mut renaming = None;
                 let mut deleting = None;
                 let mut restoring = None;
+                let mut exporting = None;
+                let formats: std::collections::HashMap<NoteId, NoteFormat> = self
+                    .workspace
+                    .iter()
+                    .flat_map(|w| w.listing().notes.iter().map(|n| (n.id.clone(), n.format)))
+                    .collect();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if searching {
                         if let Some(clicked) = found_list(
@@ -2878,6 +3302,21 @@ impl eframe::App for UnderlineApp {
                                 deleting = Some(entry.id.clone());
                                 ui.close_menu();
                             }
+                            // UC-009 step 1.
+                            ui.menu_button("Export", |ui| {
+                                for kind in ExportKind::ALL {
+                                    if ui
+                                        .button(format!(
+                                            "{}…",
+                                            kind.label(entry_format(&formats, &entry.id))
+                                        ))
+                                        .clicked()
+                                    {
+                                        exporting = Some((entry.id.clone(), kind));
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
                         });
                         // UC-007 BR-007: the Delete key in the note overview.
                         if label.has_focus() {
@@ -2934,6 +3373,9 @@ impl eframe::App for UnderlineApp {
                 if let Some(found) = found_choice {
                     self.open_found(found);
                 }
+                if let Some((id, kind)) = exporting {
+                    self.start_export(id, Some(kind));
+                }
             });
         // UC-007 BR-007: the Delete key deletes the note chosen in the note
         // overview while the overview has the keyboard: chosen by a click or
@@ -2987,6 +3429,7 @@ impl eframe::App for UnderlineApp {
             let mut close = None;
             let mut renaming = None;
             let mut deleting = None;
+            let mut exporting = None;
             egui::ScrollArea::horizontal()
                 .id_salt("tabs")
                 .show(ui, |ui| {
@@ -3007,6 +3450,10 @@ impl eframe::App for UnderlineApp {
                                 }
                                 if ui.button("Delete…").clicked() {
                                     deleting = Some(id.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("Export…  Ctrl+Shift+E").clicked() {
+                                    exporting = Some(id.clone());
                                     ui.close_menu();
                                 }
                             });
@@ -3035,6 +3482,9 @@ impl eframe::App for UnderlineApp {
             }
             if let Some(id) = deleting {
                 self.start_delete(id);
+            }
+            if let Some(id) = exporting {
+                self.start_export(id, None);
             }
             ui.separator();
             // UC-008 A6: the find field of the active tab.

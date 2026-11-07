@@ -195,7 +195,7 @@ fn work(shared: &Shared) {
 }
 
 /// The bytes of the image.
-fn load(source: &ImageSource) -> Result<Vec<u8>, ImageError> {
+pub(crate) fn load(source: &ImageSource) -> Result<Vec<u8>, ImageError> {
     match source {
         ImageSource::File(path) => {
             let size = std::fs::metadata(path)

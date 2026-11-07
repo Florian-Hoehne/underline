@@ -19,3 +19,5 @@ underline-mcp.workspace = true
 underline-wiki.workspace = true
 eframe.workspace = true
 open.workspace = true
+# The system's file dialogs (ADR-016).
+rfd = "0.17"

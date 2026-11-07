@@ -9,6 +9,7 @@ mod asciidoc;
 pub mod blocks;
 pub mod clip;
 pub mod diagram;
+pub mod export;
 pub mod formatting;
 pub mod highlight;
 pub mod images;

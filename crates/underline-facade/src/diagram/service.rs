@@ -199,7 +199,7 @@ fn work(shared: &Shared) {
     }
 }
 
-fn renderer(language: DiagramLanguage) -> Box<dyn DiagramRenderer> {
+pub(crate) fn renderer(language: DiagramLanguage) -> Box<dyn DiagramRenderer> {
     match language {
         DiagramLanguage::PlantUml => Box::new(PlantUml::new()),
         DiagramLanguage::Mermaid => Box::new(Mermaid::new()),

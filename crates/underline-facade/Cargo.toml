@@ -19,6 +19,11 @@ resvg = { version = "=0.45.1", default-features = false, features = ["text"] }
 # Mermaid (ADR-009): every diagram family, SVG without the ELK layout.
 merman = { version = "=0.9.3", default-features = false, features = ["all-diagrams", "complete-svg"] }
 serde_json.workspace = true
+# PDF export (ADR-015): Typst set as a library, its fonts and the system's.
+typst = "=0.15.1"
+typst-layout = "=0.15.1"
+typst-pdf = "=0.15.1"
+typst-kit = { version = "=0.15.1", default-features = false, features = ["embedded-fonts", "scan-fonts"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ureq = "3"
 scraper = { version = "0.29", default-features = false }
