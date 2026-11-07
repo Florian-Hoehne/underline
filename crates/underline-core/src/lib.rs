@@ -18,6 +18,7 @@ mod open;
 mod properties;
 mod rename;
 mod saver;
+mod search;
 mod settings;
 mod state;
 mod tabs;
@@ -48,6 +49,10 @@ pub use open::{check_open_directory, check_readable_directory, OpenProblem};
 pub use properties::{format_local_time, format_size, NoteProperties};
 pub use rename::{NoteMove, Rename};
 pub use saver::{NoteSaver, OwnWrites, SaveJob, SaveResult};
+pub use search::{
+    found_lines, lower, search_notes, FoundLine, FoundNote, Query, SearchRequest, SearchResult,
+    Searcher, Texts, LINE_CONTEXT, SHOWN_PLACES,
+};
 pub use settings::{
     set_key, store_setting, user_settings_dir, user_settings_path, Effective, InputMode, LineSide,
     SettingKey, Settings, SettingsError, Theme, WorkspaceSettings, SETTINGS_FILE_NAME,
