@@ -1519,3 +1519,43 @@ Answer: When the workspace opens, after every commit, and when Underline closes.
 **Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
 
 Answer: Yes; their message starts with `Auto: `.
+
+## OQ-152: How are the two versions of a note in conflict shown?
+
+**Element:** UC-015 step 3, BR-002
+**Raised by:** /use-case-spec UC-015, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-015](use_cases/UC-015-resolve-sync-conflict.md)
+
+Answer: Each conflicting place as a block of Here and Remote side by side in the note's tab; the rest of the note is joined already.
+
+## OQ-153: How is a conflicting place resolved?
+
+**Element:** UC-015 step 4, A1
+**Raised by:** /use-case-spec UC-015, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-015](use_cases/UC-015-resolve-sync-conflict.md)
+
+Answer: Here, Remote, Both, or edited freely; or one side for the whole note.
+
+## OQ-154: Must a conflict be resolved at once?
+
+**Element:** UC-015 A4, A5
+**Raised by:** /use-case-spec UC-015, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-015](use_cases/UC-015-resolve-sync-conflict.md)
+
+Answer: No; it can wait, while commits, branch switches, and syncs wait too; the sync can be aborted.
+
+## OQ-155: What happens with files that are not notes in a conflict?
+
+**Element:** UC-015 A2
+**Raised by:** /use-case-spec UC-015, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-015](use_cases/UC-015-resolve-sync-conflict.md)
+
+Answer: One version is chosen for the whole file; the other is kept as a copy next to it.
