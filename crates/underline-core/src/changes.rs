@@ -72,6 +72,11 @@ pub struct Changes {
     pub branch: BranchState,
     /// Notes first, then other files, each by place (BR-002).
     pub files: Vec<FileChange>,
+    /// UC-012 BR-009: a merge waits for its conflicts to be resolved.
+    pub merging: bool,
+    /// UC-012 BR-006: the message of the last commit, when it may still be
+    /// amended because the remote does not hold it.
+    pub amendable: Option<String>,
 }
 
 impl Changes {
@@ -169,9 +174,159 @@ impl Git {
             (a.note().is_none(), a.path.to_lowercase())
                 .cmp(&(b.note().is_none(), b.path.to_lowercase()))
         });
-        Ok(Changes { branch, files })
+        let merging = self
+            .run(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+            .is_ok();
+        let amendable = match branch {
+            BranchState::Branch(_) | BranchState::Detached(_) => self.amendable(dir),
+            BranchState::NoCommit(_) => None,
+        };
+        Ok(Changes {
+            branch,
+            files,
+            merging,
+            amendable,
+        })
     }
 
+    /// The message of the last commit while the remote branch does not hold
+    /// it (UC-012 BR-006).
+    fn amendable(&self, dir: &Path) -> Option<String> {
+        if let Ok(upstream) = self.run(dir, &["rev-parse", "--abbrev-ref", "@{upstream}"]) {
+            let upstream = upstream.trim().to_owned();
+            if self
+                .run(dir, &["merge-base", "--is-ancestor", "HEAD", &upstream])
+                .is_ok()
+            {
+                return None;
+            }
+        }
+        self.run(dir, &["log", "-1", "--format=%B"])
+            .ok()
+            .map(|m| m.trim_end().to_owned())
+    }
+
+    /// UC-012 step 6, A6: records `changes` with `message` as a new commit,
+    /// or as the last commit amended; returns the commit's short name. Only
+    /// the paths of `changes` are committed; whatever else is staged stays
+    /// staged (BR-001).
+    pub fn commit_changes(
+        &self,
+        dir: &Path,
+        changes: &[FileChange],
+        message: &str,
+        amend: bool,
+    ) -> Result<String, GitError> {
+        let mut paths: Vec<&str> = Vec::new();
+        let mut added: Vec<&str> = Vec::new();
+        for change in changes {
+            paths.push(&change.path);
+            match &change.kind {
+                ChangeKind::Deleted => {}
+                ChangeKind::Renamed { from } => {
+                    paths.push(from);
+                    added.push(&change.path);
+                }
+                _ => added.push(&change.path),
+            }
+        }
+        if !added.is_empty() {
+            let mut add = vec!["add", "--"];
+            add.extend(added);
+            self.run(dir, &add)?;
+        }
+        let mut commit = vec!["commit", "--quiet", "--message", message];
+        if amend {
+            commit.push("--amend");
+        }
+        if paths.is_empty() {
+            commit.push("--only");
+        } else {
+            commit.push("--");
+            commit.extend(paths);
+        }
+        self.run(dir, &commit)?;
+        self.run(dir, &["rev-parse", "--short", "HEAD"])
+            .map(|id| id.trim().to_owned())
+    }
+
+    /// UC-012 A3, BR-005: keeps the user's name and email in their own git
+    /// settings, for every repository.
+    pub fn set_identity(&self, dir: &Path, name: &str, email: &str) -> Result<(), GitError> {
+        self.run(dir, &["config", "--global", "user.name", name])?;
+        self.run(dir, &["config", "--global", "user.email", email])
+            .map(drop)
+    }
+}
+
+/// UC-012 BR-002: a message naming what changed by the titles of the notes.
+pub fn proposed_message(changes: &[&FileChange]) -> String {
+    let mut updated = Vec::new();
+    let mut added = Vec::new();
+    let mut deleted = Vec::new();
+    let mut renamed = Vec::new();
+    let mut others = 0;
+    for change in changes {
+        let Some((id, _)) = change.note() else {
+            others += 1;
+            continue;
+        };
+        match &change.kind {
+            ChangeKind::Changed => updated.push(id.title()),
+            ChangeKind::New => added.push(id.title()),
+            ChangeKind::Deleted => deleted.push(id.title()),
+            ChangeKind::Renamed { from } => {
+                let old = from.rsplit_once('.').map_or(from.as_str(), |(s, _)| s);
+                renamed.push(format!(
+                    "{} to {}",
+                    NoteId::from_relative(old).title(),
+                    id.title()
+                ));
+            }
+        }
+    }
+    let name = |verb: &str, titles: &[String]| -> Option<String> {
+        match titles.len() {
+            0 => None,
+            1..=3 => Some(format!("{verb} {}", join_titles(titles))),
+            n => Some(format!(
+                "{verb} {} and {} more notes",
+                titles[..3].join(", "),
+                n - 3
+            )),
+        }
+    };
+    let mut parts: Vec<String> = [
+        name("Update", &updated),
+        name("Add", &added),
+        name("Delete", &deleted),
+        name("Rename", &renamed),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let files = match others {
+        0 => None,
+        1 => Some("1 other file".to_owned()),
+        n => Some(format!("{n} other files")),
+    };
+    match (parts.last_mut(), files) {
+        (Some(last), Some(files)) => {
+            last.push_str(" and ");
+            last.push_str(&files);
+        }
+        (None, Some(files)) => parts.push(format!("Update {files}")),
+        _ => {}
+    }
+    parts.join("; ")
+}
+
+/// `A`, `A, B`, `A, B, C`.
+fn join_titles(titles: &[String]) -> String {
+    titles.join(", ")
+}
+
+impl Git {
     /// A deleted note and a new note of the same format that share most of
     /// their lines are one note renamed (UC-006), as git would find it once
     /// both were recorded.
@@ -534,6 +689,98 @@ mod tests {
             .unwrap();
         let changes = repo.git.changes(&repo.dir).unwrap();
         assert!(matches!(changes.branch, BranchState::Detached(ref c) if c.len() == 7));
+    }
+
+    /// TC-012-01 / TC-012-02 / TC-012-05 / TC-012-12: commit chosen
+    /// changes, renamed and deleted notes, and amend the last commit.
+    #[test]
+    fn uc012_tc01_tc02_tc05_tc12_commit() {
+        let repo = Repo::new("commit");
+        repo.write("Plan.md", "plan\n");
+        repo.write("Ideas.md", "ideas\n");
+        let draft: String = (0..20).map(|n| format!("line {n}\n")).collect();
+        repo.write("Draft.md", &draft);
+        repo.write("Old.md", "old\n");
+        repo.commit();
+        repo.write("Plan.md", "plan 2\n");
+        repo.write("Ideas.md", "ideas 2\n");
+        fs::remove_file(repo.dir.join("Old.md")).unwrap();
+        fs::remove_file(repo.dir.join("Draft.md")).unwrap();
+        repo.write("Final.md", &draft);
+        repo.write("img/shot.png", "png");
+        let changes = repo.git.changes(&repo.dir).unwrap();
+        assert!(changes.amendable.is_some());
+        let chosen: Vec<FileChange> = changes
+            .files
+            .iter()
+            .filter(|c| c.path != "Ideas.md")
+            .cloned()
+            .collect();
+        let id = repo
+            .git
+            .commit_changes(&repo.dir, &chosen, "Plan the trip", false)
+            .unwrap();
+        assert_eq!(id.len(), 7);
+        assert_eq!(repo.kinds(), [("Ideas.md".into(), ChangeKind::Changed)]);
+        let stat = repo
+            .git
+            .run(&repo.dir, &["show", "--stat", "--format=%s", "-M", "HEAD"])
+            .unwrap();
+        assert!(stat.starts_with("Plan the trip"), "{stat}");
+        assert!(stat.contains("Draft.md => Final.md"), "{stat}");
+        assert!(stat.contains("Old.md"), "{stat}");
+        // Amend with the remaining note and a new message.
+        let rest = repo.git.changes(&repo.dir).unwrap();
+        assert_eq!(rest.amendable.as_deref(), Some("Plan the trip"));
+        repo.git
+            .commit_changes(&repo.dir, &rest.files, "Plan the trip, with ideas", true)
+            .unwrap();
+        assert!(repo.kinds().is_empty());
+        let log = repo.git.run(&repo.dir, &["log", "--format=%s"]).unwrap();
+        assert_eq!(log, "Plan the trip, with ideas\nc\n");
+        // The message alone can be amended too.
+        repo.git
+            .commit_changes(&repo.dir, &[], "Planned", true)
+            .unwrap();
+        let log = repo
+            .git
+            .run(&repo.dir, &["log", "-1", "--format=%s"])
+            .unwrap();
+        assert_eq!(log.trim(), "Planned");
+    }
+
+    /// TC-012-03: the proposed message.
+    #[test]
+    fn uc012_tc03_proposed_message() {
+        let change = |path: &str, kind: ChangeKind| FileChange {
+            path: path.into(),
+            kind,
+        };
+        let files = [
+            change("A.md", ChangeKind::Changed),
+            change("B.md", ChangeKind::Changed),
+            change("C.md", ChangeKind::Changed),
+            change("D.md", ChangeKind::Changed),
+            change("E.md", ChangeKind::Changed),
+            change("New.md", ChangeKind::New),
+            change("Old.md", ChangeKind::Deleted),
+            change(
+                "Final.md",
+                ChangeKind::Renamed {
+                    from: "Draft.md".into(),
+                },
+            ),
+            change("img/a.png", ChangeKind::Changed),
+            change("img/b.png", ChangeKind::New),
+        ];
+        let all: Vec<&FileChange> = files.iter().collect();
+        assert_eq!(
+            proposed_message(&all),
+            "Update A, B, C and 2 more notes; Add New; Delete Old; Rename Draft to Final and 2 other files"
+        );
+        assert_eq!(proposed_message(&all[..2]), "Update A, B");
+        assert_eq!(proposed_message(&all[8..9]), "Update 1 other file");
+        assert_eq!(proposed_message(&[]), "");
     }
 
     /// TC-011-01 / TC-011-04: context, joined parts, and changed words.

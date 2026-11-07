@@ -9,15 +9,15 @@ use underline_core::{
     create_workspace, dropped_link, embed_file, format_local_time, heading_anchor, heading_title,
     note_overview, now, outside_copy_path, relative, resolve_link, store_pasted_image,
     user_settings_dir, Autosave, CreateProblem, DeleteProblem, DeletedNote, DirectoryProblem,
-    EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget, NewNote, NewNoteProblem,
-    NewWorkspace, NoteFormat, NoteId, NoteMove, NoteProperties, NoteSaver, OpenProblem,
-    OverviewEntry, OwnWrites, Rename, SaveJob, SettingKey, StateNotice, StateStore, Surroundings,
-    TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
-    STATE_WRITE_DELAY,
+    EditingView, EmbedError, Git, GitError, GitRepositoryOption, LinkTarget, NewNote,
+    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteMove, NoteProperties, NoteSaver,
+    OpenProblem, OverviewEntry, OwnWrites, Rename, SaveJob, SettingKey, StateNotice, StateStore,
+    Surroundings, TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher,
+    HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_core::{
-    changed_lines, diff as diff_lines, restore_committed, BranchState, ChangeKind, ChangeTracker,
-    Changes, FileChange, Hunk, LineKind, OnlyDiffers,
+    changed_lines, diff as diff_lines, proposed_message, restore_committed, BranchState,
+    ChangeKind, ChangeTracker, Changes, FileChange, Hunk, LineKind, OnlyDiffers,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::FOUND_COLOR;
@@ -112,6 +112,10 @@ pub struct UnderlineApp {
     chosen_change: Option<FileChange>,
     shown_diff: Option<ShownDiff>,
     discard: Option<DiscardDialog>,
+    /// UC-012: the commit being written, and the question for the user's
+    /// name and email.
+    commit: CommitState,
+    identity: Option<IdentityDialog>,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -317,6 +321,27 @@ struct ShownDiff {
     hunks: Option<Vec<Hunk>>,
 }
 
+/// The commit being written (UC-012 steps 2–3).
+#[derive(Default)]
+struct CommitState {
+    message: String,
+    /// The user typed the message; it no longer follows the proposal.
+    typed: bool,
+    /// The changes left out, by place.
+    left_out: std::collections::HashSet<String>,
+    amend: bool,
+    /// Why the last attempt was refused (A1, A2).
+    problem: Option<String>,
+    /// The message field is to take the keyboard.
+    focus: bool,
+}
+
+/// UC-012 A3: the name and email to record commits with.
+struct IdentityDialog {
+    name: String,
+    email: String,
+}
+
 /// The question before discarding the changes of a note (UC-011 A6).
 struct DiscardDialog {
     change: FileChange,
@@ -507,6 +532,8 @@ fn found_list(
 enum ChangeAction {
     Choose(FileChange),
     Discard(FileChange),
+    /// UC-012 step 4.
+    Commit,
     /// A line of the diff, by its number in the note now.
     Line(usize),
 }
@@ -528,11 +555,100 @@ fn changes_ui(
     chosen: Option<&FileChange>,
     shown: Option<&ShownDiff>,
     open: bool,
+    commit: &mut CommitState,
 ) -> Option<ChangeAction> {
     let Some(Ok(changes)) = changes else {
         return None;
     };
     let mut action = None;
+    // UC-012: the message above the list; BR-009 none during a merge.
+    if changes.merging {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            "A synchronization left notes in conflict; resolve them before committing.",
+        );
+    } else if !changes.files.is_empty() || changes.amendable.is_some() {
+        commit
+            .left_out
+            .retain(|p| changes.files.iter().any(|f| &f.path == p));
+        let chosen: Vec<&FileChange> = changes
+            .files
+            .iter()
+            .filter(|c| !commit.left_out.contains(&c.path))
+            .collect();
+        if !commit.typed {
+            commit.message = proposed_message(&chosen);
+        }
+        let id = egui::Id::new("commit message");
+        // Step 4: Ctrl+Enter in the message field commits.
+        let send = ui.memory(|m| m.has_focus(id))
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+        let field = ui.add(
+            egui::TextEdit::multiline(&mut commit.message)
+                .id(id)
+                .hint_text("Commit message")
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        );
+        if std::mem::take(&mut commit.focus) {
+            field.request_focus();
+        }
+        if field.changed() {
+            commit.typed = true;
+            commit.problem = None;
+        }
+        // BR-003: a long first line.
+        if commit
+            .message
+            .lines()
+            .next()
+            .is_some_and(|l| l.chars().count() > 72)
+        {
+            ui.weak("The first line is long; many programs show only its start.");
+        }
+        if let Some(last) = &changes.amendable {
+            if ui
+                .checkbox(&mut commit.amend, "Amend the last commit")
+                .changed()
+                && commit.amend
+            {
+                commit.message = last.clone();
+                commit.typed = true;
+            }
+        } else {
+            commit.amend = false;
+        }
+        let nothing = chosen.is_empty() && !commit.amend;
+        if nothing {
+            ui.weak("Nothing is chosen.");
+        }
+        if let Some(problem) = &commit.problem {
+            ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+        }
+        ui.horizontal(|ui| {
+            let label = if commit.amend { "Amend" } else { "Commit" };
+            let shortcut = if cfg!(target_os = "macos") {
+                "Cmd+Enter"
+            } else {
+                "Ctrl+Enter"
+            };
+            if (ui
+                .add_enabled(!nothing, egui::Button::new(label))
+                .on_hover_text(shortcut)
+                .clicked()
+                || send)
+                && !nothing
+            {
+                action = Some(ChangeAction::Commit);
+            }
+            if ui.small_button("All").clicked() {
+                commit.left_out.clear();
+            }
+            if ui.small_button("None").clicked() {
+                commit.left_out = changes.files.iter().map(|f| f.path.clone()).collect();
+            }
+        });
+    }
     let header = egui::CollapsingHeader::new(format!("Changes ({})", changes.files.len()))
         .id_salt("changes")
         .default_open(false)
@@ -559,6 +675,17 @@ fn changes_ui(
                 (None, _) => change.path.clone(),
             };
             ui.horizontal(|ui| {
+                // UC-012 BR-004: chosen for the commit.
+                if !changes.merging {
+                    let mut chosen = !commit.left_out.contains(&change.path);
+                    if ui.checkbox(&mut chosen, "").changed() {
+                        if chosen {
+                            commit.left_out.remove(&change.path);
+                        } else {
+                            commit.left_out.insert(change.path.clone());
+                        }
+                    }
+                }
                 let letter = change.kind.letter();
                 ui.colored_label(
                     change_color(letter),
@@ -822,6 +949,8 @@ impl UnderlineApp {
             chosen_change: None,
             shown_diff: None,
             discard: None,
+            commit: CommitState::default(),
+            identity: None,
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -1831,6 +1960,7 @@ impl UnderlineApp {
                                 self.chosen_change.as_ref(),
                                 self.shown_diff.as_ref(),
                                 std::mem::take(&mut self.show_changes),
+                                &mut self.commit,
                             );
                         });
                     });
@@ -1890,6 +2020,7 @@ impl UnderlineApp {
                             self.chosen_change.as_ref(),
                             self.shown_diff.as_ref(),
                             std::mem::take(&mut self.show_changes),
+                            &mut self.commit,
                         );
                     }
                     let Some((_, lists)) = &tab.indexes else {
@@ -1960,6 +2091,7 @@ impl UnderlineApp {
                 self.shown_diff = None;
             }
             Some(ChangeAction::Discard(change)) => self.start_discard(change),
+            Some(ChangeAction::Commit) => self.commit_changes(),
             Some(ChangeAction::Line(line)) => {
                 if self.chosen_change.is_some() {
                     return;
@@ -1978,6 +2110,117 @@ impl UnderlineApp {
                         tab.view.jump_to_byte(offset);
                         tab.view.focus_cursor();
                     }
+                }
+            }
+        }
+    }
+
+    /// UC-012 steps 4–7, A1–A6.
+    fn commit_changes(&mut self) {
+        let Some(Ok(changes)) = &self.changes else {
+            return;
+        };
+        let message = self.commit.message.trim().to_owned();
+        if message.is_empty() {
+            self.commit.problem = Some("A commit needs a message.".into());
+            return;
+        }
+        let chosen: Vec<FileChange> = changes
+            .files
+            .iter()
+            .filter(|c| !self.commit.left_out.contains(&c.path))
+            .cloned()
+            .collect();
+        let amend = self.commit.amend && changes.amendable.is_some();
+        if chosen.is_empty() && !amend {
+            self.commit.problem = Some("Nothing is chosen.".into());
+            return;
+        }
+        // Step 5: open notes are saved first (A5).
+        if let Err(failures) = self.flush_all() {
+            self.status = format!("Nothing was committed, because {}", failures.join("; "));
+            return;
+        }
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        match self.git.commit_changes(&root, &chosen, &message, amend) {
+            Ok(id) => {
+                let notes = chosen.iter().filter(|c| c.note().is_some()).count();
+                let files = chosen.len() - notes;
+                let mut held = vec![];
+                if notes > 0 {
+                    held.push(count(notes, "note"));
+                }
+                if files > 0 {
+                    held.push(count(files, "file"));
+                }
+                let held = if held.is_empty() {
+                    String::new()
+                } else {
+                    format!(" holding {}", held.join(" and "))
+                };
+                self.status = if amend {
+                    format!("Amended the last commit, now {id}{held}")
+                } else {
+                    format!("Committed {id}{held}")
+                };
+                self.commit = CommitState::default();
+                self.refresh_changes();
+            }
+            // A3: git does not know the user.
+            Err(GitError::NoIdentity) => {
+                self.identity = Some(IdentityDialog {
+                    name: String::new(),
+                    email: String::new(),
+                });
+            }
+            // A4.
+            Err(err) => self.status = format!("The commit failed: {err}"),
+        }
+    }
+
+    /// UC-012 A3.
+    fn show_identity(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &mut self.identity else {
+            return;
+        };
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Window::new("Your name for commits")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("git does not know who makes the commit. Your name and email are kept in your git settings for every repository and show in the history.");
+                egui::Grid::new("identity").num_columns(2).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut dialog.name);
+                    ui.end_row();
+                    ui.label("Email");
+                    ui.text_edit_singleline(&mut dialog.email);
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    let ready = !dialog.name.trim().is_empty() && dialog.email.contains('@');
+                    confirm = ui.add_enabled(ready, egui::Button::new("Commit")).clicked();
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                });
+            });
+        if cancel {
+            self.identity = None;
+        } else if confirm {
+            let Some(dialog) = self.identity.take() else {
+                return;
+            };
+            let root = self.workspace.as_ref().map(|w| w.root().to_owned());
+            if let Some(root) = root {
+                match self
+                    .git
+                    .set_identity(&root, dialog.name.trim(), dialog.email.trim())
+                {
+                    Ok(()) => self.commit_changes(),
+                    Err(err) => self.status = format!("Your name could not be kept: {err}"),
                 }
             }
         }
@@ -3578,6 +3821,7 @@ impl eframe::App for UnderlineApp {
         self.take_export(ctx);
         self.track_changes(ctx);
         self.show_discard(ctx);
+        self.show_identity(ctx);
         // UC-011 BR-007: Ctrl+Shift+G opens the changes.
         if ctx.input_mut(|i| {
             i.consume_key(
@@ -3586,6 +3830,7 @@ impl eframe::App for UnderlineApp {
             )
         }) {
             self.show_changes = true;
+            self.commit.focus = true;
         }
         // UC-009 BR-008: Ctrl+Shift+E exports the note of the active tab.
         if self.export.is_none()
