@@ -783,3 +783,43 @@ hides it for all tabs.
 
 Answer: In the facade a line is a block (paragraph, list item, heading); yanked and deleted text goes into a register
 of its own, and `"+` uses the clipboard.
+
+## OQ-078: How does the user change settings, and give a workspace a value of its own?
+
+**Element:** UC-010, FR-070
+**Raised by:** /use-case-spec UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: In a settings window with two parts, "For me" and "This workspace"; in the workspace part each setting shows whether it uses its own value, and "As for me" removes that value again.
+
+## OQ-079: Do the quick switches of the toolbar stay next to the settings, and are they stored?
+
+**Element:** UC-010 A3, FR-071
+**Raised by:** /use-case-spec UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: They stay, and their state is stored at once like any other setting, where the setting comes from.
+
+## OQ-080: What happens when a settings file has an error?
+
+**Element:** UC-010 A6
+**Raised by:** /use-case-spec UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: The last settings that could be read stay in effect (the built-in defaults at start), the status bar names file, line, and error, and the file is not written until it is corrected.
+
+## OQ-081: Is the visibility of the minimap a setting that is kept?
+
+**Element:** UC-010 BR-001, FR-030
+**Raised by:** /use-case-spec UC-010, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
+
+Answer: Yes, a setting of its own, shown by default.

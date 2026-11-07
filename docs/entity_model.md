@@ -123,6 +123,7 @@ The settings of the user settings file or of one workspace settings file.
 | show_line_numbers  | Whether line numbers are shown                                     | Boolean   | 1                | Optional |
 | line_number_side   | Side of the editor the line numbers are shown on                   | String    | 10               | Optional, Values: Left, Right |
 | copy_on_select     | Whether a selection is copied to the clipboard at once             | Boolean   | 1                | Optional |
+| show_minimap       | Whether the minimap is shown beside the editor                     | Boolean   | 1                | Optional |
 | git_sync_interval  | Minutes between two git syncs                                      | Integer   | 10               | Optional, Min: 1, Max: 60 |
 | mcp_server_enabled | Whether the MCP server lets an agent reach the notes               | Boolean   | 1                | Optional |
 | overview_width     | Width of the note overview, in pixels                              | Integer   | 10               | Optional, Min: 100, Max: 1000 |
@@ -136,8 +137,8 @@ The settings of the user settings file or of one workspace settings file.
   chosen when it was created; a workspace whose settings do not give it uses the note format most of its notes have,
   Markdown on a tie or without notes.
 - In the user settings every setting has a value; the built-in default fills any value the user never set (theme
-  Light, input mode Normal, line numbers shown on the left, copy on select on, git sync every 5 minutes, MCP server
-  off).
+  Light, input mode Normal, line numbers shown on the left, minimap shown, copy on select on, git sync every 5
+  minutes, MCP server off, note overview 200 and tool panel 240 pixels wide).
 - In workspace settings an empty value means that the user setting applies.
 - A setting the user changes in the interface is stored in the workspace settings when they already give it a value,
   otherwise in the user settings.

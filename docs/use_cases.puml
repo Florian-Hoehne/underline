@@ -77,7 +77,7 @@ end note
 ' UC-007 Delete Note ............. FR-006
 ' UC-008 Find Note ............... FR-007
 ' UC-009 Export Note ............. FR-014, FR-015, FR-016
-' UC-010 Adjust Settings ......... FR-022, FR-028, FR-029, FR-032, FR-069, FR-070, FR-071
+' UC-010 Adjust Settings ......... FR-022, FR-028, FR-029, FR-030, FR-032, FR-069, FR-070, FR-071
 ' UC-011 Review Changes .......... FR-047, FR-048, FR-049
 ' UC-012 Commit Changes .......... FR-051
 ' UC-013 Manage Branches ......... FR-050

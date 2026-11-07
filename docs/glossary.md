@@ -43,4 +43,5 @@
 | Scheduled date          | The day the user plans to work on a todo.                                                                                          |                   |
 | User settings file      | The `underline.yaml` in the user's home directory with the user's default settings.                                               |                   |
 | Workspace settings file | The `underline.yaml` in the root directory of a workspace; its settings override the user settings file for that workspace.      |                   |
+| Settings                | Where the user changes the user settings ("For me") and the settings of the open workspace ("This workspace").              | Preferences, Options |
 | Export                  | Writing a copy of a note in another format (Markdown, AsciiDoc, HTML, or PDF) without changing the note.                          |                   |
