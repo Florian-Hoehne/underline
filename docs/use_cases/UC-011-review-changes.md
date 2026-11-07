@@ -131,7 +131,7 @@ A note is marked as new (not in the last commit), changed, or renamed in the not
 
 ### BR-004: Diff
 
-The diff compares lines of the markup, as git does: removed lines first, then added lines, each with its line number, three unchanged lines around each changed part, and the parts joined when they come close. A note renamed and changed shows the changes of its content.
+The diff compares lines of the markup, as git does: removed lines first, then added lines, each with its line number, three unchanged lines around each changed part, and the parts joined when they come close. A note renamed and changed shows the changes of its content. Within a changed line, the words removed and added are marked more strongly than the rest of the line. A line that differs only in spaces or in its line ending is shown as changed, as git records it, with a note saying so.
 
 ### BR-005: Discarding
 

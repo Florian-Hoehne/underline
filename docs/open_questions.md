@@ -1300,3 +1300,23 @@ Answer: Yes, below the notes, with a diff for text files only.
 **Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
 
 Answer: Yes, after a question; a new note goes to the deleted notes.
+
+## OQ-130: Are the changed words within a line marked?
+
+**Element:** UC-011 BR-004
+**Raised by:** spec review UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: Yes; the words removed and added are marked more strongly than the line.
+
+## OQ-131: How does the diff treat changes of spaces or line endings only?
+
+**Element:** UC-011 BR-004
+**Raised by:** spec review UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: They are shown as git records them, with a note that only spaces or the line ending differ.
