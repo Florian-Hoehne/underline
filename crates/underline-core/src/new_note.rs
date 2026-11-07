@@ -139,7 +139,7 @@ fn is_reserved(name: &str) -> bool {
 }
 
 /// The folder levels the user entered, or why they cannot be used.
-fn folder_levels(folder: &str) -> Result<Vec<String>, NewNoteProblem> {
+pub(crate) fn folder_levels(folder: &str) -> Result<Vec<String>, NewNoteProblem> {
     let folder = folder.trim();
     if folder.starts_with('/') || folder.starts_with('\\') {
         return Err(NewNoteProblem::Outside);
@@ -252,7 +252,7 @@ fn existing_note(dir: &Path, page: &str) -> Option<String> {
 }
 
 /// The topmost folder between `root` and `folder` that does not exist yet.
-fn topmost_missing(root: &Path, folder: &Path) -> Option<PathBuf> {
+pub(crate) fn topmost_missing(root: &Path, folder: &Path) -> Option<PathBuf> {
     folder
         .ancestors()
         .take_while(|dir| *dir != root && !dir.exists())

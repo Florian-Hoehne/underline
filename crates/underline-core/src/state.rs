@@ -310,6 +310,20 @@ impl StateStore {
         loaded.changed_at.get_or_insert_with(Instant::now);
     }
 
+    /// UC-006 step 7: the note `from` of the workspace at `directory` is now
+    /// named `to`; its remembered tab and when it was last opened follow it.
+    pub fn note_renamed(&mut self, directory: &Path, from: &NoteId, to: &NoteId) {
+        let loaded = self.workspace(directory);
+        loaded.state.notes.retain(|n| &n.note != to);
+        for entry in loaded.state.notes.iter_mut().filter(|n| &n.note == from) {
+            entry.note = to.clone();
+        }
+        for tab in loaded.state.tabs.iter_mut().filter(|t| &t.note == from) {
+            tab.note = to.clone();
+        }
+        loaded.changed_at.get_or_insert_with(Instant::now);
+    }
+
     /// Remembers the open tabs of the workspace at `directory`, left to
     /// right (UC-004 step 6, A5); positions start at 1.
     pub fn set_tabs(&mut self, directory: &Path, tabs: Vec<TabState>) {
@@ -545,6 +559,21 @@ mod tests {
         assert_eq!(store.note_last_opened(&new, &home()), Some(2_001));
         // TC-001-04: the previous workspace keeps its tab.
         assert_eq!(store.active_note(&old), Some(NoteId::from_title("A")));
+    }
+
+    /// TC-006-15: the tab and the recent note follow a renamed note.
+    #[test]
+    fn uc006_tc15_tab_and_recent_note_follow_the_rename() {
+        let sandbox = Sandbox::new("rename");
+        let dir = sandbox.workspace("w", &["Plan.md", "Road-Map.md"]);
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        let (plan, road) = (NoteId::from_title("Plan"), NoteId::from_title("Road Map"));
+        store.note_viewed(&dir, &road, 5);
+        store.note_opened(&dir, &plan, EditingView::Source, 10);
+        store.note_renamed(&dir, &plan, &road);
+        assert_eq!(store.active_note(&dir), Some(road.clone()));
+        assert_eq!(store.note_last_opened(&dir, &road), Some(10));
+        assert_eq!(store.note_last_opened(&dir, &plan), None);
     }
 
     /// ADR-008: a change is written after the write delay, not before.

@@ -13,6 +13,7 @@ pub mod formatting;
 pub mod highlight;
 pub mod images;
 pub mod index;
+pub mod rename;
 pub mod sections;
 pub mod themes;
 

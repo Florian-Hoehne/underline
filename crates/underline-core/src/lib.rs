@@ -15,6 +15,7 @@ mod new_note;
 mod note;
 mod open;
 mod properties;
+mod rename;
 mod saver;
 mod settings;
 mod state;
@@ -43,6 +44,7 @@ pub use new_note::{
 pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
 pub use properties::{format_local_time, format_size, NoteProperties};
+pub use rename::{NoteMove, Rename};
 pub use saver::{NoteSaver, OwnWrites, SaveJob, SaveResult};
 pub use settings::{
     set_key, store_setting, user_settings_dir, user_settings_path, Effective, InputMode, LineSide,

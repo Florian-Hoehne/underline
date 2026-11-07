@@ -118,7 +118,7 @@ pub fn asciidoc_anchor(heading: &str) -> String {
 }
 
 /// `path` without `.` and `..`, or `None` when it climbs above its root.
-fn normalize(path: &Path) -> Option<PathBuf> {
+pub(crate) fn normalize(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -135,7 +135,7 @@ fn normalize(path: &Path) -> Option<PathBuf> {
 }
 
 /// Decodes `%20` and the like in a link.
-fn percent_decode(text: &str) -> String {
+pub(crate) fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
