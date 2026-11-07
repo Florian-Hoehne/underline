@@ -2232,6 +2232,17 @@ mod tests {
         facade: FacadeView,
     }
 
+    /// UC-004 A7, UC-011 A6: a text loaded again from its file shows in the
+    /// facade at once, even when no edit was made before.
+    #[test]
+    fn reloaded_text_shows_in_the_facade() {
+        let mut h = Harness::new("Old text\n");
+        assert!(h.facade.current_blocks(&h.source)[0].text().contains("Old"));
+        h.source.reload("New text\n");
+        h.frame(vec![]);
+        assert!(h.facade.current_blocks(&h.source)[0].text().contains("New"));
+    }
+
     /// TC-008-01 / TC-008-12: the words of a search are found as char
     /// ranges, again after the text changes, and none without a search.
     #[test]

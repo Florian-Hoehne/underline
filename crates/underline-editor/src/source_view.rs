@@ -258,7 +258,7 @@ impl SourceView {
         let column = self.cursor - self.doc.rope().line_to_char(line);
         let format = self.highlight.format();
         let set = self.highlight.set();
-        self.doc = Document::new(text);
+        self.doc = self.doc.replaced_by(text);
         self.highlight = DocumentHighlight::new(set, format);
         self.highlight.invalidate_from(0, self.doc.len_lines());
         self.galleys.clear();

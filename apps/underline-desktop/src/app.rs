@@ -15,6 +15,10 @@ use underline_core::{
     TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
     STATE_WRITE_DELAY,
 };
+use underline_core::{
+    changed_lines, diff as diff_lines, restore_committed, BranchState, ChangeKind, ChangeTracker,
+    Changes, FileChange, Hunk, LineKind, OnlyDiffers,
+};
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::FOUND_COLOR;
 use underline_editor::{
@@ -96,6 +100,18 @@ pub struct UnderlineApp {
     export_done: Option<std::sync::mpsc::Receiver<ExportOutcome>>,
     export_report: Option<ExportReport>,
     last_export_folder: Option<PathBuf>,
+    /// UC-011: git's answer about the changes, the tracker that asks it,
+    /// when it was last asked, whether the changes are open in the tool
+    /// panel, the file chosen there, the diff shown, and the question
+    /// before discarding.
+    tracker: Option<ChangeTracker>,
+    changes: Option<Result<Changes, String>>,
+    changes_generation: u64,
+    changes_asked: Instant,
+    show_changes: bool,
+    chosen_change: Option<FileChange>,
+    shown_diff: Option<ShownDiff>,
+    discard: Option<DiscardDialog>,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -290,6 +306,23 @@ struct ExportReport {
     shown: bool,
 }
 
+/// The diff the tool panel shows (UC-011 step 6), and what it was made from.
+struct ShownDiff {
+    /// The file, relative to the workspace.
+    path: String,
+    /// The revision of the tab's text and the answer of git it was made for.
+    made_for: (Option<u64>, u64),
+    made_at: Instant,
+    /// `None` for a file that is not text (A5).
+    hunks: Option<Vec<Hunk>>,
+}
+
+/// The question before discarding the changes of a note (UC-011 A6).
+struct DiscardDialog {
+    change: FileChange,
+    lines: usize,
+}
+
 /// What the user did in the find field this frame.
 #[derive(PartialEq)]
 enum FindAction {
@@ -470,6 +503,189 @@ fn found_list(
     clicked
 }
 
+/// What the user did in the changes of the tool panel (UC-011).
+enum ChangeAction {
+    Choose(FileChange),
+    Discard(FileChange),
+    /// A line of the diff, by its number in the note now.
+    Line(usize),
+}
+
+/// The color of a change's letter (BR-003): the letter tells it apart too.
+fn change_color(letter: char) -> egui::Color32 {
+    match letter {
+        'N' => egui::Color32::from_rgb(63, 185, 80),
+        'D' => egui::Color32::from_rgb(248, 81, 73),
+        'R' => egui::Color32::from_rgb(88, 166, 255),
+        _ => egui::Color32::from_rgb(210, 153, 34),
+    }
+}
+
+/// UC-011 steps 4 and 6: the list of changes and the diff in the tool panel.
+fn changes_ui(
+    ui: &mut egui::Ui,
+    changes: Option<&Result<Changes, String>>,
+    chosen: Option<&FileChange>,
+    shown: Option<&ShownDiff>,
+    open: bool,
+) -> Option<ChangeAction> {
+    let Some(Ok(changes)) = changes else {
+        return None;
+    };
+    let mut action = None;
+    let header = egui::CollapsingHeader::new(format!("Changes ({})", changes.files.len()))
+        .id_salt("changes")
+        .default_open(false)
+        .open(open.then_some(true));
+    header.show(ui, |ui| {
+        if changes.files.is_empty() {
+            ui.weak("Nothing changed since the last commit.");
+        }
+        let mut others = false;
+        for change in &changes.files {
+            if change.note().is_none() && !others {
+                others = true;
+                ui.weak("Other files");
+            }
+            let name = match (change.note(), &change.kind) {
+                (Some((id, _)), ChangeKind::Renamed { from }) => {
+                    let old = from.rsplit_once('.').map_or(from.as_str(), |(s, _)| s);
+                    format!("{} ← {}", id.title(), NoteId::from_relative(old).title())
+                }
+                (Some((id, _)), _) => match id.folder() {
+                    Some(folder) => format!("{} · {folder}", id.title()),
+                    None => id.title(),
+                },
+                (None, _) => change.path.clone(),
+            };
+            ui.horizontal(|ui| {
+                let letter = change.kind.letter();
+                ui.colored_label(
+                    change_color(letter),
+                    egui::RichText::new(letter.to_string()).monospace().strong(),
+                );
+                let row = ui.selectable_label(
+                    chosen == Some(change) || shown.is_some_and(|d| d.path == change.path),
+                    name,
+                );
+                if row.clicked() {
+                    action = Some(ChangeAction::Choose(change.clone()));
+                }
+                if change.note().is_some() && ui.small_button("Discard…").clicked() {
+                    action = Some(ChangeAction::Discard(change.clone()));
+                }
+            });
+        }
+    });
+    egui::CollapsingHeader::new("Diff")
+        .id_salt("diff")
+        .default_open(true)
+        .show(ui, |ui| {
+            let Some(shown) = shown else {
+                ui.weak("Open a note to see its changes.");
+                return;
+            };
+            ui.weak(&shown.path);
+            let Some(hunks) = &shown.hunks else {
+                let kind =
+                    changes
+                        .files
+                        .iter()
+                        .find(|f| f.path == shown.path)
+                        .map_or("changed", |f| match f.kind {
+                            ChangeKind::New => "new",
+                            ChangeKind::Deleted => "deleted",
+                            _ => "changed",
+                        });
+                ui.label(format!("This file is not text; it is {kind}."));
+                return;
+            };
+            if hunks.is_empty() {
+                ui.label("The note did not change since the last commit.");
+                return;
+            }
+            let font = egui::TextStyle::Monospace.resolve(ui.style());
+            let text_color = ui.visuals().text_color();
+            let weak = ui.visuals().weak_text_color();
+            for hunk in hunks {
+                ui.separator();
+                for line in &hunk.lines {
+                    let (sign, light, strong) = match line.kind {
+                        LineKind::Same => {
+                            (" ", egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT)
+                        }
+                        LineKind::Removed => (
+                            "-",
+                            egui::Color32::from_rgba_unmultiplied(248, 81, 73, 40),
+                            egui::Color32::from_rgba_unmultiplied(248, 81, 73, 120),
+                        ),
+                        LineKind::Added => (
+                            "+",
+                            egui::Color32::from_rgba_unmultiplied(46, 160, 67, 40),
+                            egui::Color32::from_rgba_unmultiplied(46, 160, 67, 120),
+                        ),
+                    };
+                    let number =
+                        |n: Option<usize>| n.map_or("    ".to_owned(), |n| format!("{n:>4}"));
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(
+                        &format!("{} {} {sign} ", number(line.old), number(line.new)),
+                        0.0,
+                        egui::TextFormat::simple(font.clone(), weak),
+                    );
+                    let mut at = 0;
+                    for word in &line.words {
+                        job.append(
+                            &line.text[at..word.start],
+                            0.0,
+                            egui::TextFormat {
+                                background: light,
+                                ..egui::TextFormat::simple(font.clone(), text_color)
+                            },
+                        );
+                        job.append(
+                            &line.text[word.clone()],
+                            0.0,
+                            egui::TextFormat {
+                                background: strong,
+                                ..egui::TextFormat::simple(font.clone(), text_color)
+                            },
+                        );
+                        at = word.end;
+                    }
+                    job.append(
+                        &line.text[at..],
+                        0.0,
+                        egui::TextFormat {
+                            background: light,
+                            ..egui::TextFormat::simple(font.clone(), text_color)
+                        },
+                    );
+                    if let Some(only) = line.only {
+                        job.append(
+                            match only {
+                                OnlyDiffers::Spaces => "  (only spaces differ)",
+                                OnlyDiffers::LineEnding => "  (only the line ending differs)",
+                            },
+                            0.0,
+                            egui::TextFormat::simple(
+                                egui::TextStyle::Small.resolve(ui.style()),
+                                weak,
+                            ),
+                        );
+                    }
+                    job.wrap.max_width = ui.available_width();
+                    if ui.selectable_label(false, job).clicked() {
+                        if let Some(n) = line.new.or(line.old) {
+                            action = Some(ChangeAction::Line(n));
+                        }
+                    }
+                }
+            }
+        });
+    action
+}
+
 /// The note format of `id` among `formats`.
 fn entry_format(
     formats: &std::collections::HashMap<NoteId, NoteFormat>,
@@ -598,6 +814,14 @@ impl UnderlineApp {
             export_done: None,
             export_report: None,
             last_export_folder: None,
+            tracker: None,
+            changes: None,
+            changes_generation: 0,
+            changes_asked: Instant::now(),
+            show_changes: false,
+            chosen_change: None,
+            shown_diff: None,
+            discard: None,
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -747,6 +971,17 @@ impl UnderlineApp {
         self.searcher = Some(Searcher::start(root.clone(), move || {
             wake.request_repaint()
         }));
+        // UC-011: the changes, when the workspace is a git repository.
+        self.changes = None;
+        self.chosen_change = None;
+        self.shown_diff = None;
+        self.tracker = root.join(".git").exists().then(|| {
+            let wake = self.ctx.clone();
+            ChangeTracker::start(self.git.clone(), root.clone(), move || {
+                wake.request_repaint()
+            })
+        });
+        self.changes_asked = Instant::now();
         self.search_result = None;
         self.search_asked = None;
         self.find = None;
@@ -906,6 +1141,7 @@ impl UnderlineApp {
         let state = &mut self.state;
         self.overview = note_overview(&notes, |id| state.note_last_opened(&root, id));
         self.overview_generation += 1;
+        self.refresh_changes();
     }
 
     /// UC-008 step 2, A3: asks the searcher again when the search text,
@@ -1470,6 +1706,7 @@ impl UnderlineApp {
             }
             busy |= tab.saving || tab.autosave.is_unstored();
         }
+        let mut saved = false;
         for result in self.saver.poll() {
             let Some((_, tab)) = self.tabs.iter_mut().find(|(_, t)| t.path == result.path) else {
                 continue;
@@ -1489,6 +1726,7 @@ impl UnderlineApp {
                         self.status = format!("Stored {} again at its place", tab.title);
                     } else {
                         self.status = format!("Saved {}", tab.title);
+                        saved = true;
                     }
                 }
                 Err(err) => {
@@ -1498,6 +1736,9 @@ impl UnderlineApp {
                     tab.error = Some(err);
                 }
             }
+        }
+        if saved {
+            self.refresh_changes();
         }
         if busy {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -1573,6 +1814,30 @@ impl UnderlineApp {
     fn show_tool_panel(&mut self, ctx: &egui::Context) {
         let mut tool_width = None;
         let root = self.workspace.as_ref().map(|w| w.root().to_path_buf());
+        let has_git = self.tracker.is_some();
+        let mut change_action = None;
+        if self.tabs.active().is_none() {
+            // UC-011: the changes show also without an open note.
+            if has_git {
+                let width = self.settings.effective.tool_panel_width as f32;
+                egui::SidePanel::right(egui::Id::new(("tools", self.settings.width_generation)))
+                    .resizable(true)
+                    .default_width(width)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            change_action = changes_ui(
+                                ui,
+                                self.changes.as_ref(),
+                                self.chosen_change.as_ref(),
+                                self.shown_diff.as_ref(),
+                                std::mem::take(&mut self.show_changes),
+                            );
+                        });
+                    });
+            }
+            self.change_action(change_action);
+            return;
+        }
         let Some((_, tab)) = self.tabs.active_mut() else {
             return;
         };
@@ -1618,6 +1883,15 @@ impl UnderlineApp {
                                 ui.weak("Not saved yet");
                             }
                         });
+                    if has_git {
+                        change_action = changes_ui(
+                            ui,
+                            self.changes.as_ref(),
+                            self.chosen_change.as_ref(),
+                            self.shown_diff.as_ref(),
+                            std::mem::take(&mut self.show_changes),
+                        );
+                    }
                     let Some((_, lists)) = &tab.indexes else {
                         return;
                     };
@@ -1665,6 +1939,67 @@ impl UnderlineApp {
             self.settings
                 .quick_change(SettingKey::ToolPanelWidth, width.to_string());
         }
+        self.change_action(change_action);
+    }
+
+    /// UC-011 steps 5–8, A4–A6: what the user did in the changes.
+    fn change_action(&mut self, action: Option<ChangeAction>) {
+        match action {
+            None => {}
+            Some(ChangeAction::Choose(change)) => {
+                match (&change.kind, change.note()) {
+                    // A4, A5: shown without a tab.
+                    (ChangeKind::Deleted, _) | (_, None) => {
+                        self.chosen_change = Some(change);
+                    }
+                    (_, Some((id, _))) => {
+                        self.chosen_change = None;
+                        self.open_note(&id);
+                    }
+                }
+                self.shown_diff = None;
+            }
+            Some(ChangeAction::Discard(change)) => self.start_discard(change),
+            Some(ChangeAction::Line(line)) => {
+                if self.chosen_change.is_some() {
+                    return;
+                }
+                let Some((_, tab)) = self.tabs.active_mut() else {
+                    return;
+                };
+                let rope = tab.view.document().rope();
+                let offset = rope.line_to_byte(
+                    line.saturating_sub(1)
+                        .min(rope.len_lines().saturating_sub(1)),
+                );
+                match tab.editing_view {
+                    EditingView::Facade => tab.facade.reveal(offset),
+                    EditingView::Source => {
+                        tab.view.jump_to_byte(offset);
+                        tab.view.focus_cursor();
+                    }
+                }
+            }
+        }
+    }
+
+    /// UC-011 step 2: the letters of the changed notes, unsaved ones too.
+    fn change_marks(&self) -> std::collections::HashMap<NoteId, char> {
+        let mut marks: std::collections::HashMap<NoteId, char> = self
+            .changes
+            .iter()
+            .flat_map(|c| c.iter())
+            .flat_map(|c| &c.files)
+            .filter_map(|f| f.note().map(|(id, _)| (id, f.kind.letter())))
+            .collect();
+        if self.tracker.is_some() {
+            for (id, tab) in self.tabs.iter() {
+                if tab.autosave.is_unstored() {
+                    marks.entry(id.clone()).or_insert('M');
+                }
+            }
+        }
+        marks
     }
 
     /// UC-010: the settings in effect, applied to the window and every tab:
@@ -2668,6 +3003,220 @@ impl UnderlineApp {
         };
     }
 
+    /// UC-011 A3: asks git again for the changes.
+    fn refresh_changes(&mut self) {
+        if let Some(tracker) = &self.tracker {
+            tracker.refresh();
+            self.changes_asked = Instant::now();
+        }
+    }
+
+    /// UC-011 step 1, A3: takes in git's answers, asks again every few
+    /// seconds so commits made outside show up, and keeps the diff of the
+    /// chosen file or the active note up to date.
+    fn track_changes(&mut self, ctx: &egui::Context) {
+        let Some(tracker) = &self.tracker else {
+            return;
+        };
+        if let Some(answer) = tracker.poll() {
+            self.changes = Some(answer);
+            self.changes_generation += 1;
+        }
+        if self.changes_asked.elapsed() > Duration::from_secs(3) {
+            self.refresh_changes();
+        }
+        ctx.request_repaint_after(Duration::from_secs(3));
+        // The diff: of the file chosen in the list, else of the active note.
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let active = self.tabs.active().map(|(id, tab)| {
+            let format = tab.view.document_format();
+            (
+                id.file_name(format),
+                tab.view.document().revision(),
+                tab.view.document().text(),
+            )
+        });
+        let (path, revision, text) = match (&self.chosen_change, active) {
+            (Some(change), active) if active.as_ref().is_none_or(|(p, ..)| *p != change.path) => {
+                let text = match change.kind {
+                    ChangeKind::Deleted => Some(String::new()),
+                    _ => std::fs::read(root.join(&change.path))
+                        .ok()
+                        .and_then(|b| String::from_utf8(b).ok()),
+                };
+                (change.path.clone(), None, text)
+            }
+            (_, Some((path, revision, text))) => (path, Some(revision), Some(text)),
+            _ => {
+                self.shown_diff = None;
+                return;
+            }
+        };
+        let made_for = (revision, self.changes_generation);
+        let current = self.shown_diff.as_ref().filter(|d| d.path == path);
+        if current.is_some_and(|d| d.made_for == made_for) {
+            return;
+        }
+        // A3: while typing, at most once a second.
+        if current.is_some_and(|d| d.made_at.elapsed() < Duration::from_millis(700)) {
+            ctx.request_repaint_after(Duration::from_millis(700));
+            return;
+        }
+        let renamed_from = self
+            .changes
+            .as_ref()
+            .and_then(|c| c.as_ref().ok())
+            .and_then(|c| c.files.iter().find(|f| f.path == path))
+            .and_then(|f| match &f.kind {
+                ChangeKind::Renamed { from } => Some(from.clone()),
+                _ => None,
+            });
+        let old = self
+            .git
+            .committed(&root, renamed_from.as_deref().unwrap_or(&path))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let hunks = text.map(|text| diff_lines(&old, &text, 3));
+        self.shown_diff = Some(ShownDiff {
+            path,
+            made_for,
+            made_at: Instant::now(),
+            hunks,
+        });
+    }
+
+    /// UC-011 A6 step 1: asks before discarding the changes of a note.
+    fn start_discard(&mut self, change: FileChange) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root();
+        let from = match &change.kind {
+            ChangeKind::Renamed { from } => from.clone(),
+            _ => change.path.clone(),
+        };
+        let old = self
+            .git
+            .committed(root, &from)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let new = match change.note().and_then(|(id, _)| self.tabs.find(&id)) {
+            Some(index) => self.tabs.get(index).view.document().text(),
+            None => std::fs::read_to_string(root.join(&change.path)).unwrap_or_default(),
+        };
+        let lines = changed_lines(&diff_lines(&old, &new, 0));
+        self.discard = Some(DiscardDialog { change, lines });
+    }
+
+    /// UC-011 A6.
+    fn show_discard(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = &self.discard else {
+            return;
+        };
+        let title = dialog
+            .change
+            .note()
+            .map_or(dialog.change.path.clone(), |(id, _)| id.title());
+        let (mut confirm, mut cancel) = (false, false);
+        egui::Window::new("Discard changes")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Discard the changes of {title} since the last commit?"
+                ));
+                ui.label(match dialog.change.kind {
+                    ChangeKind::New => "The note is new; it goes to the deleted notes.".to_owned(),
+                    ChangeKind::Deleted => "The note comes back as it was committed.".to_owned(),
+                    _ => format!(
+                        "{} will be lost and cannot be restored.",
+                        count(dialog.lines, "changed line")
+                    ),
+                });
+                ui.horizontal(|ui| {
+                    confirm = ui.button("Discard").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                });
+            });
+        if cancel {
+            self.discard = None;
+        } else if confirm {
+            if let Some(dialog) = self.discard.take() {
+                self.discard_change(dialog.change);
+            }
+        }
+    }
+
+    /// UC-011 A6 step 2–3.
+    fn discard_change(&mut self, change: FileChange) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let Some((id, _)) = change.note() else {
+            return;
+        };
+        let title = id.title();
+        let result: Result<(), String> = match &change.kind {
+            ChangeKind::New => match workspace.delete_note(&id, now()) {
+                Ok(_) => {
+                    if let Some(index) = self.tabs.find(&id) {
+                        self.tabs.close(index);
+                    }
+                    self.state.note_deleted(&root, &id);
+                    Ok(())
+                }
+                Err(err) => Err(err.to_string()),
+            },
+            ChangeKind::Renamed { from } => restore_committed(&self.git, &root, from)
+                .map_err(|e| e.to_string())
+                .and_then(|()| {
+                    std::fs::remove_file(root.join(&change.path)).map_err(|e| e.to_string())
+                })
+                .map(|()| {
+                    if let Some(index) = self.tabs.find(&id) {
+                        self.tabs.close(index);
+                    }
+                }),
+            ChangeKind::Changed | ChangeKind::Deleted => {
+                restore_committed(&self.git, &root, &change.path).map_err(|e| e.to_string())
+            }
+        };
+        match result {
+            Ok(()) => {
+                // The open tab shows the committed content again.
+                if let Some(index) = self.tabs.find(&id) {
+                    let tab = self.tabs.get_mut(index);
+                    if let Ok(content) = std::fs::read_to_string(&tab.path) {
+                        tab.view.reload(&content);
+                        tab.on_disk = content;
+                        tab.autosave = Autosave::default();
+                        tab.error = None;
+                        tab.deleted = false;
+                    }
+                }
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.rescan();
+                }
+                self.chosen_change = None;
+                self.persist_tabs();
+                self.refresh_deleted();
+                self.refresh_overview();
+                self.status = format!("Discarded the changes of {title}");
+            }
+            Err(err) => {
+                self.status = format!("The changes of {title} could not be discarded: {err}")
+            }
+        }
+    }
+
     /// UC-009 step 1: the kinds of export of `id`; with `kind`, that one.
     fn start_export(&mut self, id: NoteId, kind: Option<ExportKind>) {
         if self.export.is_some() || self.workspace.is_none() {
@@ -3027,6 +3576,17 @@ impl eframe::App for UnderlineApp {
         self.show_purge_dialog(ctx);
         self.show_export(ctx);
         self.take_export(ctx);
+        self.track_changes(ctx);
+        self.show_discard(ctx);
+        // UC-011 BR-007: Ctrl+Shift+G opens the changes.
+        if ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::G,
+            )
+        }) {
+            self.show_changes = true;
+        }
         // UC-009 BR-008: Ctrl+Shift+E exports the note of the active tab.
         if self.export.is_none()
             && ctx.input_mut(|i| {
@@ -3126,6 +3686,36 @@ impl eframe::App for UnderlineApp {
             let mut undo = false;
             let mut opening = None;
             ui.horizontal(|ui| {
+                // UC-011 step 1: the branch and the number of changes.
+                match &self.changes {
+                    Some(Ok(changes)) => {
+                        let branch = match &changes.branch {
+                            BranchState::Branch(name) => name.clone(),
+                            BranchState::NoCommit(name) => format!("{name} (no commit yet)"),
+                            BranchState::Detached(commit) => format!("not on a branch: {commit}"),
+                        };
+                        let text = match changes.files.len() {
+                            0 => format!("Branch {branch}"),
+                            n => format!("Branch {branch} · {}", count(n, "change")),
+                        };
+                        if ui
+                            .small_button(text)
+                            .on_hover_text(if cfg!(target_os = "macos") {
+                                "Show the changes  Cmd+Shift+G"
+                            } else {
+                                "Show the changes  Ctrl+Shift+G"
+                            })
+                            .clicked()
+                        {
+                            self.show_changes = true;
+                        }
+                    }
+                    // A9.
+                    Some(Err(err)) => {
+                        ui.weak(format!("Changes cannot be shown: {err}"));
+                    }
+                    None => {}
+                }
                 ui.label(parts.join("  |  "));
                 // UC-009 step 5, A2: open the export, show the approximated blocks.
                 if let Some(report) = self
@@ -3268,6 +3858,7 @@ impl eframe::App for UnderlineApp {
                 let mut deleting = None;
                 let mut restoring = None;
                 let mut exporting = None;
+                let marks = self.change_marks();
                 let formats: std::collections::HashMap<NoteId, NoteFormat> = self
                     .workspace
                     .iter()
@@ -3286,7 +3877,28 @@ impl eframe::App for UnderlineApp {
                     }
                     for entry in self.overview.iter().filter(|_| !searching) {
                         let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
-                        let label = ui.selectable_label(active, &entry.label);
+                        // UC-011 step 2: the mark of a changed note.
+                        let label = match marks.get(&entry.id) {
+                            Some(letter) => {
+                                let mut job = egui::text::LayoutJob::default();
+                                let font = egui::TextStyle::Button.resolve(ui.style());
+                                job.append(
+                                    &entry.label,
+                                    0.0,
+                                    egui::TextFormat::simple(
+                                        font.clone(),
+                                        ui.visuals().text_color(),
+                                    ),
+                                );
+                                job.append(
+                                    &letter.to_string(),
+                                    6.0,
+                                    egui::TextFormat::simple(font, change_color(*letter)),
+                                );
+                                ui.selectable_label(active, job)
+                            }
+                            None => ui.selectable_label(active, &entry.label),
+                        };
                         if label.clicked() {
                             selected = Some(entry.id.clone());
                             // The keyboard leaves the editor for the overview.

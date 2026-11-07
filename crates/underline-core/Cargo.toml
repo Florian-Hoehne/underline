@@ -15,3 +15,5 @@ directories.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 jiff = "0.2"
+# Line and word diffs of notes against their last commit (UC-011).
+similar = { version = "2", features = ["inline"] }

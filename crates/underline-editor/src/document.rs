@@ -28,6 +28,16 @@ impl Document {
         }
     }
 
+    /// The text `text` in place of this document's, counted as a change, so
+    /// views that remember the last revision they saw show it.
+    pub fn replaced_by(&self, text: &str) -> Self {
+        Self {
+            rope: Rope::from_str(text),
+            revision: self.revision + 1,
+            ..Self::default()
+        }
+    }
+
     pub fn rope(&self) -> &Rope {
         &self.rope
     }

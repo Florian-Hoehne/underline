@@ -138,7 +138,7 @@ impl Git {
             .map(|out| out.lines().map(str::to_owned).collect())
     }
 
-    fn run(&self, dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    pub(crate) fn run(&self, dir: &Path, args: &[&str]) -> Result<String, GitError> {
         let output = Command::new(&self.program)
             .args(args)
             .current_dir(dir)

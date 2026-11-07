@@ -6,6 +6,7 @@
 
 mod atomic;
 mod autosave;
+mod changes;
 mod create;
 mod deleted;
 mod embed;
@@ -27,6 +28,10 @@ mod workspace;
 
 pub use atomic::{write_atomic, write_new_atomic};
 pub use autosave::{Autosave, AUTOSAVE_LATEST, AUTOSAVE_QUIET, AUTOSAVE_RETRY};
+pub use changes::{
+    changed_lines, diff, restore_committed, BranchState, ChangeKind, ChangeTracker, Changes,
+    DiffLine, DiscardError, FileChange, Hunk, LineKind, OnlyDiffers,
+};
 pub use create::{
     check_directory, create_workspace, CreateError, CreateProblem, DirectoryProblem,
     GitRepositoryOption, NewWorkspace, Surroundings, FALLBACK_BRANCH, FIRST_COMMIT_MESSAGE,
