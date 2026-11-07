@@ -106,7 +106,7 @@ The proposed message names what changed by the titles of the notes, such as `Upd
 
 ### BR-003: Message
 
-The message has a first line that sums up the commit and may have more lines. Spaces at its start and end are dropped. It is kept while the user looks at other notes, until a commit succeeds.
+The message has a first line that sums up the commit and may have more lines. Spaces at its start and end are dropped. When the first line is longer than 72 characters, the field says that many programs show only the start of it; the commit is still possible. It is kept while the user looks at other notes, until a commit succeeds.
 
 ### BR-004: Choice
 
@@ -127,3 +127,8 @@ Committing works without a network connection and sends nothing (NFR-014); the c
 ### BR-008: The repository's checks
 
 Checks the repository runs before a commit run as they do with git. When one rejects the commit, A4 applies.
+
+### BR-009: Unfinished merge
+
+While a synchronization left notes in conflict (UC-015), the commit that finishes it belongs to UC-015; this use case offers no commit until the conflicts are resolved.
+
