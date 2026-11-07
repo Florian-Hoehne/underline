@@ -863,3 +863,73 @@ Answer: In the source view only; the facade's lines are not lines of the file.
 **Resolved in:** [UC-010](use_cases/UC-010-adjust-settings.md)
 
 Answer: With Ctrl+, (Cmd+, on macOS) and a settings button in the top bar.
+
+## OQ-086: How are the links to a renamed note updated?
+
+**Element:** UC-006 BR-003, BR-007, FR-005
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: At once, without asking; the status bar reports how many links in how many notes were updated.
+
+## OQ-087: Can renaming also move the note to another folder?
+
+**Element:** UC-006 BR-001, FR-005
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: Yes; one dialog for title and folder, as for a new note, since a move needs the same link updates.
+
+## OQ-088: Can renaming change the note format?
+
+**Element:** UC-006 BR-002, FR-004
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: No; the note format stays. Converting a note is not renaming.
+
+## OQ-089: Does a link text that shows the old title change?
+
+**Element:** UC-006 BR-003
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: Yes, when it shows exactly the old title; any other link text stays.
+
+## OQ-090: How does the user start renaming?
+
+**Element:** UC-006 step 1, NFR-011
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: From the context menu of the note in the note overview or of its tab, and with F2 for the note in the active tab.
+
+## OQ-091: What happens to the links of a note that moves to another folder?
+
+**Element:** UC-006 BR-005
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: The linked notes and files stay where they are; the note's relative links are changed so they still lead to them.
+
+## OQ-092: Does the first heading change with the title?
+
+**Element:** UC-006 BR-004
+**Raised by:** /use-case-spec UC-006, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-006](use_cases/UC-006-rename-note.md)
+
+Answer: Yes, when it shows exactly the old title; otherwise the content stays.
