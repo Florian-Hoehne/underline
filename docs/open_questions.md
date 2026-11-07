@@ -1429,3 +1429,23 @@ Answer: No.
 **Status:** Open
 
 Open. No requirement asks for it yet; git does it.
+
+## OQ-143: Can a new branch start from another branch than the current one?
+
+**Element:** UC-013 BR-008
+**Raised by:** spec review UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
+
+Answer: No; it always starts from the current commit with the current changes.
+
+## OQ-144: Does a new branch go to the remote?
+
+**Element:** UC-013 A1, BR-009
+**Raised by:** spec review UC-013, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-013](use_cases/UC-013-manage-branches.md)
+
+Answer: Yes, with the next synchronization, which then follows it.

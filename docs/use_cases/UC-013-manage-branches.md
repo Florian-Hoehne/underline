@@ -31,7 +31,7 @@
 **Trigger:** The user chooses to create a new branch (step 3)  
 **Flow:**
 
-1. The system asks for the name of the new branch, filled with the text of the filter field, and says it starts from the current commit with the current changes.
+1. The system asks for the name of the new branch, filled with the text of the filter field, and says it starts from the current commit with the current changes and goes to the remote with the next synchronization.
 2. The user enters a name and confirms.
 3. The system checks the name (BR-005), creates the branch from the current commit, and switches to it; the changes that are not committed stay as they are.
 4. Use case continues at step 6.
@@ -135,3 +135,12 @@ Ctrl+Shift+B (Cmd+Shift+B on macOS) opens the menu with the focus in the filter 
 ### BR-007: Not in scope
 
 Deleting and renaming branches are not part of this use case (OQ-142); git does them.
+
+### BR-008: Starting point
+
+A new branch always starts from the current commit, with the changes that are not committed; there is no choice of another starting point.
+
+### BR-009: To the remote
+
+When the workspace has a remote, a new branch goes to it with the next synchronization (UC-014), which then follows the remote branch, so nothing stays only on this computer.
+
