@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The note has the title and the folder the user chose, and every local link to it, in other notes and in todos, still leads to it.  
 **Trigger:** The user asks to rename a note.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-005, FR-004, FR-017, FR-018, NFR-006, NFR-007, NFR-011, NFR-013](../requirements.md)
 
