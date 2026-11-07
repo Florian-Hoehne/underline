@@ -1857,7 +1857,7 @@ impl eframe::App for UnderlineApp {
                     .selected_text(format!("Keys: {}", self.input_mode.label()))
                     .show_ui(ui, |ui| {
                         for mode in InputMode::ALL {
-                            ui.selectable_value(&mut self.input_mode, mode, mode.label());
+                            ui.selectable_value(&mut self.input_mode, *mode, mode.label());
                         }
                     });
                 // FR-032: copy on select, until the settings hold it (UC-010).

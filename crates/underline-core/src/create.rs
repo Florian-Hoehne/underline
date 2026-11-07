@@ -219,6 +219,7 @@ fn fill(
 
     WorkspaceSettings {
         default_format: Some(request.default_format),
+        ..WorkspaceSettings::default()
     }
     .write_new(directory)?;
     let home_file = NoteId::from_title(HOME_TITLE).file_name(request.default_format);

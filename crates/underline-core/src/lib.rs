@@ -44,7 +44,10 @@ pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
 pub use properties::{format_local_time, format_size, NoteProperties};
 pub use saver::{NoteSaver, OwnWrites, SaveJob, SaveResult};
-pub use settings::{user_settings_dir, SettingsError, WorkspaceSettings, SETTINGS_FILE_NAME};
+pub use settings::{
+    set_key, store_setting, user_settings_dir, user_settings_path, Effective, InputMode, LineSide,
+    SettingKey, Settings, SettingsError, Theme, WorkspaceSettings, SETTINGS_FILE_NAME,
+};
 pub use state::{
     now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,
     Timestamp, WorkspaceState, STATE_FILE_NAME, STATE_WRITE_DELAY,

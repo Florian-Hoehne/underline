@@ -8,26 +8,7 @@ use std::ops::Range;
 
 use eframe::egui::{Event, Key, Modifiers};
 
-/// The set of keys the editor follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub enum InputMode {
-    #[default]
-    Normal,
-    Vim,
-    Nano,
-}
-
-impl InputMode {
-    pub const ALL: [InputMode; 3] = [InputMode::Normal, InputMode::Vim, InputMode::Nano];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            InputMode::Normal => "Normal",
-            InputMode::Vim => "Vim",
-            InputMode::Nano => "Nano",
-        }
-    }
-}
+pub use underline_core::InputMode;
 
 /// What the keys ask of the window: `:w` and `Ctrl+O` store, `:q` and
 /// `Ctrl+X` close the tab.

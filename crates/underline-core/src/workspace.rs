@@ -125,10 +125,8 @@ impl Workspace {
                 self.recorded_format = settings.default_format;
                 self.settings_problem = None;
             }
-            Err(err) => {
-                self.recorded_format = None;
-                self.settings_problem = Some(err.to_string());
-            }
+            // UC-010 A6: the last settings that could be read stay.
+            Err(err) => self.settings_problem = Some(err.to_string()),
         }
     }
 
