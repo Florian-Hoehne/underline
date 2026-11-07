@@ -274,6 +274,22 @@ fn decode(source: &ImageSource, bytes: &[u8], scale: f32) -> Result<Picture, Ima
     })
 }
 
+/// UC-005 A18: an image from the clipboard (RGBA, not premultiplied) as
+/// PNG bytes.
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ImageError> {
+    let mut png = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png);
+    image::ImageEncoder::write_image(
+        encoder,
+        rgba,
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    )
+    .map_err(|e| ImageError::Unreadable(e.to_string()))?;
+    Ok(png)
+}
+
 fn has_extension(path: &Path, extension: &str) -> bool {
     path.extension()
         .and_then(|e| e.to_str())

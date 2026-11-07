@@ -52,6 +52,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-011 | Watch the workspace with notify, poll as fallback | Accepted |
 | ADR-012 | Own editor widget on egui (rope, block facade, key maps), prototype first | Accepted |
 | ADR-013 | Web images are the editor's only network access, a plain request through ureq | Accepted |
+| ADR-014 | Clipboard through arboard; HTML converted to and from markup | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 

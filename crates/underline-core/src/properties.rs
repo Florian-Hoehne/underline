@@ -80,6 +80,18 @@ pub fn format_local_time(time: SystemTime) -> String {
     }
 }
 
+/// `time` in the local time zone as part of a file name: `2026-11-06-1430`.
+pub(crate) fn local_stamp(time: SystemTime) -> String {
+    let zone = jiff::tz::TimeZone::system();
+    match jiff::Timestamp::try_from(time) {
+        Ok(timestamp) => timestamp
+            .to_zoned(zone)
+            .strftime("%Y-%m-%d-%H%M")
+            .to_string(),
+        Err(_) => String::from("pasted"),
+    }
+}
+
 /// `time` in the time zone `zone` (an IANA name), to the minute; for tests.
 #[cfg(test)]
 fn format_time_in(time: SystemTime, zone: &str) -> String {

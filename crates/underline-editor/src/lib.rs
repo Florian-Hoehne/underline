@@ -2,6 +2,7 @@
 //! that lays out only the visible lines, and later the facade on the same
 //! text.
 
+mod clipboard;
 mod document;
 mod enlarged;
 mod facade_view;
@@ -10,6 +11,9 @@ mod minimap;
 mod source_view;
 mod toolbar;
 
+pub use clipboard::{
+    ClipContent, ClipImage, Clipboard, MemoryClipboard, SharedClipboard, SystemClipboard,
+};
 pub use document::{Document, Edit};
 pub use facade_view::FacadeView;
 pub use source_view::SourceView;

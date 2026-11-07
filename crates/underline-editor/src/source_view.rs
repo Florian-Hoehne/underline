@@ -13,10 +13,12 @@ use eframe::egui::{
 use underline_core::NoteFormat;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
+use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
 use crate::document::Document;
 use crate::minimap::{self, Mark};
 use crate::Tool;
 use underline_facade::blocks::{link_at, parse_blocks};
+use underline_facade::clip::html_to_markup;
 use underline_facade::formatting::{apply_format, Format};
 use underline_facade::sections::{section_at, sections, Section, SectionKey};
 
@@ -87,6 +89,33 @@ pub struct SourceView {
     /// Where the text was drawn last, on the screen: the top left of its
     /// first line, and the part of the screen it covers.
     pub(crate) drawn: Option<(Pos2, Rect)>,
+    /// The clipboard (ADR-014); without one, copying and pasting use egui's
+    /// plain text.
+    clipboard: Option<SharedClipboard>,
+    /// Copy on select (FR-031, BR-011): whether it is on, the selection put
+    /// on the clipboard last, and what the clipboard held before.
+    copy_on_select: bool,
+    copied_selection: Option<(usize, usize)>,
+    before_selection: Option<ClipContent>,
+    /// The markup Underline put on the clipboard last; pasted as it is.
+    own_markup: Option<String>,
+    /// When a paste was handled, so the release of its key does nothing.
+    pasted_at: Option<std::time::Instant>,
+    /// Whether the press of `V` was seen, so its release is typing.
+    paste_key_down: bool,
+    /// A pasted image for the window to store next to the note (A18).
+    pasted_image: Option<ClipImage>,
+}
+
+/// What a paste brings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Pasted {
+    /// Plain text, to be inserted as typed.
+    Text(String),
+    /// Markup of the note format, to be inserted as it is.
+    Markup(String),
+    Image(ClipImage),
+    Nothing,
 }
 
 impl SourceView {
@@ -126,6 +155,14 @@ impl SourceView {
             scroll_to: None,
             columns: 80,
             drawn: None,
+            clipboard: None,
+            copy_on_select: true,
+            copied_selection: None,
+            before_selection: None,
+            own_markup: None,
+            pasted_at: None,
+            paste_key_down: false,
+            pasted_image: None,
         }
     }
 
@@ -392,6 +429,146 @@ impl SourceView {
         self.minimap = shown;
     }
 
+    /// Uses `clipboard` for copying and pasting with formats (ADR-014).
+    pub fn set_clipboard(&mut self, clipboard: SharedClipboard) {
+        self.clipboard = Some(clipboard);
+    }
+
+    /// Switches copy on select on or off (FR-031, FR-032).
+    pub fn set_copy_on_select(&mut self, on: bool) {
+        self.copy_on_select = on;
+    }
+
+    /// Whether a clipboard with formats is set.
+    pub(crate) fn has_clipboard(&self) -> bool {
+        self.clipboard.is_some()
+    }
+
+    pub(crate) fn set_pasted_image(&mut self, image: ClipImage) {
+        self.pasted_image = Some(image);
+    }
+
+    /// An image pasted from the clipboard, for the window to store next to
+    /// the note and insert (UC-005 A18).
+    pub fn take_pasted_image(&mut self) -> Option<ClipImage> {
+        self.pasted_image.take()
+    }
+
+    /// UC-005 A17, A18, BR-011: what pasting brings now. Over the selection
+    /// copy on select made, it is what the clipboard held before it. With
+    /// `rich`, HTML comes as markup of the note format (the facade), and
+    /// the markup Underline copied comes as it is; otherwise plain text.
+    pub(crate) fn paste(&mut self, rich: bool) -> Pasted {
+        self.pasted_at = Some(std::time::Instant::now());
+        let Some(clipboard) = self.clipboard.clone() else {
+            return Pasted::Nothing;
+        };
+        let selection = self.selection();
+        let content = match (&self.before_selection, self.copied_selection) {
+            (Some(before), Some(copied)) if copied == selection && selection.0 != selection.1 => {
+                before.clone()
+            }
+            _ => clipboard.lock().expect("clipboard").read(),
+        };
+        if let Some(text) = &content.text {
+            if rich && self.own_markup.as_deref() == Some(text.as_str()) {
+                return Pasted::Markup(text.clone());
+            }
+        }
+        match (content.html, content.text, content.image) {
+            (Some(html), _, _) if rich => {
+                let markup = html_to_markup(&html, self.highlight.format());
+                if markup.is_empty() {
+                    Pasted::Nothing
+                } else {
+                    Pasted::Markup(markup)
+                }
+            }
+            (_, Some(text), _) => Pasted::Text(text),
+            (_, None, Some(image)) => Pasted::Image(image),
+            _ => Pasted::Nothing,
+        }
+    }
+
+    /// Whether a paste happened that egui did not report: egui takes the
+    /// press of the paste key for itself and reports a paste only when the
+    /// clipboard holds text, so the release of `V` without its press is a
+    /// paste of an image alone (UC-005 A18). A typed `v` shows its press.
+    pub(crate) fn unreported_paste(&mut self, ui: &egui::Ui) -> bool {
+        let mut unreported = false;
+        let events = ui.input(|i| i.events.clone());
+        let reported = events.iter().any(|e| matches!(e, Event::Paste(_)));
+        for event in events {
+            if let Event::Key {
+                key: Key::V | Key::Paste,
+                pressed,
+                ..
+            } = event
+            {
+                if pressed {
+                    self.paste_key_down = true;
+                } else {
+                    unreported |= !self.paste_key_down && !reported;
+                    self.paste_key_down = false;
+                }
+            }
+        }
+        unreported
+            && self
+                .pasted_at
+                .is_none_or(|at| at.elapsed() > std::time::Duration::from_millis(500))
+    }
+
+    /// Puts the selection on the clipboard: `markup`, and `html` for other
+    /// programs when given. Remembers the markup, to paste it as it is.
+    pub(crate) fn copy(&mut self, markup: String, html: Option<String>) {
+        let Some(clipboard) = self.clipboard.clone() else {
+            return;
+        };
+        let content = ClipContent {
+            text: Some(markup.clone()),
+            html,
+            image: None,
+        };
+        clipboard.lock().expect("clipboard").write(&content);
+        self.own_markup = Some(markup);
+    }
+
+    /// FR-031, BR-011: a finished selection goes to the clipboard at once;
+    /// what the clipboard held before is kept for pasting over it. `html`
+    /// makes the formatted text of the selection.
+    pub(crate) fn copy_on_select(
+        &mut self,
+        ui: &egui::Ui,
+        html: impl FnOnce(&mut Self) -> Option<String>,
+    ) {
+        let selection = self.selection();
+        if selection.0 == selection.1 {
+            self.copied_selection = None;
+            self.before_selection = None;
+            return;
+        }
+        let selecting = ui.input(|i| i.pointer.any_down());
+        if !self.copy_on_select
+            || self.clipboard.is_none()
+            || selecting
+            || self.copied_selection == Some(selection)
+        {
+            return;
+        }
+        if self.copied_selection.is_none() {
+            let before = self
+                .clipboard
+                .as_ref()
+                .map(|c| c.lock().expect("clipboard").read());
+            self.before_selection = before;
+        }
+        let markup = self.selected_text();
+        let html = html(self);
+        self.copy(markup, html);
+        self.copied_selection = Some(selection);
+    }
+
     /// Draws the view with its minimap and handles their input. Returns
     /// whether the text changed.
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
@@ -648,6 +825,8 @@ impl SourceView {
                 ui.scroll_to_rect(cursor_rect.expand(row_height), None);
             }
         });
+        // FR-031: the source view copies the markup of a selection.
+        self.copy_on_select(ui, |_| None);
         if self.uncolored {
             ui.ctx().request_repaint();
         }
@@ -802,26 +981,36 @@ impl SourceView {
         let mut changed = false;
         for event in events {
             match event {
-                Event::Text(text) | Event::Paste(text) => {
+                Event::Text(text) => {
                     self.insert(&text);
+                    changed = true;
+                }
+                // UC-005 A17, BR-014: the source view pastes plain text.
+                Event::Paste(text) => {
+                    match self.clipboard.is_some().then(|| self.paste(false)) {
+                        Some(Pasted::Text(text) | Pasted::Markup(text)) => self.insert(&text),
+                        Some(Pasted::Image(image)) => self.pasted_image = Some(image),
+                        Some(Pasted::Nothing) => {}
+                        None => self.insert(&text),
+                    }
                     changed = true;
                 }
                 Event::Ime(egui::ImeEvent::Commit(text)) => {
                     self.insert(&text);
                     changed = true;
                 }
-                Event::Copy => {
+                Event::Copy | Event::Cut => {
                     let text = self.selected_text();
                     if !text.is_empty() {
-                        ui.ctx().copy_text(text);
-                    }
-                }
-                Event::Cut => {
-                    let text = self.selected_text();
-                    if !text.is_empty() {
-                        ui.ctx().copy_text(text);
-                        self.insert("");
-                        changed = true;
+                        if self.clipboard.is_some() {
+                            self.copy(text, None);
+                        } else {
+                            ui.ctx().copy_text(text);
+                        }
+                        if event == Event::Cut {
+                            self.insert("");
+                            changed = true;
+                        }
                     }
                 }
                 Event::Key {
@@ -833,6 +1022,17 @@ impl SourceView {
                     changed |= self.key(key, modifiers, page);
                 }
                 _ => {}
+            }
+        }
+        // UC-005 A18: a paste egui did not report, as of an image alone.
+        if self.clipboard.is_some() && self.unreported_paste(ui) {
+            match self.paste(false) {
+                Pasted::Image(image) => self.pasted_image = Some(image),
+                Pasted::Text(text) | Pasted::Markup(text) => {
+                    self.insert(&text);
+                    changed = true;
+                }
+                Pasted::Nothing => {}
             }
         }
         changed

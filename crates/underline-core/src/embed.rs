@@ -128,6 +128,43 @@ pub fn embed_file(
     unreachable!("some number is free")
 }
 
+/// UC-005 A18, BR-014: stores a pasted image, `png` (PNG bytes), in the
+/// folder of the note at `note`, named after the note and the local time to
+/// the minute, `Plan-2026-11-06-1430.png`, with the next free number when
+/// that name is taken. Gives the name, the place relative to the note.
+pub fn store_pasted_image(
+    note: &Path,
+    png: &[u8],
+    time: std::time::SystemTime,
+) -> Result<String, EmbedError> {
+    let folder = note.parent().unwrap_or(Path::new("."));
+    let stem = note
+        .file_stem()
+        .map_or_else(|| "pasted".to_owned(), |s| s.to_string_lossy().into_owned());
+    let base = format!("{stem}-{}", crate::properties::local_stamp(time));
+    for number in 1.. {
+        let name = if number == 1 {
+            format!("{base}.png")
+        } else {
+            format!("{base}-{number}.png")
+        };
+        let target = folder.join(&name);
+        if target.exists() {
+            continue;
+        }
+        return match crate::atomic::write_new_atomic(&target, png) {
+            Ok(()) => Ok(name),
+            // Taken in the meantime: the next number.
+            Err(_) if target.exists() => continue,
+            Err(source) => Err(EmbedError::Copy {
+                path: target,
+                source,
+            }),
+        };
+    }
+    unreachable!("some number is free")
+}
+
 /// UC-005 A12: the link a dropped item stands for, if it is one: a web
 /// address handed over as the dropped item, or a shortcut file of Windows
 /// (`.url`) or macOS (`.webloc`) that a browser makes when a link is
@@ -257,6 +294,31 @@ mod tests {
         let arch = embed_file(&root, &note, &s.path("ws/img/arch.png"), false).unwrap();
         assert_eq!(arch.place, "../img/arch.png");
         assert!(!s.path("ws/guide/arch.png").exists());
+    }
+
+    /// TC-005-27: a pasted image is named after the note and the time, and
+    /// numbered when pasted again within the minute.
+    #[test]
+    fn uc005_tc27_pasted_images() {
+        let s = Sandbox::new("paste");
+        let note = s.path("ws/guide/Setup.md");
+        let time = std::time::SystemTime::now();
+        let first = store_pasted_image(&note, b"png one", time).unwrap();
+        let second = store_pasted_image(&note, b"png two", time).unwrap();
+        assert!(
+            first.starts_with("Setup-") && first.ends_with(".png"),
+            "{first}"
+        );
+        assert_eq!(first.len(), "Setup-2026-11-06-1430.png".len());
+        assert_eq!(second, first.replace(".png", "-2.png"));
+        assert_eq!(
+            fs::read(s.path("ws/guide").join(&first)).unwrap(),
+            b"png one"
+        );
+        assert_eq!(
+            fs::read(s.path("ws/guide").join(&second)).unwrap(),
+            b"png two"
+        );
     }
 
     /// TC-005-21: a dropped address, and the link shortcuts browsers make.

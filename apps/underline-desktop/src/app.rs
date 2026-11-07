@@ -6,18 +6,18 @@ use eframe::egui;
 use underline_core::{
     asciidoc_anchor, check_directory, check_open_directory, check_readable_directory,
     create_workspace, dropped_link, embed_file, heading_anchor, heading_title, note_overview, now,
-    outside_copy_path, relative, resolve_link, user_settings_dir, Autosave, CreateProblem,
-    DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget, NewNote,
-    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteProperties, NoteSaver, OpenProblem,
-    OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState,
-    Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
+    outside_copy_path, relative, resolve_link, store_pasted_image, user_settings_dir, Autosave,
+    CreateProblem, DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget,
+    NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteProperties, NoteSaver,
+    OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList,
+    TabState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
-use underline_editor::{FacadeView, SourceView, Tool};
+use underline_editor::{ClipImage, FacadeView, SharedClipboard, SourceView, SystemClipboard, Tool};
 use underline_facade::blocks::{heading_offset, parse_blocks};
 use underline_facade::diagram::Diagrams;
 use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
-use underline_facade::images::Images;
+use underline_facade::images::{encode_png, Images};
 use underline_facade::index::{indexes, Indexes};
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -41,6 +41,10 @@ pub struct UnderlineApp {
     images: Arc<Images>,
     /// Whether the editors show their minimap (FR-030, UC-004 BR-013).
     minimap: bool,
+    /// The clipboard of the system, with HTML and images (ADR-014), and
+    /// whether a selection goes onto it at once (FR-031, FR-032).
+    clipboard: SharedClipboard,
+    copy_on_select: bool,
     /// Stores changed notes in the background (UC-005 BR-001).
     saver: NoteSaver,
     /// A close that waits for the user, because changes could not be stored
@@ -237,6 +241,8 @@ impl UnderlineApp {
                 Arc::new(Diagrams::start(move || ctx.request_repaint()))
             },
             minimap: true,
+            clipboard: SystemClipboard::shared(),
+            copy_on_select: true,
             images: {
                 let ctx = ctx.clone();
                 Arc::new(Images::start(move || ctx.request_repaint()))
@@ -839,8 +845,13 @@ impl UnderlineApp {
                 .map_or(workspace.default_format(), |entry| entry.format);
             let highlight = Arc::clone(&self.highlight);
             let root = workspace.root().to_path_buf();
+            let clipboard = Arc::clone(&self.clipboard);
             let opened = self.tabs.open(id.clone(), || OpenTab {
-                view: SourceView::new(note.id.as_str(), &note.body, format, highlight),
+                view: {
+                    let mut view = SourceView::new(note.id.as_str(), &note.body, format, highlight);
+                    view.set_clipboard(clipboard);
+                    view
+                },
                 facade: FacadeView::new(note.id.as_str())
                     .with_diagrams(Arc::clone(&self.diagrams))
                     .with_images(Arc::clone(&self.images), root, path.clone()),
@@ -1280,6 +1291,28 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-005 A18, BR-014: stores a pasted image as a PNG next to the note,
+    /// named after the note and the time, and inserts it at the cursor.
+    fn paste_image(&mut self, image: ClipImage) {
+        let Some((_, tab)) = self.tabs.active_mut() else {
+            return;
+        };
+        let stored = encode_png(image.width, image.height, &image.rgba)
+            .map_err(|e| e.to_string())
+            .and_then(|png| {
+                store_pasted_image(&tab.path, &png, SystemTime::now()).map_err(|e| e.to_string())
+            });
+        match stored {
+            Ok(name) => {
+                if tab.view.apply_format(&Format::Image(name.clone())) {
+                    tab.autosave.changed(Instant::now());
+                }
+                self.status = format!("Pasted image stored as {name}");
+            }
+            Err(err) => self.status = format!("The pasted image could not be stored: {err}"),
+        }
+    }
+
     /// UC-005 A9 to A13, BR-012: inserts what was dropped at the cursor,
     /// which the editor put at the drop position: a file from outside is
     /// copied next to the note, a file of the workspace is referred to, a
@@ -1699,6 +1732,7 @@ impl eframe::App for UnderlineApp {
         let mut ask_tool = None;
         let mut followed = None;
         let mut dropped = Vec::new();
+        let mut pasted_image = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
@@ -1775,6 +1809,9 @@ impl eframe::App for UnderlineApp {
                 // UC-004 BR-013: the minimap, shown or hidden for all tabs.
                 ui.toggle_value(&mut self.minimap, "Minimap")
                     .on_hover_text("Show or hide the minimap beside the editor");
+                // FR-032: copy on select, until the settings hold it (UC-010).
+                ui.toggle_value(&mut self.copy_on_select, "Copy on select")
+                    .on_hover_text("Put a selection on the clipboard as soon as it is made");
             });
             if let Some(tool) = tool_used {
                 if tab.view.apply_tool(tool) {
@@ -1793,6 +1830,7 @@ impl eframe::App for UnderlineApp {
             }
             tab.facade.set_minimap(self.minimap);
             tab.view.set_minimap(self.minimap);
+            tab.view.set_copy_on_select(self.copy_on_select);
             let changed = match tab.editing_view {
                 EditingView::Facade => tab.facade.show(ui, &mut tab.view),
                 EditingView::Source => tab.view.show(ui),
@@ -1813,6 +1851,9 @@ impl eframe::App for UnderlineApp {
                 }
                 dropped = drops;
             }
+            if let Some(image) = tab.view.take_pasted_image() {
+                pasted_image = Some(image);
+            }
             if let Some(link) = tab.view.take_followed_link() {
                 followed = Some((link, tab.path.clone()));
             }
@@ -1828,6 +1869,9 @@ impl eframe::App for UnderlineApp {
         }
         if !dropped.is_empty() {
             self.drop_items(dropped);
+        }
+        if let Some(image) = pasted_image {
+            self.paste_image(image);
         }
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             self.status = "Drop to insert at the place under the pointer".into();

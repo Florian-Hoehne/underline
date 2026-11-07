@@ -69,13 +69,15 @@ pub fn apply_format(
             insert(selection, text)
         }
         Format::Image(place) => {
-            let alt = &source[selection.clone()];
+            // An image on a paragraph of its own, so the facade shows it as
+            // a picture (UC-005 A9 step 2, A18); the selection is its text.
+            let alt = source[selection.clone()].trim();
             let text = if markdown {
                 format!("![{alt}]({place})")
             } else {
-                format!("image:{place}[{alt}]")
+                format!("image::{place}[{alt}]")
             };
-            insert(selection, text)
+            on_own_lines(source, selection, &text)
         }
         Format::Table => {
             let table = if markdown {
@@ -83,25 +85,42 @@ pub fn apply_format(
             } else {
                 "|===\n| Column 1 | Column 2\n\n|\n|\n\n|\n|\n|===\n"
             };
-            // A table starts on a line of its own, after an empty line.
             let start = selection.start;
-            let before = &source[..start];
-            let lead = if before.is_empty() || before.ends_with("\n\n") {
-                ""
-            } else if before.ends_with('\n') {
-                "\n"
-            } else {
-                "\n\n"
-            };
-            // ... and ends with an empty line before text that follows.
-            let after = &source[start..];
-            let trail = if after.is_empty() || after.starts_with('\n') {
-                ""
-            } else {
-                "\n"
-            };
-            insert(start..start, format!("{lead}{table}{trail}"))
+            on_own_lines(source, start..start, table.trim_end())
         }
+    }
+}
+
+/// Puts `block` in place of `range` on lines of its own, with an empty line
+/// before and after it, as a block of its own; the cursor goes after it.
+fn on_own_lines(source: &str, range: Range<usize>, block: &str) -> FormatEdit {
+    let before = source[..range.start].trim_end_matches([' ', '\t']);
+    let start = before.len();
+    let after = source[range.end..].trim_start_matches([' ', '\t']);
+    let end = source.len() - after.len();
+    let lead = if before.is_empty() || before.ends_with("\n\n") {
+        ""
+    } else if before.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    // After the block: the end of the note, an empty line, or one made.
+    let trail = if after.is_empty() {
+        "\n"
+    } else if after == "\n" || after.starts_with("\n\n") {
+        ""
+    } else if after.starts_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let text = format!("{lead}{block}{trail}");
+    let cursor = start + lead.len() + block.len();
+    FormatEdit {
+        range: start..end,
+        text,
+        selection: cursor..cursor,
     }
 }
 
@@ -228,13 +247,14 @@ mod tests {
             ),
             "see https://x.org[docs]\n"
         );
+        // An image goes on a paragraph of its own.
         assert_eq!(
             run("a pic\n", "pic", Format::Image("photo.png".into()), md),
-            "a ![pic](photo.png)\n"
+            "a\n\n![pic](photo.png)\n"
         );
         assert_eq!(
-            run("a pic\n", "pic", Format::Image("photo.png".into()), adoc),
-            "a image:photo.png[pic]\n"
+            run("a pic b\n", "pic", Format::Image("photo.png".into()), adoc),
+            "a\n\nimage::photo.png[pic]\n\nb\n"
         );
     }
 

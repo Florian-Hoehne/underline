@@ -17,6 +17,7 @@ use underline_core::{resolve_link, LinkTarget, NoteFormat};
 use underline_facade::blocks::{
     insert_typed, link_at, parse_blocks, Block, BlockKind, CellAlign, ListMarker, Run, Table,
 };
+use underline_facade::clip::blocks_to_html;
 use underline_facade::diagram::{DiagramLanguage, DiagramState, Diagrams, Picture};
 use underline_facade::highlight::highlight_code;
 use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
@@ -24,7 +25,7 @@ use underline_facade::sections::Section;
 
 use crate::enlarged::{Enlarged, Shown};
 use crate::minimap::{self, Mark};
-use crate::source_view::{paint_fold_arrow, MARKS_EVERY};
+use crate::source_view::{paint_fold_arrow, Pasted, MARKS_EVERY};
 use crate::{fonts, SourceView, Tool};
 
 const PADDING: f32 = 12.0;
@@ -632,6 +633,13 @@ impl FacadeView {
                 theme.weak,
             );
         });
+        // FR-031, BR-011: the facade copies markup and formatted text.
+        source.copy_on_select(ui, |source| {
+            let (start, end) = source.selection();
+            let rope = source.document().rope();
+            let bytes = rope.char_to_byte(start)..rope.char_to_byte(end);
+            Some(blocks_to_html(&self.blocks, bytes))
+        });
         if self.minimap && self.marks_dirty {
             if self.marks.is_empty() || self.marks_built.elapsed() >= MARKS_EVERY {
                 let (foreground, _) = source.colors();
@@ -1197,23 +1205,35 @@ impl FacadeView {
         let mut changed = false;
         for event in events {
             match event {
-                Event::Text(text) | Event::Paste(text) => {
+                Event::Text(text) => {
                     changed |= self.type_text(source, &text);
+                }
+                // UC-005 A17, BR-014: formatting is kept, as markup of the
+                // note format; Ctrl+Shift+V pastes plain text.
+                Event::Paste(text) => {
+                    let plain = ui.input(|i| i.modifiers.shift);
+                    changed |= if source.has_clipboard() {
+                        let pasted = source.paste(!plain);
+                        self.paste(source, pasted)
+                    } else {
+                        self.type_text(source, &text)
+                    };
                 }
                 Event::Ime(egui::ImeEvent::Commit(text)) => {
                     changed |= self.type_text(source, &text);
                 }
-                Event::Copy => {
+                Event::Copy | Event::Cut => {
                     let text = source.selected_text();
                     if !text.is_empty() {
-                        ui.ctx().copy_text(text);
-                    }
-                }
-                Event::Cut => {
-                    let text = source.selected_text();
-                    if !text.is_empty() {
-                        ui.ctx().copy_text(text);
-                        changed |= self.delete_selection(source);
+                        if source.has_clipboard() {
+                            let html = self.selection_html(source);
+                            source.copy(text, Some(html));
+                        } else {
+                            ui.ctx().copy_text(text);
+                        }
+                        if event == Event::Cut {
+                            changed |= self.delete_selection(source);
+                        }
                     }
                 }
                 Event::Key {
@@ -1230,7 +1250,65 @@ impl FacadeView {
                 self.reparse(source);
             }
         }
+        // UC-005 A18: a paste egui did not report, as of an image alone.
+        if source.has_clipboard() && source.unreported_paste(ui) {
+            let pasted = source.paste(true);
+            changed |= self.paste(source, pasted);
+        }
         changed
+    }
+
+    /// Inserts what a paste brought: plain text as typed, markup as it is
+    /// (several blocks on lines of their own), an image for the window to
+    /// store (UC-005 A17, A18).
+    fn paste(&mut self, source: &mut SourceView, pasted: Pasted) -> bool {
+        match pasted {
+            Pasted::Text(text) => self.type_text(source, &text),
+            Pasted::Markup(markup) => {
+                self.delete_selection(source);
+                let text = source.document().text();
+                let (cursor, _) = source.cursor_anchor();
+                let at = source.document().rope().char_to_byte(cursor);
+                let (lead, trail) = if markup.contains('\n') {
+                    let before = &text[..at];
+                    let after = &text[at..];
+                    let lead = if before.is_empty() || before.ends_with("\n\n") {
+                        ""
+                    } else if before.ends_with('\n') {
+                        "\n"
+                    } else {
+                        "\n\n"
+                    };
+                    let trail = if after.is_empty() || after.starts_with("\n\n") {
+                        ""
+                    } else if after.starts_with('\n') {
+                        "\n"
+                    } else {
+                        "\n\n"
+                    };
+                    (lead, trail)
+                } else {
+                    ("", "")
+                };
+                source.replace(cursor..cursor, &format!("{lead}{markup}{trail}"));
+                self.scroll_to_cursor = true;
+                true
+            }
+            Pasted::Image(image) => {
+                source.set_pasted_image(image);
+                false
+            }
+            Pasted::Nothing => false,
+        }
+    }
+
+    /// The selection as HTML in the facade's formatting (BR-011).
+    fn selection_html(&mut self, source: &SourceView) -> String {
+        self.reparse(source);
+        let (start, end) = source.selection();
+        let rope = source.document().rope();
+        let bytes = rope.char_to_byte(start)..rope.char_to_byte(end);
+        blocks_to_html(&self.blocks, bytes)
     }
 
     /// Types `text` at the cursor, escaped where the markup would read it as
@@ -1856,6 +1934,7 @@ fn rgba([r, g, b, a]: [u8; 4]) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::{ClipContent, ClipImage, MemoryClipboard};
     use std::time::{Duration, Instant};
     use underline_facade::highlight::HighlightSet;
 
@@ -2338,6 +2417,160 @@ mod tests {
         assert!(run(&mut h, Some(origin + Vec2::new(200.0, row * 1.5))));
         // The end of the second line.
         assert_eq!(h.source.cursor(), "one\ntwo".chars().count());
+    }
+
+    fn with_clipboard(h: &mut Harness, text: &str) -> Arc<std::sync::Mutex<MemoryClipboard>> {
+        let clipboard = MemoryClipboard::holding(text);
+        h.source.set_clipboard(clipboard.clone());
+        clipboard
+    }
+
+    fn paste_event() -> Vec<Event> {
+        vec![Event::Paste("ignored".into())]
+    }
+
+    /// TC-005-26: pasting a web page's HTML into the facade keeps heading,
+    /// bold, link, list and table as Markdown; Ctrl+Shift+V and the source
+    /// view paste the plain text.
+    #[test]
+    fn uc005_tc26_paste_formatted_and_plain() {
+        let mut h = Harness::new("Before\n\nAfter\n");
+        let clipboard = with_clipboard(&mut h, "");
+        clipboard.lock().unwrap().content = ClipContent {
+            text: Some("Install\nUse bold".into()),
+            html: Some("<h2>Install</h2><p>Use <b>bold</b> and <a href=\"https://x.org\">x</a></p><ul><li>one</li></ul>".into()),
+            image: None,
+        };
+        h.facade.request_focus();
+        h.cursor_after("Before");
+        h.frame(paste_event());
+        assert_eq!(
+            h.text(),
+            "Before\n\n## Install\n\nUse **bold** and [x](https://x.org)\n\n- one\n\nAfter\n"
+        );
+        // Ctrl+Shift+V: the plain text, as typed.
+        let mut plain = Harness::new("A\n");
+        let clipboard = with_clipboard(&mut plain, "");
+        clipboard.lock().unwrap().content = ClipContent {
+            text: Some("x*y".into()),
+            html: Some("<b>x*y</b>".into()),
+            image: None,
+        };
+        plain.cursor_after("A");
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            events: vec![Event::Paste("ignored".into())],
+            modifiers: shift,
+            ..Default::default()
+        };
+        let (source, facade) = (&mut plain.source, &mut plain.facade);
+        let _ = plain.ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                facade.show(ui, source);
+            });
+        });
+        assert_eq!(plain.text(), "Ax\\*y\n");
+        // The source view pastes plain text.
+        assert_eq!(plain.source.paste(false), Pasted::Text("x*y".into()));
+    }
+
+    /// TC-005-17: copy on select puts a selection on the clipboard at once,
+    /// as markup and formatted text; pasting over it pastes what was there
+    /// before; switched off, the clipboard stays.
+    #[test]
+    fn uc005_tc17_copy_on_select() {
+        let note = "Use **bold** here.\n\ntarget\n";
+        let mut h = Harness::new(note);
+        let clipboard = with_clipboard(&mut h, "REPLACEMENT");
+        h.facade.request_focus();
+        // Step 1: select `target` and paste.
+        let text = h.text();
+        let start = text.find("target").unwrap();
+        h.source.set_cursor_anchor(start + 6, start);
+        h.frame(vec![]);
+        assert_eq!(
+            clipboard.lock().unwrap().content.text.as_deref(),
+            Some("target")
+        );
+        h.frame(paste_event());
+        assert_eq!(h.text(), "Use **bold** here.\n\nREPLACEMENT\n");
+        assert_eq!(
+            clipboard.lock().unwrap().content.text.as_deref(),
+            Some("target")
+        );
+        // Step 2: select `Use bold here` in the facade.
+        let end = h.text().find('.').unwrap();
+        h.source.set_cursor_anchor(end, 0);
+        h.frame(vec![]);
+        let content = clipboard.lock().unwrap().content.clone();
+        assert_eq!(content.text.as_deref(), Some("Use **bold** here"));
+        assert_eq!(
+            content.html.as_deref(),
+            Some("<p>Use <strong>bold</strong> here</p>")
+        );
+        // Step 3: pasting it into a note keeps the markup as it is.
+        let mut other = Harness::new("X\n");
+        other.source.set_clipboard(clipboard.clone());
+        other.facade.request_focus();
+        other.cursor_after("X");
+        other.source.copy("Use **bold** here".into(), None);
+        other.frame(paste_event());
+        assert_eq!(other.text(), "XUse **bold** here\n");
+        // Step 6: switched off, a selection leaves the clipboard alone.
+        clipboard.lock().unwrap().content.text = Some("kept".into());
+        h.source.set_copy_on_select(false);
+        h.source.set_cursor_anchor(3, 0);
+        h.frame(vec![]);
+        h.source.set_cursor_anchor(2, 0);
+        h.frame(vec![]);
+        assert_eq!(
+            clipboard.lock().unwrap().content.text.as_deref(),
+            Some("kept")
+        );
+    }
+
+    /// TC-005-27: an image alone on the clipboard, which egui does not
+    /// report, is pasted when the key is released, for the window to store.
+    #[test]
+    fn uc005_tc27_paste_an_image() {
+        let mut h = Harness::new("Text\n");
+        let clipboard = with_clipboard(&mut h, "");
+        let image = ClipImage {
+            width: 2,
+            height: 1,
+            rgba: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        clipboard.lock().unwrap().content = ClipContent {
+            text: None,
+            html: None,
+            image: Some(image.clone()),
+        };
+        h.facade.request_focus();
+        h.frame(vec![]);
+        h.frame(vec![Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            // egui reports the release after the Ctrl key's, so without it.
+            modifiers: egui::Modifiers::default(),
+        }]);
+        assert_eq!(h.source.take_pasted_image(), Some(image));
+        // A typed `v` is no paste.
+        let press = |pressed| Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        h.frame(vec![press(true), Event::Text("v".into()), press(false)]);
+        assert_eq!(h.source.take_pasted_image(), None);
+        assert_eq!(h.text(), "vText\n");
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and
