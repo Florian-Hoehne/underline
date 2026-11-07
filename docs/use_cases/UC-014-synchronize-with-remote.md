@@ -19,7 +19,7 @@
 ## Main Success Scenario
 
 1. A sync starts: the interval of the settings passed since the last one (UC-010), the workspace was opened, a commit was made (UC-012), Underline is closing, or the user chose "Sync now" in the status bar.
-2. The system saves the open notes with changes not yet saved and commits the changes that are not committed, with the proposed message of UC-012 (BR-002).
+2. The system saves the open notes with changes not yet saved and commits the changes that are not committed, with the proposed message of UC-012 led by `Auto: ` (BR-002).
 3. The system shows "Syncing…" in the status bar and fetches the changes of the remote branch.
 4. The system joins the remote's changes with the local commits, as the user's git setup says (BR-003).
 5. The system pushes the local commits to the remote branch.
@@ -114,6 +114,15 @@
 1. The system does not sync; "Sync now" is not offered, and the status bar says why when the user asks.
 2. Use case ends.
 
+### A11: A change left out is in the way
+
+**Trigger:** A change the user left out of commits (BR-002) is in a note or file the remote changed too, so the remote's changes cannot be fetched into the workspace (step 4)  
+**Flow:**
+
+1. The system stops the sync before joining and names the note or file in the way.
+2. The status bar offers to commit the change (UC-012) or discard it (UC-011 A6); the next sync tries again.
+3. Use case ends.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -134,7 +143,7 @@ A workspace syncs every few minutes as the settings say (UC-010: 1 to 60, 5 by d
 
 ### BR-002: Committing before a sync
 
-Before a sync, the changes that are not committed are committed with the message UC-012 proposes, so they are backed up. Changes the user left out in the commit field (UC-012 BR-004) stay out until the user commits them or chooses them again. No commit is made when nothing changed, or while a merge waits (UC-015).
+Before a sync, the changes that are not committed are committed with the message UC-012 proposes, so they are backed up. The message starts with `Auto: `, such as `Auto: Update Plan, Ideas`, so the history tells these commits from the user's own. Changes the user left out in the commit field (UC-012 BR-004) stay out until the user commits them or chooses them again. No commit is made when nothing changed, or while a merge waits (UC-015).
 
 ### BR-003: Joining
 
@@ -158,4 +167,4 @@ A branch syncs with the remote branch it follows. A new branch goes to the remot
 
 ### BR-008: Typing goes on
 
-A sync runs in the background: typing, saving, and reading go on while it runs (NFR-002). When it changes a note that is open, the tab shows the note as it is now, as for a change from outside (UC-004 A7).
+A sync runs in the background: typing, saving, and reading go on while it runs (NFR-002). When it changes a note that is open, the tab shows the note as it is now, as for a change from outside (UC-004 A7); when the user typed in that note meanwhile, both versions are kept (UC-004 A9). A sync never waits for an answer typed into a terminal, such as a password for a key; such a sign-in counts as missing (A5).

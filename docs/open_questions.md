@@ -1509,3 +1509,13 @@ Answer: The status bar says so and how to set up a sign-in in git; Underline ask
 **Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
 
 Answer: When the workspace opens, after every commit, and when Underline closes.
+
+## OQ-151: Are automatic commits before a sync marked as such?
+
+**Element:** UC-014 step 2, BR-002
+**Raised by:** spec review UC-014, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-014](use_cases/UC-014-synchronize-with-remote.md)
+
+Answer: Yes; their message starts with `Auto: `.
