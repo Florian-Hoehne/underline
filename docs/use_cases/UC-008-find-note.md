@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user finds the notes that hold what they look for, sees where, and opens one at that place, without knowing its name.  
 **Trigger:** The user starts to type in the search field of the note overview.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-007, FR-017, FR-018, NFR-002, NFR-003, NFR-011, NFR-013](../requirements.md)
 
