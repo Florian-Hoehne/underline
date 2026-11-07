@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The changes the user chose are recorded in the history of the workspace with a message that says what changed and why.  
 **Trigger:** The user asks to commit the changes of the workspace.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-051, FR-048, NFR-006, NFR-011, NFR-014](../requirements.md)
 
