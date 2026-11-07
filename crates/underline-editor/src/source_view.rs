@@ -10,7 +10,7 @@ use eframe::egui::{
     self, text::CCursor, text::LayoutJob, Color32, Event, EventFilter, FontId, Galley, Key, Pos2,
     Rect, Sense, Stroke, TextFormat, Vec2,
 };
-use underline_core::NoteFormat;
+use underline_core::{LineSide, NoteFormat};
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
@@ -110,6 +110,8 @@ pub struct SourceView {
     /// FR-026), and what its keys ask of the window.
     pub(crate) keys: Keys,
     commands: Vec<EditorCommand>,
+    /// Whether line numbers are shown, and on which side (UC-010).
+    line_numbers: (bool, LineSide),
 }
 
 /// What a paste brings.
@@ -170,6 +172,7 @@ impl SourceView {
             pasted_image: None,
             keys: Keys::default(),
             commands: Vec::new(),
+            line_numbers: (true, LineSide::Left),
         }
     }
 
@@ -475,6 +478,23 @@ impl SourceView {
         Some(rope.byte_to_char(byte))
     }
 
+    /// Shows the line numbers or not, and on which side (FR-028, FR-029).
+    pub fn set_line_numbers(&mut self, shown: bool, side: LineSide) {
+        if self.line_numbers != (shown, side) {
+            self.line_numbers = (shown, side);
+            self.layout_revision = None;
+        }
+    }
+
+    /// Colors the text with `set`, the colors of another theme (UC-010
+    /// BR-004); every line is colored again.
+    pub fn set_highlight_set(&mut self, set: Arc<HighlightSet>) {
+        let format = self.highlight.format();
+        self.highlight = DocumentHighlight::new(set, format);
+        self.highlight.invalidate_from(0, self.doc.len_lines());
+        self.galleys.clear();
+    }
+
     /// Uses `clipboard` for copying and pasting with formats (ADR-014).
     pub fn set_clipboard(&mut self, clipboard: SharedClipboard) {
         self.clipboard = Some(clipboard);
@@ -672,12 +692,19 @@ impl SourceView {
         area.show_viewport(ui, |ui, viewport| {
             self.visible = (viewport.min.y, viewport.max.y);
             let lines = self.doc.len_lines();
-            // Line numbers on the left (FR-028; their settings come with
-            // UC-010).
+            // Line numbers left or right, or none (FR-028, FR-029); the fold
+            // arrows stay on the left.
             let digits = lines.max(1).ilog10() as f32 + 1.0;
-            let gutter = digits * char_width + 2.0 * PADDING + FOLD_ARROW;
+            let number_width = if self.line_numbers.0 {
+                digits * char_width + PADDING
+            } else {
+                0.0
+            };
+            let right = self.line_numbers.1 == LineSide::Right;
+            let gutter = PADDING + FOLD_ARROW + if right { 0.0 } else { number_width };
             let width = ui.available_width();
-            let wrap_width = (width - gutter - 2.0 * PADDING).max(char_width * 8.0);
+            let right_room = if right { number_width } else { 0.0 };
+            let wrap_width = (width - gutter - right_room - 2.0 * PADDING).max(char_width * 8.0);
             self.update_layout(wrap_width, char_width, row_height);
             if self.tops_folds != self.fold_version {
                 self.recompute_tops();
@@ -791,13 +818,20 @@ impl SourceView {
                     exact_changed = true;
                 }
                 let top = origin + Vec2::new(0.0, self.tops[line]);
-                painter.text(
-                    Pos2::new(origin.x - PADDING, top.y),
-                    egui::Align2::RIGHT_TOP,
-                    (line + 1).to_string(),
-                    font.clone(),
-                    numbers,
-                );
+                if self.line_numbers.0 {
+                    let x = if right {
+                        rect.right() - PADDING
+                    } else {
+                        origin.x - PADDING
+                    };
+                    painter.text(
+                        Pos2::new(x, top.y),
+                        egui::Align2::RIGHT_TOP,
+                        (line + 1).to_string(),
+                        font.clone(),
+                        numbers,
+                    );
+                }
                 // Selection behind the text, row by row.
                 let line_start = self.doc.rope().line_to_char(line);
                 let line_len = self.doc.line_text(line).chars().count();

@@ -37,6 +37,41 @@ pub struct Palette {
     pub heading: Rgb,
 }
 
+impl Palette {
+    /// The fill of a switched-on toggle or a chosen entry: the panel moved a
+    /// quarter of the way to the link color, so it stands out from the panel.
+    pub fn chosen(&self) -> Rgb {
+        mix(self.panel, self.link, 0.25)
+    }
+
+    /// The text on a chosen fill: the body text, moved towards white in dark
+    /// themes and black in light ones only as far as NFR-010 needs.
+    pub fn chosen_text(&self) -> Rgb {
+        let end = if self.dark { [255; 3] } else { [0; 3] };
+        (0..=20)
+            .map(|step| mix(self.foreground, end, step as f32 / 20.0))
+            .find(|&text| contrast(text, self.chosen()) >= 4.5)
+            .unwrap_or(end)
+    }
+
+    /// The fill of a button that is not switched on: the panel moved a little
+    /// towards the text, no further than the text stays readable on it.
+    pub fn button(&self) -> Rgb {
+        (0..=8)
+            .rev()
+            .map(|step| mix(self.panel, self.foreground, step as f32 / 100.0))
+            .find(|&fill| contrast(self.foreground, fill) >= 4.5)
+            .unwrap_or(self.panel)
+    }
+}
+
+/// `a` moved the fraction `t` of the way to `b`.
+fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+    let channel =
+        |i: usize| (f32::from(a[i]) + (f32::from(b[i]) - f32::from(a[i])) * t).round() as u8;
+    [channel(0), channel(1), channel(2)]
+}
+
 const fn hex(value: u32) -> Rgb {
     [(value >> 16) as u8, (value >> 8) as u8, value as u8]
 }
@@ -204,6 +239,14 @@ mod tests {
             check("text", p.foreground, p.background, 4.5);
             check("text on panel", p.foreground, p.panel, 4.5);
             check("text on code", p.foreground, p.code_background, 4.5);
+            check("text on a chosen toggle", p.chosen_text(), p.chosen(), 4.5);
+            check("text on a button", p.foreground, p.button(), 4.5);
+            check(
+                "chosen toggle against a button",
+                p.chosen(),
+                p.button(),
+                1.2,
+            );
             check("link", p.link, p.background, 4.5);
             check("weak", p.weak, p.background, 3.0);
             check("weak on panel", p.weak, p.panel, 3.0);

@@ -7,6 +7,7 @@
 //! MCP on stdin and stdout.
 
 mod app;
+mod settings;
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;

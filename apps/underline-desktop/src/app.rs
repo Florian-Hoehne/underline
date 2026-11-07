@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::settings::SettingsState;
 use eframe::egui;
 use underline_core::{
     asciidoc_anchor, check_directory, check_open_directory, check_readable_directory,
@@ -9,8 +10,9 @@ use underline_core::{
     outside_copy_path, relative, resolve_link, store_pasted_image, user_settings_dir, Autosave,
     CreateProblem, DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget,
     NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteProperties, NoteSaver,
-    OpenProblem, OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList,
-    TabState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
+    OpenProblem, OverviewEntry, OwnWrites, SaveJob, SettingKey, StateNotice, StateStore,
+    Surroundings, TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher,
+    HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_editor::{
     ClipImage, EditorCommand, FacadeView, InputMode, SharedClipboard, SourceView, SystemClipboard,
@@ -22,6 +24,7 @@ use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::images::{encode_png, Images};
 use underline_facade::index::{indexes, Indexes};
+use underline_facade::themes::Palette;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
@@ -42,15 +45,14 @@ pub struct UnderlineApp {
     diagrams: Arc<Diagrams>,
     /// Loads the images of the open notes (UC-004 step 3).
     images: Arc<Images>,
-    /// Whether the editors show their minimap (FR-030, UC-004 BR-013).
-    minimap: bool,
-    /// The clipboard of the system, with HTML and images (ADR-014), and
-    /// whether a selection goes onto it at once (FR-031, FR-032).
+    /// The clipboard of the system, with HTML and images (ADR-014).
     clipboard: SharedClipboard,
-    copy_on_select: bool,
-    /// The keys the editors follow: normal, Vim, or Nano (FR-024, FR-025),
-    /// until the settings of UC-010 hold it.
-    input_mode: InputMode,
+    /// The user and workspace settings and those in effect (UC-010), and
+    /// the theme the window shows now.
+    settings: SettingsState,
+    applied_theme: Option<Theme>,
+    /// Whether the note overview and the tool panel were being resized.
+    resizing: [bool; 2],
     /// Stores changed notes in the background (UC-005 BR-001).
     saver: NoteSaver,
     /// A close that waits for the user, because changes could not be stored
@@ -246,10 +248,10 @@ impl UnderlineApp {
                 let ctx = ctx.clone();
                 Arc::new(Diagrams::start(move || ctx.request_repaint()))
             },
-            minimap: true,
             clipboard: SystemClipboard::shared(),
-            copy_on_select: true,
-            input_mode: InputMode::Normal,
+            settings: SettingsState::load(),
+            applied_theme: None,
+            resizing: [false; 2],
             images: {
                 let ctx = ctx.clone();
                 Arc::new(Images::start(move || ctx.request_repaint()))
@@ -404,6 +406,7 @@ impl UnderlineApp {
         );
         let polling = watcher.is_polling();
         self.watcher = Some(watcher);
+        self.settings.open_workspace(&root, &self.git);
         self.workspace = Some(workspace);
         self.tabs = TabList::default();
         self.state.workspace_opened(&root, now());
@@ -458,6 +461,7 @@ impl UnderlineApp {
                     }
                 }
                 WorkspaceEvent::SettingsChanged => {
+                    self.settings.reload_workspace();
                     if let Some(workspace) = &mut self.workspace {
                         workspace.reload_settings();
                         if let Some(problem) = workspace.settings_problem() {
@@ -1077,6 +1081,7 @@ impl UnderlineApp {
     /// index, and figure index of the active note; a click on an entry
     /// scrolls the tab to it (FR-019, FR-041 to FR-043).
     fn show_tool_panel(&mut self, ctx: &egui::Context) {
+        let mut tool_width = None;
         let root = self.workspace.as_ref().map(|w| w.root().to_path_buf());
         let Some((_, tab)) = self.tabs.active_mut() else {
             return;
@@ -1094,9 +1099,12 @@ impl UnderlineApp {
             NoteProperties::read(root, &tab.path, tab.view.document_format()).ok()
         });
         let mut jump = None;
-        egui::SidePanel::right("tools")
+        let width = self.settings.effective.tool_panel_width as f32;
+        let generation = self.settings.width_generation;
+        let panel = egui::SidePanel::right(egui::Id::new(("tools", generation)))
             .resizable(true)
-            .default_width(240.0)
+            .width_range(100.0..=1000.0)
+            .default_width(width)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     egui::CollapsingHeader::new("Properties")
@@ -1148,6 +1156,12 @@ impl UnderlineApp {
                     }
                 });
             });
+        let resizing = ctx.is_being_dragged(egui::Id::new(("tools", generation)).with("__resize"));
+        let released = std::mem::replace(&mut self.resizing[1], resizing) && !resizing;
+        let shown = panel.response.rect.width().round();
+        if released && (shown - width).abs() > 1.0 {
+            tool_width = Some((shown as u32).clamp(100, 1000));
+        }
         if let Some(offset) = jump {
             match tab.editing_view {
                 EditingView::Facade => tab.facade.reveal(offset),
@@ -1156,6 +1170,34 @@ impl UnderlineApp {
                     tab.view.focus_cursor();
                 }
             }
+        }
+        if let Some(width) = tool_width {
+            self.settings
+                .quick_change(SettingKey::ToolPanelWidth, width.to_string());
+        }
+    }
+
+    /// UC-010: the settings in effect, applied to the window and every tab:
+    /// the theme at once (BR-004), the user settings file watched (A5),
+    /// the settings window, Ctrl+, (BR-006), and their messages.
+    fn apply_settings(&mut self, ctx: &egui::Context) {
+        self.settings.poll();
+        let theme = self.settings.effective.theme;
+        if self.applied_theme != Some(theme) {
+            self.applied_theme = Some(theme);
+            ctx.set_visuals(visuals(self.settings.palette()));
+            self.highlight = Arc::new(self.highlight.with_theme(theme));
+            for (_, tab) in self.tabs.iter_mut() {
+                tab.view.set_highlight_set(Arc::clone(&self.highlight));
+            }
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+            self.settings.open = !self.settings.open;
+        }
+        let derived = self.workspace.as_ref().map(|w| w.default_format());
+        self.settings.show_window(ctx, derived);
+        for message in self.settings.take_messages() {
+            self.status = message;
         }
     }
 
@@ -1678,6 +1720,7 @@ impl eframe::App for UnderlineApp {
             }
         }
         self.handle_outside_changes();
+        self.apply_settings(ctx);
         self.show_close_confirm(ctx);
         self.show_open_dialog(ctx);
         self.show_create_dialog(ctx);
@@ -1693,6 +1736,18 @@ impl eframe::App for UnderlineApp {
                 }
                 if ui.button("New workspace…").clicked() {
                     self.start_create();
+                }
+                // UC-010 BR-006: the settings button.
+                if ui
+                    .button("Settings")
+                    .on_hover_text(if cfg!(target_os = "macos") {
+                        "Cmd+,"
+                    } else {
+                        "Ctrl+,"
+                    })
+                    .clicked()
+                {
+                    self.settings.open = !self.settings.open;
                 }
                 ui.separator();
                 ui.label("Wiki project URL");
@@ -1745,28 +1800,44 @@ impl eframe::App for UnderlineApp {
             return;
         }
 
-        egui::SidePanel::left("pages").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Notes");
-                if ui.button("New note…").clicked() {
-                    self.start_new_note();
-                }
-            });
-            ui.separator();
-            let mut selected = None;
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for entry in &self.overview {
-                    let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
-                    if ui.selectable_label(active, &entry.label).clicked() {
-                        selected = Some(entry.id.clone());
+        let overview_width = self.settings.effective.overview_width as f32;
+        let generation = self.settings.width_generation;
+        let pages = egui::SidePanel::left(egui::Id::new(("pages", generation)))
+            .resizable(true)
+            .width_range(100.0..=1000.0)
+            .default_width(overview_width)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Notes");
+                    if ui.button("New note…").clicked() {
+                        self.start_new_note();
                     }
+                });
+                ui.separator();
+                let mut selected = None;
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for entry in &self.overview {
+                        let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
+                        if ui.selectable_label(active, &entry.label).clicked() {
+                            selected = Some(entry.id.clone());
+                        }
+                    }
+                });
+                if let Some(id) = selected {
+                    self.open_note(&id);
+                    self.refresh_overview();
                 }
             });
-            if let Some(id) = selected {
-                self.open_note(&id);
-                self.refresh_overview();
-            }
-        });
+        // UC-010 A4: a width the user dragged is kept once they let go.
+        let resizing = ctx.is_being_dragged(egui::Id::new(("pages", generation)).with("__resize"));
+        let released = std::mem::replace(&mut self.resizing[0], resizing) && !resizing;
+        let shown = pages.response.rect.width().round();
+        if released && (shown - overview_width).abs() > 1.0 {
+            self.settings.quick_change(
+                SettingKey::OverviewWidth,
+                (shown as u32).clamp(100, 1000).to_string(),
+            );
+        }
 
         self.show_tool_panel(ctx);
 
@@ -1775,6 +1846,7 @@ impl eframe::App for UnderlineApp {
         let mut followed = None;
         let mut dropped = Vec::new();
         let mut pasted_image = None;
+        let mut quick: Vec<(SettingKey, String)> = Vec::new();
         let mut key_commands = Vec::new();
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
@@ -1849,20 +1921,35 @@ impl eframe::App for UnderlineApp {
                     }
                 }
                 ui.separator();
-                // UC-004 BR-013: the minimap, shown or hidden for all tabs.
-                ui.toggle_value(&mut self.minimap, "Minimap")
-                    .on_hover_text("Show or hide the minimap beside the editor");
-                // FR-024, FR-025: the input mode, until the settings hold it.
+                // UC-010 A3: quick switches, stored like any setting.
+                let effective = self.settings.effective.clone();
+                let mut minimap = effective.show_minimap;
+                if ui
+                    .toggle_value(&mut minimap, "Minimap")
+                    .on_hover_text("Show or hide the minimap beside the editor")
+                    .changed()
+                {
+                    quick.push((SettingKey::ShowMinimap, minimap.to_string()));
+                }
+                let mut mode = effective.input_mode;
                 egui::ComboBox::from_id_salt("input-mode")
-                    .selected_text(format!("Keys: {}", self.input_mode.label()))
+                    .selected_text(format!("Keys: {}", mode.label()))
                     .show_ui(ui, |ui| {
-                        for mode in InputMode::ALL {
-                            ui.selectable_value(&mut self.input_mode, *mode, mode.label());
+                        for each in InputMode::ALL {
+                            ui.selectable_value(&mut mode, *each, each.label());
                         }
                     });
-                // FR-032: copy on select, until the settings hold it (UC-010).
-                ui.toggle_value(&mut self.copy_on_select, "Copy on select")
-                    .on_hover_text("Put a selection on the clipboard as soon as it is made");
+                if mode != effective.input_mode {
+                    quick.push((SettingKey::InputMode, mode.label().to_owned()));
+                }
+                let mut copy = effective.copy_on_select;
+                if ui
+                    .toggle_value(&mut copy, "Copy on select")
+                    .on_hover_text("Put a selection on the clipboard as soon as it is made")
+                    .changed()
+                {
+                    quick.push((SettingKey::CopyOnSelect, copy.to_string()));
+                }
             });
             if let Some(tool) = tool_used {
                 if tab.view.apply_tool(tool) {
@@ -1879,10 +1966,13 @@ impl eframe::App for UnderlineApp {
                     EditingView::Source => tab.view.focus_cursor(),
                 }
             }
-            tab.facade.set_minimap(self.minimap);
-            tab.view.set_minimap(self.minimap);
-            tab.view.set_copy_on_select(self.copy_on_select);
-            tab.view.set_input_mode(self.input_mode);
+            let effective = &self.settings.effective;
+            tab.facade.set_minimap(effective.show_minimap);
+            tab.view.set_minimap(effective.show_minimap);
+            tab.view.set_copy_on_select(effective.copy_on_select);
+            tab.view.set_input_mode(effective.input_mode);
+            tab.view
+                .set_line_numbers(effective.show_line_numbers, effective.line_number_side);
             let changed = match tab.editing_view {
                 EditingView::Facade => tab.facade.show(ui, &mut tab.view),
                 EditingView::Source => tab.view.show(ui),
@@ -1925,6 +2015,9 @@ impl eframe::App for UnderlineApp {
         }
         if let Some(image) = pasted_image {
             self.paste_image(image);
+        }
+        for (key, value) in quick {
+            self.settings.quick_change(key, value);
         }
         // UC-005 A6, A7: `:w` and Ctrl+O store at once, `:q` and Ctrl+X
         // close the tab.
@@ -1972,4 +2065,25 @@ fn directory_dialog(path: String, problem: &DirectoryProblem) -> CreateDialog {
         problem: Some(format!("{problem}.{hint}")),
         offer_open,
     }
+}
+
+/// The look of the window in the colors of a theme (FR-022, UC-010 BR-004).
+fn visuals(palette: &Palette) -> egui::Visuals {
+    let color = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
+    let mut visuals = if palette.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.panel_fill = color(palette.panel);
+    visuals.window_fill = color(palette.panel);
+    visuals.extreme_bg_color = color(palette.background);
+    visuals.faint_bg_color = color(palette.code_background);
+    visuals.code_bg_color = color(palette.code_background);
+    visuals.hyperlink_color = color(palette.link);
+    visuals.override_text_color = Some(color(palette.foreground));
+    visuals.selection.bg_fill = color(palette.chosen());
+    visuals.widgets.inactive.weak_bg_fill = color(palette.button());
+    visuals.selection.stroke.color = color(palette.chosen_text());
+    visuals
 }

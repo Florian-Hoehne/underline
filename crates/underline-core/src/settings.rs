@@ -322,6 +322,28 @@ impl Settings {
         }
     }
 
+    /// Sets `key` to `value` as written in a file, or unsets it for `None`;
+    /// a value that is not allowed is refused with the reason.
+    pub fn set(&mut self, key: SettingKey, value: Option<&str>) -> Result<(), String> {
+        let text = set_key("", key.key(), value);
+        let parsed =
+            Settings::parse(&text, Path::new(SETTINGS_FILE_NAME)).map_err(|e| e.to_string())?;
+        match key {
+            SettingKey::DefaultFormat => self.default_format = parsed.default_format,
+            SettingKey::Theme => self.theme = parsed.theme,
+            SettingKey::InputMode => self.input_mode = parsed.input_mode,
+            SettingKey::ShowLineNumbers => self.show_line_numbers = parsed.show_line_numbers,
+            SettingKey::LineNumberSide => self.line_number_side = parsed.line_number_side,
+            SettingKey::ShowMinimap => self.show_minimap = parsed.show_minimap,
+            SettingKey::CopyOnSelect => self.copy_on_select = parsed.copy_on_select,
+            SettingKey::GitSyncInterval => self.git_sync_interval = parsed.git_sync_interval,
+            SettingKey::McpServerEnabled => self.mcp_server_enabled = parsed.mcp_server_enabled,
+            SettingKey::OverviewWidth => self.overview_width = parsed.overview_width,
+            SettingKey::ToolPanelWidth => self.tool_panel_width = parsed.tool_panel_width,
+        }
+        Ok(())
+    }
+
     /// Whether this file sets `key`.
     pub fn sets(&self, key: SettingKey) -> bool {
         self.value_text(key).is_some()
@@ -663,6 +685,23 @@ mod tests {
         assert_eq!(settings.theme, Some(Theme::GitHubDark));
         assert_eq!(settings.input_mode, Some(InputMode::Vim));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn set_in_memory() {
+        let mut settings = Settings::default();
+        settings.set(SettingKey::Theme, Some("Nord")).unwrap();
+        settings
+            .set(SettingKey::OverviewWidth, Some("300"))
+            .unwrap();
+        assert_eq!(settings.theme, Some(Theme::Nord));
+        assert_eq!(
+            settings.value_text(SettingKey::OverviewWidth).as_deref(),
+            Some("300")
+        );
+        assert!(settings.set(SettingKey::OverviewWidth, Some("5")).is_err());
+        settings.set(SettingKey::Theme, None).unwrap();
+        assert_eq!(settings.theme, None);
     }
 
     /// TC-010-01, BR-005: a change is stored in its file, which appears on
