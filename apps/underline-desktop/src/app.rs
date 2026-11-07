@@ -8,9 +8,9 @@ use underline_core::{
     create_workspace, embed_file, heading_anchor, heading_title, note_overview, now,
     outside_copy_path, relative, resolve_link, user_settings_dir, Autosave, CreateProblem,
     DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget, NewNote,
-    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteSaver, OpenProblem, OverviewEntry,
-    OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState, Workspace,
-    WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
+    NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteProperties, NoteSaver, OpenProblem,
+    OverviewEntry, OwnWrites, SaveJob, StateNotice, StateStore, Surroundings, TabList, TabState,
+    Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_editor::{FacadeView, SourceView, Tool};
 use underline_facade::blocks::{heading_offset, parse_blocks};
@@ -18,6 +18,7 @@ use underline_facade::diagram::Diagrams;
 use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::images::Images;
+use underline_facade::index::{indexes, Indexes};
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
@@ -88,6 +89,9 @@ struct OpenTab {
     on_disk: String,
     /// The text a running background save writes.
     saving_text: Option<String>,
+    /// The lists of the tool panel and the revision of the text they were
+    /// made from (FR-041 to FR-043).
+    indexes: Option<(u64, Indexes)>,
 }
 
 impl OpenTab {
@@ -845,6 +849,7 @@ impl UnderlineApp {
                 kept_outside: None,
                 on_disk: note.body.clone(),
                 saving_text: None,
+                indexes: None,
             });
             // UC-004 A6: the tab used longest ago was closed; its changes
             // are stored first.
@@ -1042,6 +1047,92 @@ impl UnderlineApp {
                 tab.facade.request_focus();
             }
             None => self.status = format!("The heading {anchor} was not found"),
+        }
+    }
+
+    /// UC-004 step 4: the tool panel with the properties, outline, code
+    /// index, and figure index of the active note; a click on an entry
+    /// scrolls the tab to it (FR-019, FR-041 to FR-043).
+    fn show_tool_panel(&mut self, ctx: &egui::Context) {
+        let root = self.workspace.as_ref().map(|w| w.root().to_path_buf());
+        let Some((_, tab)) = self.tabs.active_mut() else {
+            return;
+        };
+        let revision = tab.view.document().revision();
+        if tab
+            .indexes
+            .as_ref()
+            .is_none_or(|(made, _)| *made != revision)
+        {
+            let blocks = tab.facade.current_blocks(&tab.view);
+            tab.indexes = Some((revision, indexes(blocks)));
+        }
+        let properties = root.as_deref().and_then(|root| {
+            NoteProperties::read(root, &tab.path, tab.view.document_format()).ok()
+        });
+        let mut jump = None;
+        egui::SidePanel::right("tools")
+            .resizable(true)
+            .default_width(240.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::CollapsingHeader::new("Properties")
+                        .default_open(true)
+                        .show(ui, |ui| match &properties {
+                            Some(p) => {
+                                egui::Grid::new("properties").num_columns(2).show(ui, |ui| {
+                                    for (name, value) in [
+                                        ("Place", p.place.clone()),
+                                        ("Format", p.format.name().to_owned()),
+                                        ("Size", p.size_text()),
+                                        ("Last change", p.changed_text()),
+                                    ] {
+                                        ui.weak(name);
+                                        ui.label(value);
+                                        ui.end_row();
+                                    }
+                                });
+                            }
+                            None => {
+                                ui.weak("Not saved yet");
+                            }
+                        });
+                    let Some((_, lists)) = &tab.indexes else {
+                        return;
+                    };
+                    for (title, entries) in [
+                        ("Outline", &lists.outline),
+                        ("Code", &lists.code),
+                        ("Figures", &lists.figures),
+                    ] {
+                        egui::CollapsingHeader::new(format!("{title} ({})", entries.len()))
+                            .id_salt(title)
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                if entries.is_empty() {
+                                    ui.weak("None");
+                                }
+                                for entry in entries {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(entry.depth as f32 * 14.0);
+                                        let link = ui.selectable_label(false, &entry.label);
+                                        if link.clicked() {
+                                            jump = Some(entry.offset);
+                                        }
+                                    });
+                                }
+                            });
+                    }
+                });
+            });
+        if let Some(offset) = jump {
+            match tab.editing_view {
+                EditingView::Facade => tab.facade.reveal(offset),
+                EditingView::Source => {
+                    tab.view.jump_to_byte(offset);
+                    tab.view.focus_cursor();
+                }
+            }
         }
     }
 
@@ -1543,6 +1634,8 @@ impl eframe::App for UnderlineApp {
                 self.refresh_overview();
             }
         });
+
+        self.show_tool_panel(ctx);
 
         let mut persist = false;
         let mut ask_tool = None;

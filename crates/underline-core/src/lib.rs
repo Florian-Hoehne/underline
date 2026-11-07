@@ -14,6 +14,7 @@ mod links;
 mod new_note;
 mod note;
 mod open;
+mod properties;
 mod saver;
 mod settings;
 mod state;
@@ -40,6 +41,7 @@ pub use new_note::{
 };
 pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
+pub use properties::{format_local_time, format_size, NoteProperties};
 pub use saver::{NoteSaver, OwnWrites, SaveJob, SaveResult};
 pub use settings::{user_settings_dir, SettingsError, WorkspaceSettings, SETTINGS_FILE_NAME};
 pub use state::{

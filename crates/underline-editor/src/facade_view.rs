@@ -58,6 +58,9 @@ pub struct FacadeView {
     last_pictures: HashMap<usize, Arc<Picture>>,
     /// The picture shown enlarged over the window (FR-039).
     enlarged: Option<Enlarged>,
+    /// A source offset whose block is scrolled to the top at the next
+    /// frame (UC-004 step 5).
+    reveal: Option<usize>,
 }
 
 /// What a block shows besides its text: the marker before it, in chars, and
@@ -102,6 +105,7 @@ impl FacadeView {
             textures: HashMap::new(),
             last_pictures: HashMap::new(),
             enlarged: None,
+            reveal: None,
         }
     }
 
@@ -242,6 +246,21 @@ impl FacadeView {
                     self.layout_all(ui, source, &theme, width);
                 }
 
+                if let Some(offset) = self.reveal.take() {
+                    if !self.blocks.is_empty() {
+                        let index = self
+                            .blocks
+                            .iter()
+                            .position(|b| offset < b.span.end)
+                            .unwrap_or(self.blocks.len() - 1);
+                        let top = origin + Vec2::new(0.0, self.tops[index]);
+                        let target = Rect::from_min_size(
+                            top - Vec2::new(0.0, PADDING),
+                            Vec2::new(width, 1.0),
+                        );
+                        ui.scroll_to_rect(target, Some(egui::Align::TOP));
+                    }
+                }
                 let painter = ui.painter_at(rect.intersect(viewport.translate(rect.min.to_vec2())));
                 painter.rect_filled(painter.clip_rect(), 0.0, rgba(background));
                 let first = self.block_at(viewport.min.y - PADDING);
@@ -688,6 +707,20 @@ impl FacadeView {
             },
         };
         self.enlarged = Some(Enlarged::new(shown, picture));
+    }
+
+    /// UC-004 step 5, FR-041 to FR-043: scrolls the block at source offset
+    /// `offset` to the top, without moving the cursor, so a figure is shown
+    /// as its picture.
+    pub fn reveal(&mut self, offset: usize) {
+        self.reveal = Some(offset);
+    }
+
+    /// The blocks of `source`'s text as they are now, parsed again if the
+    /// text changed (for the tool panel).
+    pub fn current_blocks(&mut self, source: &SourceView) -> &[Block] {
+        self.reparse(source);
+        &self.blocks
     }
 
     /// Whether a picture is shown enlarged.
