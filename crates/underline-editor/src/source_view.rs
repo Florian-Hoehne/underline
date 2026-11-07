@@ -213,6 +213,34 @@ impl SourceView {
         self.anchor = self.cursor;
     }
 
+    /// UC-006 A7: replaces byte ranges of the text, sorted and not
+    /// overlapping, as a rename changes the links of an open note. The cursor
+    /// and the selection stay at the same place of the content, and the view
+    /// does not scroll.
+    pub fn apply_edits(&mut self, edits: &[(std::ops::Range<usize>, String)]) {
+        let (mut cursor, mut anchor) = (self.cursor, self.anchor);
+        for (range, text) in edits.iter().rev() {
+            let rope = self.doc.rope();
+            let start = rope.byte_to_char(range.start.min(rope.len_bytes()));
+            let end = rope.byte_to_char(range.end.min(rope.len_bytes()));
+            self.replace(start..end, text);
+            let inserted = text.chars().count();
+            let shift = |at: usize| {
+                if at >= end {
+                    at + inserted - (end - start)
+                } else if at > start {
+                    start + inserted.min(at - start)
+                } else {
+                    at
+                }
+            };
+            cursor = shift(cursor);
+            anchor = shift(anchor);
+        }
+        self.scroll_to_cursor = false;
+        self.set_cursor_anchor(cursor, anchor);
+    }
+
     /// Puts the cursor at the end of the text and the keyboard focus on the
     /// view, as for a new note (UC-003 step 6).
     pub fn focus_end(&mut self) {

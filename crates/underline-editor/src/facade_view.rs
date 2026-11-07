@@ -180,6 +180,14 @@ impl FacadeView {
         self
     }
 
+    /// UC-006: the note is now in the file `note`; its images are found
+    /// from there.
+    pub fn set_note_file(&mut self, note: PathBuf) {
+        if let Some((_, place)) = &mut self.place {
+            *place = note;
+        }
+    }
+
     /// UC-004 BR-012: which blocks folded sections hide, and the section of
     /// each heading, when the folds or the text changed.
     fn update_folds(&mut self, source: &mut SourceView) {
@@ -2209,6 +2217,28 @@ mod tests {
         ctx: egui::Context,
         source: SourceView,
         facade: FacadeView,
+    }
+
+    /// TC-006-13: links changed by a rename in an open note keep the typed
+    /// text and the cursor at its place.
+    #[test]
+    fn uc006_tc13_rename_edits_keep_the_cursor() {
+        let set = Arc::new(HighlightSet::new(true));
+        let text = "[p](Plan.md) and Ünïcode [q](Plan.md)\ndraft";
+        let mut view = SourceView::new("t", text, NoteFormat::Markdown, set);
+        let at_draft = text.chars().count() - 2;
+        view.set_cursor(at_draft);
+        let first = text.find("Plan.md").unwrap();
+        let second = text.rfind("Plan.md").unwrap();
+        view.apply_edits(&[
+            (first..first + 7, "Road-Map.md".into()),
+            (second..second + 7, "Road-Map.md".into()),
+        ]);
+        assert_eq!(
+            view.document().text(),
+            "[p](Road-Map.md) and Ünïcode [q](Road-Map.md)\ndraft"
+        );
+        assert_eq!(view.cursor(), at_draft + 8);
     }
 
     impl Harness {

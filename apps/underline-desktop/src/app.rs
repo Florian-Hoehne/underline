@@ -9,8 +9,8 @@ use underline_core::{
     create_workspace, dropped_link, embed_file, heading_anchor, heading_title, note_overview, now,
     outside_copy_path, relative, resolve_link, store_pasted_image, user_settings_dir, Autosave,
     CreateProblem, DirectoryProblem, EditingView, EmbedError, Git, GitRepositoryOption, LinkTarget,
-    NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteProperties, NoteSaver,
-    OpenProblem, OverviewEntry, OwnWrites, SaveJob, SettingKey, StateNotice, StateStore,
+    NewNote, NewNoteProblem, NewWorkspace, NoteFormat, NoteId, NoteMove, NoteProperties, NoteSaver,
+    OpenProblem, OverviewEntry, OwnWrites, Rename, SaveJob, SettingKey, StateNotice, StateStore,
     Surroundings, TabList, TabState, Theme, Workspace, WorkspaceEvent, WorkspaceWatcher,
     HOME_TITLE, STATE_WRITE_DELAY,
 };
@@ -24,6 +24,7 @@ use underline_facade::formatting::Format;
 use underline_facade::highlight::HighlightSet;
 use underline_facade::images::{encode_png, Images};
 use underline_facade::index::{indexes, Indexes};
+use underline_facade::rename::{rename_note, Edit, OpenNotes, Renamed};
 use underline_facade::themes::Palette;
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
@@ -68,6 +69,7 @@ pub struct UnderlineApp {
     create: Option<CreateDialog>,
     open: Option<OpenDialog>,
     new_note: Option<NoteDialog>,
+    rename: Option<RenameDialog>,
     /// The question a link or image tool asks (UC-005 A2).
     tool_dialog: Option<ToolDialog>,
     /// The user agreed to open web addresses in this session (UC-004 A4).
@@ -103,6 +105,10 @@ struct OpenTab {
     on_disk: String,
     /// The text a running background save writes.
     saving_text: Option<String>,
+    /// The next save stores a change Underline made, not the user, such as
+    /// links updated by a rename (UC-006 A7); it does not replace the report
+    /// in the status bar.
+    quiet_save: bool,
     /// The lists of the tool panel and the revision of the text they were
     /// made from (FR-041 to FR-043).
     indexes: Option<(u64, Indexes)>,
@@ -182,6 +188,60 @@ struct NoteDialog {
     problem: Option<String>,
     /// A2: the existing note the user may open instead (A3).
     existing: Option<NoteId>,
+}
+
+/// The dialog of UC-006 Rename Note (steps 2–3).
+struct RenameDialog {
+    from: NoteId,
+    title: String,
+    folder: String,
+    /// Why the last confirmation was refused (A1–A3).
+    problem: Option<String>,
+    /// The title is selected when the dialog opens.
+    select: bool,
+}
+
+/// What the user did in the rename dialog this frame.
+enum RenameAction {
+    None,
+    Cancel,
+    Rename,
+}
+
+/// The open tabs as a rename sees them (UC-006 A7): a linking note that is
+/// open is changed in its tab, which saves it with its next autosave.
+struct TabEdits<'a> {
+    tabs: &'a mut TabList<OpenTab>,
+    /// The renamed note, whose tab is changed after the move.
+    renamed: &'a NoteId,
+}
+
+impl OpenNotes for TabEdits<'_> {
+    fn text(&self, id: &NoteId) -> Option<String> {
+        if id == self.renamed {
+            return None;
+        }
+        let index = self.tabs.find(id)?;
+        Some(self.tabs.get(index).view.document().text())
+    }
+
+    fn edit(&mut self, id: &NoteId, edits: &[Edit]) {
+        if let Some(index) = self.tabs.find(id) {
+            let tab = self.tabs.get_mut(index);
+            tab.view.apply_edits(edits);
+            tab.quiet_save = !tab.autosave.is_unstored();
+            tab.autosave.changed(Instant::now());
+        }
+    }
+}
+
+/// `n` things, as "1 link" or "3 links".
+fn count(n: usize, thing: &str) -> String {
+    if n == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{n} {thing}s")
+    }
 }
 
 /// What the user did in the note dialog this frame.
@@ -266,6 +326,7 @@ impl UnderlineApp {
             create: None,
             open: None,
             new_note: None,
+            rename: None,
             tool_dialog: None,
             web_allowed: false,
             web_confirm: None,
@@ -876,6 +937,7 @@ impl UnderlineApp {
                 kept_outside: None,
                 on_disk: note.body.clone(),
                 saving_text: None,
+                quiet_save: false,
                 indexes: None,
             });
             // UC-004 A6: the tab used longest ago was closed; its changes
@@ -994,7 +1056,9 @@ impl UnderlineApp {
                     if let Some(text) = tab.saving_text.take() {
                         tab.on_disk = text;
                     }
-                    if std::mem::take(&mut tab.deleted) {
+                    if std::mem::take(&mut tab.quiet_save) {
+                        // UC-006 A7: the rename's report stays.
+                    } else if std::mem::take(&mut tab.deleted) {
                         // UC-005 A15: a note deleted outside is stored again.
                         self.status = format!("Stored {} again at its place", tab.title);
                     } else {
@@ -1350,6 +1414,7 @@ impl UnderlineApp {
             EditorCommand::Store => {
                 let mut tabs = std::mem::take(&mut self.tabs);
                 if let Some((_, tab)) = tabs.iter_mut().nth(index) {
+                    tab.quiet_save = false;
                     tab.autosave.changed(Instant::now());
                     self.status = match self.flush_tab_now(tab) {
                         Ok(()) => format!("Stored {}", tab.title),
@@ -1381,6 +1446,7 @@ impl UnderlineApp {
         match stored {
             Ok(name) => {
                 if tab.view.apply_format(&Format::Image(name.clone())) {
+                    tab.quiet_save = false;
                     tab.autosave.changed(Instant::now());
                 }
                 self.status = format!("Pasted image stored as {name}");
@@ -1424,6 +1490,7 @@ impl UnderlineApp {
                 match embed_file(&root, &tab.path, &path, false) {
                     Ok(embedded) => {
                         tab.view.insert_text(&embedded.place);
+                        tab.quiet_save = false;
                         tab.autosave.changed(Instant::now());
                         if embedded.renamed {
                             self.status =
@@ -1504,6 +1571,7 @@ impl UnderlineApp {
         self.tool_dialog = None;
         if let Some((_, tab)) = self.tabs.active_mut() {
             if tab.view.apply_format(&format) {
+                tab.quiet_save = false;
                 tab.autosave.changed(Instant::now());
             }
             match tab.editing_view {
@@ -1685,6 +1753,191 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-006 step 1: asks for the new title and folder of `id`.
+    fn start_rename(&mut self, id: NoteId) {
+        if self.rename.is_some() || self.workspace.is_none() {
+            return;
+        }
+        self.rename = Some(RenameDialog {
+            title: id.title(),
+            folder: id.folder().unwrap_or_default().to_owned(),
+            from: id,
+            problem: None,
+            select: true,
+        });
+    }
+
+    /// UC-006 steps 2–3.
+    fn show_rename_dialog(&mut self, ctx: &egui::Context) {
+        let (Some(dialog), Some(workspace)) = (&mut self.rename, &self.workspace) else {
+            return;
+        };
+        let mut action = RenameAction::None;
+        egui::Window::new("Rename note")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Title:");
+                let mut title = egui::TextEdit::singleline(&mut dialog.title).show(ui);
+                if std::mem::take(&mut dialog.select) {
+                    // Step 2: the current title is selected.
+                    title.response.request_focus();
+                    let all = egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(dialog.title.chars().count()),
+                    );
+                    title.state.cursor.set_char_range(Some(all));
+                    title.state.store(ui.ctx(), title.response.id);
+                }
+                ui.label("Folder (empty for the top folder, new folders are created):");
+                let folder = ui.text_edit_singleline(&mut dialog.folder);
+                // Step 2: the file name the note will get, while the user types.
+                let rename = Rename {
+                    folder: dialog.folder.clone(),
+                    title: dialog.title.clone(),
+                };
+                if let Ok(Some(planned)) = workspace.plan_rename(&dialog.from, &rename) {
+                    ui.weak(format!("File: {}", planned.to_file()));
+                }
+                // BR-009: the start page of a GitHub wiki.
+                if dialog.from.as_str() == HOME_TITLE {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "This is the Home note, the start page of a GitHub wiki. Renamed or moved, the wiki has no start page.",
+                    );
+                }
+                if let Some(problem) = &dialog.problem {
+                    ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+                }
+                ui.horizontal(|ui| {
+                    let enter = (title.response.lost_focus() || folder.lost_focus())
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Rename").clicked() || enter {
+                        action = RenameAction::Rename;
+                    }
+                    if ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        action = RenameAction::Cancel;
+                    }
+                });
+            });
+        match action {
+            RenameAction::None => {}
+            // A8: nothing is changed.
+            RenameAction::Cancel => self.rename = None,
+            RenameAction::Rename => self.rename_note(),
+        }
+    }
+
+    /// UC-006 steps 4–7.
+    fn rename_note(&mut self) {
+        let Some(dialog) = &self.rename else {
+            return;
+        };
+        let from = dialog.from.clone();
+        let rename = Rename {
+            folder: dialog.folder.clone(),
+            title: dialog.title.clone(),
+        };
+        // Step 5: unsaved changes of the note are saved first.
+        if let Some(index) = self.tabs.find(&from) {
+            let mut tabs = std::mem::take(&mut self.tabs);
+            let result = self.flush_tab_now(tabs.get_mut(index));
+            self.tabs = tabs;
+            if let Err(err) = result {
+                self.rename = None;
+                self.status = format!("The note could not be renamed, because {err}");
+                return;
+            }
+        }
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        let planned = match workspace.plan_rename(&from, &rename) {
+            Ok(Some(planned)) => planned,
+            // A4: nothing changed.
+            Ok(None) => {
+                self.rename = None;
+                return;
+            }
+            Err(problem) => return self.refuse_rename(problem),
+        };
+        let mut open = TabEdits {
+            tabs: &mut self.tabs,
+            renamed: &from,
+        };
+        match rename_note(workspace, &planned, &mut open) {
+            Ok(renamed) => self.renamed(&planned, renamed),
+            Err(problem) => self.refuse_rename(problem),
+        }
+    }
+
+    /// UC-006 A1–A3 keep the dialog with what the user entered; A5 reports
+    /// in the status bar.
+    fn refuse_rename(&mut self, problem: NewNoteProblem) {
+        let Some(dialog) = &mut self.rename else {
+            return;
+        };
+        match problem {
+            NewNoteProblem::Exists(id) => {
+                dialog.problem = Some(format!(
+                    "A note named {} exists in that folder. Change the title or the folder.",
+                    id.title()
+                ));
+            }
+            problem @ NewNoteProblem::Io { .. } => {
+                self.rename = None;
+                self.status = format!("The note could not be renamed: {problem}");
+            }
+            problem => {
+                let mut text = problem.to_string();
+                if let Some(first) = text.get_mut(0..1) {
+                    first.make_ascii_uppercase();
+                }
+                dialog.problem = Some(format!("{text}."));
+            }
+        }
+    }
+
+    /// UC-006 step 7: the tab, the remembered state, the note overview, and
+    /// the report (BR-007, A6).
+    fn renamed(&mut self, planned: &NoteMove, renamed: Renamed) {
+        self.rename = None;
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        if let Some(index) = self.tabs.find(&planned.from) {
+            let tab = self.tabs.get_mut(index);
+            tab.view.apply_edits(&renamed.own_edits);
+            tab.on_disk = tab.view.document().text();
+            tab.path = root.join(planned.to_file());
+            tab.facade.set_note_file(tab.path.clone());
+            tab.title = planned.to.title();
+            tab.deleted = false;
+            self.tabs.rename(&planned.from, planned.to.clone());
+        }
+        self.state.note_renamed(&root, &planned.from, &planned.to);
+        self.persist_tabs();
+        self.refresh_overview();
+        let mut status = format!(
+            "Renamed {} to {}; updated {} in {}",
+            planned.from.title(),
+            planned.to.title(),
+            count(renamed.links, "link"),
+            count(renamed.notes, "note"),
+        );
+        if !renamed.not_updated.is_empty() {
+            let names: Vec<String> = renamed.not_updated.iter().map(NoteId::title).collect();
+            status.push_str(&format!(
+                "; these notes could not be updated and still link to the old title: {}",
+                names.join(", ")
+            ));
+        }
+        self.status = status;
+    }
+
     fn start_create(&mut self) {
         if self.create.is_none() {
             self.open = None;
@@ -1725,7 +1978,16 @@ impl eframe::App for UnderlineApp {
         self.show_open_dialog(ctx);
         self.show_create_dialog(ctx);
         self.show_note_dialog(ctx);
+        self.show_rename_dialog(ctx);
         self.show_tool_dialog(ctx);
+        // UC-006 step 1: F2 renames the note of the active tab.
+        if self.rename.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2))
+        {
+            if let Some((id, _)) = self.tabs.active() {
+                self.start_rename(id.clone());
+            }
+        }
         self.show_web_confirm(ctx);
         self.write_state(ctx);
 
@@ -1815,17 +2077,29 @@ impl eframe::App for UnderlineApp {
                 });
                 ui.separator();
                 let mut selected = None;
+                let mut renaming = None;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for entry in &self.overview {
                         let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
-                        if ui.selectable_label(active, &entry.label).clicked() {
+                        let label = ui.selectable_label(active, &entry.label);
+                        if label.clicked() {
                             selected = Some(entry.id.clone());
                         }
+                        // UC-006 step 1: the context menu of the note.
+                        label.context_menu(|ui| {
+                            if ui.button("Rename…").clicked() {
+                                renaming = Some(entry.id.clone());
+                                ui.close_menu();
+                            }
+                        });
                     }
                 });
                 if let Some(id) = selected {
                     self.open_note(&id);
                     self.refresh_overview();
+                }
+                if let Some(id) = renaming {
+                    self.start_rename(id);
                 }
             });
         // UC-010 A4: a width the user dragged is kept once they let go.
@@ -1852,6 +2126,7 @@ impl eframe::App for UnderlineApp {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
             let mut close = None;
+            let mut renaming = None;
             egui::ScrollArea::horizontal()
                 .id_salt("tabs")
                 .show(ui, |ui| {
@@ -1864,6 +2139,13 @@ impl eframe::App for UnderlineApp {
                             if label.clicked() {
                                 activate = Some(index);
                             }
+                            // UC-006 step 1: the context menu of the tab.
+                            label.context_menu(|ui| {
+                                if ui.button("Rename…  F2").clicked() {
+                                    renaming = Some(id.clone());
+                                    ui.close_menu();
+                                }
+                            });
                             if label.middle_clicked() || ui.small_button("×").clicked() {
                                 close = Some(id.clone());
                             }
@@ -1883,6 +2165,9 @@ impl eframe::App for UnderlineApp {
             }
             if let Some(id) = close {
                 self.close_tab(&id, false);
+            }
+            if let Some(id) = renaming {
+                self.start_rename(id);
             }
             ui.separator();
             let Some((_, tab)) = self.tabs.active_mut() else {
@@ -1953,6 +2238,7 @@ impl eframe::App for UnderlineApp {
             });
             if let Some(tool) = tool_used {
                 if tab.view.apply_tool(tool) {
+                    tab.quiet_save = false;
                     tab.autosave.changed(Instant::now());
                 }
                 switched = true;
@@ -2001,6 +2287,7 @@ impl eframe::App for UnderlineApp {
                 followed = Some((link, tab.path.clone()));
             }
             if changed {
+                tab.quiet_save = false;
                 tab.autosave.changed(Instant::now());
             }
         });

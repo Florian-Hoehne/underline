@@ -148,6 +148,14 @@ impl<T> TabList<T> {
         (entry.note, entry.item)
     }
 
+    /// UC-006 step 7: the tab of `from` shows the note under its new name
+    /// `to`, at the same place.
+    pub fn rename(&mut self, from: &NoteId, to: NoteId) {
+        if let Some(entry) = self.tabs.iter_mut().find(|e| &e.note == from) {
+            entry.note = to;
+        }
+    }
+
     /// Takes all tabs out, left to right.
     pub fn drain(&mut self) -> Vec<(NoteId, T)> {
         self.active = None;
