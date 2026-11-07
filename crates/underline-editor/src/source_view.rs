@@ -1,8 +1,9 @@
 //! The source view (UC-005, ADR-012): the markup of a note, highlighted, with
 //! only the visible lines laid out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::sync::Arc;
 
 use eframe::egui::{
@@ -16,6 +17,7 @@ use crate::document::Document;
 use crate::Tool;
 use underline_facade::blocks::{link_at, parse_blocks};
 use underline_facade::formatting::{apply_format, Format};
+use underline_facade::sections::{section_at, sections, Section, SectionKey};
 
 const FONT_SIZE: f32 = 14.0;
 const PADDING: f32 = 6.0;
@@ -55,6 +57,15 @@ pub struct SourceView {
     request: Option<Tool>,
     /// A link the user followed with Ctrl+click (UC-004 A2, BR-006).
     followed: Option<String>,
+    /// The folded sections, shared with the facade of the tab (UC-004
+    /// BR-012).
+    folds: HashSet<SectionKey>,
+    /// The sections of the text and the revision they were found in.
+    sections: Option<(u64, Vec<Section>)>,
+    /// Counts the changes of the folded sections, so views lay out again.
+    fold_version: u64,
+    /// The fold version the line tops were computed for.
+    tops_folds: u64,
 }
 
 impl SourceView {
@@ -81,6 +92,10 @@ impl SourceView {
             pending_edit: None,
             request: None,
             followed: None,
+            folds: HashSet::new(),
+            sections: None,
+            fold_version: 0,
+            tops_folds: 0,
         }
     }
 
@@ -197,6 +212,130 @@ impl SourceView {
         self.scroll_to_cursor = true;
     }
 
+    /// The sections of the text (UC-004 BR-012), found again when it changed.
+    pub(crate) fn sections(&mut self) -> &[Section] {
+        let revision = self.doc.revision();
+        if self.sections.as_ref().is_none_or(|(r, _)| *r != revision) {
+            let found = sections(&self.doc.text(), self.highlight.format());
+            self.sections = Some((revision, found));
+        }
+        &self.sections.as_ref().expect("sections").1
+    }
+
+    /// The bytes hidden by folded sections, in order and not overlapping.
+    pub(crate) fn hidden(&mut self) -> Vec<Range<usize>> {
+        if self.folds.is_empty() {
+            return Vec::new();
+        }
+        let folds = self.folds.clone();
+        let mut hidden: Vec<Range<usize>> = Vec::new();
+        for section in self.sections() {
+            if !folds.contains(&section.key) || section.body.is_empty() {
+                continue;
+            }
+            match hidden.last_mut() {
+                Some(last) if section.body.start <= last.end => {
+                    last.end = last.end.max(section.body.end);
+                }
+                _ => hidden.push(section.body.clone()),
+            }
+        }
+        hidden
+    }
+
+    pub(crate) fn is_folded(&self, key: &SectionKey) -> bool {
+        self.folds.contains(key)
+    }
+
+    /// Counts the changes of the folded sections.
+    pub fn fold_version(&self) -> u64 {
+        self.fold_version
+    }
+
+    /// UC-004 BR-012: folds or expands `section`. A cursor inside the hidden
+    /// part moves to the end of the heading, so the section stays folded.
+    pub(crate) fn toggle_fold(&mut self, section: &Section) {
+        if !self.folds.remove(&section.key) {
+            self.folds.insert(section.key.clone());
+            let rope = self.doc.rope();
+            let byte = rope.char_to_byte(self.cursor);
+            if section.body.contains(&byte) {
+                let end = section
+                    .heading
+                    .end
+                    .saturating_sub(1)
+                    .max(section.heading.start);
+                self.cursor = rope.byte_to_char(end.min(rope.len_bytes()));
+                self.anchor = self.cursor;
+            }
+        }
+        self.fold_version += 1;
+    }
+
+    /// Ctrl+Shift+[ folds, Ctrl+Shift+] expands the section at the cursor
+    /// (UC-004 BR-012, NFR-011).
+    pub(crate) fn fold_key(&mut self, key: Key, modifiers: egui::Modifiers) -> bool {
+        if !(modifiers.command && modifiers.shift) {
+            return false;
+        }
+        let fold = match key {
+            Key::OpenBracket => true,
+            Key::CloseBracket => false,
+            _ => return false,
+        };
+        let byte = self.doc.rope().char_to_byte(self.cursor);
+        let Some(section) = section_at(self.sections(), byte).cloned() else {
+            return true;
+        };
+        if fold != self.is_folded(&section.key) {
+            self.toggle_fold(&section);
+        }
+        true
+    }
+
+    /// UC-004 BR-012: a folded section the cursor is in expands.
+    pub(crate) fn unfold_at_cursor(&mut self) {
+        if self.folds.is_empty() {
+            return;
+        }
+        let byte = self.doc.rope().char_to_byte(self.cursor);
+        let open: Vec<SectionKey> = self
+            .sections()
+            .iter()
+            .filter(|s| s.body.start <= byte && byte < s.body.end)
+            .map(|s| s.key.clone())
+            .collect();
+        let before = self.folds.len();
+        for key in open {
+            self.folds.remove(&key);
+        }
+        if self.folds.len() != before {
+            self.fold_version += 1;
+        }
+    }
+
+    /// Whether `line` is hidden by a folded section: it has no height.
+    fn is_hidden_line(&self, line: usize) -> bool {
+        line + 1 < self.tops.len()
+            && self.tops[line + 1] == self.tops[line]
+            && self.rows.get(line).is_some_and(|r| *r > 0)
+    }
+
+    /// The nearest line from `line` in the direction of `step` (1 or -1)
+    /// that is shown, or `line` when there is none.
+    fn visible_line(&self, line: usize, step: isize) -> usize {
+        let mut at = line as isize;
+        let lines = self.doc.len_lines() as isize;
+        while at >= 0 && at < lines && self.is_hidden_line(at as usize) {
+            at += step;
+        }
+        if at < 0 || at >= lines {
+            line
+        } else {
+            at as usize
+        }
+    }
+
     /// Draws the view and handles its input. Returns whether the text changed.
     pub fn show(&mut self, ui: &mut egui::Ui) -> bool {
         let font = FontId::monospace(FONT_SIZE);
@@ -208,6 +347,7 @@ impl SourceView {
         let mut changed = false;
         self.deadline = Some(std::time::Instant::now() + COLORING_BUDGET);
         self.uncolored = false;
+        self.unfold_at_cursor();
 
         egui::ScrollArea::vertical()
             .id_salt(self.id.with("scroll"))
@@ -217,10 +357,13 @@ impl SourceView {
                 // Line numbers on the left (FR-028; their settings come with
                 // UC-010).
                 let digits = lines.max(1).ilog10() as f32 + 1.0;
-                let gutter = digits * char_width + 2.0 * PADDING;
+                let gutter = digits * char_width + 2.0 * PADDING + FOLD_ARROW;
                 let width = ui.available_width();
                 let wrap_width = (width - gutter - 2.0 * PADDING).max(char_width * 8.0);
                 self.update_layout(wrap_width, char_width, row_height);
+                if self.tops_folds != self.fold_version {
+                    self.recompute_tops();
+                }
 
                 let size = Vec2::new(width, self.tops[lines] + 2.0 * PADDING);
                 let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -268,8 +411,12 @@ impl SourceView {
                     });
                     let page = (viewport.height() / row_height).floor().max(1.0) as usize;
                     changed = self.handle_keys(ui, page);
+                    self.unfold_at_cursor();
                     if changed {
                         self.update_layout(wrap_width, char_width, row_height);
+                    }
+                    if self.tops_folds != self.fold_version {
+                        self.recompute_tops();
                     }
                 }
 
@@ -281,7 +428,40 @@ impl SourceView {
                 let (selection_start, selection_end) = self.selection();
                 let selection_color = ui.visuals().selection.bg_fill;
                 let mut exact_changed = false;
+                // UC-004 BR-012: the arrows of the section headings shown.
+                let heading_lines: HashMap<usize, Section> = {
+                    let rope = self.doc.rope().clone();
+                    self.sections()
+                        .iter()
+                        .map(|s| (rope.byte_to_line(s.heading.start), s.clone()))
+                        .filter(|(line, _)| (first..last).contains(line))
+                        .collect()
+                };
+                let pointer = ui.input(|i| i.pointer.hover_pos());
+                let mut toggle = None;
                 for line in first..last {
+                    if self.is_hidden_line(line) {
+                        continue;
+                    }
+                    if let Some(section) = heading_lines.get(&line) {
+                        let top = origin.y + self.tops[line];
+                        let arrow = Rect::from_min_size(
+                            Pos2::new(rect.min.x + 2.0, top),
+                            Vec2::new(FOLD_ARROW - 2.0, row_height),
+                        );
+                        let folded = self.is_folded(&section.key);
+                        let hovered = pointer.is_some_and(|p| {
+                            p.y >= top && p.y < top + row_height && rect.contains(p)
+                        });
+                        let click =
+                            ui.interact(arrow, self.id.with(("fold", line)), Sense::click());
+                        if folded || hovered || click.hovered() {
+                            paint_fold_arrow(&painter, arrow, folded, numbers);
+                        }
+                        if click.clicked() {
+                            toggle = Some(section.clone());
+                        }
+                    }
                     let galley = self.galley(ui, &font, line);
                     let rows = galley.rows.len().max(1) as u32;
                     if self.rows[line] != rows {
@@ -332,7 +512,25 @@ impl SourceView {
                             );
                         }
                     }
+                    let folded_heading = heading_lines
+                        .get(&line)
+                        .is_some_and(|s| self.is_folded(&s.key));
+                    if folded_heading {
+                        let end = galley.rect.right_bottom();
+                        painter.text(
+                            top + Vec2::new(end.x + 8.0, end.y),
+                            egui::Align2::LEFT_BOTTOM,
+                            "…",
+                            font.clone(),
+                            numbers,
+                        );
+                    }
                     painter.galley(top, galley, foreground);
+                }
+                if let Some(section) = toggle {
+                    self.toggle_fold(&section);
+                    self.recompute_tops();
+                    ui.ctx().request_repaint();
                 }
                 if exact_changed {
                     self.recompute_tops();
@@ -417,11 +615,33 @@ impl SourceView {
     }
 
     fn recompute_tops(&mut self) {
+        // Lines of folded sections take no room (UC-004 BR-012).
+        let hidden_lines: Vec<Range<usize>> = {
+            let hidden = self.hidden();
+            let rope = self.doc.rope();
+            hidden
+                .iter()
+                .filter(|r| !r.is_empty())
+                .map(|r| {
+                    let first = rope.byte_to_line(r.start.min(rope.len_bytes()));
+                    let last = rope.byte_to_line((r.end - 1).min(rope.len_bytes()));
+                    first..last + 1
+                })
+                .collect()
+        };
+        self.tops_folds = self.fold_version;
         self.tops.clear();
         self.tops.reserve(self.rows.len() + 1);
         let mut y = 0.0;
-        for rows in &self.rows {
+        let mut hidden = hidden_lines.iter().peekable();
+        for (line, rows) in self.rows.iter().enumerate() {
             self.tops.push(y);
+            while hidden.peek().is_some_and(|r| r.end <= line) {
+                hidden.next();
+            }
+            if hidden.peek().is_some_and(|r| r.contains(&line)) {
+                continue;
+            }
             y += *rows as f32 * self.row_height;
         }
         self.tops.push(y);
@@ -479,6 +699,9 @@ impl SourceView {
     }
 
     fn key(&mut self, key: Key, modifiers: egui::Modifiers, page: usize) -> bool {
+        if self.fold_key(key, modifiers) {
+            return false;
+        }
         if let Some(tool) = Tool::for_key(key, modifiers) {
             return self.apply_tool(tool);
         }
@@ -519,8 +742,15 @@ impl SourceView {
             }
             Key::ArrowLeft => target = Some(self.cursor.saturating_sub(1)),
             Key::ArrowRight => target = Some((self.cursor + 1).min(rope_len)),
-            Key::ArrowUp => target = Some(self.at_line(line.saturating_sub(1), column)),
-            Key::ArrowDown => target = Some(self.at_line(line + 1, column)),
+            // Folded lines are stepped over.
+            Key::ArrowUp => {
+                let up = self.visible_line(line.saturating_sub(1), -1);
+                target = Some(self.at_line(up, column));
+            }
+            Key::ArrowDown => {
+                let down = self.visible_line(line + 1, 1);
+                target = Some(self.at_line(down, column));
+            }
             Key::PageUp => target = Some(self.at_line(line.saturating_sub(page), column)),
             Key::PageDown => target = Some(self.at_line(line + page, column)),
             Key::Home if modifiers.command => target = Some(0),
@@ -711,6 +941,30 @@ fn layout_job(text: &str, spans: &[Span], font: &FontId, plain: Color32) -> Layo
         job.append(&text[end..], 0.0, TextFormat::simple(font.clone(), plain));
     }
     job
+}
+
+/// Room for the fold arrows left of the line numbers.
+const FOLD_ARROW: f32 = 14.0;
+
+/// UC-004 BR-012: the arrow of a section, pointing right when folded and
+/// down when expanded.
+pub(crate) fn paint_fold_arrow(painter: &egui::Painter, rect: Rect, folded: bool, color: Color32) {
+    let c = rect.center();
+    let r = 4.0;
+    let points = if folded {
+        vec![
+            c + Vec2::new(-r * 0.6, -r),
+            c + Vec2::new(r * 0.9, 0.0),
+            c + Vec2::new(-r * 0.6, r),
+        ]
+    } else {
+        vec![
+            c + Vec2::new(-r, -r * 0.6),
+            c + Vec2::new(r, -r * 0.6),
+            c + Vec2::new(0.0, r * 0.9),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
 }
 
 fn color([r, g, b, a]: [u8; 4]) -> Color32 {

@@ -179,3 +179,12 @@ A double click on an image or a diagram, or the magnifier shown at its corner wh
 over the whole window (FR-039). There it can be zoomed with the mouse wheel or the keys for larger and smaller,
 moved by dragging, and fitted to the window again. The escape key, a click beside it, or its close button closes
 it; the note is then shown at the same place as before. A single click puts the cursor into it, as in UC-005 BR-008.
+
+### BR-012: Folding
+
+A section is a heading with everything below it up to the next heading of the same or a higher level; folding it
+hides everything but its heading, its own sections included (FR-027). An arrow before each heading folds and expands
+its section, shown while pointing at the heading and always at a folded one, in the facade before the heading and in
+the source view beside its line number; the keyboard folds and expands the section the cursor is in. A folded heading
+shows that something is hidden behind it. When the cursor moves into a folded section, the section expands. Both
+editing views of a tab share the folded sections, which stay folded while the tab is open (step 6).

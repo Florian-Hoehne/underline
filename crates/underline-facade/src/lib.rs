@@ -12,6 +12,7 @@ pub mod formatting;
 pub mod highlight;
 pub mod images;
 pub mod index;
+pub mod sections;
 
 use underline_core::NoteFormat;
 

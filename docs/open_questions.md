@@ -750,3 +750,14 @@ zoomed, moved, and fitted again; escape, a click beside it, or its close button 
 
 Answer: As a diagram: the table is shown formatted, and while the cursor is in it, its markup is shown below it and
 edited there; editing the cells in place may follow later.
+
+## OQ-075: How are sections folded, and do both editing views share it?
+
+**Element:** FR-027, UC-004 step 5 and 6
+**Raised by:** implementation of folding, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-004](use_cases/UC-004-read-note.md), BR-012
+
+Answer: By an arrow before each heading and by keys for the section at the cursor; the facade and the source view of a
+tab share the folded sections.

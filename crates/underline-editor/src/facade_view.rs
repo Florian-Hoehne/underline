@@ -20,8 +20,10 @@ use underline_facade::blocks::{
 use underline_facade::diagram::{DiagramLanguage, DiagramState, Diagrams, Picture};
 use underline_facade::highlight::highlight_code;
 use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
+use underline_facade::sections::Section;
 
 use crate::enlarged::{Enlarged, Shown};
+use crate::source_view::paint_fold_arrow;
 use crate::{fonts, SourceView, Tool};
 
 const PADDING: f32 = 12.0;
@@ -63,6 +65,12 @@ pub struct FacadeView {
     /// A source offset whose block is scrolled to the top at the next
     /// frame (UC-004 step 5).
     reveal: Option<usize>,
+    /// Blocks hidden by folded sections, and the section of each heading
+    /// block (UC-004 BR-012).
+    hidden: Vec<bool>,
+    heading_sections: HashMap<usize, Section>,
+    /// The fold version and text revision `hidden` was made for.
+    folds_seen: Option<(u64, u64)>,
 }
 
 /// What a block shows besides its text: the marker before it, in chars, and
@@ -125,6 +133,9 @@ impl FacadeView {
             last_pictures: HashMap::new(),
             enlarged: None,
             reveal: None,
+            hidden: Vec::new(),
+            heading_sections: HashMap::new(),
+            folds_seen: None,
         }
     }
 
@@ -140,6 +151,49 @@ impl FacadeView {
         self.images = Some(images);
         self.place = Some((root, note));
         self
+    }
+
+    /// UC-004 BR-012: which blocks folded sections hide, and the section of
+    /// each heading, when the folds or the text changed.
+    fn update_folds(&mut self, source: &mut SourceView) {
+        source.unfold_at_cursor();
+        let seen = (source.fold_version(), source.document().revision());
+        if self.folds_seen == Some(seen) && self.hidden.len() == self.blocks.len() {
+            return;
+        }
+        self.folds_seen = Some(seen);
+        let hidden = source.hidden();
+        let by_heading: HashMap<usize, Section> = source
+            .sections()
+            .iter()
+            .map(|s| (s.heading.start, s.clone()))
+            .collect();
+        self.hidden = self
+            .blocks
+            .iter()
+            .map(|b| hidden.iter().any(|r| r.contains(&b.span.start)))
+            .collect();
+        self.heading_sections = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| matches!(b.kind, BlockKind::Heading(_)))
+            .filter_map(|(i, b)| by_heading.get(&b.span.start).map(|s| (i, s.clone())))
+            .collect();
+        self.tops.clear();
+    }
+
+    /// The next block from `index` in the direction of `step` that is
+    /// shown, if any.
+    fn next_visible(&self, index: usize, step: isize) -> Option<usize> {
+        let mut at = index as isize + step;
+        while at >= 0 && (at as usize) < self.blocks.len() {
+            if !self.hidden.get(at as usize).copied().unwrap_or(false) {
+                return Some(at as usize);
+            }
+            at += step;
+        }
+        None
     }
 
     /// Whether block `index` is shown as a picture: a diagram or an image.
@@ -190,6 +244,7 @@ impl FacadeView {
             weak: rgba(foreground).gamma_multiply(0.55),
         };
         self.reparse(source);
+        self.update_folds(source);
         self.update_editing(source);
         let mut changed = false;
 
@@ -262,6 +317,7 @@ impl FacadeView {
                     if changed {
                         self.reparse(source);
                     }
+                    self.update_folds(source);
                     self.update_editing(source);
                     self.layout_all(ui, source, &theme, width);
                 }
@@ -287,9 +343,45 @@ impl FacadeView {
                 let last = (self.block_at(viewport.max.y - PADDING) + 1).min(self.blocks.len());
                 let (sel_start, sel_end) = source.selection();
                 let rope = source.document().rope().clone();
+                let pointer = ui.input(|i| i.pointer.hover_pos());
+                let mut toggle = None;
                 for index in first..last {
+                    if self.hidden.get(index).copied().unwrap_or(false) {
+                        continue;
+                    }
                     let laid = self.laid(ui, source, &theme, index);
                     let block_top = origin + Vec2::new(0.0, self.tops[index]);
+                    // UC-004 BR-012: the arrow before a section heading, and
+                    // "…" behind a folded one.
+                    if let Some(section) = self.heading_sections.get(&index) {
+                        let row = laid.galley.rows.first().map_or(20.0, |r| r.rect.height());
+                        let arrow = Rect::from_min_size(
+                            Pos2::new(rect.min.x, block_top.y),
+                            Vec2::new(PADDING, row),
+                        );
+                        let folded = source.is_folded(&section.key);
+                        let hovered = pointer.is_some_and(|p| {
+                            p.y >= block_top.y && p.y < block_top.y + row && rect.contains(p)
+                        });
+                        let click =
+                            ui.interact(arrow, self.id.with(("fold", index)), Sense::click());
+                        if folded || hovered || click.hovered() {
+                            paint_fold_arrow(&painter, arrow, folded, theme.weak);
+                        }
+                        if click.clicked() {
+                            toggle = Some(section.clone());
+                        }
+                        if folded {
+                            let end = laid.galley.rect.right_bottom();
+                            painter.text(
+                                block_top + Vec2::new(end.x + 10.0, end.y),
+                                egui::Align2::LEFT_BOTTOM,
+                                "…",
+                                FontId::proportional(BODY_SIZE),
+                                theme.weak,
+                            );
+                        }
+                    }
                     let top = block_top + laid.offset;
                     let block = &self.blocks[index];
                     match &laid.figure {
@@ -397,6 +489,13 @@ impl FacadeView {
                     }
                 }
 
+                if let Some(section) = toggle {
+                    source.toggle_fold(&section);
+                    self.update_folds(source);
+                    self.layout_all(ui, source, &theme, width);
+                    ui.ctx().request_repaint();
+                }
+
                 // UC-004 BR-011: the magnifier at the corner of the picture
                 // under the pointer enlarges it.
                 // The pointer is asked directly: over the button, the facade
@@ -496,6 +595,9 @@ impl FacadeView {
         let mut y = 0.0;
         for index in 0..self.blocks.len() {
             tops.push(y);
+            if self.hidden.get(index).copied().unwrap_or(false) {
+                continue;
+            }
             let laid = self.laid(ui, source, theme, index);
             let extra = match self.blocks[index].kind {
                 BlockKind::ThematicBreak => 16.0,
@@ -513,7 +615,9 @@ impl FacadeView {
 
     fn block_at(&self, y: f32) -> usize {
         let count = self.blocks.len();
-        if count == 0 {
+        // Without a layout (it is made again within the frame) there is no
+        // block at a height.
+        if count == 0 || self.tops.len() < count {
             return 0;
         }
         self.tops[..count]
@@ -1030,6 +1134,9 @@ impl FacadeView {
         key: Key,
         modifiers: egui::Modifiers,
     ) -> bool {
+        if source.fold_key(key, modifiers) {
+            return false;
+        }
         let Some((index, at)) = self.cursor_position(source) else {
             if key == Key::Enter {
                 return self.type_text(source, "\n");
@@ -1071,9 +1178,9 @@ impl FacadeView {
             Key::ArrowLeft => {
                 target = Some(if at > 0 {
                     self.char_of(source, index, at - 1)
-                } else if index > 0 {
-                    let previous = self.blocks[index - 1].text().chars().count();
-                    self.char_of(source, index - 1, previous)
+                } else if let Some(previous) = self.next_visible(index, -1) {
+                    let count = self.blocks[previous].text().chars().count();
+                    self.char_of(source, previous, count)
                 } else {
                     self.char_of(source, index, 0)
                 });
@@ -1081,8 +1188,8 @@ impl FacadeView {
             Key::ArrowRight => {
                 target = Some(if at < count {
                     self.char_of(source, index, at + 1)
-                } else if index + 1 < self.blocks.len() {
-                    self.char_of(source, index + 1, 0)
+                } else if let Some(next) = self.next_visible(index, 1) {
+                    self.char_of(source, next, 0)
                 } else {
                     self.char_of(source, index, count)
                 });
@@ -1099,13 +1206,15 @@ impl FacadeView {
                 };
                 let same_row = moved.rcursor.row == current.rcursor.row;
                 target = Some(match key {
-                    Key::ArrowUp if same_row && index > 0 => {
-                        let previous = self.blocks[index - 1].text().chars().count();
-                        self.char_of(source, index - 1, previous.min(at))
+                    Key::ArrowUp if same_row && self.next_visible(index, -1).is_some() => {
+                        let previous = self.next_visible(index, -1).unwrap_or(index);
+                        let count = self.blocks[previous].text().chars().count();
+                        self.char_of(source, previous, count.min(at))
                     }
-                    Key::ArrowDown if same_row && index + 1 < self.blocks.len() => {
-                        let next = self.blocks[index + 1].text().chars().count();
-                        self.char_of(source, index + 1, at.min(next))
+                    Key::ArrowDown if same_row && self.next_visible(index, 1).is_some() => {
+                        let next = self.next_visible(index, 1).unwrap_or(index);
+                        let count = self.blocks[next].text().chars().count();
+                        self.char_of(source, next, at.min(count))
                     }
                     _ => {
                         let at = moved.ccursor.index.saturating_sub(laid.prefix).min(count);
@@ -1945,6 +2054,65 @@ mod tests {
         assert!(h.text().contains("| a | 1 |\n| b | 22 |"), "{}", h.text());
         let (cells, _, _) = look(&mut h);
         assert_eq!(cells, 6, "the table follows the change");
+    }
+
+    /// TC-004-09, UC-004 BR-012: folding `Setup` hides its content, `Linux`
+    /// included, in the facade and the source view alike; the arrow keys
+    /// step over it, and expanding shows everything again. The text stays.
+    #[test]
+    fn uc004_tc09_fold_and_expand_sections() {
+        let note = "# Intro\n\nText\n\n# Setup\n\nSteps\n\n## Linux\n\napt\n\n# Usage\n\nRun\n";
+        let mut h = Harness::new(note);
+        let ctrl_shift = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                shift: true,
+                ..Default::default()
+            },
+        };
+        h.cursor_after("# Setup");
+        h.frame(vec![ctrl_shift(Key::OpenBracket)]);
+        h.frame(vec![]);
+        let hidden: Vec<String> = h
+            .facade
+            .blocks
+            .iter()
+            .zip(&h.facade.hidden)
+            .filter(|(_, hidden)| **hidden)
+            .map(|(b, _)| b.text())
+            .collect();
+        assert_eq!(hidden, ["Steps", "Linux", "apt"]);
+        assert_eq!(h.text(), note, "folding does not change the note");
+        // The source view of the tab shares the fold.
+        let setup = h
+            .source
+            .sections()
+            .iter()
+            .find(|s| s.key.heading == "# Setup")
+            .cloned()
+            .unwrap();
+        assert!(h.source.is_folded(&setup.key));
+        // Arrow down from the folded heading goes to `Usage`.
+        h.key(Key::ArrowDown);
+        let (index, _) = h.facade.cursor_position(&h.source).unwrap();
+        assert_eq!(h.facade.blocks[index].text(), "Usage");
+        // Expand again.
+        h.cursor_after("# Setup");
+        h.frame(vec![ctrl_shift(Key::CloseBracket)]);
+        h.frame(vec![]);
+        assert!(h.facade.hidden.iter().all(|hidden| !hidden));
+        // A cursor moved into a folded section expands it.
+        h.frame(vec![ctrl_shift(Key::OpenBracket)]);
+        h.frame(vec![]);
+        assert!(h.facade.hidden.iter().any(|hidden| *hidden));
+        h.cursor_after("apt");
+        h.frame(vec![]);
+        assert!(h.facade.hidden.iter().all(|hidden| !hidden));
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and
