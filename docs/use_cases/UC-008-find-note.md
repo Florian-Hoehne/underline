@@ -9,7 +9,7 @@
 **Trigger:** The user starts to type in the search field of the note overview.  
 **Status:** Draft  
 
-**Requirements:** [FR-007, FR-017, FR-018, NFR-003, NFR-011, NFR-013](../requirements.md)
+**Requirements:** [FR-007, FR-017, FR-018, NFR-002, NFR-003, NFR-011, NFR-013](../requirements.md)
 
 ## Preconditions
 
