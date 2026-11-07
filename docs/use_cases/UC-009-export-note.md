@@ -122,3 +122,12 @@ The file dialog proposes the title of the note as file name: `Getting-Started.ad
 ### BR-008: Keyboard
 
 Ctrl+Shift+E (Cmd+Shift+E on macOS) asks for the kind of export of the note in the active tab; the arrow keys and Enter choose it (NFR-011).
+
+### BR-009: Text and title
+
+In the HTML and the PDF export, text stays text: it can be selected, copied, and searched, and every character the note shows appears, also umlauts and other scripts. Both carry the title of the note as the title of the document.
+
+### BR-010: One note, unchanged
+
+One note is exported at a time; exporting several notes or a folder at once is not part of this use case (OQ-122). Exporting never changes or replaces the note; turning a note into the other note format in place is not part of it either (OQ-123).
+

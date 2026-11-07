@@ -1202,3 +1202,41 @@ Answer: Their text stays but they are no links; web addresses and links to headi
 **Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
 
 Answer: From the context menus of the note overview and the tab, and with Ctrl+Shift+E for the active note.
+
+## OQ-120: Can several notes or a folder be exported at once?
+
+**Element:** UC-009 BR-010
+**Raised by:** spec review UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: No; one note at a time.
+
+## OQ-121: Is there a conversion that replaces the note by the other note format?
+
+**Element:** UC-009 BR-010
+**Raised by:** spec review UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: No; the note stays unchanged, and an export into the workspace adds a new note.
+
+## OQ-122: Should a folder or several notes be exportable as one document?
+
+**Element:** UC-009 BR-010, FR-014 to FR-016
+**Raised by:** spec review UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Open
+
+Open. No requirement asks for it yet.
+
+## OQ-123: Should a note be convertible to the other note format in place, with the links following it?
+
+**Element:** UC-009 BR-010, FR-014
+**Raised by:** spec review UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Open
+
+Open. No requirement asks for it yet.
