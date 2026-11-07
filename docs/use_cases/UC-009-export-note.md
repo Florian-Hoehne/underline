@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user has a copy of a note in the other note format, as a standalone HTML file, or as a PDF file, with its diagrams and images, at a place of their choice.  
 **Trigger:** The user asks to export a note.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-014, FR-015, FR-016, NFR-006, NFR-011, NFR-013, NFR-014, NFR-015](../requirements.md)
 
