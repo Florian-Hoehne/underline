@@ -129,3 +129,12 @@ A note or file in conflict is marked with the letter C in the note overview and 
 ### BR-006: Keyboard
 
 In a note with conflicts, F7 and Shift+F7 move to the next and previous open place; Alt+H, Alt+R, and Alt+B choose "Here", "Remote", and "Both" for the place at the cursor (NFR-011).
+
+### BR-007: Other use cases while in conflict
+
+A note with open places is saved as it shows them, so a crash loses nothing (NFR-006). It is not exported (UC-009) until it is resolved; the export says so. Renaming or deleting it (UC-006, UC-007) waits until the conflicts are resolved or the sync is aborted. What agents may do with a note in conflict belongs to UC-019 (OQ-156).
+
+### BR-008: Abort is safe
+
+Aborting never touches the local commits, the changes left out of commits, or notes the conflict did not involve; it takes back only what the stopped sync joined.
+

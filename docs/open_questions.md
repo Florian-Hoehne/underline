@@ -1559,3 +1559,12 @@ Answer: No; it can wait, while commits, branch switches, and syncs wait too; the
 **Resolved in:** [UC-015](use_cases/UC-015-resolve-sync-conflict.md)
 
 Answer: One version is chosen for the whole file; the other is kept as a copy next to it.
+
+## OQ-156: What may an agent do with a note in conflict?
+
+**Element:** UC-015 BR-007, UC-019
+**Raised by:** spec review UC-015, 2026-11-07
+**Blocking:** No
+**Status:** Open
+
+An agent writing a note through the MCP server (UC-019) could write into a note with open conflict places. To be decided with UC-019: refuse, read only, or allow.
