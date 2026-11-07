@@ -1062,3 +1062,43 @@ Answer: The user is asked a second time whether to delete the note for good; oth
 **Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
 
 Answer: No; one note at a time.
+
+## OQ-106: Where does the user search?
+
+**Element:** UC-008 step 1, BR-007
+**Raised by:** /use-case-spec UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: In a search field above the note overview, with Ctrl+Shift+F; while it holds text, the overview shows the found notes.
+
+## OQ-107: What does the search look at?
+
+**Element:** UC-008 BR-001
+**Raised by:** /use-case-spec UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: Titles, folders, and the text of the notes in their markup; title and folder matches come first.
+
+## OQ-108: How are the found notes shown?
+
+**Element:** UC-008 step 2, BR-004, A5
+**Raised by:** /use-case-spec UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: Each note with its title, folder, and number of places, and the lines found with the words marked; choosing one opens the note at that place.
+
+## OQ-109: How is the search text read?
+
+**Element:** UC-008 BR-002
+**Raised by:** /use-case-spec UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: All words must occur, in any order and case; words in double quotes are one sequence; no further options.
