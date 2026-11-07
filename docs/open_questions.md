@@ -1608,3 +1608,13 @@ Answer: In the section Agents of the settings.
 **Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
 
 Answer: Install asks whether to switch it on.
+
+## OQ-161: Does Underline offer MCP install on its own?
+
+**Element:** UC-016 BR-007
+**Raised by:** spec review UC-016, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
+
+Answer: No; only in the section Agents of the settings.

@@ -113,3 +113,12 @@ Installing never switches the MCP server on without asking (A1); whether an agen
 ### BR-006: State shown
 
 For each tool, the list shows "not found", "not installed", "installed", or "installed for another place" (A2), checked again whenever the section is opened.
+
+### BR-007: Only when asked
+
+Underline offers installing only in the section "Agents" of the settings; it never suggests it on its own, since letting agents reach the notes is the user's decision.
+
+### BR-008: Other workspaces' entries
+
+The list concerns the open workspace only. Entries of other workspaces, also of workspaces that no longer exist, are left as they are; the user removes them from that workspace or in the tool.
+
