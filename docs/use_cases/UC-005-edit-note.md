@@ -236,6 +236,9 @@ source is shown in a frame below the picture and edited there; the picture follo
 the diagram, only the picture is shown again. A diagram whose source has an error is shown as its source with the
 error (UC-004 A11).
 
+A table is shown formatted in the same way: while the cursor is in it, its markup is shown in a frame below the table
+and edited there, and the table follows each change.
+
 ### BR-009: Vim keys
 
 The Vim input mode offers the normal, insert, and visual mode; motions, the operators delete, change, yank, and put; counts; undo and redo; search with `/` and `n`; `:q` to close the tab; and `:w` to store at once. The status bar shows the active mode and its most important commands (FR-026).

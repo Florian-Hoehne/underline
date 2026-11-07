@@ -739,3 +739,14 @@ follows each change. Without the cursor only the picture is shown.
 
 Answer: A double click or a magnifier at the corner of the picture opens it over the whole window, where it is
 zoomed, moved, and fitted again; escape, a click beside it, or its close button returns to the note at the same place.
+
+## OQ-074: How is a table edited in the facade?
+
+**Element:** UC-005 BR-008, UC-004 step 3
+**Raised by:** implementation of tables, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-005](use_cases/UC-005-edit-note.md), BR-008
+
+Answer: As a diagram: the table is shown formatted, and while the cursor is in it, its markup is shown below it and
+edited there; editing the cells in place may follow later.

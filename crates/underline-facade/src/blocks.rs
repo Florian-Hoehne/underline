@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use comrak::nodes::{AstNode, ListType, NodeValue};
+use comrak::nodes::{AstNode, ListType, NodeValue, TableAlignment};
 use comrak::{parse_document, Arena, Options};
 use underline_core::NoteFormat;
 
@@ -55,6 +55,9 @@ pub enum BlockKind {
     Admonition(String),
     /// A block the facade shows and edits as its markup (UC-005 BR-008).
     Markup,
+    /// A table (UC-004 step 3); its runs are its markup, edited in place
+    /// below the formatted table (UC-005 BR-008).
+    Table(Box<Table>),
     /// An image on its own (UC-004 step 3): where it is, its alternative
     /// text, and its caption. Its runs are its markup, edited in place
     /// below the picture.
@@ -63,6 +66,34 @@ pub enum BlockKind {
         alt: String,
         caption: Option<String>,
     },
+}
+
+/// How the text of a table column is aligned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CellAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+/// The content of a table: its rows of cells, each cell its styled text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct Table {
+    /// The first row is the header.
+    pub header: bool,
+    /// The alignment of each column.
+    pub align: Vec<CellAlign>,
+    pub rows: Vec<Vec<Vec<Run>>>,
+    /// The title of an AsciiDoc table, shown as its caption.
+    pub caption: Option<String>,
+}
+
+impl Table {
+    /// The number of columns: that of the widest row.
+    pub fn columns(&self) -> usize {
+        self.rows.iter().map(Vec::len).max().unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -404,6 +435,37 @@ fn collect<'a>(
                 )],
             });
         }
+        NodeValue::Table(table) => {
+            let align = table
+                .alignments
+                .iter()
+                .map(|a| match a {
+                    TableAlignment::Center => CellAlign::Center,
+                    TableAlignment::Right => CellAlign::Right,
+                    _ => CellAlign::Left,
+                })
+                .collect();
+            let mut header = false;
+            let rows = node
+                .children()
+                .map(|row| {
+                    if let NodeValue::TableRow(true) = row.data.borrow().value {
+                        header = true;
+                    }
+                    row.children()
+                        .map(|cell| inline_runs(cell, source, lines))
+                        .collect()
+                })
+                .collect();
+            let mut block = markup_block(source, span);
+            block.kind = BlockKind::Table(Box::new(Table {
+                header,
+                align,
+                rows,
+                caption: None,
+            }));
+            blocks.push(block);
+        }
         NodeValue::ThematicBreak => blocks.push(Block {
             kind: BlockKind::ThematicBreak,
             span,
@@ -440,7 +502,7 @@ fn only_image<'a>(paragraph: &'a AstNode<'a>) -> Option<BlockKind> {
 }
 
 /// A block shown as its markup, one to one.
-fn markup_block(source: &str, span: Range<usize>) -> Block {
+pub(crate) fn markup_block(source: &str, span: Range<usize>) -> Block {
     let text = source[span.clone()].trim_end_matches('\n').to_owned();
     let end = span.start + text.len();
     Block {
@@ -593,7 +655,13 @@ mod tests {
     const NOTE: &str = "# Hi *there*\n\nSome **bold \\* x** and [a link](http://x) ~~gone~~.\nnext line\n\n- one\n- [x] two\n  1. inner\n\n> quoted\n\n```rust\nfn a() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n";
 
     fn kinds(blocks: &[Block]) -> Vec<String> {
-        blocks.iter().map(|b| format!("{:?}", b.kind)).collect()
+        blocks
+            .iter()
+            .map(|b| match b.kind {
+                BlockKind::Table(_) => "Table".to_owned(),
+                _ => format!("{:?}", b.kind),
+            })
+            .collect()
     }
 
     #[test]
@@ -609,7 +677,7 @@ mod tests {
                 "ListItem { depth: 1, marker: Some(Number(1)), checked: None }",
                 "Quote(1)",
                 "Code { language: \"rust\" }",
-                "Markup",
+                "Table",
                 "ThematicBreak",
             ]
         );
@@ -721,6 +789,30 @@ mod tests {
         );
         assert_eq!(blocks[0].text(), "![The plan](img/plan.png)");
         assert_eq!(blocks[1].kind, BlockKind::Paragraph);
+    }
+
+    /// UC-004 step 3: a table with its header, alignment, and formatted
+    /// cells; its text is its markup, for editing.
+    #[test]
+    fn markdown_tables() {
+        let note = "| Name | Size |\n|:---|---:|\n| **a** | 1 |\n| [b](x.md) | 22 |\n";
+        let blocks = parse_blocks(note, NoteFormat::Markdown);
+        let BlockKind::Table(table) = &blocks[0].kind else {
+            panic!("{:?}", blocks[0].kind);
+        };
+        assert!(table.header);
+        assert_eq!(table.align, [CellAlign::Left, CellAlign::Right]);
+        assert_eq!(table.columns(), 2);
+        let text = |cell: &Vec<Run>| cell.iter().map(|r| r.text.as_str()).collect::<String>();
+        let rows: Vec<Vec<String>> = table
+            .rows
+            .iter()
+            .map(|r| r.iter().map(text).collect())
+            .collect();
+        assert_eq!(rows, [["Name", "Size"], ["a", "1"], ["b", "22"]]);
+        assert!(table.rows[1][0][0].style.bold);
+        assert_eq!(table.rows[2][0][0].style.link.as_deref(), Some("x.md"));
+        assert_eq!(blocks[0].text(), note.trim_end());
     }
 
     #[test]

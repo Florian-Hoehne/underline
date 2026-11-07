@@ -14,7 +14,9 @@ use eframe::egui::{
     Rect, Sense, Stroke, TextFormat, Vec2,
 };
 use underline_core::{resolve_link, LinkTarget, NoteFormat};
-use underline_facade::blocks::{insert_typed, link_at, parse_blocks, Block, BlockKind, ListMarker};
+use underline_facade::blocks::{
+    insert_typed, link_at, parse_blocks, Block, BlockKind, CellAlign, ListMarker, Run, Table,
+};
 use underline_facade::diagram::{DiagramLanguage, DiagramState, Diagrams, Picture};
 use underline_facade::highlight::highlight_code;
 use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
@@ -84,6 +86,23 @@ enum Figure {
     Picture(egui::TextureId, Vec2),
     /// A message, wrapped to the width of the facade.
     Message(Arc<Galley>),
+    /// A table, laid out cell by cell, below `top`.
+    Table(TableLayout),
+}
+
+/// A table laid out for the facade.
+struct TableLayout {
+    /// Where the table starts below the top of its block (after a caption).
+    top: f32,
+    size: Vec2,
+    /// The cells: their rectangle within the table, their text, and whether
+    /// they belong to the header.
+    cells: Vec<(Rect, Arc<Galley>, bool)>,
+    /// The x of each column border and the y of each row border.
+    columns: Vec<f32>,
+    rows: Vec<f32>,
+    /// The height of the header row, 0 without one.
+    header: f32,
 }
 
 impl FacadeView {
@@ -127,6 +146,7 @@ impl FacadeView {
     fn is_figure(&self, index: usize) -> bool {
         match &self.blocks[index].kind {
             BlockKind::Image { .. } => self.images.is_some(),
+            BlockKind::Table(_) => true,
             kind => self.diagrams.is_some() && diagram_language(kind).is_some(),
         }
     }
@@ -284,6 +304,9 @@ impl FacadeView {
                         Some(Figure::Message(message)) => {
                             painter.galley(block_top, Arc::clone(message), theme.weak);
                         }
+                        Some(Figure::Table(table)) => {
+                            paint_table(&painter, table, block_top, &theme);
+                        }
                         None => {}
                     }
                     if let Some((caption_top, caption)) = &laid.caption {
@@ -294,7 +317,10 @@ impl FacadeView {
                         );
                     }
                     match &block.kind {
-                        BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Image { .. }
+                        BlockKind::Code { .. }
+                        | BlockKind::Markup
+                        | BlockKind::Image { .. }
+                        | BlockKind::Table(_)
                             if laid.text_shown =>
                         {
                             painter.rect_filled(
@@ -473,7 +499,10 @@ impl FacadeView {
             let laid = self.laid(ui, source, theme, index);
             let extra = match self.blocks[index].kind {
                 BlockKind::ThematicBreak => 16.0,
-                BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Image { .. } => 8.0,
+                BlockKind::Code { .. }
+                | BlockKind::Markup
+                | BlockKind::Image { .. }
+                | BlockKind::Table(_) => 8.0,
                 _ => 0.0,
             };
             y += laid.height + BLOCK_GAP + extra;
@@ -594,6 +623,40 @@ impl FacadeView {
     /// source with the error (UC-004 A11), an image that cannot be shown
     /// says why, naming its address (BR-004).
     fn figure(&mut self, ui: &egui::Ui, theme: &Theme, index: usize, laid: &mut Laid) {
+        if let BlockKind::Table(table) = &self.blocks[index].kind {
+            // TC-004-02: a table caption above it, numbered as Asciidoctor
+            // numbers tables.
+            let mut top = 0.0;
+            laid.caption = None;
+            if let Some(caption) = &table.caption {
+                let number = self.blocks[..=index]
+                    .iter()
+                    .filter(|b| matches!(&b.kind, BlockKind::Table(t) if t.caption.is_some()))
+                    .count();
+                let galley = ui.fonts(|f| {
+                    f.layout(
+                        format!("Table {number}. {caption}"),
+                        FontId::proportional(14.0),
+                        theme.text,
+                        self.width,
+                    )
+                });
+                top = galley.size().y + 6.0;
+                laid.caption = Some((0.0, galley));
+            }
+            let layout = layout_table(ui, table, theme, self.width, top);
+            let height = top + layout.size.y;
+            laid.text_shown = self.editing == Some(index);
+            laid.offset = Vec2::new(0.0, height + if laid.text_shown { 12.0 } else { 0.0 });
+            laid.height = laid.offset.y
+                + if laid.text_shown {
+                    laid.galley.size().y
+                } else {
+                    0.0
+                };
+            laid.figure = Some(Figure::Table(layout));
+            return;
+        }
         let (state, failed) = self.picture_state(ui, index);
         let pending = matches!(&state, Err(m) if m.ends_with('…'));
         let picture = match state {
@@ -919,7 +982,9 @@ impl FacadeView {
         let (raw, fast) = match position {
             Some((index, at)) => match &self.blocks[index].kind {
                 BlockKind::Code { .. } if markdown => (text.to_owned(), !text.contains(['`', '~'])),
-                BlockKind::Markup | BlockKind::Image { .. } => (text.to_owned(), false),
+                BlockKind::Markup | BlockKind::Image { .. } | BlockKind::Table(_) => {
+                    (text.to_owned(), false)
+                }
                 _ if markdown => (escape_markdown(text, at == 0), at > 0),
                 // AsciiDoc has no escape that always works; plain text away
                 // from markup joins its block, anything else parses again.
@@ -1147,9 +1212,10 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
         _ => BODY_SIZE,
     };
     let body = match block.kind {
-        BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Image { .. } => {
-            FontId::monospace(CODE_SIZE)
-        }
+        BlockKind::Code { .. }
+        | BlockKind::Markup
+        | BlockKind::Image { .. }
+        | BlockKind::Table(_) => FontId::monospace(CODE_SIZE),
         _ => FontId::new(size, fonts::family(heading, false)),
     };
     let prefix = prefix_text(&block.kind);
@@ -1193,18 +1259,38 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
         }
         return (job, prefix_chars);
     }
-    for run in &block.runs {
+    if matches!(
+        block.kind,
+        BlockKind::Markup | BlockKind::Image { .. } | BlockKind::Table(_)
+    ) {
+        // Markup is shown as it is written, in the code font (BR-008).
+        for run in &block.runs {
+            job.append(&run.text, 0.0, TextFormat::simple(body.clone(), theme.text));
+        }
+    } else {
+        append_runs(&mut job, &block.runs, theme, size, heading);
+    }
+    if block.runs.is_empty() {
+        job.append("", 0.0, TextFormat::simple(body, theme.text));
+    }
+    (job, prefix_chars)
+}
+
+/// Appends `runs` to `job` in their styles, at `size`; `strong` sets all of
+/// them bold, as in a heading or a table header.
+fn append_runs(job: &mut LayoutJob, runs: &[Run], theme: &Theme, size: f32, strong: bool) {
+    for run in runs {
         let style = &run.style;
         let font = if style.code {
             FontId::monospace(CODE_SIZE)
         } else {
-            FontId::new(size, fonts::family(style.bold || heading, style.italic))
+            FontId::new(size, fonts::family(style.bold || strong, style.italic))
         };
         let mut format = TextFormat::simple(
             font,
             if style.link.is_some() {
                 theme.link
-            } else if style.bold || heading {
+            } else if style.bold || strong {
                 theme.strong
             } else {
                 theme.text
@@ -1221,10 +1307,122 @@ fn block_job(block: &Block, theme: &Theme, width: f32, source: &SourceView) -> (
         }
         job.append(&run.text, 0.0, format);
     }
-    if block.runs.is_empty() {
-        job.append("", 0.0, TextFormat::simple(body, theme.text));
+}
+
+/// Space around the text of a table cell.
+const CELL_PADDING: Vec2 = Vec2::new(10.0, 5.0);
+
+/// UC-004 step 3: lays out `table` in `width`: each column as wide as its
+/// widest cell, all narrowed in proportion when the table is wider, with the
+/// text wrapped; the header bold; the text aligned as its column says.
+fn layout_table(ui: &egui::Ui, table: &Table, theme: &Theme, width: f32, top: f32) -> TableLayout {
+    let columns = table.columns().max(1);
+    let cell_job = |runs: &[Run], header: bool, wrap: f32| {
+        let mut job = LayoutJob::default();
+        job.wrap.max_width = wrap;
+        append_runs(&mut job, runs, theme, BODY_SIZE, header);
+        if runs.is_empty() {
+            job.append(
+                "",
+                0.0,
+                TextFormat::simple(FontId::proportional(BODY_SIZE), theme.text),
+            );
+        }
+        job
+    };
+    let is_header = |row: usize| table.header && row == 0;
+    // The width each column wants.
+    let mut wanted = vec![24.0_f32; columns];
+    for (r, row) in table.rows.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            let galley = ui.fonts(|f| f.layout_job(cell_job(cell, is_header(r), f32::INFINITY)));
+            wanted[c] = wanted[c].max(galley.size().x + 2.0 * CELL_PADDING.x);
+        }
     }
-    (job, prefix_chars)
+    let total: f32 = wanted.iter().sum();
+    let widths: Vec<f32> = if total <= width {
+        wanted
+    } else {
+        wanted
+            .iter()
+            .map(|w| (w * width / total).max(40.0))
+            .collect()
+    };
+    let mut column_x = vec![0.0];
+    for w in &widths {
+        column_x.push(column_x.last().copied().unwrap_or(0.0) + w);
+    }
+    let mut cells = Vec::new();
+    let mut row_y = vec![0.0];
+    let mut header = 0.0;
+    for (r, row) in table.rows.iter().enumerate() {
+        let y = row_y.last().copied().unwrap_or(0.0);
+        let galleys: Vec<Arc<Galley>> = (0..columns)
+            .map(|c| {
+                let runs = row.get(c).map_or(&[][..], Vec::as_slice);
+                let wrap = widths[c] - 2.0 * CELL_PADDING.x;
+                ui.fonts(|f| f.layout_job(cell_job(runs, is_header(r), wrap)))
+            })
+            .collect();
+        let height = galleys.iter().map(|g| g.size().y).fold(0.0, f32::max) + 2.0 * CELL_PADDING.y;
+        for (c, galley) in galleys.into_iter().enumerate() {
+            let free = widths[c] - 2.0 * CELL_PADDING.x - galley.size().x;
+            let shift = match table.align.get(c).copied().unwrap_or_default() {
+                CellAlign::Left => 0.0,
+                CellAlign::Center => free / 2.0,
+                CellAlign::Right => free,
+            }
+            .max(0.0);
+            let rect = Rect::from_min_size(
+                Pos2::new(column_x[c] + CELL_PADDING.x + shift, y + CELL_PADDING.y),
+                galley.size(),
+            );
+            cells.push((rect, galley, is_header(r)));
+        }
+        if is_header(r) {
+            header = height;
+        }
+        row_y.push(y + height);
+    }
+    TableLayout {
+        top,
+        size: Vec2::new(
+            *column_x.last().unwrap_or(&0.0),
+            *row_y.last().unwrap_or(&0.0),
+        ),
+        cells,
+        columns: column_x,
+        rows: row_y,
+        header,
+    }
+}
+
+/// Draws a laid-out table with its grid at `origin`, the top of its block.
+fn paint_table(painter: &egui::Painter, table: &TableLayout, origin: Pos2, theme: &Theme) {
+    let at = origin + Vec2::new(0.0, table.top);
+    let line = Stroke::new(1.0_f32, theme.weak);
+    if table.header > 0.0 {
+        painter.rect_filled(
+            Rect::from_min_size(at, Vec2::new(table.size.x, table.header)),
+            0.0,
+            theme.code_bg,
+        );
+    }
+    for x in &table.columns {
+        painter.line_segment(
+            [at + Vec2::new(*x, 0.0), at + Vec2::new(*x, table.size.y)],
+            line,
+        );
+    }
+    for y in &table.rows {
+        painter.line_segment(
+            [at + Vec2::new(0.0, *y), at + Vec2::new(table.size.x, *y)],
+            line,
+        );
+    }
+    for (rect, galley, _) in &table.cells {
+        painter.galley(at + rect.min.to_vec2(), Arc::clone(galley), theme.text);
+    }
 }
 
 /// Where the image `target` of a note is: a web address, or a file found as
@@ -1549,6 +1747,7 @@ mod tests {
                             format!("error: {}", m.text())
                         }
                         Some(Figure::Message(_)) => "pending".into(),
+                        Some(Figure::Table(_)) => "table".into(),
                         None => "none".into(),
                     };
                 });
@@ -1623,6 +1822,7 @@ mod tests {
                     let kind = match &laid.figure {
                         Some(Figure::Picture(_, size)) => format!("picture {}x{}", size.x, size.y),
                         Some(Figure::Message(m)) => m.text().to_owned(),
+                        Some(Figure::Table(_)) => "table".into(),
                         None => "none".into(),
                     };
                     out = (
@@ -1701,6 +1901,50 @@ mod tests {
         h.key(Key::Escape);
         assert!(!h.facade.is_enlarged());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// UC-004 step 3, UC-005 BR-008: a table is shown formatted; with the
+    /// cursor in it its markup shows below, and the table follows a change.
+    #[test]
+    fn uc005_tables_show_formatted_and_their_markup_when_edited() {
+        let note = "Intro\n\n| Name | Size |\n|---|--:|\n| a | 1 |\n\nEnd\n";
+        let mut h = Harness::new(note);
+        h.cursor_after("End");
+        h.frame(vec![]);
+        let theme = Theme {
+            text: Color32::WHITE,
+            strong: Color32::WHITE,
+            link: Color32::WHITE,
+            code_bg: Color32::BLACK,
+            weak: Color32::GRAY,
+        };
+        let look = |h: &mut Harness| {
+            let ctx = h.ctx.clone();
+            let mut out = (0, false, Vec2::ZERO);
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let laid = h.facade.laid(ui, &h.source, &theme, 1);
+                    if let Some(Figure::Table(table)) = &laid.figure {
+                        out = (table.cells.len(), laid.text_shown, table.size);
+                    }
+                });
+            });
+            out
+        };
+        let (cells, shown, size) = look(&mut h);
+        assert_eq!(cells, 4);
+        assert!(!shown, "the markup is hidden without the cursor");
+        assert!(size.x > 40.0 && size.y > 30.0);
+        h.cursor_after("| a | 1 |");
+        h.frame(vec![]);
+        let (_, shown, _) = look(&mut h);
+        assert!(shown, "the markup shows while the cursor is in the table");
+        h.facade.request_focus();
+        h.frame(vec![]);
+        h.frame(vec![Event::Text("\n| b | 22 |".into())]);
+        assert!(h.text().contains("| a | 1 |\n| b | 22 |"), "{}", h.text());
+        let (cells, _, _) = look(&mut h);
+        assert_eq!(cells, 6, "the table follows the change");
     }
 
     /// UC-005: Backspace deletes an escaped character with its backslash, and

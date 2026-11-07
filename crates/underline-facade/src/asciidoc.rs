@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 
-use crate::blocks::{Block, BlockKind, ListMarker, Run, Style};
+use crate::blocks::{Block, BlockKind, CellAlign, ListMarker, Run, Style, Table};
 
 /// The labels of admonitions (`NOTE: …`, `[NOTE]`).
 const ADMONITIONS: [&str; 5] = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"];
@@ -67,6 +67,8 @@ struct Pending {
     unused: Option<usize>,
     /// The text of a block title (`.Title`), a caption for an image.
     title: Option<String>,
+    /// The other block attribute lines, for a table's options.
+    attributes: String,
 }
 
 struct Parser<'s, 'l> {
@@ -125,6 +127,8 @@ impl Parser<'_, '_> {
                 }
                 if is_block_title(text) {
                     pending.title = Some(text[1..].trim().to_owned());
+                } else {
+                    pending.attributes.push_str(text);
                 }
                 pending.unused.get_or_insert(i);
                 i += 1;
@@ -132,6 +136,22 @@ impl Parser<'_, '_> {
             }
             let first_block = header;
             header = false;
+            // A table, with its title and options.
+            if text.starts_with("|===") && delimiter(text).is_some() {
+                let start = pending.unused.take().unwrap_or(i);
+                let close = (i + 1..range.end)
+                    .find(|&j| self.lines[j].text == text)
+                    .unwrap_or(range.end);
+                let span_end = self.lines.get(close).map_or(self.source.len(), |l| l.next);
+                let table = self.table(i + 1..close, &pending);
+                let mut block = markup_block(self.source, self.lines[start].start..span_end);
+                block.kind = BlockKind::Table(Box::new(table));
+                self.blocks.push(block);
+                pending = Pending::default();
+                self.numbers.clear();
+                i = close + 1;
+                continue;
+            }
             if let Some(delimiter) = delimiter(text) {
                 pending.unused = self.flush_unused(pending.unused, i);
                 let close = (i + 1..range.end)
@@ -302,6 +322,64 @@ impl Parser<'_, '_> {
             b'*' | b'-' => self.parse(inner, quote),
             // Comments, passthroughs and tables are shown as markup.
             _ => self.blocks.push(markup_block(self.source, span)),
+        }
+    }
+
+    /// The cells of a table between its delimiters, the lines `inner`: each
+    /// `|` starts a cell, a line without one continues the cell before,
+    /// and the cells fill rows of as many columns as `cols` names or the
+    /// first line holds. The first line is the header when the options say
+    /// so, or when it holds all its cells and a blank line follows, as
+    /// Asciidoctor reads it.
+    fn table(&self, inner: Range<usize>, pending: &Pending) -> Table {
+        let attributes = pending.attributes.as_str();
+        let mut cells: Vec<Vec<Range<usize>>> = Vec::new();
+        let mut first_line_cells = None;
+        let mut implicit_header = false;
+        for j in inner.clone() {
+            let line = self.lines[j];
+            if line.blank() {
+                if first_line_cells.is_some() && j == inner.start + 1 {
+                    implicit_header = true;
+                }
+                continue;
+            }
+            let parts = cell_parts(line.text);
+            if first_line_cells.is_none() {
+                first_line_cells = Some(parts.iter().filter(|(_, starts)| *starts).count());
+            }
+            for (part, starts) in parts {
+                let range = line.start + part.start..line.start + part.end;
+                let trimmed = trim_range(self.source, range);
+                match (starts, cells.last_mut()) {
+                    (false, Some(cell)) => cell.push(trimmed),
+                    _ => cells.push(vec![trimmed]),
+                }
+            }
+        }
+        let columns = cols_count(attributes)
+            .or(first_line_cells)
+            .unwrap_or(1)
+            .max(1);
+        let header = if attributes.contains("noheader") {
+            false
+        } else {
+            attributes.contains("header") || implicit_header
+        };
+        let runs: Vec<Vec<Run>> = cells
+            .iter()
+            .map(|pieces| {
+                let pieces: Vec<Range<usize>> =
+                    pieces.iter().filter(|r| !r.is_empty()).cloned().collect();
+                self.inline(&pieces)
+            })
+            .collect();
+        let rows = runs.chunks(columns).map(<[Vec<Run>]>::to_vec).collect();
+        Table {
+            header,
+            align: vec![CellAlign::Left; columns],
+            rows,
+            caption: pending.title.clone(),
         }
     }
 
@@ -799,6 +877,69 @@ fn block_image(line: &str) -> Option<(String, String)> {
     Some((target.to_owned(), alt))
 }
 
+/// The pieces of a table line: the text of each cell, and whether a `|`
+/// starts it (a piece before the first `|` continues the cell before).
+fn cell_parts(line: &str) -> Vec<(Range<usize>, bool)> {
+    let bytes = line.as_bytes();
+    let mut bars: Vec<usize> = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'|' && (i == 0 || bytes[i - 1] != b'\\') {
+            bars.push(i);
+        }
+    }
+    let mut parts = Vec::new();
+    let first = bars.first().copied().unwrap_or(line.len());
+    // Text before the first bar is a cell spec (`2+|`, `a|`) when short and
+    // made of spec characters; otherwise it continues the cell before.
+    let spec = &line[..first];
+    let is_spec = !spec.is_empty()
+        && spec
+            .chars()
+            .all(|c| c.is_ascii_digit() || "+*.<>^aehlmsdv".contains(c));
+    if first > 0 && !is_spec {
+        parts.push((0..first, false));
+    }
+    for (n, &bar) in bars.iter().enumerate() {
+        let end = bars.get(n + 1).copied().unwrap_or(line.len());
+        // A spec right before the next bar belongs to that cell.
+        let mut stop = end;
+        if n + 1 < bars.len() {
+            let before = &line[bar + 1..end];
+            let tail = before.len()
+                - before
+                    .trim_end_matches(|c: char| c.is_ascii_digit() || "+*.<>^".contains(c))
+                    .len();
+            if tail > 0 && before[..before.len() - tail].ends_with(' ') {
+                stop = end - tail;
+            }
+        }
+        parts.push((bar + 1..stop, true));
+    }
+    parts
+}
+
+/// `range` without the spaces at its ends.
+fn trim_range(source: &str, range: Range<usize>) -> Range<usize> {
+    let text = &source[range.clone()];
+    let start = range.start + (text.len() - text.trim_start().len());
+    let end = range.end - (text.len() - text.trim_end().len());
+    start..end.max(start)
+}
+
+/// The number of columns a `cols="1,2,1"` or `cols="3*"` attribute names.
+fn cols_count(attributes: &str) -> Option<usize> {
+    let at = attributes.find("cols=")?;
+    let rest = attributes[at + 5..].trim_start_matches(['"', '\'']);
+    let value: String = rest
+        .chars()
+        .take_while(|c| *c != '"' && *c != '\'' && *c != ']')
+        .collect();
+    if let Some((count, _)) = value.split_once('*') {
+        return count.trim().parse().ok();
+    }
+    Some(value.split([',', ';']).count())
+}
+
 /// `.Title` before a block.
 fn is_block_title(line: &str) -> bool {
     line.starts_with('.')
@@ -877,7 +1018,13 @@ mod tests {
     const NOTE: &str = "= Guide\nAda Lovelace\n:toc:\n\n== Getting *Started*\n\nSome *bold* and _italic_ and `code`, **un**constrained,\nsee https://x.org[the site] or link:Plan.adoc[the plan], <<setup,Setup>>.\nA bare https://example.org.\n\n* one\n** inner\n* [x] done\n\n. first\n. second\n\n[source,rust]\n----\nfn a() {}\n----\n\nNOTE: Mind the gap.\n\n____\nQuoted text\n____\n\n|===\n| a | b\n|===\n\n'''\n\n// a comment\n\nimage::shot.png[Shot]\n";
 
     fn kinds(blocks: &[Block]) -> Vec<String> {
-        blocks.iter().map(|b| format!("{:?}", b.kind)).collect()
+        blocks
+            .iter()
+            .map(|b| match b.kind {
+                BlockKind::Table(_) => "Table".to_owned(),
+                _ => format!("{:?}", b.kind),
+            })
+            .collect()
     }
 
     /// ADR-003: the blocks of an AsciiDoc note as Asciidoctor reads them.
@@ -899,7 +1046,7 @@ mod tests {
                 "Code { language: \"rust\" }",
                 "Admonition(\"NOTE\")",
                 "Quote(1)",
-                "Markup",
+                "Table",
                 "ThematicBreak",
                 "Markup",
                 "Image { target: \"shot.png\", alt: \"Shot\", caption: None }",
@@ -1045,6 +1192,53 @@ mod tests {
             blocks[0].text(),
             ".The architecture\nimage::img/arch.png[Architecture,600]"
         );
+    }
+
+    /// UC-004 step 3, TC-004-02: AsciiDoc tables with header, caption,
+    /// cells over several lines, and formatting in cells.
+    #[test]
+    fn asciidoc_tables() {
+        let cell_text = |t: &Table| -> Vec<Vec<String>> {
+            t.rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(|c| c.iter().map(|x| x.text.as_str()).collect())
+                        .collect()
+                })
+                .collect()
+        };
+        // Implicit header: the first line holds its cells, a blank line follows.
+        let note = ".Sizes\n|===\n| Name | Size\n\n| *a* | 1\n| b | 22\n|===\n";
+        let blocks = asciidoc_blocks(note);
+        let BlockKind::Table(table) = &blocks[0].kind else {
+            panic!("{:?}", blocks[0].kind);
+        };
+        assert!(table.header);
+        assert_eq!(table.caption.as_deref(), Some("Sizes"));
+        assert_eq!(
+            cell_text(table),
+            [["Name", "Size"], ["a", "1"], ["b", "22"]]
+        );
+        assert!(table.rows[1][0][0].style.bold);
+        assert_eq!(blocks[0].text(), note.trim_end());
+
+        // Cells one per line, columns from `cols`, header from the options.
+        let note = "[cols=\"1,2\", options=\"header\"]\n|===\n|Key\n|Meaning\n\n|Ctrl+B\n|Bold,\nalso in the source\n|===\n";
+        let BlockKind::Table(table) = &asciidoc_blocks(note)[0].kind else {
+            panic!();
+        };
+        assert!(table.header);
+        assert_eq!(
+            cell_text(table),
+            [["Key", "Meaning"], ["Ctrl+B", "Bold, also in the source"]]
+        );
+        // Without a blank line after the first line, there is no header.
+        let BlockKind::Table(table) = &asciidoc_blocks("|===\n|a |b\n|c |d\n|===\n")[0].kind else {
+            panic!();
+        };
+        assert!(!table.header);
+        assert_eq!(cell_text(table), [["a", "b"], ["c", "d"]]);
     }
 
     #[test]
