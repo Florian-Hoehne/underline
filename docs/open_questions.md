@@ -1568,3 +1568,43 @@ Answer: One version is chosen for the whole file; the other is kept as a copy ne
 **Status:** Open
 
 An agent writing a note through the MCP server (UC-019) could write into a note with open conflict places. To be decided with UC-019: refuse, read only, or allow.
+
+## OQ-157: Which workspace does an installed MCP server serve?
+
+**Element:** UC-016 BR-001
+**Raised by:** /use-case-spec UC-016, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
+
+Answer: One entry per workspace, with that workspace's folder.
+
+## OQ-158: Where does MCP install write the configuration?
+
+**Element:** UC-016 BR-002
+**Raised by:** /use-case-spec UC-016, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
+
+Answer: Into the tool's configuration for the user, never into the workspace.
+
+## OQ-159: Where are MCP install and the configuration snippet offered?
+
+**Element:** UC-016 step 1
+**Raised by:** /use-case-spec UC-016, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
+
+Answer: In the section Agents of the settings.
+
+## OQ-160: What happens on install while the MCP server is off?
+
+**Element:** UC-016 A1, BR-005
+**Raised by:** /use-case-spec UC-016, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
+
+Answer: Install asks whether to switch it on.
