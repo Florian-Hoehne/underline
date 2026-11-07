@@ -17,8 +17,8 @@ use underline_core::{
 };
 use underline_core::{
     branch_name, changed_lines, diff as diff_lines, proposed_message, restore_committed,
-    BranchState, Branches, ChangeKind, ChangeTracker, Changes, FileChange, Hunk, LineKind,
-    OnlyDiffers, SwitchError,
+    BranchState, Branches, ChangeKind, ChangeTracker, Changes, Distance, FileChange, Hunk,
+    LineKind, OnlyDiffers, SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::FOUND_COLOR;
@@ -119,6 +119,9 @@ pub struct UnderlineApp {
     identity: Option<IdentityDialog>,
     /// UC-013: the branch menu.
     branch_menu: Option<BranchMenu>,
+    /// UC-014: the syncer of the workspace and what the status bar shows.
+    syncer: Option<Syncer>,
+    sync: SyncView,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -354,12 +357,38 @@ struct BranchMenu {
     focus: bool,
 }
 
+/// The state of the syncs (UC-014 BR-004).
+#[derive(Default)]
+struct SyncView {
+    running: bool,
+    /// When the last sync ended, and when the last one succeeded.
+    ended: Option<Instant>,
+    succeeded: Option<Instant>,
+    last: Option<SyncOutcome>,
+    distance: Distance,
+    /// A9: Underline closes once the sync ended, or at this time.
+    closing: Option<Instant>,
+}
+
+/// "just now", "2 min ago", "3 h ago".
+fn ago(at: Instant) -> String {
+    let secs = at.elapsed().as_secs();
+    match secs {
+        0..=59 => "just now".to_owned(),
+        60..=3599 => format!("{} min ago", secs / 60),
+        _ => format!("{} h ago", secs / 3600),
+    }
+}
+
 /// What the user did in the branch menu this frame.
 enum BranchAction {
     Switch(String),
     Track(String),
     Create(String),
     ShowChanges,
+    /// UC-014 A1.
+    Pull,
+    Push,
     Close,
 }
 
@@ -979,6 +1008,8 @@ impl UnderlineApp {
             commit: CommitState::default(),
             identity: None,
             branch_menu: None,
+            syncer: None,
+            sync: SyncView::default(),
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -1111,9 +1142,18 @@ impl UnderlineApp {
     /// opened again, or the first note (UC-002 step 8, BR-005).
     fn switch_to(&mut self, workspace: Workspace) {
         let root = workspace.root().to_owned();
-        self.git_state = self.git.remotes(&root).and_then(|remotes| {
-            // UC-014 brings git sync; until then no sync has run.
-            (!remotes.is_empty()).then(|| "git: no sync yet".to_owned())
+        self.git_state = None;
+        // UC-014: a workspace with a remote syncs, first when it opens.
+        self.sync = SyncView::default();
+        let has_remote = self
+            .git
+            .remotes(&root)
+            .is_some_and(|remotes| remotes.iter().any(|r| !r.is_empty()));
+        self.syncer = (has_remote && root.join(".git").exists()).then(|| {
+            let wake = self.ctx.clone();
+            Syncer::start(self.git.clone(), root.clone(), move || {
+                wake.request_repaint()
+            })
         });
         let wake = self.ctx.clone();
         let watcher = WorkspaceWatcher::start(
@@ -1139,6 +1179,9 @@ impl UnderlineApp {
             })
         });
         self.changes_asked = Instant::now();
+        if self.syncer.is_some() {
+            self.request_sync(SyncMode::Full, false);
+        }
         self.search_result = None;
         self.search_asked = None;
         self.find = None;
@@ -2196,6 +2239,8 @@ impl UnderlineApp {
                 };
                 self.commit = CommitState::default();
                 self.refresh_changes();
+                // UC-014 BR-001: a commit is synced right after.
+                self.request_sync(SyncMode::Full, false);
             }
             // A3: git does not know the user.
             Err(GitError::NoIdentity) => {
@@ -2207,6 +2252,125 @@ impl UnderlineApp {
             // A4.
             Err(err) => self.status = format!("The commit failed: {err}"),
         }
+    }
+
+    /// UC-014 step 1: starts a sync after saving the open notes; `asked`
+    /// when the user asked, so a refusal is reported (A10).
+    fn request_sync(&mut self, mode: SyncMode, asked: bool) {
+        if self.syncer.is_none() {
+            if asked {
+                self.status = "This workspace has no remote to sync with".into();
+            }
+            return;
+        };
+        let refusal = match &self.changes {
+            Some(Ok(c)) if c.merging => Some("notes are in conflict; resolve them first"),
+            Some(Ok(c)) if matches!(c.branch, BranchState::Detached(_)) => {
+                Some("the workspace is not on a branch")
+            }
+            _ => None,
+        };
+        if let Some(reason) = refusal {
+            if asked {
+                self.status = format!("No sync, because {reason}");
+            }
+            return;
+        }
+        // Step 2: open notes are saved first, then the syncer commits them.
+        if let Err(failures) = self.flush_all() {
+            self.status = format!(
+                "Not everything could be saved before the sync: {}",
+                failures.join("; ")
+            );
+        }
+        if let Some(syncer) = &self.syncer {
+            syncer.request(SyncRequest {
+                mode,
+                left_out: self.commit.left_out.clone(),
+            });
+        }
+        self.sync.running = true;
+    }
+
+    /// UC-014: the interval (BR-001), the outcomes of syncs, and closing (A9).
+    fn run_syncs(&mut self, ctx: &egui::Context) {
+        let Some(syncer) = &self.syncer else {
+            if self.sync.closing.take().is_some() {
+                self.close_anyway = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        };
+        let outcomes = syncer.poll();
+        let mut ended = false;
+        for (_, outcome, distance) in outcomes {
+            ended = true;
+            self.sync.running = false;
+            self.sync.ended = Some(Instant::now());
+            self.sync.distance = distance;
+            match &outcome {
+                SyncOutcome::Synced { .. } => {
+                    self.sync.succeeded = Some(Instant::now());
+                    // Step 6, BR-008: the notes as they are now.
+                    let paths: Vec<PathBuf> =
+                        self.tabs.iter().map(|(_, t)| t.path.clone()).collect();
+                    for path in paths {
+                        if path.exists() {
+                            self.outside_change(&path);
+                        }
+                    }
+                    if let Some(workspace) = &mut self.workspace {
+                        workspace.rescan();
+                    }
+                    self.refresh_overview();
+                }
+                SyncOutcome::Conflict(files) => {
+                    self.status = format!(
+                        "The sync stopped: {} changed here and on the remote in the same lines",
+                        files.join(", ")
+                    );
+                    self.refresh_changes();
+                }
+                SyncOutcome::InTheWay(files) => {
+                    self.status = format!(
+                        "The sync stopped: changes you left out of commits are in the way of the remote's: {}. Commit or discard them.",
+                        files.join(", ")
+                    );
+                }
+                SyncOutcome::PushRejected => {
+                    self.status =
+                        "The remote has commits this branch lacks; sync to join them first".into();
+                }
+                SyncOutcome::SignIn(reason) => {
+                    self.status = format!(
+                        "Signing in to the remote failed ({reason}). Set up a sign-in for git, such as a saved token or an SSH key."
+                    );
+                }
+                SyncOutcome::NotPossible(reason) => {
+                    self.status = format!("No sync, because {reason}");
+                }
+                SyncOutcome::Offline(_) | SyncOutcome::Failed(_) => {}
+            }
+            self.sync.last = Some(outcome);
+            self.refresh_changes();
+        }
+        // A9: close once the sync ended, or after ten seconds.
+        if let Some(deadline) = self.sync.closing {
+            if ended || Instant::now() >= deadline {
+                self.close_anyway = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(200));
+            }
+            return;
+        }
+        // BR-001: every few minutes after the last sync ended.
+        let interval =
+            Duration::from_secs(u64::from(self.settings.effective.git_sync_interval.max(1)) * 60);
+        if !self.sync.running && self.sync.ended.is_some_and(|e| e.elapsed() >= interval) {
+            self.request_sync(SyncMode::Full, false);
+        }
+        ctx.request_repaint_after(Duration::from_secs(30));
     }
 
     /// UC-013 steps 1–2.
@@ -2348,6 +2512,15 @@ impl UnderlineApp {
                 if ui.button("Show changes").clicked() {
                     action = Some(BranchAction::ShowChanges);
                 }
+                // UC-014 A1: pull and push on demand.
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!merging, egui::Button::new("Pull")).clicked() {
+                        action = Some(BranchAction::Pull);
+                    }
+                    if ui.add_enabled(!merging, egui::Button::new("Push")).clicked() {
+                        action = Some(BranchAction::Push);
+                    }
+                });
                 if escape {
                     action = Some(BranchAction::Close);
                 }
@@ -2355,6 +2528,14 @@ impl UnderlineApp {
         match action {
             None => {}
             Some(BranchAction::Close) => self.branch_menu = None,
+            Some(BranchAction::Pull) => {
+                self.branch_menu = None;
+                self.request_sync(SyncMode::Pull, true);
+            }
+            Some(BranchAction::Push) => {
+                self.branch_menu = None;
+                self.request_sync(SyncMode::Push, true);
+            }
             Some(BranchAction::ShowChanges) => {
                 self.branch_menu = None;
                 self.show_changes = true;
@@ -4093,8 +4274,15 @@ impl eframe::App for UnderlineApp {
             if let Err(failures) = self.flush_all() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.close_confirm = Some(CloseConfirm::App(failures.join("; ")));
+            } else if self.syncer.is_some() && self.sync.closing.is_none() {
+                // UC-014 A9: a last sync, ten seconds at most.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.sync.closing = Some(Instant::now() + Duration::from_secs(10));
+                self.request_sync(SyncMode::Full, false);
+                self.status = "Syncing before closing…".into();
             }
         }
+        self.run_syncs(ctx);
         self.handle_outside_changes();
         self.apply_settings(ctx);
         self.show_close_confirm(ctx);
@@ -4228,6 +4416,7 @@ impl eframe::App for UnderlineApp {
             }
             let mut undo = false;
             let mut opening = None;
+            let mut sync_now = false;
             ui.horizontal(|ui| {
                 // UC-011 step 1: the branch and the number of changes.
                 match &self.changes {
@@ -4258,6 +4447,71 @@ impl eframe::App for UnderlineApp {
                         ui.weak(format!("Changes cannot be shown: {err}"));
                     }
                     None => {}
+                }
+                // UC-014 BR-004: the state of the syncs and Sync now.
+                if self.syncer.is_some() {
+                    let sync = &self.sync;
+                    let since = sync.succeeded.map(ago);
+                    let (text, warn, hover) = match (&sync.last, sync.running) {
+                        (_, true) => ("Syncing…".to_owned(), false, None),
+                        (None, false) => ("Not synced yet".to_owned(), false, None),
+                        (Some(SyncOutcome::Synced { .. }), _) => (
+                            format!("Synced {}", since.clone().unwrap_or_default()),
+                            false,
+                            None,
+                        ),
+                        (Some(SyncOutcome::Offline(reason)), _) => (
+                            match &since {
+                                Some(since) => format!("Offline, will retry (synced {since})"),
+                                None => "Offline, will retry".to_owned(),
+                            },
+                            false,
+                            Some(reason.clone()),
+                        ),
+                        (Some(SyncOutcome::Failed(reason)), _) => {
+                            ("Sync failed".to_owned(), true, Some(reason.clone()))
+                        }
+                        (Some(SyncOutcome::SignIn(reason)), _) => (
+                            "Sync failed: signing in".to_owned(),
+                            true,
+                            Some(reason.clone()),
+                        ),
+                        (Some(SyncOutcome::Conflict(files)), _) => (
+                            "Sync stopped: conflict".to_owned(),
+                            true,
+                            Some(files.join(", ")),
+                        ),
+                        (Some(SyncOutcome::InTheWay(files)), _) => {
+                            ("Sync stopped".to_owned(), true, Some(files.join(", ")))
+                        }
+                        (Some(SyncOutcome::PushRejected), _) => {
+                            ("Push refused".to_owned(), true, None)
+                        }
+                        (Some(SyncOutcome::NotPossible(reason)), _) => {
+                            ("No sync".to_owned(), false, Some(reason.clone()))
+                        }
+                    };
+                    let label = if warn {
+                        ui.colored_label(ui.visuals().warn_fg_color, text)
+                    } else {
+                        ui.label(text)
+                    };
+                    if let Some(hover) = hover {
+                        label.on_hover_text(hover);
+                    }
+                    let Distance { ahead, behind } = sync.distance;
+                    if ahead > 0 {
+                        ui.weak(format!("{ahead} to push"));
+                    }
+                    if behind > 0 {
+                        ui.weak(format!("{behind} to pull"));
+                    }
+                    if ui
+                        .add_enabled(!sync.running, egui::Button::new("Sync now").small())
+                        .clicked()
+                    {
+                        sync_now = true;
+                    }
                 }
                 ui.label(parts.join("  |  "));
                 // UC-009 step 5, A2: open the export, show the approximated blocks.
@@ -4290,6 +4544,9 @@ impl eframe::App for UnderlineApp {
             }
             if let Some(target) = opening {
                 self.open_with_system(&target);
+            }
+            if sync_now {
+                self.request_sync(SyncMode::Full, true);
             }
             if undo {
                 if let Some(offer) = self.undo_delete.take() {

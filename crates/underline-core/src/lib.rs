@@ -23,6 +23,7 @@ mod saver;
 mod search;
 mod settings;
 mod state;
+mod sync;
 mod tabs;
 mod watcher;
 mod workspace;
@@ -68,6 +69,7 @@ pub use state::{
     now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,
     Timestamp, WorkspaceState, STATE_FILE_NAME, STATE_WRITE_DELAY,
 };
+pub use sync::{Distance, SyncMode, SyncOutcome, SyncRequest, Syncer, AUTO_PREFIX};
 pub use tabs::{Opened, TabList, MAX_TABS};
 pub use watcher::{
     outside_copy_path, WorkspaceEvent, WorkspaceWatcher, BULK_CHANGES, WATCH_COLLECT,
