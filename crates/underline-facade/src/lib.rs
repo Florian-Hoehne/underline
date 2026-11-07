@@ -14,6 +14,7 @@ pub mod highlight;
 pub mod images;
 pub mod index;
 pub mod sections;
+pub mod themes;
 
 use underline_core::NoteFormat;
 

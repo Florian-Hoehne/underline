@@ -4,13 +4,17 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use std::str::FromStr;
+
 use syntect::highlighting::{
-    Color, FontStyle, HighlightIterator, HighlightState, Highlighter as SyntectHighlighter, Theme,
-    ThemeSet,
+    Color, FontStyle, HighlightIterator, HighlightState, Highlighter as SyntectHighlighter,
+    ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSettings,
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
-use underline_core::NoteFormat;
+use underline_core::{NoteFormat, Theme as UnderlineTheme};
+
+use crate::themes::{self, Palette, Rgb};
 
 /// One colored piece of a line: a byte range of the line and its color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,26 +29,44 @@ pub struct Span {
 
 /// The grammars and the theme colors, shared by all documents.
 pub struct HighlightSet {
-    syntaxes: SyntaxSet,
+    syntaxes: Arc<SyntaxSet>,
     theme: Theme,
+    palette: &'static Palette,
 }
 
 impl HighlightSet {
-    /// The embedded grammars with a light or dark theme.
-    ///
-    /// The palettes of the eleven Underline themes replace these themes when
-    /// themes are built (ADR-010).
+    /// The embedded grammars with the Light or the Dark theme.
     pub fn new(dark: bool) -> Self {
-        let themes = ThemeSet::load_defaults();
-        let name = if dark {
-            "base16-ocean.dark"
+        Self::for_theme(if dark {
+            UnderlineTheme::Dark
         } else {
-            "InspiredGitHub"
-        };
+            UnderlineTheme::Light
+        })
+    }
+
+    /// The embedded grammars with the colors of `theme` (ADR-010, FR-038).
+    pub fn for_theme(theme: UnderlineTheme) -> Self {
+        Self::with_grammars(Arc::new(SyntaxSet::load_defaults_newlines()), theme)
+    }
+
+    /// The same grammars with the colors of another theme, without loading
+    /// them again (UC-010 BR-004).
+    pub fn with_theme(&self, theme: UnderlineTheme) -> Self {
+        Self::with_grammars(Arc::clone(&self.syntaxes), theme)
+    }
+
+    fn with_grammars(syntaxes: Arc<SyntaxSet>, theme: UnderlineTheme) -> Self {
+        let palette = themes::palette(theme);
         Self {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
-            theme: themes.themes[name].clone(),
+            syntaxes,
+            theme: syntect_theme(palette),
+            palette,
         }
+    }
+
+    /// The palette of the theme these colors come from.
+    pub fn palette(&self) -> &'static Palette {
+        self.palette
     }
 
     fn syntax_for(&self, format: NoteFormat) -> &SyntaxReference {
@@ -326,6 +348,47 @@ impl DocumentHighlight {
     }
 }
 
+/// ADR-010: a syntect theme made of `palette`'s colors for the usual scopes
+/// of code and markup.
+fn syntect_theme(palette: &Palette) -> Theme {
+    let color = |[r, g, b]: Rgb| Color { r, g, b, a: 0xFF };
+    let item = |scopes: &str, rgb: Rgb, font_style: Option<FontStyle>| ThemeItem {
+        scope: ScopeSelectors::from_str(scopes).expect("scope selectors"),
+        style: StyleModifier {
+            foreground: Some(color(rgb)),
+            background: None,
+            font_style,
+        },
+    };
+    let p = palette;
+    Theme {
+        name: Some(p.theme.label().to_owned()),
+        author: None,
+        settings: ThemeSettings {
+            foreground: Some(color(p.foreground)),
+            background: Some(color(p.background)),
+            caret: Some(color(p.foreground)),
+            selection: Some(color(p.selection)),
+            ..ThemeSettings::default()
+        },
+        scopes: vec![
+            item("comment, punctuation.definition.comment, markup.quote", p.comment, Some(FontStyle::ITALIC)),
+            item("variable, variable.parameter, variable.other", p.variable, None),
+            item("keyword, storage, keyword.operator.word", p.keyword, None),
+            item("string, constant.other.symbol, string.quoted", p.string, None),
+            item("constant.numeric, constant.language, constant.character", p.number, None),
+            item("entity.name.type, entity.name.class, support.type, support.class", p.kind, None),
+            item("entity.name.function, support.function, meta.function-call variable.function", p.function, None),
+            item("markup.heading, entity.name.section, punctuation.definition.heading", p.heading, Some(FontStyle::BOLD)),
+            item("markup.bold", p.foreground, Some(FontStyle::BOLD)),
+            item("markup.italic", p.foreground, Some(FontStyle::ITALIC)),
+            item("markup.underline.link, string.other.link, meta.link, constant.other.reference.link", p.link, None),
+            item("markup.raw, markup.inline.raw, markup.raw.block", p.string, None),
+            item("punctuation.definition.list, markup.list punctuation, beginning.punctuation.definition.list", p.weak, None),
+        ],
+    }
+}
+
 /// Colors a code block of `language` line by line, for the facade
 /// (ADR-010); an unknown language gives no colors.
 pub fn highlight_code(set: &HighlightSet, language: &str, code: &str) -> Vec<Vec<Span>> {
@@ -544,5 +607,28 @@ mod tests {
         lines.insert(10, "inserted".to_owned());
         highlight.edited(9, 1, lines.len());
         assert_eq!(highlight.spans(61, text(&lines)), after);
+    }
+
+    /// TC-010-01, FR-038: code takes the colors of the active theme.
+    #[test]
+    fn uc010_code_in_the_colors_of_the_theme() {
+        let nord = HighlightSet::for_theme(UnderlineTheme::Nord);
+        let palette = themes::palette(UnderlineTheme::Nord);
+        let [r, g, b] = palette.background;
+        assert_eq!(
+            nord.theme.settings.background,
+            Some(Color { r, g, b, a: 0xFF })
+        );
+        let lines = highlight_code(&nord, "rust", "fn main() {}\n");
+        let [r, g, b] = palette.keyword;
+        assert!(
+            lines[0].iter().any(|span| span.color == [r, g, b, 0xFF]),
+            "{:?}",
+            lines[0]
+        );
+        // Another theme keeps the grammars.
+        let dracula = nord.with_theme(UnderlineTheme::Dracula);
+        assert!(Arc::ptr_eq(&nord.syntaxes, &dracula.syntaxes));
+        assert_eq!(dracula.palette().theme, UnderlineTheme::Dracula);
     }
 }
