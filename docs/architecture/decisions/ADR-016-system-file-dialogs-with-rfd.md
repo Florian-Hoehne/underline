@@ -1,6 +1,6 @@
 # ADR-016: The system's file dialogs through rfd
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-07
 **Requirements:** NFR-011, NFR-013, UC-009 step 2, BR-007
 

@@ -1,6 +1,6 @@
 # ADR-015: PDF and HTML export from the facade's blocks, PDF set by Typst as a library
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-07
 **Requirements:** FR-014, FR-015, FR-016, NFR-013, NFR-014, NFR-015, UC-009 BR-002 to BR-005, BR-009
 
