@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** Underline looks and behaves as the user wants it, in every workspace by default and differently in a workspace where they want that, and keeps it after a restart.  
 **Trigger:** The user opens the settings, uses a quick switch of the toolbar, or changes the size of a panel.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-059, FR-069, FR-070, FR-071, NFR-009, NFR-010, NFR-011, NFR-013, NFR-015, NFR-016, C-006](../requirements.md)
 
