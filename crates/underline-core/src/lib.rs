@@ -6,6 +6,7 @@
 
 mod atomic;
 mod autosave;
+mod branches;
 mod changes;
 mod create;
 mod deleted;
@@ -28,6 +29,7 @@ mod workspace;
 
 pub use atomic::{write_atomic, write_new_atomic};
 pub use autosave::{Autosave, AUTOSAVE_LATEST, AUTOSAVE_QUIET, AUTOSAVE_RETRY};
+pub use branches::{branch_name, BranchNameProblem, Branches, SwitchError};
 pub use changes::{
     changed_lines, diff, proposed_message, restore_committed, BranchState, ChangeKind,
     ChangeTracker, Changes, DiffLine, DiscardError, FileChange, Hunk, LineKind, OnlyDiffers,

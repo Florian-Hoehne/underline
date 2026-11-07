@@ -16,8 +16,9 @@ use underline_core::{
     HOME_TITLE, STATE_WRITE_DELAY,
 };
 use underline_core::{
-    changed_lines, diff as diff_lines, proposed_message, restore_committed, BranchState,
-    ChangeKind, ChangeTracker, Changes, FileChange, Hunk, LineKind, OnlyDiffers,
+    branch_name, changed_lines, diff as diff_lines, proposed_message, restore_committed,
+    BranchState, Branches, ChangeKind, ChangeTracker, Changes, FileChange, Hunk, LineKind,
+    OnlyDiffers, SwitchError,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::FOUND_COLOR;
@@ -116,6 +117,8 @@ pub struct UnderlineApp {
     /// name and email.
     commit: CommitState,
     identity: Option<IdentityDialog>,
+    /// UC-013: the branch menu.
+    branch_menu: Option<BranchMenu>,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -334,6 +337,30 @@ struct CommitState {
     problem: Option<String>,
     /// The message field is to take the keyboard.
     focus: bool,
+}
+
+/// The branch menu (UC-013 steps 1–3).
+#[derive(Default)]
+struct BranchMenu {
+    filter: String,
+    branches: Option<Branches>,
+    /// The entry chosen with the keyboard.
+    cursor: usize,
+    /// A1: the name of the new branch, while it is asked for.
+    naming: Option<String>,
+    problem: Option<String>,
+    /// A3: the notes and files a switch would overwrite.
+    in_the_way: Vec<String>,
+    focus: bool,
+}
+
+/// What the user did in the branch menu this frame.
+enum BranchAction {
+    Switch(String),
+    Track(String),
+    Create(String),
+    ShowChanges,
+    Close,
 }
 
 /// UC-012 A3: the name and email to record commits with.
@@ -951,6 +978,7 @@ impl UnderlineApp {
             discard: None,
             commit: CommitState::default(),
             identity: None,
+            branch_menu: None,
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -2178,6 +2206,266 @@ impl UnderlineApp {
             }
             // A4.
             Err(err) => self.status = format!("The commit failed: {err}"),
+        }
+    }
+
+    /// UC-013 steps 1–2.
+    fn open_branch_menu(&mut self) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        if self.tracker.is_none() {
+            return;
+        }
+        let branches = self.git.branches(workspace.root());
+        self.branch_menu = Some(BranchMenu {
+            problem: branches.as_ref().err().map(|e| e.to_string()),
+            branches: branches.ok(),
+            focus: true,
+            ..BranchMenu::default()
+        });
+    }
+
+    /// UC-013 steps 2–3, A1, A2, A3, A7, A8.
+    fn show_branch_menu(&mut self, ctx: &egui::Context) {
+        let merging = matches!(&self.changes, Some(Ok(c)) if c.merging);
+        let Some(menu) = &mut self.branch_menu else {
+            return;
+        };
+        let mut action = None;
+        egui::Window::new("Branches")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(8.0, -32.0))
+            .show(ctx, |ui| {
+                if let Some(name) = &mut menu.naming {
+                    // A1: the name of the new branch.
+                    ui.label("New branch, from the current commit with the current changes; it goes to the remote with the next synchronization.");
+                    let field = ui.text_edit_singleline(name);
+                    if std::mem::take(&mut menu.focus) {
+                        field.request_focus();
+                    }
+                    let preview = branch_name(name);
+                    match &preview {
+                        Ok(clean) => ui.weak(format!("Branch: {clean}")),
+                        Err(problem) => ui.colored_label(ui.visuals().warn_fg_color, format!("{problem}.")),
+                    };
+                    if let Some(problem) = &menu.problem {
+                        ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+                    }
+                    ui.horizontal(|ui| {
+                        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if (ui.add_enabled(preview.is_ok(), egui::Button::new("Create")).clicked() || enter)
+                            && preview.is_ok()
+                        {
+                            if let Ok(clean) = preview {
+                                action = Some(BranchAction::Create(clean));
+                            }
+                        }
+                        if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            action = Some(BranchAction::Close);
+                        }
+                    });
+                    return;
+                }
+                let field = ui.add(egui::TextEdit::singleline(&mut menu.filter).hint_text("Filter branches"));
+                if std::mem::take(&mut menu.focus) {
+                    field.request_focus();
+                }
+                let filter = menu.filter.to_lowercase();
+                let current = menu.branches.as_ref().and_then(|b| b.current.clone());
+                let entries: Vec<(String, bool)> = menu
+                    .branches
+                    .iter()
+                    .flat_map(|b| {
+                        b.local.iter().map(|n| (n.clone(), false)).chain(b.remote.iter().map(|n| (n.clone(), true)))
+                    })
+                    .filter(|(n, _)| n.to_lowercase().contains(&filter))
+                    .collect();
+                let (down, up, enter, escape) = ui.input(|i| {
+                    (
+                        i.key_pressed(egui::Key::ArrowDown),
+                        i.key_pressed(egui::Key::ArrowUp),
+                        i.key_pressed(egui::Key::Enter),
+                        i.key_pressed(egui::Key::Escape),
+                    )
+                });
+                if !entries.is_empty() {
+                    if down {
+                        menu.cursor = (menu.cursor + 1).min(entries.len() - 1);
+                    }
+                    if up {
+                        menu.cursor = menu.cursor.saturating_sub(1);
+                    }
+                    menu.cursor = menu.cursor.min(entries.len() - 1);
+                }
+                if merging {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        "A synchronization left notes in conflict; resolve them before switching branches.",
+                    );
+                }
+                for (n, (name, remote)) in entries.iter().enumerate() {
+                    let is_current = current.as_deref() == Some(name);
+                    let label = match (is_current, remote) {
+                        (true, _) => format!("{name}  (current)"),
+                        (_, true) => format!("{name}  (on the remote)"),
+                        _ => name.clone(),
+                    };
+                    let row = ui.add_enabled(!merging, egui::SelectableLabel::new(n == menu.cursor, label));
+                    let chosen = row.clicked() || (enter && n == menu.cursor && field.lost_focus());
+                    if chosen && !is_current {
+                        action = Some(if *remote {
+                            BranchAction::Track(name.clone())
+                        } else {
+                            BranchAction::Switch(name.clone())
+                        });
+                    } else if chosen {
+                        action = Some(BranchAction::Close);
+                    }
+                }
+                if let Some(problem) = &menu.problem {
+                    ui.colored_label(ui.visuals().warn_fg_color, problem.as_str());
+                }
+                if !menu.in_the_way.is_empty() {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!(
+                            "Changes not committed would be overwritten: {}. Commit them first, or stay.",
+                            menu.in_the_way.join(", ")
+                        ),
+                    );
+                    if ui.button("Commit first").clicked() {
+                        action = Some(BranchAction::ShowChanges);
+                    }
+                }
+                ui.separator();
+                if ui.add_enabled(!merging, egui::Button::new("New branch…")).clicked() {
+                    menu.naming = Some(menu.filter.clone());
+                    menu.focus = true;
+                    menu.problem = None;
+                }
+                if ui.button("Show changes").clicked() {
+                    action = Some(BranchAction::ShowChanges);
+                }
+                if escape {
+                    action = Some(BranchAction::Close);
+                }
+            });
+        match action {
+            None => {}
+            Some(BranchAction::Close) => self.branch_menu = None,
+            Some(BranchAction::ShowChanges) => {
+                self.branch_menu = None;
+                self.show_changes = true;
+                self.commit.focus = true;
+            }
+            Some(BranchAction::Switch(name)) => {
+                self.switch_branch(&name, |git, dir| git.switch_branch(dir, &name))
+            }
+            Some(BranchAction::Track(remote)) => {
+                let name = remote
+                    .split_once('/')
+                    .map_or(remote.clone(), |(_, n)| n.to_owned());
+                self.switch_branch(&name, |git, dir| git.track_branch(dir, &remote));
+            }
+            Some(BranchAction::Create(name)) => {
+                let exists = self
+                    .branch_menu
+                    .as_ref()
+                    .and_then(|m| m.branches.as_ref())
+                    .is_some_and(|b| b.local.contains(&name));
+                if exists {
+                    // A2: taken; offered to switch to it instead.
+                    if let Some(menu) = &mut self.branch_menu {
+                        menu.problem = Some(format!(
+                            "The branch {name} exists; choose it in the list to switch to it."
+                        ));
+                        menu.naming = None;
+                        menu.filter = name;
+                    }
+                } else {
+                    self.switch_branch(&name, |git, dir| git.create_branch(dir, &name));
+                }
+            }
+        }
+    }
+
+    /// UC-013 steps 4–6, A3, A5, A6: saves, switches with `switch`, and
+    /// shows the branch's notes.
+    fn switch_branch(
+        &mut self,
+        name: &str,
+        switch: impl FnOnce(&Git, &Path) -> Result<(), SwitchError>,
+    ) {
+        // A6: open notes are saved first.
+        if let Err(failures) = self.flush_all() {
+            self.branch_menu = None;
+            self.status = format!("Did not switch, because {}", failures.join("; "));
+            return;
+        }
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let root = workspace.root().to_owned();
+        let carried = match &self.changes {
+            Some(Ok(changes)) => changes.files.len(),
+            _ => 0,
+        };
+        match switch(&self.git, &root) {
+            Ok(()) => {
+                self.branch_menu = None;
+                // Step 5 / BR-004: tabs follow the branch.
+                let mut closed = Vec::new();
+                let gone: Vec<NoteId> = self
+                    .tabs
+                    .iter()
+                    .filter(|(_, tab)| !tab.path.exists())
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for id in gone {
+                    if let Some(index) = self.tabs.find(&id) {
+                        self.tabs.close(index);
+                        closed.push(id.title());
+                    }
+                }
+                for (_, tab) in self.tabs.iter_mut() {
+                    if let Ok(content) = std::fs::read_to_string(&tab.path) {
+                        if content != tab.on_disk {
+                            tab.view.reload(&content);
+                            tab.on_disk = content;
+                        }
+                    }
+                }
+                if let Some(workspace) = &mut self.workspace {
+                    workspace.rescan();
+                }
+                self.persist_tabs();
+                self.refresh_overview();
+                let mut status = format!("Switched to {name}");
+                if carried > 0 {
+                    status.push_str(&format!("; carried along {}", count(carried, "change")));
+                }
+                if !closed.is_empty() {
+                    status.push_str(&format!(
+                        "; closed {}, not on this branch",
+                        closed.join(", ")
+                    ));
+                }
+                self.status = status;
+            }
+            // A3.
+            Err(SwitchError::WouldOverwrite(files)) => {
+                if let Some(menu) = &mut self.branch_menu {
+                    menu.in_the_way = files;
+                    menu.naming = None;
+                }
+            }
+            // A5.
+            Err(SwitchError::Git(err)) => {
+                self.branch_menu = None;
+                self.status = format!("Could not switch to {name}: {err}");
+            }
         }
     }
 
@@ -3822,6 +4110,16 @@ impl eframe::App for UnderlineApp {
         self.track_changes(ctx);
         self.show_discard(ctx);
         self.show_identity(ctx);
+        // UC-013 BR-006: Ctrl+Shift+B opens the branch menu.
+        if ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::B,
+            )
+        }) {
+            self.open_branch_menu();
+        }
+        self.show_branch_menu(ctx);
         // UC-011 BR-007: Ctrl+Shift+G opens the changes.
         if ctx.input_mut(|i| {
             i.consume_key(
@@ -3946,13 +4244,13 @@ impl eframe::App for UnderlineApp {
                         if ui
                             .small_button(text)
                             .on_hover_text(if cfg!(target_os = "macos") {
-                                "Show the changes  Cmd+Shift+G"
+                                "Branches  Cmd+Shift+B"
                             } else {
-                                "Show the changes  Ctrl+Shift+G"
+                                "Branches  Ctrl+Shift+B"
                             })
                             .clicked()
                         {
-                            self.show_changes = true;
+                            self.open_branch_menu();
                         }
                     }
                     // A9.
