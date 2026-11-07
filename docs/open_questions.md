@@ -962,3 +962,73 @@ Answer: No separate undo; renaming back updates the links again, and git can rev
 **Status:** Open
 
 No requirement covers renaming folders. Renaming them by hand outside Underline breaks the links to their notes.
+
+## OQ-096: Where does a deleted note go?
+
+**Element:** UC-007 BR-004, FR-006
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: Into the deleted notes of the workspace, kept by Underline itself in the Underline folder, not the trash of the system.
+
+## OQ-097: What does the confirmation say about links to the note?
+
+**Element:** UC-007 BR-001, BR-002
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: It names how many links in how many notes lead to the note; the links stay unchanged.
+
+## OQ-098: What happens to images and files only the deleted note uses?
+
+**Element:** UC-007 BR-003
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: They stay where they are.
+
+## OQ-099: How does the user start deleting?
+
+**Element:** UC-007 step 1, BR-007, NFR-011
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: From the context menu of the note overview and of the tab, and with the Delete key in the note overview.
+
+## OQ-100: How long are deleted notes kept?
+
+**Element:** UC-007 BR-005
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: 30 days; older ones are removed when the workspace is opened, and the user can empty them earlier.
+
+## OQ-101: How is a deleted note restored?
+
+**Element:** UC-007 A4, A5, BR-006
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: From the list of deleted notes at the end of the note overview, and with an undo in the status bar right after deleting; it comes back at its place.
+
+## OQ-102: Are deleted notes shared through git?
+
+**Element:** UC-007 BR-004
+**Raised by:** /use-case-spec UC-007, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-007](use_cases/UC-007-delete-note.md)
+
+Answer: No; they are kept on this computer only, and git sees the note as deleted.

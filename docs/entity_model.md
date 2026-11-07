@@ -15,6 +15,7 @@ erDiagram
     NOTE ||--o{ TODO_LINK : "is linked by"
     WORKSPACE ||--o{ OPEN_TAB : "remembers"
     NOTE ||--o{ OPEN_TAB : "is shown in"
+    WORKSPACE ||--o{ DELETED_NOTE : "keeps for 30 days"
 ```
 
 ### WORKSPACE
@@ -161,3 +162,20 @@ A note the user has open in a tab, remembered so the tabs come back after a rest
 - A note is open in at most one tab of its workspace (workspace and note are unique together).
 - No two tabs of a workspace have the same position.
 - At most one tab of a workspace is active, and exactly one while any tab is open.
+
+### DELETED_NOTE
+
+A note the user deleted (UC-007), kept with its content so it can be restored; kept on this computer only.
+
+| Attribute  | Description                                             | Data Type | Length/Precision | Validation Rules         |
+|------------|---------------------------------------------------------|-----------|------------------|--------------------------|
+| path       | The place the note had in the workspace                 | String    | 500              | Primary Key (with deleted_at) |
+| content    | The content of the note when it was deleted             | Text      | -                | Not Null                 |
+| deleted_at | When the note was deleted                               | DateTime  | -                | Primary Key (with path)  |
+
+#### Constraints
+
+- A deleted note is removed for good 30 days after it was deleted, or earlier when the user empties the deleted notes.
+- A deleted note is not listed in the note overview, not searched, and not read by agents.
+- The same place may have been deleted several times; each is kept on its own.
+

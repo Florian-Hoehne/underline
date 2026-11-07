@@ -4,10 +4,11 @@
 |-------------------------|------------------------------------------------------------------------------------------------------------------------------------|-------------------|
 | User                    | The person who works with Underline on their notes.                                                                                |                   |
 | Agent                   | An AI tool, such as Claude Code or Cursor, that reads and writes notes through the MCP server on the user's behalf.               | Bot, Bearbeiter   |
-| Underline folder        | The hidden folder `.underline` in a workspace in which Underline remembers its open tabs and recently opened notes; git ignores it by itself. |                   |
+| Underline folder        | The hidden folder `.underline` in a workspace in which Underline remembers its open tabs, recently opened notes, and deleted notes; git ignores it by itself. |                   |
 | Recently opened workspaces | The workspaces the user opened or created before, listed with the most recently opened first when opening a workspace. |                   |
 | Workspace               | A local directory whose Markdown and AsciiDoc files Underline shows as notes; it may be a git repository.                         | Notebook, Vault   |
 | Note                    | One Markdown or AsciiDoc file in a workspace, shown and edited in a tab.                                                           | Notiz             |
+| Deleted notes           | The notes the user deleted in a workspace, kept on this computer for 30 days so they can be restored; git does not see them. | Trash, Papierkorb |
 | Home note               | The note titled Home that every new workspace starts with; the start page when the workspace is a GitHub wiki.                   |                   |
 | Note format             | The markup a note is stored in, given by its file extension: Markdown (`.md`) or AsciiDoc (`.adoc`).                               |                   |
 | Default format          | The note format a workspace gives to new notes: chosen when the workspace is created, otherwise the format most of its notes have; Markdown unless the user picks another. |                   |
