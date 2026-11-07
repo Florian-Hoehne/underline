@@ -1132,3 +1132,73 @@ Answer: Yes, every occurrence in both editing views while the search field holds
 **Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
 
 Answer: Yes: Ctrl+F with the same rules, Enter/F3 for the next and Shift+Enter/Shift+F3 for the previous occurrence.
+
+## OQ-113: Where is a note exported to?
+
+**Element:** UC-009 step 2, BR-007
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: To a place chosen in the file dialog of the system, proposing the title with the extension and the folder of the last export.
+
+## OQ-114: What happens to content the other note format has no markup for?
+
+**Element:** UC-009 A2, BR-002
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: The closest counterpart is written, and the report says which blocks were only approximated.
+
+## OQ-115: How do images and diagrams get into the HTML export?
+
+**Element:** UC-009 BR-003
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: Inside the one HTML file, so it stands alone.
+
+## OQ-116: How is the PDF set up?
+
+**Element:** UC-009 BR-004
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: Paper size by the region of the system, portrait, usual margins, page numbers, light look; no settings.
+
+## OQ-117: How does the HTML export look?
+
+**Element:** UC-009 BR-003
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: Light and plain as on GitHub, dark where the reader's browser asks for it, whatever the theme of Underline.
+
+## OQ-118: What happens to links to other notes in HTML and PDF?
+
+**Element:** UC-009 BR-005
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: Their text stays but they are no links; web addresses and links to headings of the note stay links.
+
+## OQ-119: How does the user start an export?
+
+**Element:** UC-009 step 1, BR-008
+**Raised by:** /use-case-spec UC-009, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-009](use_cases/UC-009-export-note.md)
+
+Answer: From the context menus of the note overview and the tab, and with Ctrl+Shift+E for the active note.
