@@ -1102,3 +1102,33 @@ Answer: Each note with its title, folder, and number of places, and the lines fo
 **Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
 
 Answer: All words must occur, in any order and case; words in double quotes are one sequence; no further options.
+
+## OQ-110: Do accents and umlauts count in a search?
+
+**Element:** UC-008 BR-002
+**Raised by:** spec review UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: Yes; only upper and lower case do not matter.
+
+## OQ-111: Are the words found marked in the opened note?
+
+**Element:** UC-008 step 4, BR-008
+**Raised by:** spec review UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: Yes, every occurrence in both editing views while the search field holds text.
+
+## OQ-112: Is finding within the active note part of UC-008?
+
+**Element:** UC-008 A6, BR-009
+**Raised by:** spec review UC-008, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-008](use_cases/UC-008-find-note.md)
+
+Answer: Yes: Ctrl+F with the same rules, Enter/F3 for the next and Shift+Enter/Shift+F3 for the previous occurrence.
