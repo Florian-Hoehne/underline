@@ -1240,3 +1240,63 @@ Open. No requirement asks for it yet.
 **Status:** Open
 
 Open. No requirement asks for it yet.
+
+## OQ-124: Where does the user see which notes changed?
+
+**Element:** UC-011 steps 2 and 4, BR-003
+**Raised by:** /use-case-spec UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: Marks in the note overview and a list of changes in the tool panel.
+
+## OQ-125: How does the tool panel show the diff of the active note?
+
+**Element:** UC-011 step 6, BR-004
+**Raised by:** /use-case-spec UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: As lines of the markup removed and added, with a few lines around them; choosing a line shows it in the note.
+
+## OQ-126: Against what are the changes shown?
+
+**Element:** UC-011 BR-001
+**Raised by:** /use-case-spec UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: Against the last commit, unsaved text included; there is no staging.
+
+## OQ-127: Where does the current branch show?
+
+**Element:** UC-011 step 1
+**Raised by:** /use-case-spec UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: In the status bar, with the number of changed notes and files; choosing it opens the changes.
+
+## OQ-128: Are files that are not notes listed among the changes?
+
+**Element:** UC-011 step 4, A5, BR-002
+**Raised by:** /use-case-spec UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: Yes, below the notes, with a diff for text files only.
+
+## OQ-129: Can the changes of a note be discarded?
+
+**Element:** UC-011 A6, BR-005
+**Raised by:** /use-case-spec UC-011, 2026-11-07
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-011](use_cases/UC-011-review-changes.md)
+
+Answer: Yes, after a question; a new note goes to the deleted notes.
