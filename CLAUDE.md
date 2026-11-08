@@ -55,6 +55,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-014 | Clipboard through arboard; HTML converted to and from markup | Accepted |
 | ADR-015 | Exports from the facade's blocks; PDF set by Typst as a library | Accepted |
 | ADR-016 | The system's file dialogs through rfd | Accepted |
+| ADR-017 | MCP install edits each agent tool's user configuration file | Proposed |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
