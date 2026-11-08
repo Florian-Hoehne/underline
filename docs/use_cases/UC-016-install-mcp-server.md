@@ -8,7 +8,7 @@
 **Secondary Actor:** Agent tool (Claude Code, Claude Desktop, Cursor, VS Code with Copilot, Codex, Gemini CLI)  
 **Goal:** The user's agent tool knows how to reach the notes of the open workspace through Underline's MCP server, without the user editing any configuration by hand.  
 **Trigger:** The user opens the section "Agents" of the settings.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-059, FR-060, FR-061, NFR-006, NFR-013, NFR-015, NFR-016](../requirements.md)
 
