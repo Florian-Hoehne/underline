@@ -8,6 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::todos::TodoListState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +70,9 @@ pub struct WorkspaceState {
     pub tabs: Vec<TabState>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<NoteState>,
+    /// UC-021 BR-005: the tab "Todos", its sort and its filter.
+    #[serde(default, skip_serializing_if = "TodoListState::is_default")]
+    pub todo_list: TodoListState,
 }
 
 /// One open tab (entity OPEN_TAB).
@@ -335,6 +339,20 @@ impl StateStore {
 
     /// Remembers the open tabs of the workspace at `directory`, left to
     /// right (UC-004 step 6, A5); positions start at 1.
+    /// UC-021 BR-005: the todo list of the workspace at `directory`.
+    pub fn todo_list(&mut self, directory: &Path) -> TodoListState {
+        self.workspace(directory).state.todo_list
+    }
+
+    /// UC-021 BR-005: keeps the todo list of the workspace at `directory`.
+    pub fn set_todo_list(&mut self, directory: &Path, list: TodoListState) {
+        let loaded = self.workspace(directory);
+        if loaded.state.todo_list != list {
+            loaded.state.todo_list = list;
+            loaded.changed_at.get_or_insert_with(Instant::now);
+        }
+    }
+
     pub fn set_tabs(&mut self, directory: &Path, tabs: Vec<TabState>) {
         let loaded = self.workspace(directory);
         if loaded.state.tabs != tabs {
@@ -571,6 +589,33 @@ mod tests {
         assert_eq!(store.note_last_opened(&new, &home()), Some(2_001));
         // TC-001-04: the previous workspace keeps its tab.
         assert_eq!(store.active_note(&old), Some(NoteId::from_title("A")));
+    }
+
+    /// TC-021-10, UC-021 BR-005: the todo list is kept per workspace, in
+    /// the Underline folder, across a restart.
+    #[test]
+    fn uc021_tc10_todo_list_kept_per_workspace() {
+        use crate::todos::{TodoFilter, TodoSort};
+        let sandbox = Sandbox::new("todo-list");
+        let a = sandbox.workspace("a", &["A.md"]);
+        let b = sandbox.workspace("b", &["B.md"]);
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        let list = TodoListState {
+            open: true,
+            active: true,
+            sort: TodoSort::Urgency,
+            filter: TodoFilter::All,
+        };
+        store.set_todo_list(&a, list);
+        store.write().unwrap();
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        assert_eq!(store.todo_list(&a), list);
+        assert_eq!(store.todo_list(&b), TodoListState::default());
+        assert!(
+            fs::read_to_string(a.join(UNDERLINE_FOLDER).join(STATE_FILE_NAME))
+                .unwrap()
+                .contains("urgency")
+        );
     }
 
     /// TC-006-15: the tab and the recent note follow a renamed note.

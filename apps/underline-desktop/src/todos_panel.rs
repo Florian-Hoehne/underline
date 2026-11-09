@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use eframe::egui;
-use underline_core::{Day, NoteId, Todo, TodoConflict, Todos, Urgency};
+use underline_core::{
+    links_summary, overdue_days, todo_list, Day, NoteId, Todo, TodoConflict, TodoFilter,
+    TodoListState, TodoSort, Todos, Urgency,
+};
 
 /// What the section remembers between frames.
 #[derive(Default)]
@@ -26,6 +29,11 @@ pub struct TodosView {
     pub deleted: Option<(Todo, String)>,
     /// A10: the todos in conflict after a sync.
     pub conflicts: Vec<TodoConflict>,
+    /// UC-021 step 8: the todo before it was marked in the list, and the
+    /// report that offers to undo it.
+    pub marked: Option<(Todo, String)>,
+    /// UC-021 BR-008: the row chosen in the list.
+    pub chosen: Option<u64>,
     /// The month the calendar shows, and for which field.
     pub calendar: Option<(DateField, u64, Day)>,
 }
@@ -69,6 +77,12 @@ pub enum TodoAction {
     Open(NoteId),
     MissingNote(String),
     Resolve(u64, Option<Todo>),
+    /// UC-021 step 1.
+    OpenList,
+    /// UC-021 step 7: done or open again, from the list.
+    Mark(Todo, bool),
+    /// UC-021 A4: shows the todo in the section "Todos".
+    Show(u64),
 }
 
 impl TodosView {
@@ -115,6 +129,13 @@ pub fn todos_ui(
         .default_open(true)
         .show(ui, |ui| {
             conflicts_ui(ui, view, &mut actions);
+            if ui
+                .small_button("Open list")
+                .on_hover_text("The tab \"Todos\": all todos, sorted and filtered")
+                .clicked()
+            {
+                actions.push(TodoAction::OpenList);
+            }
             // Step 3: a new todo.
             let field = ui.add(
                 egui::TextEdit::singleline(&mut view.new_title)
@@ -545,5 +566,199 @@ fn calendar_ui(ui: &mut egui::Ui, view: &mut TodosView, actions: &mut Vec<TodoAc
             }
         }
         actions.push(TodoAction::Save(changed));
+    }
+}
+
+/// UC-021 steps 2–8, A1–A6, BR-001 to BR-009: the tab "Todos". Returns what
+/// the user asked for and whether the sort or the filter changed.
+pub fn todo_table(
+    ui: &mut egui::Ui,
+    view: &mut TodosView,
+    list: &mut TodoListState,
+    notes: &[NoteId],
+    today: Day,
+) -> (Vec<TodoAction>, bool) {
+    let mut actions = Vec::new();
+    let before = (list.sort, list.filter);
+    ui.horizontal(|ui| {
+        ui.heading("Todos");
+        ui.separator();
+        for filter in TodoFilter::ALL {
+            ui.selectable_value(&mut list.filter, filter, filter.label());
+        }
+        ui.separator();
+        ui.weak("Sort by");
+        ui.selectable_value(&mut list.sort, TodoSort::Due, "Due date");
+        ui.selectable_value(&mut list.sort, TodoSort::Urgency, "Urgency");
+    });
+    ui.horizontal(|ui| {
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut view.new_title)
+                .hint_text("New todo")
+                .desired_width(320.0),
+        );
+        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            actions.push(TodoAction::Create(view.new_title.clone()));
+            field.request_focus();
+        }
+        if let Some(problem) = &view.new_problem {
+            ui.colored_label(ui.visuals().warn_fg_color, problem);
+        }
+    });
+    ui.separator();
+    let rows: Vec<Todo> = todo_list(&view.todos.todos, list.sort, list.filter)
+        .into_iter()
+        .cloned()
+        .collect();
+    if rows.is_empty() {
+        // A3.
+        ui.weak(match list.filter {
+            TodoFilter::Open => "No open todos. Type a title above to create one.",
+            TodoFilter::Done => "No done todos.",
+            TodoFilter::All => "No todos. Type a title above to create one.",
+        });
+        return (actions, before != (list.sort, list.filter));
+    }
+    // BR-008: arrows choose a row, Space marks it, Enter opens its note.
+    if !ui.ctx().wants_keyboard_input() {
+        let at = view
+            .chosen
+            .and_then(|n| rows.iter().position(|t| t.number == n));
+        let (down, up, space, enter) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::Enter),
+            )
+        });
+        if down {
+            let next = at.map_or(0, |a| (a + 1).min(rows.len() - 1));
+            view.chosen = Some(rows[next].number);
+        }
+        if up {
+            let next = at.map_or(0, |a| a.saturating_sub(1));
+            view.chosen = Some(rows[next].number);
+        }
+        if let Some(todo) = at.map(|a| &rows[a]) {
+            if space {
+                actions.push(TodoAction::Mark(todo.clone(), !todo.is_done()));
+            }
+            if enter {
+                if let Some(link) = todo.links.first() {
+                    open_link(notes, link, &mut actions);
+                }
+            }
+        }
+    }
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::Grid::new("todo-table")
+            .num_columns(8)
+            .striped(true)
+            .spacing([14.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("");
+                ui.strong("#");
+                ui.strong("Title");
+                // BR-007: the headings sort, too.
+                if ui
+                    .selectable_label(
+                        list.sort == TodoSort::Due,
+                        egui::RichText::new("Due").strong(),
+                    )
+                    .clicked()
+                {
+                    list.sort = TodoSort::Due;
+                }
+                if ui
+                    .selectable_label(
+                        list.sort == TodoSort::Urgency,
+                        egui::RichText::new("Urgency").strong(),
+                    )
+                    .clicked()
+                {
+                    list.sort = TodoSort::Urgency;
+                }
+                ui.strong("Scheduled");
+                ui.strong("Notes");
+                ui.strong(if list.filter == TodoFilter::Open {
+                    ""
+                } else {
+                    "Done"
+                });
+                ui.end_row();
+                for todo in &rows {
+                    let chosen = view.chosen == Some(todo.number);
+                    let mut done = todo.is_done();
+                    if ui
+                        .checkbox(&mut done, "")
+                        .on_hover_text("Done (Space)")
+                        .changed()
+                    {
+                        actions.push(TodoAction::Mark(todo.clone(), done));
+                    }
+                    ui.weak(format!("#{}", todo.number));
+                    let mut title = egui::RichText::new(&todo.title);
+                    if todo.is_done() {
+                        title = title.strikethrough();
+                    }
+                    let link = ui
+                        .selectable_label(chosen, title)
+                        .on_hover_text("Show and change");
+                    if link.clicked() {
+                        view.chosen = Some(todo.number);
+                        actions.push(TodoAction::Show(todo.number));
+                    }
+                    // A2: overdue rows marked.
+                    match (todo.due, overdue_days(todo, today)) {
+                        (Some(due), Some(days)) => {
+                            let late = if days == 1 {
+                                "1 day overdue".to_owned()
+                            } else {
+                                format!("{days} days overdue")
+                            };
+                            ui.colored_label(ui.visuals().error_fg_color, format!("{due}  {late}"));
+                        }
+                        (Some(due), None) => {
+                            ui.label(due.to_string());
+                        }
+                        (None, _) => {
+                            ui.weak("–");
+                        }
+                    }
+                    ui.colored_label(urgency_color(ui, todo.urgency), todo.urgency.label());
+                    match todo.scheduled {
+                        Some(day) => ui.label(day.to_string()),
+                        None => ui.weak("–"),
+                    };
+                    // FR-066, BR-009: up to two notes, each opens.
+                    ui.horizontal(|ui| {
+                        for link in todo.links.iter().take(2) {
+                            let title = NoteId::from_relative(link).title();
+                            if ui.link(title).on_hover_text(link).clicked() {
+                                open_link(notes, link, &mut actions);
+                            }
+                        }
+                        if todo.links.len() > 2 {
+                            ui.weak(format!("+{}", todo.links.len() - 2))
+                                .on_hover_text(links_summary(todo));
+                        }
+                    });
+                    match &todo.done {
+                        Some(done) => ui.weak(done.get(..16).unwrap_or(done).replace('T', " ")),
+                        None => ui.label(""),
+                    };
+                    ui.end_row();
+                }
+            });
+    });
+    (actions, before != (list.sort, list.filter))
+}
+
+/// A6: a linked note opens, or the user is told it is missing.
+fn open_link(notes: &[NoteId], link: &str, actions: &mut Vec<TodoAction>) {
+    match notes.iter().find(|n| n.as_str().eq_ignore_ascii_case(link)) {
+        Some(note) => actions.push(TodoAction::Open(note.clone())),
+        None => actions.push(TodoAction::MissingNote(link.to_owned())),
     }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::settings::SettingsState;
-use crate::todos_panel::{todos_ui, TodoAction, TodosView};
+use crate::todos_panel::{todo_table, todos_ui, TodoAction, TodosView};
 use eframe::egui;
 use underline_core::{
     answer_for_tab, answer_request, apply_to_file, connected_agents, find_note, plan_for_tab,
@@ -29,8 +29,8 @@ use underline_core::{
     SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
 };
 use underline_core::{
-    create_todo, delete_todo, load_todos, restore_todo, save_todo, todo_number_of,
-    todos_fingerprint, Todo, TodoError,
+    create_todo, delete_todo, load_todos, overdue_count, restore_todo, save_todo, todo_number_of,
+    todos_fingerprint, Day, Todo, TodoError, TodoFilter, TodoListState,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::{AgentMark, FOUND_COLOR};
@@ -145,6 +145,8 @@ pub struct UnderlineApp {
     agents: AgentsView,
     /// UC-020: the section "Todos" of the tool panel.
     todos: TodosView,
+    /// UC-021: the tab "Todos" of the workspace, its sort and filter.
+    todo_list: TodoListState,
     /// UC-020 A10: the changes the todo conflicts were looked for in.
     todos_conflicts_seen: Option<u64>,
     /// UC-020 A8: the last todo change of each agent that was reported.
@@ -1241,6 +1243,7 @@ impl UnderlineApp {
             abort_confirm: false,
             agents: AgentsView::default(),
             todos: TodosView::default(),
+            todo_list: TodoListState::default(),
             todos_conflicts_seen: None,
             agent_todo_seen: HashMap::new(),
             overview_chosen: None,
@@ -1422,6 +1425,9 @@ impl UnderlineApp {
         self.workspace = Some(workspace);
         self.tabs = TabList::default();
         self.state.workspace_opened(&root, now());
+        // UC-021 BR-005: the tab "Todos", its sort and filter come back.
+        self.todo_list = self.state.todo_list(&root);
+        self.todos = TodosView::default();
         // UC-004: the remembered tabs come back in their order; restoring
         // them does not change the order of the note overview.
         let remembered = self.state.tabs(&root);
@@ -1989,6 +1995,11 @@ impl UnderlineApp {
     /// Opens `id` in a tab; with `viewed`, records it as the most recently
     /// opened note. Returns whether a tab shows the note now.
     fn open_tab(&mut self, id: &NoteId, viewed: bool, editing_view: EditingView) -> bool {
+        if viewed && self.todo_list.active {
+            // UC-021 step 6: the note shows; the tab "Todos" stays open.
+            self.todo_list.active = false;
+            self.persist_todo_list();
+        }
         let Some(workspace) = &self.workspace else {
             return false;
         };
@@ -2049,6 +2060,23 @@ impl UnderlineApp {
     }
 
     /// Remembers the open tabs and the active one (UC-004 step 6).
+    /// UC-021 BR-005: keeps the tab "Todos", its sort and filter.
+    fn persist_todo_list(&mut self) {
+        if let Some(root) = self.workspace.as_ref().map(|w| w.root().to_owned()) {
+            self.state.set_todo_list(&root, self.todo_list);
+        }
+    }
+
+    /// UC-021 step 1, A2: shows the tab "Todos", opening it if needed.
+    fn open_todo_list(&mut self, filter: Option<TodoFilter>) {
+        self.todo_list.open = true;
+        self.todo_list.active = true;
+        if let Some(filter) = filter {
+            self.todo_list.filter = filter;
+        }
+        self.persist_todo_list();
+    }
+
     fn persist_tabs(&mut self) {
         let Some(workspace) = &self.workspace else {
             return;
@@ -3058,6 +3086,32 @@ impl UnderlineApp {
                     Err(err) => self.status = format!("The todo could not be deleted: {err}"),
                 },
                 TodoAction::Open(note) => self.open_note(&note),
+                TodoAction::OpenList => self.open_todo_list(None),
+                // UC-021 step 8: marked in the list, with Undo.
+                TodoAction::Mark(before, done) => {
+                    let mut todo = before.clone();
+                    todo.set_done(done);
+                    match save_todo(&root, &todo) {
+                        Ok(()) => {
+                            self.status = format!(
+                                "Marked todo {} {}",
+                                todo.name(),
+                                if done { "done" } else { "open" }
+                            );
+                            self.todos.marked = Some((before, self.status.clone()));
+                        }
+                        Err(err) => {
+                            self.status =
+                                format!("Todo #{} could not be stored: {err}", todo.number);
+                        }
+                    }
+                }
+                // UC-021 A4: changed in the section "Todos".
+                TodoAction::Show(number) => {
+                    self.todos.open = Some(number);
+                    // The fields are filled from the todo anew.
+                    self.todos.edit.number = 0;
+                }
                 // A6 step 3.
                 TodoAction::MissingNote(link) => {
                     self.status =
@@ -5627,6 +5681,8 @@ impl eframe::App for UnderlineApp {
             let mut opening = None;
             let mut opening_note: Option<NoteId> = None;
             let mut undo_todo = false;
+            let mut undo_mark = false;
+            let mut open_overdue = false;
             let mut sync_now = false;
             ui.horizontal(|ui| {
                 // UC-011 step 1: the branch and the number of changes.
@@ -5746,6 +5802,37 @@ impl eframe::App for UnderlineApp {
                 if self.workspace.is_some() {
                     self.agents_status(ui);
                 }
+                // UC-021 A2, BR-004: the overdue todos.
+                let overdue = overdue_count(&self.todos.todos.todos, Day::today());
+                if overdue > 0 {
+                    let text = if overdue == 1 {
+                        "1 todo overdue".to_owned()
+                    } else {
+                        format!("{overdue} todos overdue")
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(text).color(ui.visuals().error_fg_color),
+                            )
+                            .small(),
+                        )
+                        .on_hover_text("Open the todo list")
+                        .clicked()
+                    {
+                        open_overdue = true;
+                    }
+                }
+                // UC-021 step 8: undo marking a todo in the list.
+                if self
+                    .todos
+                    .marked
+                    .as_ref()
+                    .is_some_and(|(_, status)| *status == self.status)
+                    && ui.small_button("Undo").clicked()
+                {
+                    undo_mark = true;
+                }
                 // UC-020 A5: undo the deletion of a todo.
                 if self
                     .todos
@@ -5809,6 +5896,22 @@ impl eframe::App for UnderlineApp {
             }
             if undo_todo {
                 self.undo_todo_delete();
+            }
+            if open_overdue {
+                self.open_todo_list(Some(TodoFilter::Open));
+            }
+            if undo_mark {
+                if let (Some((before, _)), Some(root)) = (
+                    self.todos.marked.take(),
+                    self.workspace.as_ref().map(|w| w.root().to_owned()),
+                ) {
+                    self.status = match save_todo(&root, &before) {
+                        Ok(()) => format!("Todo {} is as before", before.name()),
+                        Err(err) => format!("Todo #{} could not be stored: {err}", before.number),
+                    };
+                    self.todos.fingerprint.clear();
+                    self.todos.checked = None;
+                }
             }
             if let Some(target) = opening {
                 self.open_with_system(&target);
@@ -6103,9 +6206,15 @@ impl eframe::App for UnderlineApp {
         let mut pasted_image = None;
         let mut quick: Vec<(SettingKey, String)> = Vec::new();
         let mut key_commands = Vec::new();
+        let notes_listed: Vec<NoteId> = self
+            .workspace
+            .as_ref()
+            .map(|w| w.listing().notes.iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_default();
         egui::CentralPanel::default().show(ctx, |ui| {
             // UC-004 A5: the tab bar, left to right.
             let mut activate = None;
+            let mut todo_list_change: Option<bool> = None;
             let mut close = None;
             let mut renaming = None;
             let mut deleting = None;
@@ -6114,7 +6223,10 @@ impl eframe::App for UnderlineApp {
                 .id_salt("tabs")
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let active = self.tabs.active_index();
+                        let active = self
+                            .tabs
+                            .active_index()
+                            .filter(|_| !(self.todo_list.open && self.todo_list.active));
                         for (index, (id, tab)) in self.tabs.iter().enumerate() {
                             let label = ui
                                 .selectable_label(Some(index) == active, tab.label())
@@ -6142,8 +6254,39 @@ impl eframe::App for UnderlineApp {
                             }
                             ui.separator();
                         }
+                        // UC-021 BR-006: the one tab "Todos".
+                        if self.todo_list.open {
+                            let open = self
+                                .todos
+                                .todos
+                                .todos
+                                .iter()
+                                .filter(|t| !t.is_done())
+                                .count();
+                            let label = ui
+                                .selectable_label(self.todo_list.active, format!("Todos ({open})"));
+                            if label.clicked() && !self.todo_list.active {
+                                todo_list_change = Some(true);
+                            }
+                            if label.middle_clicked() || ui.small_button("×").clicked() {
+                                todo_list_change = Some(false);
+                            }
+                        }
                     });
                 });
+            match todo_list_change {
+                Some(true) => self.open_todo_list(None),
+                Some(false) => {
+                    self.todo_list.open = false;
+                    self.todo_list.active = false;
+                    self.persist_todo_list();
+                }
+                None => {}
+            }
+            if activate.is_some() && self.todo_list.active {
+                self.todo_list.active = false;
+                self.persist_todo_list();
+            }
             if let Some(index) = activate {
                 self.tabs.activate(index);
                 let id = self.tabs.note(index).clone();
@@ -6167,6 +6310,22 @@ impl eframe::App for UnderlineApp {
                 self.start_export(id, None);
             }
             ui.separator();
+            // UC-021: the tab "Todos" in place of a note.
+            if self.todo_list.open && self.todo_list.active {
+                let today = Day::today();
+                let (actions, changed) = todo_table(
+                    ui,
+                    &mut self.todos,
+                    &mut self.todo_list,
+                    &notes_listed,
+                    today,
+                );
+                if changed {
+                    self.persist_todo_list();
+                }
+                self.todo_actions(actions);
+                return;
+            }
             // UC-008 A6: the find field of the active tab.
             let mut find_action = None;
             let found_count =

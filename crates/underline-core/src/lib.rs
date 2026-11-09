@@ -96,8 +96,9 @@ pub use state::{
 pub use sync::{Distance, SyncMode, SyncOutcome, SyncRequest, Syncer, AUTO_PREFIX};
 pub use tabs::{Opened, TabList, MAX_TABS};
 pub use todos::{
-    create_todo, delete_todo, load_todos, relink_todos, restore_todo, save_todo, todo_number_of,
-    todo_relative_path, todos_fingerprint, todos_folder, Day, Todo, TodoConflict, TodoError,
+    create_todo, delete_todo, links_summary, load_todos, overdue_count, overdue_days, relink_todos,
+    restore_todo, save_todo, todo_list, todo_number_of, todo_relative_path, todos_fingerprint,
+    todos_folder, Day, Todo, TodoConflict, TodoError, TodoFilter, TodoListState, TodoSort,
     TodoStatus, Todos, Urgency, MAX_TODO_TITLE, TODOS_FOLDER,
 };
 pub use watcher::{

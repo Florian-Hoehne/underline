@@ -116,6 +116,15 @@ impl Day {
             .unwrap_or(self)
     }
 
+    /// How many days lie between `earlier` and this day.
+    pub fn days_since(self, earlier: Day) -> i64 {
+        earlier
+            .0
+            .until(self.0)
+            .map(|span| i64::from(span.get_days()))
+            .unwrap_or(0)
+    }
+
     /// The month and year, such as "November 2026".
     pub fn month_title(self) -> String {
         self.0.strftime("%B %Y").to_string()
@@ -307,6 +316,106 @@ fn check_title(title: &str) -> Result<String, TodoError> {
         return Err(TodoError::LongTitle);
     }
     Ok(title)
+}
+
+/// UC-021 BR-001, BR-002: the order of the todo list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TodoSort {
+    #[default]
+    Due,
+    Urgency,
+}
+
+/// UC-021 BR-003: which todos the list shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TodoFilter {
+    #[default]
+    Open,
+    Done,
+    All,
+}
+
+impl TodoFilter {
+    pub const ALL: [TodoFilter; 3] = [TodoFilter::Open, TodoFilter::Done, TodoFilter::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TodoFilter::Open => "Open",
+            TodoFilter::Done => "Done",
+            TodoFilter::All => "All",
+        }
+    }
+
+    pub fn keeps(self, todo: &Todo) -> bool {
+        match self {
+            TodoFilter::Open => !todo.is_done(),
+            TodoFilter::Done => todo.is_done(),
+            TodoFilter::All => true,
+        }
+    }
+}
+
+/// UC-021 steps 2–4, A1, BR-001 to BR-003: the todos `filter` keeps, in
+/// the order of `sort`.
+pub fn todo_list(todos: &[Todo], sort: TodoSort, filter: TodoFilter) -> Vec<&Todo> {
+    let mut list: Vec<&Todo> = todos.iter().filter(|t| filter.keeps(t)).collect();
+    // Without a due date last; the most urgent first.
+    let due = |t: &Todo| (t.due.is_none(), t.due);
+    let urgency = |t: &Todo| std::cmp::Reverse(t.urgency);
+    match sort {
+        TodoSort::Due => list.sort_by_key(|t| (due(t), urgency(t), t.number)),
+        TodoSort::Urgency => list.sort_by_key(|t| (urgency(t), due(t), t.number)),
+    }
+    list
+}
+
+/// UC-021 BR-004: how many days an open todo is overdue on `today`.
+pub fn overdue_days(todo: &Todo, today: Day) -> Option<i64> {
+    let due = todo.due.filter(|d| *d < today && !todo.is_done())?;
+    Some(today.days_since(due))
+}
+
+/// UC-021 A2, BR-004: how many todos are overdue on `today`.
+pub fn overdue_count(todos: &[Todo], today: Day) -> usize {
+    todos
+        .iter()
+        .filter(|t| overdue_days(t, today).is_some())
+        .count()
+}
+
+/// UC-021 BR-009: up to two linked notes and how many more, such as
+/// "Plan, Ideas +2".
+pub fn links_summary(todo: &Todo) -> String {
+    let titles: Vec<String> = todo
+        .links
+        .iter()
+        .take(2)
+        .map(|l| NoteId::from_relative(l).title())
+        .collect();
+    let mut text = titles.join(", ");
+    if todo.links.len() > 2 {
+        text.push_str(&format!(" +{}", todo.links.len() - 2));
+    }
+    text
+}
+
+/// UC-021 BR-005: the todo list of a workspace as this computer keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TodoListState {
+    /// The tab "Todos" is open, and it is the active tab.
+    pub open: bool,
+    pub active: bool,
+    pub sort: TodoSort,
+    pub filter: TodoFilter,
+}
+
+impl TodoListState {
+    pub fn is_default(&self) -> bool {
+        *self == TodoListState::default()
+    }
 }
 
 /// The todos folder of the workspace at `root`.
@@ -721,6 +830,77 @@ mod tests {
     }
 
     /// Unknown keys stay; unreadable files are reported, not lost.
+    fn todo(number: u64, due: Option<&str>, urgency: Urgency) -> Todo {
+        let mut todo = Todo::new(number, "x").unwrap();
+        todo.due = due.map(|d| d.parse().unwrap());
+        todo.urgency = urgency;
+        todo
+    }
+
+    fn numbers(list: &[&Todo]) -> Vec<u64> {
+        list.iter().map(|t| t.number).collect()
+    }
+
+    /// TC-021-02, TC-021-03, TC-021-04: sorted and filtered.
+    #[test]
+    fn uc021_tc02_tc03_tc04_sort_and_filter() {
+        let mut todos = vec![
+            todo(1, Some("2026-11-20"), Urgency::Normal),
+            todo(2, Some("2026-11-20"), Urgency::High),
+            todo(3, None, Urgency::Critical),
+            todo(4, Some("2026-11-15"), Urgency::Low),
+            todo(5, None, Urgency::High),
+        ];
+        let open = TodoFilter::Open;
+        assert_eq!(
+            numbers(&todo_list(&todos, TodoSort::Due, open)),
+            [4, 2, 1, 3, 5]
+        );
+        assert_eq!(
+            numbers(&todo_list(&todos, TodoSort::Urgency, open)),
+            [3, 2, 5, 1, 4]
+        );
+        todos[1].set_done(true);
+        assert_eq!(
+            numbers(&todo_list(&todos, TodoSort::Due, open)),
+            [4, 1, 3, 5]
+        );
+        assert_eq!(
+            numbers(&todo_list(&todos, TodoSort::Due, TodoFilter::Done)),
+            [2]
+        );
+        assert_eq!(todo_list(&todos, TodoSort::Due, TodoFilter::All).len(), 5);
+    }
+
+    /// TC-021-05: overdue before today only, and only while open.
+    #[test]
+    fn uc021_tc05_overdue() {
+        let today: Day = "2026-11-10".parse().unwrap();
+        let mut todos = vec![
+            todo(1, Some("2026-11-08"), Urgency::Normal),
+            todo(2, Some("2026-11-10"), Urgency::Normal),
+            todo(3, Some("2026-11-09"), Urgency::Normal),
+            todo(4, None, Urgency::Normal),
+        ];
+        todos[2].set_done(true);
+        assert_eq!(overdue_days(&todos[0], today), Some(2));
+        assert_eq!(overdue_days(&todos[1], today), None);
+        assert_eq!(overdue_count(&todos, today), 1);
+        let year: Day = "2025-11-10".parse().unwrap();
+        assert_eq!(today.days_since(year), 365);
+    }
+
+    /// TC-021-12: up to two linked notes and how many more.
+    #[test]
+    fn uc021_tc12_links_summary() {
+        let mut todo = todo(1, None, Urgency::Normal);
+        assert_eq!(links_summary(&todo), "");
+        for note in ["Plan", "Ideas", "Road-Map", "Work/Notes"] {
+            todo.link(&NoteId::from_relative(note));
+        }
+        assert_eq!(links_summary(&todo), "Plan, Ideas +2");
+    }
+
     #[test]
     fn calendar_days() {
         let day: Day = "2026-11-18".parse().unwrap();
