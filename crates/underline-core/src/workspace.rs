@@ -140,6 +140,17 @@ impl Workspace {
         self.listing = self.scan();
     }
 
+    /// The notes of the workspace as they are now, looked for again
+    /// (UC-018 BR-001).
+    pub fn notes_now(&self) -> Listing {
+        self.scan()
+    }
+
+    /// The file of a listed note.
+    pub fn file_of(&self, entry: &NoteEntry) -> PathBuf {
+        self.root.join(entry.id.file_name(entry.format))
+    }
+
     /// Lists the notes in the workspace now, sorted by id.
     pub fn list(&self) -> Result<Vec<NoteId>, WorkspaceError> {
         Ok(self

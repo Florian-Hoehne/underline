@@ -16,6 +16,7 @@ mod embed;
 mod format;
 mod git;
 mod links;
+mod lookup;
 mod new_note;
 mod note;
 mod open;
@@ -32,7 +33,8 @@ mod workspace;
 
 pub use agents::{
     agent_access_now, connected_agents, presence_path, remove_presence, stored_agent_access,
-    write_presence, Presence, AGENTS_FOLDER, PRESENCE_RENEW, PRESENCE_STALE, UNNAMED_AGENT,
+    write_presence, Presence, Reading, AGENTS_FOLDER, PRESENCE_RENEW, PRESENCE_STALE,
+    READING_SHOWN, UNNAMED_AGENT,
 };
 pub use atomic::{write_atomic, write_new_atomic};
 pub use autosave::{Autosave, AUTOSAVE_LATEST, AUTOSAVE_QUIET, AUTOSAVE_RETRY};
@@ -57,6 +59,10 @@ pub use embed::{
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
 pub use links::{asciidoc_anchor, heading_anchor, resolve_link, LinkTarget};
+pub use lookup::{
+    find_note, list_for_agent, read_for_agent, search_for_agent, AgentFound, AgentSearch,
+    ListedNote, LookupError, NoteText, AGENT_FOUND_LINES, AGENT_FOUND_NOTES, CLOSEST_NOTES,
+};
 pub use new_note::{
     check_name, heading_title, page_name, NameProblem, NewNote, NewNoteProblem,
     FORBIDDEN_CHARACTERS, MAX_PATH_CHARS, MAX_TITLE_CHARS,

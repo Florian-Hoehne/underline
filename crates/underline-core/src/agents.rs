@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::atomic::write_atomic;
+use crate::note::NoteId;
 use crate::settings::{user_settings_path, AgentAccess, Effective, Settings};
 use crate::state::{underline_folder, UNDERLINE_FOLDER};
 
@@ -57,6 +58,38 @@ pub struct Presence {
     pub name: Option<String>,
     /// UC-017 A2: a request about notes was refused because access is off.
     pub refused: bool,
+    /// UC-018 BR-006: where the agent read last.
+    pub reading: Option<Reading>,
+}
+
+/// UC-018 BR-006: how long the agent cursor marks the lines an agent read.
+pub const READING_SHOWN: Duration = Duration::from_secs(10);
+
+/// UC-018 BR-006: the lines of a note an agent read, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reading {
+    pub note: NoteId,
+    /// First and last line read, counted from 1.
+    pub lines: (usize, usize),
+    /// Milliseconds since the Unix epoch.
+    pub at: u64,
+}
+
+impl Reading {
+    /// The lines `lines` of `note`, read now.
+    pub fn now(note: NoteId, lines: (usize, usize)) -> Self {
+        let at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        Reading { note, lines, at }
+    }
+
+    /// Whether the agent cursor still marks it at `now` (BR-006).
+    pub fn shown_at(&self, now: SystemTime) -> bool {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_millis(self.at);
+        now.duration_since(at)
+            .map_or(true, |age| age <= READING_SHOWN)
+    }
 }
 
 impl Presence {
@@ -71,7 +104,17 @@ impl Presence {
             .as_deref()
             .unwrap_or("")
             .replace(['\n', '\r'], " ");
-        format!("name: {name}\nrefused: {}\n", self.refused)
+        let mut text = format!("name: {name}\nrefused: {}\n", self.refused);
+        if let Some(r) = &self.reading {
+            text.push_str(&format!(
+                "reading: {} {} {} {}\n",
+                r.lines.0,
+                r.lines.1,
+                r.at,
+                r.note.as_str()
+            ));
+        }
+        text
     }
 
     fn from_text(text: &str) -> Self {
@@ -82,6 +125,18 @@ impl Presence {
                 presence.name = (!name.is_empty()).then(|| name.to_owned());
             } else if let Some(refused) = line.strip_prefix("refused: ") {
                 presence.refused = refused.trim() == "true";
+            } else if let Some(reading) = line.strip_prefix("reading: ") {
+                let mut parts = reading.splitn(4, ' ');
+                let mut number = || parts.next().and_then(|p| p.parse::<u64>().ok());
+                if let (Some(from), Some(to), Some(at)) = (number(), number(), number()) {
+                    if let Some(note) = parts.next().filter(|n| !n.is_empty()) {
+                        presence.reading = Some(Reading {
+                            note: NoteId::from_relative(note),
+                            lines: (from as usize, to as usize),
+                            at,
+                        });
+                    }
+                }
             }
         }
         presence
@@ -194,7 +249,7 @@ mod tests {
         assert!(connected_agents(&ws, now()).is_empty());
         let claude = Presence {
             name: Some("Claude Code".into()),
-            refused: false,
+            ..Presence::default()
         };
         write_presence(&ws, 11, &claude).unwrap();
         write_presence(&ws, 12, &Presence::default()).unwrap();
@@ -220,7 +275,11 @@ mod tests {
         let presence = Presence {
             name: Some("Cursor".into()),
             refused: true,
+            reading: Some(Reading::now(NoteId::from_relative("Work/My Plan"), (3, 9))),
         };
+        let reading = presence.reading.clone().unwrap();
+        assert!(reading.shown_at(SystemTime::now()));
+        assert!(!reading.shown_at(SystemTime::now() + READING_SHOWN + Duration::from_secs(1)));
         assert_eq!(Presence::from_text(&presence.to_text()), presence);
         assert_eq!(Presence::from_text(""), Presence::default());
     }

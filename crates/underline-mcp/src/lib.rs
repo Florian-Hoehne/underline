@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use underline_core::{
-    remove_presence, stored_agent_access, user_settings_path, write_presence, AgentAccess, Note,
-    NoteId, Presence, Workspace, PRESENCE_RENEW,
+    find_note, list_for_agent, read_for_agent, remove_presence, search_for_agent,
+    stored_agent_access, user_settings_path, write_presence, AgentAccess, Note, NoteId, Presence,
+    Reading, Workspace, PRESENCE_RENEW,
 };
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -143,23 +144,32 @@ impl Server {
 
     fn call_tool(&self, params: &Value) -> Value {
         let args = &params["arguments"];
-        let page = || args["page"].as_str().map(NoteId::from_title);
+        let page = || {
+            args["page"]
+                .as_str()
+                .or(args["note"].as_str())
+                .map(NoteId::from_title)
+        };
         let name = params["name"].as_str();
         let outcome = match self.allowed(name) {
             Err(reason) => Err(reason),
             Ok(()) => self.run_tool(name, args, page),
         };
-        let (text, is_error) = match outcome {
-            Ok(text) => (text, false),
-            Err(text) => (text, true),
+        let (texts, is_error) = match outcome {
+            Ok(texts) => (texts, false),
+            Err(text) => (vec![text], true),
         };
-        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        let content: Vec<Value> = texts
+            .into_iter()
+            .map(|text| json!({ "type": "text", "text": text }))
+            .collect();
+        json!({ "content": content, "isError": is_error })
     }
 
     /// UC-017 BR-001, A6: whether the stored level allows the tool `name`.
     fn allowed(&self, name: Option<&str>) -> Result<(), String> {
         let writes = match name {
-            Some("list_notes" | "read_note") => false,
+            Some("list_notes" | "search_notes" | "read_note") => false,
             Some("write_note") => true,
             _ => return Ok(()),
         };
@@ -184,26 +194,58 @@ impl Server {
         name: Option<&str>,
         args: &Value,
         page: impl Fn() -> Option<NoteId>,
-    ) -> Result<String, String> {
+    ) -> Result<Vec<String>, String> {
+        let text = |key: &str| args[key].as_str().map(str::trim).filter(|t| !t.is_empty());
+        let line = |key: &str| -> Result<Option<usize>, String> {
+            match &args[key] {
+                Value::Null => Ok(None),
+                value => value
+                    .as_u64()
+                    .map(|n| Some(n as usize))
+                    .ok_or_else(|| format!("`{key}` must be a line number, counted from 1")),
+            }
+        };
         match name {
-            Some("list_notes") => self
-                .workspace
-                .list()
-                .map(|ids| {
-                    ids.iter()
-                        .map(NoteId::to_string)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-                .map_err(|e| e.to_string()),
-            Some("read_note") => match page() {
-                Some(id) => self
-                    .workspace
-                    .read(&id)
-                    .map(|n| n.body)
-                    .map_err(|e| e.to_string()),
-                None => Err("missing argument `page`".to_owned()),
-            },
+            // UC-018 steps 1–2, A9.
+            Some("list_notes") => {
+                let listed =
+                    list_for_agent(&self.workspace, text("folder")).map_err(|e| e.to_string())?;
+                if listed.is_empty() {
+                    return Ok(vec!["There are no notes here.".to_owned()]);
+                }
+                Ok(vec![listed
+                    .iter()
+                    .map(|l| format!("{} · {}", shown_name(&l.entry.id), l.entry.format.name()))
+                    .collect::<Vec<_>>()
+                    .join("\n")])
+            }
+            // UC-018 steps 3–4, A4, A5.
+            Some("search_notes") => {
+                let words = text("words").ok_or("missing argument `words`")?;
+                let listed = list_for_agent(&self.workspace, None).map_err(|e| e.to_string())?;
+                Ok(vec![
+                    search_for_agent(&self.workspace, &listed, words).to_text(words)
+                ])
+            }
+            // UC-018 steps 5–7, A1–A3, A7, A8.
+            Some("read_note") => {
+                let wanted = text("note")
+                    .or_else(|| text("page"))
+                    .ok_or("missing argument `note`")?;
+                let entry = find_note(&self.workspace.notes_now().notes, wanted)
+                    .map_err(|e| e.to_string())?;
+                let read = read_for_agent(
+                    &self.workspace,
+                    &entry,
+                    line("from_line")?,
+                    line("to_line")?,
+                )
+                .map_err(|e| e.to_string())?;
+                if let (Some(lines), Ok(mut presence)) = (read.lines, self.presence.lock()) {
+                    presence.reading = Some(Reading::now(read.id.clone(), lines));
+                }
+                Ok(vec![read.text.clone(), read.summary()])
+            }
             Some("write_note") => match (page(), args["body"].as_str()) {
                 (Some(id), Some(body)) => self
                     .workspace
@@ -211,12 +253,20 @@ impl Server {
                         id: id.clone(),
                         body: body.to_owned(),
                     })
-                    .map(|()| format!("saved {id}"))
+                    .map(|()| vec![format!("saved {id}")])
                     .map_err(|e| e.to_string()),
                 _ => Err("missing argument `page` or `body`".to_owned()),
             },
             other => Err(format!("unknown tool: {}", other.unwrap_or(""))),
         }
+    }
+}
+
+/// UC-018 BR-002: a note named by its folder and title.
+fn shown_name(id: &NoteId) -> String {
+    match id.folder() {
+        Some(folder) => format!("{folder}/{}", id.title()),
+        None => id.title(),
     }
 }
 
@@ -242,25 +292,50 @@ fn display_name(client: &str) -> String {
 }
 
 fn tools() -> Value {
-    let page = json!({ "type": "string", "description": "Wiki page name, for example `Home`" });
+    let note = json!({
+        "type": "string",
+        "description": "The note as listed: its folder and title, such as `Projects/Plan`; the title alone while it is unique",
+    });
     json!([
         {
             "name": "list_notes",
-            "description": "List the pages in the workspace.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "description": "List the notes of the workspace, the most recently changed first, each with its folder, title, and note format (Markdown or AsciiDoc).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "folder": { "type": "string", "description": "Only the notes of this folder and the folders in it" },
+                },
+            },
+        },
+        {
+            "name": "search_notes",
+            "description": "Search the notes for words: every word must occur in the title, folder, or text, in any order and case; words in double quotes are one. Gives the notes found with the lines found and their line numbers.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "words": { "type": "string" } },
+                "required": ["words"],
+            },
         },
         {
             "name": "read_note",
-            "description": "Read a page's Markdown.",
-            "inputSchema": { "type": "object", "properties": { "page": page }, "required": ["page"] },
+            "description": "Read a note as stored, in its note format; all of it or only some lines. A second text gives the note format and the number of lines.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note": note,
+                    "from_line": { "type": "integer", "minimum": 1, "description": "First line to read, counted from 1" },
+                    "to_line": { "type": "integer", "minimum": 1, "description": "Last line to read" },
+                },
+                "required": ["note"],
+            },
         },
         {
             "name": "write_note",
-            "description": "Create or replace a page's Markdown.",
+            "description": "Create or replace a note's text, in its note format.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "page": page, "body": { "type": "string" } },
-                "required": ["page", "body"],
+                "properties": { "note": note, "body": { "type": "string" } },
+                "required": ["note", "body"],
             },
         },
     ])
@@ -337,7 +412,7 @@ mod tests {
             "tools/call",
             json!({ "name": "list_notes", "arguments": {} }),
         );
-        assert_eq!(list["result"]["content"][0]["text"], "Plan");
+        assert_eq!(list["result"]["content"][0]["text"], "Plan · Markdown");
 
         let read = call(
             &server,
@@ -357,7 +432,7 @@ mod tests {
         let response = call(&server, 1, "initialize", json!({}));
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         let tools = call(&server, 2, "tools/list", json!({}));
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
         remove(&server);
     }
 
@@ -386,9 +461,10 @@ mod tests {
         );
         assert_eq!(server.presence().shown_name(), "Claude Code");
         let tools = call(&server, 2, "tools/list", json!({}));
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
         for (name, args) in [
             ("list_notes", json!({})),
+            ("search_notes", json!({ "words": "x" })),
             ("read_note", json!({ "page": "Plan" })),
             ("write_note", json!({ "page": "Plan", "body": "x" })),
         ] {
@@ -408,7 +484,7 @@ mod tests {
         );
         assert_eq!(
             tool(&server, "list_notes", json!({})),
-            (false, "Plan".into())
+            (false, "Plan · Markdown".into())
         );
         assert!(!server.presence().refused);
 
@@ -424,7 +500,7 @@ mod tests {
         std::fs::write(server.workspace.root().join("Plan.md"), "plan").unwrap();
         assert_eq!(
             tool(&server, "list_notes", json!({})),
-            (false, "Plan".into())
+            (false, "Plan · Markdown".into())
         );
         assert_eq!(
             tool(&server, "read_note", json!({ "page": "Plan" })),
@@ -499,5 +575,54 @@ mod tests {
     fn product_names_of_known_tools() {
         assert_eq!(display_name("claude-code"), "Claude Code");
         assert_eq!(display_name("Some Tool"), "Some Tool");
+    }
+
+    /// TC-018-01, TC-018-03, TC-018-13: list, search, and read as an agent;
+    /// the lines read are told to the window.
+    #[test]
+    fn uc018_tc01_tc03_look_up_through_the_server() {
+        let server = server_with("uc018", "read only");
+        let root = server.workspace.root();
+        std::fs::write(root.join("Plan.md"), "# Plan\n- ship the release\n").unwrap();
+        std::fs::create_dir_all(root.join("Projects")).unwrap();
+        std::fs::write(root.join("Projects/My-Ideas.adoc"), "= Ideas\n").unwrap();
+
+        let (error, list) = tool(&server, "list_notes", json!({}));
+        assert!(!error);
+        assert!(list.contains("Plan · Markdown") && list.contains("Projects/My Ideas · AsciiDoc"));
+        let (_, folder) = tool(&server, "list_notes", json!({ "folder": "Projects" }));
+        assert_eq!(folder, "Projects/My Ideas · AsciiDoc");
+        let (error, nowhere) = tool(&server, "list_notes", json!({ "folder": "Nowhere" }));
+        assert!(error && nowhere.contains("no folder"));
+
+        let (_, found) = tool(&server, "search_notes", json!({ "words": "release" }));
+        assert_eq!(found, "Plan\n  2: - ship the release\n");
+
+        let reply = call(
+            &server,
+            5,
+            "tools/call",
+            json!({ "name": "read_note", "arguments": { "note": "plan", "from_line": 2, "to_line": 9 } }),
+        );
+        let content = &reply["result"]["content"];
+        assert_eq!(content[0]["text"], "- ship the release\n");
+        assert_eq!(
+            content[1]["text"],
+            "Plan · Markdown · 2 lines · lines 2 to 2 given · the note ends at line 2"
+        );
+        let reading = server.presence().reading.unwrap();
+        assert_eq!((reading.note.as_str(), reading.lines), ("Plan", (2, 2)));
+
+        let (_, ideas) = tool(&server, "read_note", json!({ "note": "Projects/My Ideas" }));
+        assert_eq!(ideas, "= Ideas\n");
+        let (error, missing) = tool(&server, "read_note", json!({ "note": "Plann" }));
+        assert!(error && missing.contains("closest are: Plan"));
+        let (error, bad) = tool(
+            &server,
+            "read_note",
+            json!({ "note": "Plan", "from_line": "x" }),
+        );
+        assert!(error && bad.contains("line number"));
+        remove(&server);
     }
 }
