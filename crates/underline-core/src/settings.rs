@@ -183,10 +183,13 @@ pub enum SettingKey {
     AgentAccess,
     OverviewWidth,
     ToolPanelWidth,
+    /// The menu bar at the top of the window, switched by its burger
+    /// button.
+    ShowMenuBar,
 }
 
 impl SettingKey {
-    pub const ALL: [SettingKey; 11] = [
+    pub const ALL: [SettingKey; 12] = [
         SettingKey::DefaultFormat,
         SettingKey::Theme,
         SettingKey::InputMode,
@@ -198,6 +201,7 @@ impl SettingKey {
         SettingKey::AgentAccess,
         SettingKey::OverviewWidth,
         SettingKey::ToolPanelWidth,
+        SettingKey::ShowMenuBar,
     ];
 
     /// The key in the settings file.
@@ -214,6 +218,7 @@ impl SettingKey {
             SettingKey::AgentAccess => "agent_access",
             SettingKey::OverviewWidth => "overview_width",
             SettingKey::ToolPanelWidth => "tool_panel_width",
+            SettingKey::ShowMenuBar => "show_menu_bar",
         }
     }
 }
@@ -255,6 +260,8 @@ pub struct Settings {
     pub overview_width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_panel_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_menu_bar: Option<bool>,
 }
 
 /// The settings of a workspace settings file (UC-001, UC-002).
@@ -369,6 +376,7 @@ impl Settings {
             SettingKey::AgentAccess => self.agent_access.map(|a| a.label().to_owned()),
             SettingKey::OverviewWidth => self.overview_width.map(|v| v.to_string()),
             SettingKey::ToolPanelWidth => self.tool_panel_width.map(|v| v.to_string()),
+            SettingKey::ShowMenuBar => self.show_menu_bar.map(bool_text),
         }
     }
 
@@ -393,6 +401,7 @@ impl Settings {
             }
             SettingKey::OverviewWidth => self.overview_width = parsed.overview_width,
             SettingKey::ToolPanelWidth => self.tool_panel_width = parsed.tool_panel_width,
+            SettingKey::ShowMenuBar => self.show_menu_bar = parsed.show_menu_bar,
         }
         Ok(())
     }
@@ -531,6 +540,9 @@ pub struct Effective {
     pub agent_access: AgentAccess,
     pub overview_width: u32,
     pub tool_panel_width: u32,
+    /// Whether the menu bar is shown; hidden, the window shows the name of
+    /// the workspace in its place.
+    pub show_menu_bar: bool,
     /// UC-017 A1: the workspace lowers agent access below the user's level.
     pub agent_access_lowered: bool,
     /// UC-010 BR-008: the workspace settings ask for more agent access than
@@ -569,6 +581,7 @@ impl Effective {
             agent_access: ws.agent_access.map_or(user_access, |w| w.min(user_access)),
             overview_width: ws.overview_width.or(user.overview_width).unwrap_or(200),
             tool_panel_width: ws.tool_panel_width.or(user.tool_panel_width).unwrap_or(240),
+            show_menu_bar: ws.show_menu_bar.or(user.show_menu_bar).unwrap_or(false),
             agent_access_lowered: ws.agent_access.is_some_and(|w| w < user_access),
             agent_access_refused: ws.agent_access.is_some_and(|w| w > user_access),
         }
@@ -649,6 +662,24 @@ mod tests {
             (effective.overview_width, effective.tool_panel_width),
             (200, 240)
         );
+        assert!(!effective.show_menu_bar, "the menu bar starts hidden");
+    }
+
+    /// The burger button's switch of the menu bar is stored like any
+    /// setting and read back.
+    #[test]
+    fn menu_bar_switch_is_stored() {
+        let dir = temp_dir("menu-bar");
+        let path = dir.join(SETTINGS_FILE_NAME);
+        store_setting(&path, SettingKey::ShowMenuBar, Some("true")).unwrap();
+        let settings = Settings::load_file(&path).unwrap();
+        assert_eq!(settings.show_menu_bar, Some(true));
+        assert_eq!(
+            settings.value_text(SettingKey::ShowMenuBar).as_deref(),
+            Some("true")
+        );
+        assert!(Effective::of(&settings, None).show_menu_bar);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// TC-010-04, TC-010-05: a workspace value wins over the user setting.

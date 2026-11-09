@@ -1175,6 +1175,36 @@ fn editor_status_line(
     });
 }
 
+/// The burger button of the top bar: three lines, painted, so it needs no
+/// glyph from the fonts.
+fn burger_button(ui: &mut egui::Ui) -> egui::Response {
+    let size = egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Menu"));
+    let visuals = ui.style().interact(&response);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, visuals.rounding, visuals.weak_bg_fill);
+    }
+    let lines = rect.shrink(rect.width() * 0.25);
+    for step in 0..3 {
+        let y = lines.top() + lines.height() * step as f32 / 2.0;
+        ui.painter().line_segment(
+            [egui::pos2(lines.left(), y), egui::pos2(lines.right(), y)],
+            egui::Stroke::new(1.5_f32, visuals.fg_stroke.color),
+        );
+    }
+    response
+}
+
+/// The name of the workspace at `root`: its folder name.
+fn workspace_name(root: &Path) -> String {
+    root.file_name().map_or_else(
+        || root.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 /// UC-005: splits the space of `ui` into the editor and, under it, the
 /// row of its status line, as high as a button. A window too low for both
 /// gets no status line.
@@ -4395,6 +4425,61 @@ impl UnderlineApp {
         }
     }
 
+    /// The menus of the menu bar: File, Workspace, and Settings.
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let command = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+        ui.menu_button("File", |ui| {
+            let open = self.workspace.is_some();
+            if ui
+                .add_enabled(open, egui::Button::new("New note…"))
+                .clicked()
+            {
+                self.start_new_note();
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("Open workspace…").clicked() {
+                self.start_open();
+                ui.close_menu();
+            }
+            if ui.button("New workspace…").clicked() {
+                self.start_create();
+                ui.close_menu();
+            }
+        });
+        ui.menu_button("Workspace", |ui| {
+            ui.label("Wiki project URL");
+            ui.horizontal(|ui| {
+                // Narrow enough to fit a small window next to "Check".
+                let width = (ui.ctx().screen_rect().width() - 120.0).clamp(80.0, 280.0);
+                let field =
+                    ui.add(egui::TextEdit::singleline(&mut self.wiki_url).desired_width(width));
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Check").clicked() || entered {
+                    self.status = match WikiRemote::from_project_url(&self.wiki_url) {
+                        Ok(remote) => format!("Wiki repository: {}", remote.clone_url()),
+                        Err(err) => err.to_string(),
+                    };
+                    ui.close_menu();
+                }
+            });
+        });
+        ui.menu_button("Settings", |ui| {
+            // UC-010 BR-006: the settings window.
+            if ui
+                .add(egui::Button::new("Settings…").shortcut_text(format!("{command}+,")))
+                .clicked()
+            {
+                self.settings.open = !self.settings.open;
+                ui.close_menu();
+            }
+        });
+    }
+
     /// UC-003 step 2: the folder of the active note and the default format
     /// are preselected.
     fn start_new_note(&mut self) {
@@ -5706,34 +5791,29 @@ impl eframe::App for UnderlineApp {
         self.show_web_confirm(ctx);
         self.write_state(ctx);
 
+        // The top bar: the burger button switches the menu bar; hidden, the
+        // name of the workspace stands in its place. The switch is stored
+        // like a quick switch (UC-010 A3).
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Open workspace…").clicked() {
-                    self.start_open();
+            let shown = self.settings.effective.show_menu_bar;
+            egui::menu::bar(ui, |ui| {
+                let hint = if shown {
+                    "Hide the menu"
+                } else {
+                    "Show the menu"
+                };
+                if burger_button(ui).on_hover_text(hint).clicked() {
+                    self.settings
+                        .quick_change(SettingKey::ShowMenuBar, (!shown).to_string());
                 }
-                if ui.button("New workspace…").clicked() {
-                    self.start_create();
-                }
-                // UC-010 BR-006: the settings button.
-                if ui
-                    .button("Settings")
-                    .on_hover_text(if cfg!(target_os = "macos") {
-                        "Cmd+,"
-                    } else {
-                        "Ctrl+,"
-                    })
-                    .clicked()
-                {
-                    self.settings.open = !self.settings.open;
-                }
-                ui.separator();
-                ui.label("Wiki project URL");
-                ui.text_edit_singleline(&mut self.wiki_url);
-                if ui.button("Check").clicked() {
-                    self.status = match WikiRemote::from_project_url(&self.wiki_url) {
-                        Ok(remote) => format!("Wiki repository: {}", remote.clone_url()),
-                        Err(err) => err.to_string(),
-                    };
+                if shown {
+                    self.menu_bar(ui);
+                } else {
+                    let name = self.workspace.as_ref().map_or_else(
+                        || "No workspace open".to_owned(),
+                        |workspace| workspace_name(workspace.root()),
+                    );
+                    ui.add(egui::Label::new(egui::RichText::new(name).strong()).truncate());
                 }
             });
         });

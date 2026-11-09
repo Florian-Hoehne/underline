@@ -1886,3 +1886,17 @@ switches for the input mode, the minimap, and copy on select sit at its right en
 
 UC-005 and UC-010 should take this in: UC-010 A3 and TC-010-06 still place the quick switches in the toolbar. In the
 facade the line and column count in the markup, not in the rendered text.
+
+## OQ-188: Where are the commands of the window, and can the user hide them?
+
+**Element:** UC-010 BR-001, BR-006, A3; UC-001; UC-002
+**Raised by:** Implementation, 2026-11-09
+**Blocking:** No
+**Status:** Open
+**Assumed:** As the user asked: a menu bar at the top of the window holds the menus File (new note, open workspace,
+new workspace), Workspace (wiki project address), and Settings. A burger button at its left end shows or hides it;
+hidden, the name of the workspace stands in its place. It starts hidden, and the switch is stored like a quick switch
+(setting "Menu bar").
+
+UC-010 should list the setting in BR-001 and name the burger button as a quick switch; UC-001 and UC-002 should name
+the File menu as the place to open and create a workspace.

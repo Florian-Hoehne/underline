@@ -389,6 +389,7 @@ fn label(key: SettingKey) -> &'static str {
         SettingKey::AgentAccess => "Agent access",
         SettingKey::OverviewWidth => "Note overview width",
         SettingKey::ToolPanelWidth => "Tool panel width",
+        SettingKey::ShowMenuBar => "Menu bar",
     }
 }
 
@@ -464,6 +465,7 @@ fn value_widget(
         SettingKey::GitSyncInterval => number(ui, key, shown.git_sync_interval, 1..=60),
         SettingKey::OverviewWidth => number(ui, key, shown.overview_width, 100..=1000),
         SettingKey::ToolPanelWidth => number(ui, key, shown.tool_panel_width, 100..=1000),
+        SettingKey::ShowMenuBar => check(ui, key, shown.show_menu_bar, "Shown"),
     }
 }
 
