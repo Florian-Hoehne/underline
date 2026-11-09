@@ -65,13 +65,13 @@
 ## TC-016-05: MCP server switched off
 
 **Flow:** A1, BR-005, FR-059  
-**Preconditions:** The MCP server is off.
+**Preconditions:** Agent access is off (UC-017).
 
 | Step | Action                                       | Expected result                                                         |
 |------|----------------------------------------------|-------------------------------------------------------------------------|
-| 1    | Choose "Install" for Claude Code.             | Underline says agents reach notes only while the server is on, and asks to switch it on. |
-| 2    | Decline.                                      | It installs; the report says the server is off; the setting stays off. |
-| 3    | Remove, install again, and agree.             | It installs and the MCP server is on in the user settings.             |
+| 1    | Choose "Install" for Claude Code.             | Underline says agents reach notes only while agent access is on, and asks whether to allow reading, or reading and writing. |
+| 2    | Choose "Install only".                        | It installs; the report says agent access is off; the setting stays off. |
+| 3    | Remove, install again, and allow reading.     | It installs and agent access is read only in the user settings.        |
 
 ## TC-016-06: Already installed, or for another place
 

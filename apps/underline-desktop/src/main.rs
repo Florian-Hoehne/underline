@@ -9,7 +9,7 @@
 mod app;
 mod settings;
 
-use std::io::{self, BufRead, Write};
+use std::io;
 use std::path::PathBuf;
 
 use underline_core::{StateStore, Workspace};
@@ -24,7 +24,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if serve_mcp {
         let workspace = Workspace::open(given.unwrap_or_else(default_dir))?;
-        return serve_stdio(underline_mcp::Server::new(workspace));
+        // UC-017 BR-007: the server follows the stored agent access, whether
+        // the window runs or not.
+        let server = underline_mcp::Server::new(workspace);
+        server.serve(io::stdin().lock(), io::stdout().lock())?;
+        return Ok(());
     }
 
     // UC-002 A1/A2: the app opens the given directory, else the last opened
@@ -47,17 +51,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )))
         }),
     )?;
-    Ok(())
-}
-
-fn serve_stdio(server: underline_mcp::Server) -> Result<(), Box<dyn std::error::Error>> {
-    let mut stdout = io::stdout().lock();
-    for line in io::stdin().lock().lines() {
-        if let Some(reply) = server.handle_line(&line?) {
-            writeln!(stdout, "{reply}")?;
-            stdout.flush()?;
-        }
-    }
     Ok(())
 }
 

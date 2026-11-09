@@ -4,6 +4,7 @@
 //! also the layout of a GitHub or GitLab wiki repository. That keeps the local
 //! store, git sync, and MCP access working on the same files.
 
+mod agents;
 mod atomic;
 mod autosave;
 mod branches;
@@ -29,6 +30,10 @@ mod tabs;
 mod watcher;
 mod workspace;
 
+pub use agents::{
+    agent_access_now, connected_agents, presence_path, remove_presence, stored_agent_access,
+    write_presence, Presence, AGENTS_FOLDER, PRESENCE_RENEW, PRESENCE_STALE, UNNAMED_AGENT,
+};
 pub use atomic::{write_atomic, write_new_atomic};
 pub use autosave::{Autosave, AUTOSAVE_LATEST, AUTOSAVE_QUIET, AUTOSAVE_RETRY};
 pub use branches::{branch_name, BranchNameProblem, Branches, SwitchError};
@@ -66,8 +71,9 @@ pub use search::{
     Searcher, Texts, LINE_CONTEXT, SHOWN_PLACES,
 };
 pub use settings::{
-    set_key, store_setting, user_settings_dir, user_settings_path, Effective, InputMode, LineSide,
-    SettingKey, Settings, SettingsError, Theme, WorkspaceSettings, SETTINGS_FILE_NAME,
+    set_key, store_setting, user_settings_dir, user_settings_path, AgentAccess, Effective,
+    InputMode, LineSide, SettingKey, Settings, SettingsError, Theme, WorkspaceSettings,
+    LEGACY_MCP_KEY, SETTINGS_FILE_NAME,
 };
 pub use state::{
     now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,

@@ -7,8 +7,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 use underline_core::{
-    store_setting, user_settings_path, Effective, Git, InputMode, LineSide, NoteFormat, SettingKey,
-    Settings, SettingsError, Theme, WorkspaceSettings, SETTINGS_FILE_NAME,
+    store_setting, user_settings_path, AgentAccess, Effective, Git, InputMode, LineSide,
+    NoteFormat, SettingKey, Settings, SettingsError, Theme, WorkspaceSettings, SETTINGS_FILE_NAME,
 };
 use underline_facade::themes::Palette;
 
@@ -107,12 +107,10 @@ impl SettingsState {
         };
         let shared = root.join(".git").exists() && !git.is_ignored(root, SETTINGS_FILE_NAME);
         self.workspace = Some((root.to_owned(), settings, shared));
+        // A workspace opened anew is reported even when the last one asked
+        // for more too.
+        self.effective.agent_access_refused = false;
         self.recompute();
-        if self.effective.mcp_refused {
-            self.messages.push(
-                "This workspace's settings ask to switch the MCP server on; that is not followed (only your own settings can)".into(),
-            );
-        }
     }
 
     /// UC-010 A5: the workspace settings file changed outside.
@@ -151,7 +149,12 @@ impl SettingsState {
 
     fn recompute(&mut self) {
         let workspace = self.workspace.as_ref().map(|(_, s, _)| s);
+        let refused = self.effective.agent_access_refused;
         self.effective = Effective::of(&self.user, workspace);
+        // UC-017 A1: said when the workspace starts asking for more.
+        if self.effective.agent_access_refused && !refused {
+            self.messages.push(agent_access_refused_message());
+        }
     }
 
     fn path(&self, scope: Scope) -> Option<PathBuf> {
@@ -214,6 +217,24 @@ impl SettingsState {
                 "The setting could not be stored and applies until Underline is closed: {err}"
             )),
         }
+    }
+
+    /// UC-017 BR-002: the agent access the user settings allow.
+    pub fn user_agent_access(&self) -> AgentAccess {
+        self.user.agent_access.unwrap_or_default()
+    }
+
+    /// UC-017 A1: the level the workspace settings lower agent access to.
+    pub fn workspace_agent_access(&self) -> Option<AgentAccess> {
+        self.workspace.as_ref().and_then(|(_, s, _)| s.agent_access)
+    }
+
+    /// UC-017 A1: opens the settings window at `scope`.
+    pub fn open_at(&mut self, scope: Scope) {
+        if scope == Scope::Me || self.workspace.is_some() {
+            self.scope = scope;
+        }
+        self.open = true;
     }
 
     /// Changes a setting from outside the settings window (A3, A4).
@@ -280,7 +301,15 @@ impl SettingsState {
                                 continue;
                             }
                             ui.label(label(key));
-                            let change = value_widget(ui, key, &shown, self.scope, derived, &workspace);
+                            let change = value_widget(
+                                ui,
+                                key,
+                                &shown,
+                                self.scope,
+                                derived,
+                                &workspace,
+                                self.user_agent_access(),
+                            );
                             if let Some(change) = change {
                                 changes.push(change);
                             }
@@ -299,6 +328,12 @@ impl SettingsState {
                                     } else {
                                         ui.weak("as for me");
                                     }
+                                }
+                                (Scope::Me, Some(_))
+                                    if key == SettingKey::AgentAccess
+                                        && self.effective.agent_access_refused =>
+                                {
+                                    ui.weak("this workspace asks for more; not followed");
                                 }
                                 (Scope::Me, Some((settings, _))) if settings.sets(key) => {
                                     ui.weak("this workspace uses its own value");
@@ -331,6 +366,12 @@ impl SettingsState {
     }
 }
 
+/// UC-010 BR-008, UC-017 A1: the workspace asks for more agent access than
+/// the user allows.
+pub fn agent_access_refused_message() -> String {
+    "This workspace's settings ask for more agent access than your own settings allow; that is not followed (only your own settings can raise it)".into()
+}
+
 fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -345,7 +386,7 @@ fn label(key: SettingKey) -> &'static str {
         SettingKey::ShowMinimap => "Minimap",
         SettingKey::CopyOnSelect => "Copy on select",
         SettingKey::GitSyncInterval => "Git sync every (minutes)",
-        SettingKey::McpServerEnabled => "MCP server",
+        SettingKey::AgentAccess => "Agent access",
         SettingKey::OverviewWidth => "Note overview width",
         SettingKey::ToolPanelWidth => "Tool panel width",
     }
@@ -362,6 +403,7 @@ fn value_widget(
     scope: Scope,
     derived: Option<NoteFormat>,
     workspace: &Option<(Settings, bool)>,
+    user_access: AgentAccess,
 ) -> Option<Change> {
     let id = ui.make_persistent_id(("setting", key.key(), scope == Scope::Me));
     let some = |text: &str| Some((key, Some(text.to_owned())));
@@ -406,18 +448,17 @@ fn value_widget(
         ),
         SettingKey::ShowMinimap => check(ui, key, shown.show_minimap, "Shown"),
         SettingKey::CopyOnSelect => check(ui, key, shown.copy_on_select, "On"),
-        SettingKey::McpServerEnabled => match scope {
-            Scope::Me => check(ui, key, shown.mcp_server_enabled, "On"),
-            // UC-010 BR-008: a workspace can only switch it off.
+        SettingKey::AgentAccess => match scope {
+            Scope::Me => choose(ui, id, key, shown.agent_access, AgentAccess::ALL),
+            // UC-010 BR-008, UC-017 BR-002: a workspace can only lower it, so
+            // only the levels up to the user's are offered.
             Scope::Workspace => {
-                let mut off = workspace
-                    .as_ref()
-                    .is_some_and(|(s, _)| s.mcp_server_enabled == Some(false));
-                if ui.checkbox(&mut off, "Off in this workspace").changed() {
-                    Some((key, off.then(|| "false".to_owned())))
-                } else {
-                    None
-                }
+                let lower: Vec<AgentAccess> = AgentAccess::ALL
+                    .iter()
+                    .copied()
+                    .filter(|a| *a <= user_access)
+                    .collect();
+                choose(ui, id, key, shown.agent_access, &lower)
             }
         },
         SettingKey::GitSyncInterval => number(ui, key, shown.git_sync_interval, 1..=60),

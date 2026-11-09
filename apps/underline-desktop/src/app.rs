@@ -21,6 +21,7 @@ use underline_core::{
     Choice, CompleteError, Distance, FileChange, Hunk, Joining, LineKind, OnlyDiffers, Side,
     SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
 };
+use underline_core::{connected_agents, AgentAccess, Presence};
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::FOUND_COLOR;
 use underline_editor::{
@@ -388,6 +389,10 @@ struct AgentsView {
     was_open: bool,
     report: Option<String>,
     asking: Option<AgentQuestion>,
+    /// UC-017 BR-004: the agents connected to the workspace, looked at about
+    /// once a second.
+    connected: Vec<Presence>,
+    connected_checked: Option<Instant>,
 }
 
 /// UC-016 A1, A2: what the section asks before installing.
@@ -403,7 +408,7 @@ enum AgentAction {
     Install(AgentTool, bool),
     /// A1: install although the MCP server stays off.
     InstallOnly(AgentTool),
-    SwitchOnAndInstall(AgentTool),
+    AllowAndInstall(AgentTool, AgentAccess),
     Remove(AgentTool),
     Copy,
     Cancel,
@@ -946,7 +951,7 @@ fn agents_ui(
     ui: &mut egui::Ui,
     agents: &AgentsView,
     server: Option<&Server>,
-    mcp_on: bool,
+    access: AgentAccess,
 ) -> Option<AgentAction> {
     let Some(server) = server else {
         ui.weak("Open a workspace to connect agents to it.");
@@ -957,9 +962,13 @@ fn agents_ui(
         "Let an agent tool reach the notes of {} through Underline's MCP server.",
         server.workspace.display()
     ));
-    if !mcp_on {
-        ui.weak("The MCP server is off; agents reach the notes only while it is on.");
-    }
+    match access {
+        AgentAccess::Off => {
+            ui.weak("Agent access is off; agents reach the notes only while it is on.")
+        }
+        AgentAccess::ReadOnly => ui.weak("Agent access is read only."),
+        AgentAccess::ReadWrite => ui.weak("Agent access is read and write."),
+    };
     egui::Grid::new("agents-grid")
         .num_columns(3)
         .spacing([12.0, 6.0])
@@ -1004,11 +1013,14 @@ fn agents_ui(
     match agents.asking {
         Some(AgentQuestion::SwitchOn(tool)) => {
             ui.label(
-                "Agents reach the notes only while the MCP server is on. Switch it on for you?",
+                "Agents reach the notes only while agent access is on. Allow agents to read, or to read and write, for you?",
             );
             ui.horizontal(|ui| {
-                if ui.button("Switch on and install").clicked() {
-                    action = Some(AgentAction::SwitchOnAndInstall(tool));
+                if ui.button("Allow reading and install").clicked() {
+                    action = Some(AgentAction::AllowAndInstall(tool, AgentAccess::ReadOnly));
+                }
+                if ui.button("Allow reading and writing and install").clicked() {
+                    action = Some(AgentAction::AllowAndInstall(tool, AgentAccess::ReadWrite));
                 }
                 if ui.button("Install only").clicked() {
                     action = Some(AgentAction::InstallOnly(tool));
@@ -2799,6 +2811,90 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-017 BR-004: which agents are connected to the workspace, looked at
+    /// about once a second while it is open.
+    fn poll_agents(&mut self, ctx: &egui::Context) {
+        let Some(workspace) = &self.workspace else {
+            self.agents.connected.clear();
+            return;
+        };
+        if self
+            .agents
+            .connected_checked
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
+        {
+            self.agents.connected_checked = Some(Instant::now());
+            self.agents.connected = connected_agents(workspace.root(), SystemTime::now());
+        }
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// UC-017 step 1, A1, A2, A4: the agents entry of the status bar and its
+    /// menu, which changes the user setting (BR-002).
+    fn agents_status(&mut self, ui: &mut egui::Ui) {
+        let effective = &self.settings.effective;
+        let access = effective.agent_access;
+        let mut text = format!("Agents: {}", access.status_text());
+        if effective.agent_access_lowered {
+            text.push_str(" in this workspace");
+        }
+        let connected = &self.agents.connected;
+        if access.reads() && !connected.is_empty() {
+            let names: Vec<&str> = connected.iter().map(Presence::shown_name).collect();
+            let lead = if names.len() == 1 {
+                "Agent connected"
+            } else {
+                "Agents connected"
+            };
+            text.push_str(&format!(" · {lead}: {}", names.join(", ")));
+        } else if !access.reads() {
+            // A2: an agent asked while access is off.
+            let asked: Vec<&str> = connected
+                .iter()
+                .filter(|p| p.refused)
+                .map(Presence::shown_name)
+                .collect();
+            if !asked.is_empty() {
+                text.push_str(&format!(" · {} asked for access", asked.join(", ")));
+            }
+        }
+        // A1: the workspace caps what the menu offers.
+        let cap = self.settings.workspace_agent_access();
+        let user = self.settings.user_agent_access();
+        let mut chosen = None;
+        let mut open_workspace = false;
+        ui.menu_button(text, |ui| {
+            for level in AgentAccess::ALL {
+                if cap.is_some_and(|cap| *level > cap) {
+                    continue;
+                }
+                if ui.radio(user == *level, level.label()).clicked() {
+                    chosen = Some(*level);
+                    ui.close_menu();
+                }
+            }
+            if self.workspace.is_some() {
+                ui.separator();
+                if ui.button("Settings of this workspace…").clicked() {
+                    open_workspace = true;
+                    ui.close_menu();
+                }
+            }
+        })
+        .response
+        .on_hover_text("What agents may do with the notes through Underline's MCP server");
+        if let Some(level) = chosen.filter(|l| *l != user) {
+            self.settings.change(
+                crate::settings::Scope::Me,
+                SettingKey::AgentAccess,
+                Some(level.label().into()),
+            );
+        }
+        if open_workspace {
+            self.settings.open_at(crate::settings::Scope::Workspace);
+        }
+    }
+
     /// The MCP server entry of the open workspace: this Underline serving it.
     fn mcp_server(&self) -> Option<Server> {
         let workspace = self.workspace.as_ref()?;
@@ -2851,17 +2947,19 @@ impl UnderlineApp {
                     Err(err) => format!("{} was not changed: {err}", tool.name()),
                 });
             }
-            AgentAction::SwitchOnAndInstall(tool) => {
-                // A1: the user agreed to switch the MCP server on.
+            AgentAction::AllowAndInstall(tool, access) => {
+                // A1: the user chose what agents may do (UC-017).
                 self.settings.change(
                     crate::settings::Scope::Me,
-                    SettingKey::McpServerEnabled,
-                    Some("true".into()),
+                    SettingKey::AgentAccess,
+                    Some(access.label().into()),
                 );
                 self.agent_action(AgentAction::InstallOnly(tool), Some(server));
                 return;
             }
-            AgentAction::Install(tool, false) if !self.settings.effective.mcp_server_enabled => {
+            AgentAction::Install(tool, false)
+                if self.settings.user_agent_access() == AgentAccess::Off =>
+            {
                 // A1: asked first.
                 self.agents.asking = Some(AgentQuestion::SwitchOn(tool));
                 self.agents.report = None;
@@ -2877,8 +2975,8 @@ impl UnderlineApp {
                             tool.name(),
                             tool.name()
                         );
-                            if !self.settings.effective.mcp_server_enabled {
-                                report.push_str(" The MCP server is off, so the agent cannot reach the notes yet.");
+                            if !self.settings.effective.agent_access.reads() {
+                                report.push_str(" Agent access is off, so the agent cannot reach the notes yet.");
                             }
                             report
                         }
@@ -3361,6 +3459,7 @@ impl UnderlineApp {
     /// the settings window, Ctrl+, (BR-006), and their messages.
     fn apply_settings(&mut self, ctx: &egui::Context) {
         self.settings.poll();
+        self.poll_agents(ctx);
         let theme = self.settings.effective.theme;
         if self.applied_theme != Some(theme) {
             self.applied_theme = Some(theme);
@@ -3382,9 +3481,9 @@ impl UnderlineApp {
         self.agents.was_open = self.settings.open;
         let mut agent_action = None;
         let agents = &self.agents;
-        let mcp_on = self.settings.effective.mcp_server_enabled;
+        let access = self.settings.effective.agent_access;
         self.settings.show_window(ctx, derived, |ui| {
-            agent_action = agents_ui(ui, agents, server.as_ref(), mcp_on);
+            agent_action = agents_ui(ui, agents, server.as_ref(), access);
         });
         if let Some(action) = agent_action {
             self.agent_action(action, server.as_ref());
@@ -5217,6 +5316,9 @@ impl eframe::App for UnderlineApp {
                     {
                         sync_now = true;
                     }
+                }
+                if self.workspace.is_some() {
+                    self.agents_status(ui);
                 }
                 ui.label(parts.join("  |  "));
                 // UC-009 step 5, A2: open the export, show the approximated blocks.

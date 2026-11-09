@@ -40,7 +40,7 @@ pub enum SettingsError {
 macro_rules! choice {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $label:expr),+ $(,)? }) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
         pub enum $name {
             #[default]
             $($variant),+
@@ -134,6 +134,41 @@ choice! {
     }
 }
 
+choice! {
+    /// What agents may do with the notes through the MCP server (UC-017
+    /// BR-002), lowest first; off by default.
+    AgentAccess {
+        Off => "Off",
+        ReadOnly => "Read only",
+        ReadWrite => "Read and write",
+    }
+}
+
+impl AgentAccess {
+    /// Whether agents may list and read notes.
+    pub fn reads(self) -> bool {
+        self >= AgentAccess::ReadOnly
+    }
+
+    /// Whether agents may create and change notes.
+    pub fn writes(self) -> bool {
+        self == AgentAccess::ReadWrite
+    }
+
+    /// How the status bar names the level, as in "Agents: read only".
+    pub fn status_text(self) -> &'static str {
+        match self {
+            AgentAccess::Off => "off",
+            AgentAccess::ReadOnly => "read only",
+            AgentAccess::ReadWrite => "read and write",
+        }
+    }
+}
+
+/// The key under which earlier versions kept the MCP server switch; `true`
+/// is read as read and write, `false` as off (UC-017 BR-002).
+pub const LEGACY_MCP_KEY: &str = "mcp_server_enabled";
+
 /// One setting of UC-010 BR-001, as named in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SettingKey {
@@ -145,7 +180,7 @@ pub enum SettingKey {
     ShowMinimap,
     CopyOnSelect,
     GitSyncInterval,
-    McpServerEnabled,
+    AgentAccess,
     OverviewWidth,
     ToolPanelWidth,
 }
@@ -160,7 +195,7 @@ impl SettingKey {
         SettingKey::ShowMinimap,
         SettingKey::CopyOnSelect,
         SettingKey::GitSyncInterval,
-        SettingKey::McpServerEnabled,
+        SettingKey::AgentAccess,
         SettingKey::OverviewWidth,
         SettingKey::ToolPanelWidth,
     ];
@@ -176,7 +211,7 @@ impl SettingKey {
             SettingKey::ShowMinimap => "show_minimap",
             SettingKey::CopyOnSelect => "copy_on_select",
             SettingKey::GitSyncInterval => "git_sync_interval",
-            SettingKey::McpServerEnabled => "mcp_server_enabled",
+            SettingKey::AgentAccess => "agent_access",
             SettingKey::OverviewWidth => "overview_width",
             SettingKey::ToolPanelWidth => "tool_panel_width",
         }
@@ -208,8 +243,13 @@ pub struct Settings {
     /// Minutes between two git syncs, 1 to 60.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_sync_interval: Option<u32>,
+    /// UC-017: off, read only, or read and write.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_server_enabled: Option<bool>,
+    pub agent_access: Option<AgentAccess>,
+    /// The switch of earlier versions, only read: folded into
+    /// `agent_access` when the file is read.
+    #[serde(skip_serializing, rename = "mcp_server_enabled")]
+    pub legacy_mcp_server_enabled: Option<bool>,
     /// Widths of the note overview and the tool panel, 100 to 1,000 pixels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview_width: Option<u32>,
@@ -269,6 +309,16 @@ impl Settings {
                     .to_owned(),
             }
         })?;
+        let mut settings = settings;
+        if settings.agent_access.is_none() {
+            settings.agent_access = settings.legacy_mcp_server_enabled.map(|on| {
+                if on {
+                    AgentAccess::ReadWrite
+                } else {
+                    AgentAccess::Off
+                }
+            });
+        }
         let ranges = [
             (
                 SettingKey::GitSyncInterval,
@@ -316,7 +366,7 @@ impl Settings {
             SettingKey::ShowMinimap => self.show_minimap.map(bool_text),
             SettingKey::CopyOnSelect => self.copy_on_select.map(bool_text),
             SettingKey::GitSyncInterval => self.git_sync_interval.map(|v| v.to_string()),
-            SettingKey::McpServerEnabled => self.mcp_server_enabled.map(bool_text),
+            SettingKey::AgentAccess => self.agent_access.map(|a| a.label().to_owned()),
             SettingKey::OverviewWidth => self.overview_width.map(|v| v.to_string()),
             SettingKey::ToolPanelWidth => self.tool_panel_width.map(|v| v.to_string()),
         }
@@ -337,7 +387,10 @@ impl Settings {
             SettingKey::ShowMinimap => self.show_minimap = parsed.show_minimap,
             SettingKey::CopyOnSelect => self.copy_on_select = parsed.copy_on_select,
             SettingKey::GitSyncInterval => self.git_sync_interval = parsed.git_sync_interval,
-            SettingKey::McpServerEnabled => self.mcp_server_enabled = parsed.mcp_server_enabled,
+            SettingKey::AgentAccess => {
+                self.agent_access = parsed.agent_access;
+                self.legacy_mcp_server_enabled = None;
+            }
             SettingKey::OverviewWidth => self.overview_width = parsed.overview_width,
             SettingKey::ToolPanelWidth => self.tool_panel_width = parsed.tool_panel_width,
         }
@@ -449,7 +502,11 @@ pub fn store_setting(
     if value.is_none() && key_line(&text, key.key()).is_none() {
         return Ok(());
     }
-    let changed = set_key(&text, key.key(), value);
+    let mut changed = set_key(&text, key.key(), value);
+    if key == SettingKey::AgentAccess && key_line(&changed, LEGACY_MCP_KEY).is_some() {
+        // UC-017 BR-002: the new key replaces the switch of earlier versions.
+        changed = set_key(&changed, LEGACY_MCP_KEY, None);
+    }
     if changed == text {
         return Ok(());
     }
@@ -470,12 +527,15 @@ pub struct Effective {
     pub show_minimap: bool,
     pub copy_on_select: bool,
     pub git_sync_interval: u32,
-    pub mcp_server_enabled: bool,
+    /// UC-017 BR-002: the user's level, lowered by the workspace.
+    pub agent_access: AgentAccess,
     pub overview_width: u32,
     pub tool_panel_width: u32,
-    /// UC-010 BR-008: the workspace settings ask to switch the MCP server on,
-    /// which is not followed.
-    pub mcp_refused: bool,
+    /// UC-017 A1: the workspace lowers agent access below the user's level.
+    pub agent_access_lowered: bool,
+    /// UC-010 BR-008: the workspace settings ask for more agent access than
+    /// the user settings allow, which is not followed.
+    pub agent_access_refused: bool,
 }
 
 impl Default for Effective {
@@ -490,7 +550,7 @@ impl Effective {
     pub fn of(user: &Settings, workspace: Option<&Settings>) -> Self {
         let empty = Settings::default();
         let ws = workspace.unwrap_or(&empty);
-        let user_mcp = user.mcp_server_enabled.unwrap_or(false);
+        let user_access = user.agent_access.unwrap_or_default();
         Effective {
             theme: ws.theme.or(user.theme).unwrap_or_default(),
             input_mode: ws.input_mode.or(user.input_mode).unwrap_or_default(),
@@ -505,11 +565,12 @@ impl Effective {
             show_minimap: ws.show_minimap.or(user.show_minimap).unwrap_or(true),
             copy_on_select: ws.copy_on_select.or(user.copy_on_select).unwrap_or(true),
             git_sync_interval: ws.git_sync_interval.or(user.git_sync_interval).unwrap_or(5),
-            // A workspace can only switch the MCP server off.
-            mcp_server_enabled: user_mcp && ws.mcp_server_enabled != Some(false),
+            // A workspace can only lower agent access.
+            agent_access: ws.agent_access.map_or(user_access, |w| w.min(user_access)),
             overview_width: ws.overview_width.or(user.overview_width).unwrap_or(200),
             tool_panel_width: ws.tool_panel_width.or(user.tool_panel_width).unwrap_or(240),
-            mcp_refused: ws.mcp_server_enabled == Some(true),
+            agent_access_lowered: ws.agent_access.is_some_and(|w| w < user_access),
+            agent_access_refused: ws.agent_access.is_some_and(|w| w > user_access),
         }
     }
 }
@@ -583,7 +644,7 @@ mod tests {
         assert!(effective.show_line_numbers && effective.show_minimap && effective.copy_on_select);
         assert_eq!(effective.line_number_side, LineSide::Left);
         assert_eq!(effective.git_sync_interval, 5);
-        assert!(!effective.mcp_server_enabled);
+        assert_eq!(effective.agent_access, AgentAccess::Off);
         assert_eq!(
             (effective.overview_width, effective.tool_panel_width),
             (200, 240)
@@ -608,23 +669,59 @@ mod tests {
         assert_eq!(Effective::of(&user, None).theme, Theme::Gruvbox);
     }
 
-    /// TC-010-15, UC-010 BR-008: a workspace switches the MCP server off,
-    /// never on.
+    /// TC-010-15, UC-010 BR-008, TC-017-05: a workspace lowers agent
+    /// access, never raises it.
     #[test]
-    fn uc010_tc15_mcp_only_with_the_users_consent() {
-        let on = Settings {
-            mcp_server_enabled: Some(true),
-            ..Settings::default()
-        };
-        let off = Settings {
-            mcp_server_enabled: Some(false),
+    fn uc010_tc15_uc017_tc05_agent_access_only_with_the_users_consent() {
+        let with = |access| Settings {
+            agent_access: Some(access),
             ..Settings::default()
         };
         let none = Settings::default();
-        let cloned = Effective::of(&none, Some(&on));
-        assert!(!cloned.mcp_server_enabled && cloned.mcp_refused);
-        assert!(Effective::of(&on, Some(&none)).mcp_server_enabled);
-        assert!(!Effective::of(&on, Some(&off)).mcp_server_enabled);
+        let cloned = Effective::of(&none, Some(&with(AgentAccess::ReadWrite)));
+        assert_eq!(cloned.agent_access, AgentAccess::Off);
+        assert!(cloned.agent_access_refused && !cloned.agent_access_lowered);
+        let read_write = with(AgentAccess::ReadWrite);
+        assert_eq!(
+            Effective::of(&read_write, Some(&none)).agent_access,
+            AgentAccess::ReadWrite
+        );
+        let lowered = Effective::of(&read_write, Some(&with(AgentAccess::ReadOnly)));
+        assert_eq!(lowered.agent_access, AgentAccess::ReadOnly);
+        assert!(lowered.agent_access_lowered && !lowered.agent_access_refused);
+        let raised = Effective::of(&with(AgentAccess::ReadOnly), Some(&read_write));
+        assert_eq!(raised.agent_access, AgentAccess::ReadOnly);
+        assert!(raised.agent_access_refused);
+    }
+
+    /// TC-017-03: off by default; the switch of earlier versions is read as
+    /// read and write or off, and storing the level replaces it.
+    #[test]
+    fn uc017_tc03_earlier_switch_understood() {
+        let path = Path::new("underline.yaml");
+        let on = Settings::parse("mcp_server_enabled: true\n", path).unwrap();
+        assert_eq!(on.agent_access, Some(AgentAccess::ReadWrite));
+        let off = Settings::parse("mcp_server_enabled: false\n", path).unwrap();
+        assert_eq!(off.agent_access, Some(AgentAccess::Off));
+        let both =
+            Settings::parse("mcp_server_enabled: true\nagent_access: read only\n", path).unwrap();
+        assert_eq!(both.agent_access, Some(AgentAccess::ReadOnly));
+        assert_eq!(Effective::default().agent_access, AgentAccess::Off);
+
+        let dir = std::env::temp_dir().join(format!("underline-uc017-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("underline.yaml");
+        fs::write(&file, "# mine\ntheme: Nord\nmcp_server_enabled: true\n").unwrap();
+        store_setting(&file, SettingKey::AgentAccess, Some("Read only")).unwrap();
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("mcp_server_enabled"), "{text}");
+        assert!(
+            text.contains("# mine") && text.contains("theme: Nord"),
+            "{text}"
+        );
+        let stored = Settings::load_file(&file).unwrap();
+        assert_eq!(stored.agent_access, Some(AgentAccess::ReadOnly));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// TC-010-13: one changed line; comments, order, unknown keys stay.

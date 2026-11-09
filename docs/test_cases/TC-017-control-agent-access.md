@@ -70,7 +70,7 @@
 | Step | Action                                     | Expected result                                                          |
 |------|--------------------------------------------|--------------------------------------------------------------------------|
 | 1    | Look at the status bar and open its menu.   | "Agents: read only in this workspace"; "Read and write" is not offered; an entry opens the workspace settings. |
-| 2    | Set the workspace to read and write in its file. | The status bar says the workspace file is not followed; still read only. |
+| 2    | Choose "Read only" for me, then set the workspace to read and write in its file. | The status bar says the workspace file is not followed; "Agents: read only". |
 
 ## TC-017-06: Agent connects while access is off
 
