@@ -1761,3 +1761,43 @@ Answer: Yes, in the open tab, each change of an agent as one step.
 **Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
 
 Answer: Yes, briefly in the status bar, with the agent's name, the note, and an offer to open it.
+
+## OQ-176: Where are the todos of a workspace kept?
+
+**Element:** UC-020 BR-004
+**Raised by:** /use-case-spec UC-020, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
+
+Answer: In the workspace, shared through git like the notes.
+
+## OQ-177: Where does the user manage todos?
+
+**Element:** UC-020 steps 1–2
+**Raised by:** /use-case-spec UC-020, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
+
+Answer: In the section "Todos" of the tool panel.
+
+## OQ-178: Can a todo be deleted?
+
+**Element:** UC-020 A5
+**Raised by:** /use-case-spec UC-020, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
+
+Answer: Yes, with "Undo" offered in the status bar; done todos are otherwise kept and can be reopened.
+
+## OQ-179: May agents work with todos?
+
+**Element:** UC-020 A8
+**Raised by:** /use-case-spec UC-020, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
+
+Answer: Yes, as agent access allows: reading at read only, also changing at read and write.
