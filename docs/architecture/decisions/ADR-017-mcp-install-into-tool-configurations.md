@@ -1,6 +1,6 @@
 # ADR-017: MCP install edits each agent tool's user configuration file directly
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-08
 **Requirements:** FR-060, FR-061, NFR-006, NFR-013, NFR-016, UC-016 BR-001 to BR-006
 
