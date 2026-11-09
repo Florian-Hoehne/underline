@@ -1121,6 +1121,78 @@ fn system_locale() -> String {
         .unwrap_or_default()
 }
 
+/// UC-005: the status line under the editor: on the left where the cursor
+/// is and what is selected, on the right the quick switches of UC-010 A3
+/// (input mode, minimap, copy on select), stored like any setting.
+fn editor_status_line(
+    ui: &mut egui::Ui,
+    place: underline_editor::CursorPlace,
+    effective: &underline_core::Effective,
+    quick: &mut Vec<(SettingKey, String)>,
+) {
+    // The switches first, from the right; the place gets the rest of the
+    // line and is cut short there, so nothing overlaps in a narrow window.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        {
+            let mut copy = effective.copy_on_select;
+            if ui
+                .toggle_value(&mut copy, "Copy on select")
+                .on_hover_text("Put a selection on the clipboard as soon as it is made")
+                .changed()
+            {
+                quick.push((SettingKey::CopyOnSelect, copy.to_string()));
+            }
+            let mut minimap = effective.show_minimap;
+            if ui
+                .toggle_value(&mut minimap, "Minimap")
+                .on_hover_text("Show or hide the minimap beside the editor")
+                .changed()
+            {
+                quick.push((SettingKey::ShowMinimap, minimap.to_string()));
+            }
+            ui.separator();
+            let mut mode = effective.input_mode;
+            egui::ComboBox::from_id_salt("input-mode")
+                .selected_text(format!("Keys: {}", mode.label()))
+                .show_ui(ui, |ui| {
+                    for each in InputMode::ALL {
+                        ui.selectable_value(&mut mode, *each, each.label());
+                    }
+                });
+            if mode != effective.input_mode {
+                quick.push((SettingKey::InputMode, mode.label().to_owned()));
+            }
+        }
+        let rest = ui.available_rect_before_wrap();
+        ui.allocate_new_ui(
+            egui::UiBuilder::new()
+                .max_rect(rest)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(place.label()).weak()).truncate());
+            },
+        );
+    });
+}
+
+/// UC-005: splits the space of `ui` into the editor and, under it, the
+/// row of its status line, as high as a button. A window too low for both
+/// gets no status line.
+fn split_status_row(ui: &egui::Ui) -> (egui::Rect, Option<egui::Rect>) {
+    let full = ui.available_rect_before_wrap();
+    let spacing = ui.spacing();
+    let button = ui.text_style_height(&egui::TextStyle::Button) + 2.0 * spacing.button_padding.y;
+    let row = spacing.interact_size.y.max(button);
+    let gap = spacing.item_spacing.y;
+    if full.height() < 2.0 * (row + gap) {
+        return (full, None);
+    }
+    let bottom = full.bottom() - row - gap;
+    let editor = egui::Rect::from_min_max(full.min, egui::pos2(full.right(), bottom));
+    let status = egui::Rect::from_min_max(egui::pos2(full.left(), bottom + gap), full.max);
+    (editor, Some(status))
+}
+
 /// `n` things, as "1 link" or "3 links".
 fn count(n: usize, thing: &str) -> String {
     if n == 1 {
@@ -6401,7 +6473,9 @@ impl eframe::App for UnderlineApp {
             // at its place, since both views share it (UC-005 A1).
             let mut switched = false;
             let mut tool_used = None;
-            ui.horizontal(|ui| {
+            // Wrapped, so a narrow window never widens the editor past its
+            // edge, which would push the minimap out of sight.
+            ui.horizontal_wrapped(|ui| {
                 for (view, label) in [
                     (EditingView::Facade, "Facade"),
                     (EditingView::Source, "Source"),
@@ -6421,36 +6495,6 @@ impl eframe::App for UnderlineApp {
                     if ui.button(tool.label()).on_hover_text(tool.hint()).clicked() {
                         tool_used = Some(tool);
                     }
-                }
-                ui.separator();
-                // UC-010 A3: quick switches, stored like any setting.
-                let effective = self.settings.effective.clone();
-                let mut minimap = effective.show_minimap;
-                if ui
-                    .toggle_value(&mut minimap, "Minimap")
-                    .on_hover_text("Show or hide the minimap beside the editor")
-                    .changed()
-                {
-                    quick.push((SettingKey::ShowMinimap, minimap.to_string()));
-                }
-                let mut mode = effective.input_mode;
-                egui::ComboBox::from_id_salt("input-mode")
-                    .selected_text(format!("Keys: {}", mode.label()))
-                    .show_ui(ui, |ui| {
-                        for each in InputMode::ALL {
-                            ui.selectable_value(&mut mode, *each, each.label());
-                        }
-                    });
-                if mode != effective.input_mode {
-                    quick.push((SettingKey::InputMode, mode.label().to_owned()));
-                }
-                let mut copy = effective.copy_on_select;
-                if ui
-                    .toggle_value(&mut copy, "Copy on select")
-                    .on_hover_text("Put a selection on the clipboard as soon as it is made")
-                    .changed()
-                {
-                    quick.push((SettingKey::CopyOnSelect, copy.to_string()));
                 }
             });
             if let Some(tool) = tool_used {
@@ -6476,10 +6520,22 @@ impl eframe::App for UnderlineApp {
             tab.view.set_input_mode(effective.input_mode);
             tab.view
                 .set_line_numbers(effective.show_line_numbers, effective.line_number_side);
-            let changed = match tab.editing_view {
-                EditingView::Facade => tab.facade.show(ui, &mut tab.view),
-                EditingView::Source => tab.view.show(ui),
-            };
+            // UC-005: the editor, and under it its status line.
+            let (editor, status) = split_status_row(ui);
+            let changed = ui
+                .allocate_new_ui(egui::UiBuilder::new().max_rect(editor), |ui| {
+                    match tab.editing_view {
+                        EditingView::Facade => tab.facade.show(ui, &mut tab.view),
+                        EditingView::Source => tab.view.show(ui),
+                    }
+                })
+                .inner;
+            if let Some(status) = status {
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(status), |ui| {
+                    ui.set_clip_rect(status.intersect(ui.clip_rect()));
+                    editor_status_line(ui, tab.view.cursor_place(), effective, &mut quick);
+                });
+            }
             persist |= switched;
             // UC-005 A9 to A13: what is dropped goes where the pointer is.
             let drops = ui.ctx().input(|i| i.raw.dropped_files.clone());

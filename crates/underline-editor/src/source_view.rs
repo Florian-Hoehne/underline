@@ -31,6 +31,38 @@ pub const AGENT_COLOR: Color32 = Color32::from_rgba_premultiplied(30, 90, 170, 6
 /// The bar and the name of the agent cursor.
 pub const AGENT_BAR_COLOR: Color32 = Color32::from_rgb(40, 120, 220);
 
+/// UC-005: the place of the cursor, line and column counted from 1 in
+/// chars of the markup, and the size of the selection: its chars and the
+/// lines it touches (0 when nothing is selected).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorPlace {
+    /// The line of the cursor, from 1.
+    pub line: usize,
+    /// The column of the cursor in chars, from 1.
+    pub column: usize,
+    /// How many chars are selected.
+    pub selected_chars: usize,
+    /// How many lines the selection touches; a line it only reaches at its
+    /// start does not count.
+    pub selected_lines: usize,
+}
+
+impl CursorPlace {
+    /// The place as the status line shows it: "Ln 3, Col 5", then what is
+    /// selected, in chars within one line and in lines across several.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let place = format!("Ln {}, Col {}", self.line, self.column);
+        match (self.selected_chars, self.selected_lines) {
+            (0, _) => place,
+            (1, _) => format!("{place}   1 character selected"),
+            // Within one line: the chars.
+            (n, 0 | 1) => format!("{place}   {n} characters selected"),
+            (_, lines) => format!("{place}   {lines} lines selected"),
+        }
+    }
+}
+
 /// The agent cursor of one agent in a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentMark {
@@ -293,6 +325,28 @@ impl SourceView {
 
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// UC-005: where the cursor is in the markup and how much is selected,
+    /// for the status line under the editor.
+    #[must_use]
+    pub fn cursor_place(&self) -> CursorPlace {
+        let rope = self.doc.rope();
+        let line = rope.char_to_line(self.cursor);
+        let (start, end) = self.selection();
+        let selected_lines = if start == end {
+            0
+        } else {
+            // A selection of whole lines ends at the start of the next one,
+            // which is not selected.
+            rope.char_to_line(end - 1) - rope.char_to_line(start) + 1
+        };
+        CursorPlace {
+            line: line + 1,
+            column: self.cursor - rope.line_to_char(line) + 1,
+            selected_chars: end - start,
+            selected_lines,
+        }
     }
 
     /// Puts the cursor at char index `at` and scrolls it into view.

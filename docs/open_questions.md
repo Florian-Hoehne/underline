@@ -1861,3 +1861,28 @@ Answer: Open, Done, and All, as FR-067 says.
 **Resolved in:** [UC-021](use_cases/UC-021-work-through-todo-list.md)
 
 Answer: Yes, marked in the list, and counted in the status bar, which opens the list.
+
+## OQ-186: What happens to several empty lines the user enters between two paragraphs in the facade?
+
+**Element:** UC-005 step 1, BR-002, BR-003
+**Raised by:** Implementation of UC-005, 2026-11-09
+**Blocking:** No
+**Status:** Open
+**Assumed:** Each Enter opens a visible empty line, so the cursor moves down at once; once the user types text there,
+the empty lines in between are shown as one paragraph gap, as the note format renders them, and stay in the markup.
+
+Readings: (a) as assumed, the facade shows what the note format renders; (b) the facade keeps every empty line
+visible, unlike the rendered note; (c) the facade stores only one empty line between paragraphs and drops the others.
+
+## OQ-187: Does the editor show where the cursor is and how much is selected?
+
+**Element:** UC-005 step 1, UC-010 A3
+**Raised by:** Implementation of UC-005, 2026-11-09
+**Blocking:** No
+**Status:** Open
+**Assumed:** Yes, as the user asked: a status line under the editor shows the line and column of the cursor in the
+markup and the number of selected characters, or of selected lines when the selection spans several lines; the quick
+switches for the input mode, the minimap, and copy on select sit at its right end, in both editing views.
+
+UC-005 and UC-010 should take this in: UC-010 A3 and TC-010-06 still place the quick switches in the toolbar. In the
+facade the line and column count in the markup, not in the rendered text.

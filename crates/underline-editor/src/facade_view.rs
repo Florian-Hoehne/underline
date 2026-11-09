@@ -2434,6 +2434,46 @@ mod tests {
         assert!(view.found_ranges().is_empty());
     }
 
+    /// UC-005: the status line under the editor gets line and column of the
+    /// cursor and the size of the selection, in chars of the markup.
+    #[test]
+    fn uc005_cursor_place_counts_lines_columns_and_selection() {
+        let set = Arc::new(HighlightSet::new(true));
+        let mut view = SourceView::new(
+            "t",
+            "# Home\n\nÜber den Fluss\nzwei",
+            NoteFormat::Markdown,
+            set,
+        );
+        let place = view.cursor_place();
+        assert_eq!((place.line, place.column, place.selected_chars), (1, 1, 0));
+        assert_eq!(place.selected_lines, 0);
+        view.set_cursor(12);
+        let place = view.cursor_place();
+        assert_eq!((place.line, place.column), (3, 5));
+        view.select_chars(8..12);
+        let place = view.cursor_place();
+        assert_eq!((place.selected_chars, place.selected_lines), (4, 1));
+        view.select_chars(2..25);
+        let place = view.cursor_place();
+        assert_eq!((place.selected_chars, place.selected_lines), (23, 4));
+        assert_eq!(place.label(), "Ln 4, Col 3   4 lines selected");
+        view.select_chars(8..12);
+        assert_eq!(
+            view.cursor_place().label(),
+            "Ln 3, Col 5   4 characters selected"
+        );
+        // A whole line ends at the start of the next, which does not count.
+        view.select_chars(0..8);
+        let place = view.cursor_place();
+        assert_eq!((place.selected_chars, place.selected_lines), (8, 2));
+        view.select_chars(8..23);
+        assert_eq!(view.cursor_place().selected_lines, 1);
+        view.set_cursor(0);
+        view.select_chars(0..0);
+        assert_eq!(view.cursor_place().label(), "Ln 1, Col 1");
+    }
+
     /// TC-006-13: links changed by a rename in an open note keep the typed
     /// text and the cursor at its place.
     #[test]
