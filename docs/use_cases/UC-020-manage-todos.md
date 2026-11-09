@@ -109,6 +109,26 @@
 1. The system keeps the change in the window, marks the todo as not stored, says why, and tries again, as for notes (UC-005 A14).
 2. Use case ends.
 
+### A10: The same todo changed on two computers
+
+**Trigger:** A git sync (UC-014) brings changes to a todo that was also changed here since the last sync (step 2)  
+**Flow:**
+
+1. The sync stops as for a conflict in a note (UC-015 step 1); the status bar counts the todos in conflict with the notes in conflict.
+2. The section "Todos" marks each todo in conflict and shows, field by field and for its links, this computer's version beside the remote one.
+3. The user chooses for each todo which version holds, "Keep mine" or "Take remote"; the todo is stored so.
+4. When no conflict is left, in the todos or the notes, the sync completes (UC-015 step 7); aborting the sync (UC-015 A4) brings every todo back to this computer's version.
+5. Use case continues at step 2.
+
+### A11: The same number on two computers
+
+**Trigger:** A git sync brings a new todo with the number of a todo created here since the last sync (step 2)  
+**Flow:**
+
+1. The todo from the remote keeps its number; the one created here gets the next free number, with its fields and links.
+2. The status bar says so, such as "Todo #12 is now #14".
+3. Use case continues at step 2.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -127,7 +147,7 @@ A todo has a number, a title of 1 to 200 characters, an optional due date, an ur
 
 ### BR-002: Numbers
 
-Each todo has a number within its workspace, shown as `#12`, that never changes and is never given to another todo of the workspace. A number freed by a deletion is not used again.
+Each todo has a number within its workspace, shown as `#12`, that is never given to another todo of the workspace; a number freed by a deletion is not used again. A todo keeps its number, except that one created here gets a new number when a sync brings another todo of the same number first (A11).
 
 ### BR-003: Dates
 
@@ -135,7 +155,11 @@ Due date and scheduled date are days without a time, entered by typing or by cho
 
 ### BR-004: Kept with the workspace
 
-The todos are kept in the workspace, so they travel with git sync (UC-014) and are part of the workspace's changes (UC-011) and commits (UC-012) like notes, and an agent or another computer sees them.
+The todos are kept in the workspace, so they travel with git sync (UC-014) and are part of the workspace's changes (UC-011) and commits (UC-012) like notes, and an agent or another computer sees them. They are never shown as a note, also not when the workspace is a GitHub wiki.
+
+### BR-008: Joining todos
+
+A git sync joins the todos todo by todo: todos created, changed, or deleted on only one side are taken over without asking. Only a todo changed on both sides, or changed on one and deleted on the other, is a conflict the user resolves (A10).
 
 ### BR-005: Links
 

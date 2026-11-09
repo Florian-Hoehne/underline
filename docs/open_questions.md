@@ -1801,3 +1801,23 @@ Answer: Yes, with "Undo" offered in the status bar; done todos are otherwise kep
 **Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
 
 Answer: Yes, as agent access allows: reading at read only, also changing at read and write.
+
+## OQ-180: What happens when the same todo was changed on two computers?
+
+**Element:** UC-020 A10, BR-008
+**Raised by:** spec review UC-020, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
+
+Answer: It is a conflict the user resolves as for notes (UC-015), choosing for each todo which version holds; todos changed on one side only are joined without asking.
+
+## OQ-181: What happens when two computers give a new todo the same number?
+
+**Element:** UC-020 A11, BR-002
+**Raised by:** spec review UC-020, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
+
+Answer: The todo shared first keeps it; the one created here gets the next free number, and the status bar says so.
