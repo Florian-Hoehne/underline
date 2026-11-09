@@ -1751,3 +1751,13 @@ Answer: It is merged into the tab; when it touches a line the user changed and h
 **Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
 
 Answer: Yes, in the open tab, each change of an agent as one step.
+
+## OQ-175: Does Underline report an agent's change to a note that is not open?
+
+**Element:** UC-019 A1, BR-010
+**Raised by:** spec review UC-019, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
+
+Answer: Yes, briefly in the status bar, with the agent's name, the note, and an offer to open it.

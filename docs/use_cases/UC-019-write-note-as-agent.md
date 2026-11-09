@@ -34,7 +34,7 @@
 
 1. The system creates the note by the rules of UC-003 BR-001 to BR-006, in the workspace's default format unless the agent names the other note format, with the text the agent gives.
 2. The system answers that the note was created, with its name as listed (UC-018 BR-002).
-3. The note appears in the note overview within 1 second; it is not opened in a tab.
+3. The note appears in the note overview within 1 second; it is not opened in a tab, and the status bar reports it (BR-010).
 4. Use case ends.
 
 ### A2: Note exists
@@ -79,7 +79,7 @@
 
 ### A7: Note in conflict
 
-**Trigger:** The note holds places in conflict from a git sync (UC-015) (step 2, A1)  
+**Trigger:** The note holds places in conflict from a git sync (UC-015) (step 2)  
 **Flow:**
 
 1. The system refuses with the reason that the user has to resolve the conflicts first, and changes nothing; reading goes on (UC-018 A8).
@@ -133,7 +133,7 @@
 
 ### BR-001: The note's format
 
-The agent writes the text in the note's format, Markdown or AsciiDoc, as stored; Underline stores it as given and converts nothing.
+The agent writes the text in the note's format, Markdown or AsciiDoc, as stored; Underline stores it as given and converts nothing, except that line breaks follow those the note already has.
 
 ### BR-002: What an agent may change
 
@@ -145,7 +145,7 @@ A passage to replace must occur exactly once in the note as stored, character fo
 
 ### BR-004: The user's typing comes first
 
-What the user typed is never lost through an agent: a change that touches a line the user changed and has not saved yet is refused (A5); others are merged into the tab (A6).
+What the user typed is never lost through an agent: a change that touches a line the user changed and has not saved yet is refused (A5); others are merged into the tab (A6), and the note is then stored with both, the user's changes included. A change touches a line when it replaces or removes it, or inserts right before or after it; replacing the whole text touches every line. While the Underline window is closed, there is nothing unsaved, and the change is stored directly (UC-017 BR-007).
 
 ### BR-005: Notes in conflict
 
@@ -166,3 +166,7 @@ The agent gets its answer within 1 second; an open tab shows the change within 1
 ### BR-009: Local only
 
 Changes come only from an agent connected through the MCP server on this computer (NFR-016).
+
+### BR-010: Changes to notes not open
+
+When an agent creates or changes a note that is not open in a tab, the status bar says so with the agent's name and the note, such as "Claude Code changed Plan", and offers to open it; several changes in a row are reported together. The note is also listed among the workspace's changes (UC-011).
