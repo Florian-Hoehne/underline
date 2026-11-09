@@ -117,7 +117,10 @@ impl WorkspaceWatcher {
         for result in self.events.try_iter() {
             match result {
                 Ok(events) => {
-                    for event in events {
+                    // Access events carry no change of content: every write
+                    // also yields Modify or Create. Counting them would make
+                    // each reload of a changed file report it once more.
+                    for event in events.iter().filter(|e| !e.kind.is_access()) {
                         paths.extend(event.event.paths.iter().cloned());
                     }
                 }
@@ -347,6 +350,14 @@ mod tests {
         std::fs::write(root.join(SETTINGS_FILE_NAME), "default_format: asciidoc\n").unwrap();
         let seen = wait_for(&mut watcher, &WorkspaceEvent::SettingsChanged);
         assert!(seen.contains(&WorkspaceEvent::SettingsChanged), "{seen:?}");
+        quiet(&mut watcher);
+
+        // Reading the files back, as a reload does, is no change.
+        std::fs::read(root.join(SETTINGS_FILE_NAME)).unwrap();
+        std::fs::write(&plan, "# Plan\n").unwrap();
+        quiet(&mut watcher);
+        std::fs::read(&plan).unwrap();
+        assert_eq!(quiet(&mut watcher), Vec::<WorkspaceEvent>::new());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
