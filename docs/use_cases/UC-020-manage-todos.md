@@ -8,7 +8,7 @@
 **Secondary Actor:** Agent  
 **Goal:** The user keeps the work they are heading towards as todos next to the notes, each with a title, a due date, an urgency, a scheduled date, and links to the notes it is about, and marks a todo done when it is done.  
 **Trigger:** The user opens the section "Todos" of the tool panel and creates, changes, completes, or deletes a todo.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-062, FR-063, FR-064, FR-065, FR-066, FR-068, NFR-006](../requirements.md)
 
@@ -157,10 +157,6 @@ Due date and scheduled date are days without a time, entered by typing or by cho
 
 The todos are kept in the workspace, so they travel with git sync (UC-014) and are part of the workspace's changes (UC-011) and commits (UC-012) like notes, and an agent or another computer sees them. They are never shown as a note, also not when the workspace is a GitHub wiki.
 
-### BR-008: Joining todos
-
-A git sync joins the todos todo by todo: todos created, changed, or deleted on only one side are taken over without asking. Only a todo changed on both sides, or changed on one and deleted on the other, is a conflict the user resolves (A10).
-
 ### BR-005: Links
 
 A todo links to none, one, or several notes of its own workspace, each once. Links follow renamed and moved notes (UC-006 BR-006); a linked note cannot be deleted in Underline (UC-007 BR-009).
@@ -172,3 +168,7 @@ Every change of a todo is stored within 1 second, whole or not at all (NFR-006);
 ### BR-007: Done
 
 Marking a todo done records the time; reopening removes it. A done todo keeps its fields and links.
+
+### BR-008: Joining todos
+
+A git sync joins the todos todo by todo: todos created, changed, or deleted on only one side are taken over without asking. Only a todo changed on both sides, or changed on one and deleted on the other, is a conflict the user resolves (A10).
