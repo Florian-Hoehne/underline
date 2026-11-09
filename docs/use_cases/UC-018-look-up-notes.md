@@ -20,7 +20,7 @@
 ## Main Success Scenario
 
 1. The agent asks for the notes of the workspace.
-2. The system answers with every note of the workspace, each with its title, its folder, and its note format, the most recently changed first.
+2. The system answers with every note of the workspace, each with its title, its folder, and its note format, the most recently changed first (BR-009).
 3. The agent searches the notes for words.
 4. The system answers with the notes that match, each with the lines found and their line numbers, by the rules of the search of UC-008.
 5. The agent asks to read a note, naming it as listed.
@@ -43,7 +43,7 @@
 **Trigger:** The agent names a note the workspace does not hold (step 5)  
 **Flow:**
 
-1. The system answers that there is no such note, and names the notes whose titles come closest, so the agent can choose.
+1. The system answers that there is no such note, and names up to five notes whose titles come closest, so the agent can choose.
 2. Use case continues at step 5.
 
 ### A3: Same title in several folders
@@ -67,7 +67,7 @@
 **Trigger:** More notes match, or more lines in a note, than one answer holds (step 4)  
 **Flow:**
 
-1. The system answers with the first notes and lines in the order of UC-008 BR-003 and says how many more there are, so the agent can search more narrowly.
+1. The system answers with the first 50 notes, each with its first 3 lines found, in the order of UC-008 BR-003, and says how many more notes and lines there are, so the agent can search more narrowly or read the note.
 2. Use case continues at step 5.
 
 ### A6: Access off
@@ -93,6 +93,14 @@
 
 1. The system answers with the note as it is stored, with both versions of each place, and says that the note holds conflicts the user has not resolved yet.
 2. Use case continues at step 7.
+
+### A9: One folder only
+
+**Trigger:** The agent asks for the notes of one folder (step 1)  
+**Flow:**
+
+1. The system answers with the notes of that folder and of the folders in it, as in step 2; for a folder that does not exist, it says so.
+2. Use case continues at step 3.
 
 ## Postconditions
 
@@ -129,7 +137,7 @@ Looking up changes no note, no setting, and nothing the window remembers, such a
 
 ### BR-006: The agent cursor while reading
 
-While a note the agent reads is open in a tab, the agent cursor marks the lines read and names the agent (FR-057), until the agent turns to another note or place, or for at most 10 seconds after the last request about it; it never moves the user's cursor or scroll position. It is hidden while no agent is connected or access does not allow it (FR-058, UC-017 BR-005).
+While a note the agent reads is open in a tab, the agent cursor marks the lines read and names the agent (FR-057), until the agent turns to another note or place, or for at most 10 seconds after the last request about it; it never moves the user's cursor or scroll position. It shows at every level of access that lets the agent read, read only included, and is hidden while access is off or no agent is connected (FR-058, UC-017 BR-005). Several agents each have their own, named.
 
 ### BR-007: Speed
 
@@ -138,3 +146,7 @@ The list and the search answer within 1 second in a workspace of 10,000 notes (N
 ### BR-008: Local only
 
 Notes reach only the agent connected through the MCP server on this computer (NFR-015, NFR-016).
+
+### BR-009: Order and lines
+
+The list gives the most recently changed note first, so an agent sees the current work first; the window's order of recently opened notes stays the user's (BR-005). Lines are counted from 1, as the line numbers of the source view show them (UC-005).

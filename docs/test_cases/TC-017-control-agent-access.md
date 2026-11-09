@@ -131,8 +131,8 @@
 | Step | Action                     | Expected result                         |
 |------|----------------------------|-----------------------------------------|
 | 1    | Look at the tab.            | The agent cursor shows.                 |
-| 2    | Choose "Read only".         | The agent cursor is hidden.             |
-| 3    | Choose "Off".               | It stays hidden.                        |
+| 2    | Choose "Read only".         | The agent cursor of the writing is hidden; when Claude Code reads "Plan" next, it shows the lines read (UC-018). |
+| 3    | Choose "Off".               | It is hidden.                           |
 
 ## TC-017-12: Local only
 

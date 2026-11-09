@@ -1708,3 +1708,13 @@ Answer: No, it reads the notes as stored; unsaved changes are saved within a sec
 **Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md)
 
 Answer: Yes, the agent cursor marks the lines read in an open note, as for writing.
+
+## OQ-171: Does the agent cursor show while an agent reads at read only?
+
+**Element:** UC-018 BR-006, UC-017 BR-005, FR-058
+**Raised by:** spec review UC-018, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md), [UC-017](use_cases/UC-017-control-agent-access.md)
+
+Answer: Yes; it shows at every level that allows what the agent does, and is hidden only while access is off or no agent is connected.

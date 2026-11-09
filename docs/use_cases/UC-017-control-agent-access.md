@@ -110,7 +110,7 @@ An agent counts as connected while an MCP server started by an agent tool runs f
 
 ### BR-005: The agent cursor
 
-The agent cursor (FR-057, UC-019) shows only while access is read and write and that agent is connected (FR-058).
+The agent cursor (FR-057, UC-018, UC-019) shows only while that agent is connected and access allows what it does: reading at read only or read and write, writing at read and write; it is hidden while access is off (FR-058).
 
 ### BR-007: Without the window
 
