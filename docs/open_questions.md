@@ -1821,3 +1821,43 @@ Answer: It is a conflict the user resolves as for notes (UC-015), choosing for e
 **Resolved in:** [UC-020](use_cases/UC-020-manage-todos.md)
 
 Answer: The todo shared first keeps it; the one created here gets the next free number, and the status bar says so.
+
+## OQ-182: Where does the user work through the todo list?
+
+**Element:** UC-021 steps 1–2, BR-006
+**Raised by:** /use-case-spec UC-021, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-021](use_cases/UC-021-work-through-todo-list.md)
+
+Answer: In a tab "Todos" of its own, a table of the todos, in addition to the section in the tool panel.
+
+## OQ-183: How are todos sorted by due date or urgency?
+
+**Element:** UC-021 BR-001, BR-002, BR-005
+**Raised by:** /use-case-spec UC-021, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-021](use_cases/UC-021-work-through-todo-list.md)
+
+Answer: By the one, then the other; the choice is kept for the workspace.
+
+## OQ-184: Which filters does the todo list offer?
+
+**Element:** UC-021 A1, BR-003
+**Raised by:** /use-case-spec UC-021, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-021](use_cases/UC-021-work-through-todo-list.md)
+
+Answer: Open, Done, and All, as FR-067 says.
+
+## OQ-185: Are overdue todos shown?
+
+**Element:** UC-021 A2, BR-004
+**Raised by:** /use-case-spec UC-021, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-021](use_cases/UC-021-work-through-todo-list.md)
+
+Answer: Yes, marked in the list, and counted in the status bar, which opens the list.
