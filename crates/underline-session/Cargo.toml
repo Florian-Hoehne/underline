@@ -1,0 +1,21 @@
+[package]
+name = "underline-session"
+description = "Underline's workspace session without a UI: tabs, saving, background services and the tick"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# Derives `specta::Type` on the DTOs so the Tauri app can generate TypeScript
+# bindings; core and facade stay free of code generation.
+specta = ["dep:specta"]
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+specta = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

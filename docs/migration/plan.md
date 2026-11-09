@@ -353,7 +353,27 @@ und Stelle (`fv:1561-1600`). Die Migration folgt dem Code.
 | F-3 | Portieren nach `underline-session`, egui-App unberührt | wie in Abschnitt 3 |
 | F-4 | D-01–D-09 und D-11 beheben, Rest wie heute | Behebungen als gewollte Abweichung in `paritaet.md`; D-10, D-12–D-16 bleiben offene Punkte |
 
-## 14. Offene Entscheidungen (ursprüngliche Fragen)
+## 14. Vorgaben aus den Reviews des Grundgerüsts (Phase 2)
+
+- **F0 / Webview-Adapter:**
+  - `Modifiers` im Editor-Kern muss egui exakt nachbilden: `command` ist Ctrl ausserhalb von macOS und Cmd auf
+    macOS, `mac_cmd` ist nur auf macOS gesetzt.
+  - Das kommt als Konstruktor je Plattform mit Test, sonst weicht Nano/Vim im Webview still ab.
+- **F1:**
+  - Theme-Paletten als CSS-Variablen auf `<html>`, gesetzt vor dem ersten Paint.
+  - Bedienelemente erreichen in allen 11 Themes mindestens 3:1 Kontrast (NFR-010), mit einem Test je Theme.
+    Die Platzhalterfarben des Grundgerüsts werden nicht übernommen.
+  - `color-scheme` folgt dem Theme.
+  - DejaVu Sans und Monospace werden eingebunden (M-01.5).
+  - Das Drittel der Höhe (M-02.1) wird auf den Mittelbereich zwischen Top-Bar und Statusleiste bezogen.
+  - Solange `app_start` den letzten Workspace öffnet, gibt es einen Lade- bzw. Fehlerzustand, damit der leere
+    Bildschirm nicht kurz aufblitzt.
+- **Laufend:** Die Liste der Commands steht dreifach (Builder, `build.rs`, Capability). Ein Test über die
+  Command-Namen des Builders soll die Abweichung verhindern; er entsteht spätestens mit dem zweiten Command.
+- **Ablösung:** Ob die Windows-Release-Binary ohne Konsole startet (`windows_subsystem`), muss mit dem
+  `mcp`-Subcommand über Pipes auf Windows geprüft werden.
+
+## 15. Offene Entscheidungen (ursprüngliche Fragen)
 
 - **F-1 Frontend:** Svelte 5 + TS (empfohlen), React + TS oder Leptos?
 - **F-2 Vim-Verhalten:** der eigene Rust-Automat in beiden Ansichten (empfohlen, exakte Parität) oder

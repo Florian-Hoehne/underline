@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Underline",
+  "mainBinaryName": "underline-tauri",
+  "version": "0.1.0",
+  "identifier": "io.github.florian-hoehne.underline",
+  "build": {
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../ui/dist",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "../ui" },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../ui" }
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Underline"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' ul-asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self'; img-src 'self' ul-asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ws://localhost:1420; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb", "nsis", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

@@ -2,10 +2,13 @@
 resolver = "2"
 members = [
     "apps/underline-desktop",
+    "apps/underline-tauri/src-tauri",
     "crates/underline-core",
     "crates/underline-editor",
+    "crates/underline-editor-core",
     "crates/underline-facade",
     "crates/underline-mcp",
+    "crates/underline-session",
     "crates/underline-wiki",
 ]
 
@@ -34,4 +37,8 @@ notify-debouncer-full = "0.6"
 ropey = "1.6"
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 underline-editor = { path = "crates/underline-editor" }
+underline-editor-core = { path = "crates/underline-editor-core" }
 underline-facade = { path = "crates/underline-facade" }
+underline-session = { path = "crates/underline-session" }
+# Specta v2 is a release candidate: pinned exactly, as tauri-specta asks.
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }

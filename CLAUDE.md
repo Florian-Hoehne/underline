@@ -58,6 +58,10 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-017 | MCP install edits each agent tool's user configuration file | Accepted |
 | ADR-018 | Agent changes go through the running window by request files | Accepted |
 | ADR-019 | Todos as one YAML file each in `.todos/`, never merged line by line | Accepted |
+| ADR-020 | Tauri 2 with a Svelte/TypeScript frontend (replaces ADR-001 on acceptance) | Proposed |
+| ADR-021 | Editor in the webview: CodeMirror 6, own facade surface, Rust editor core (replaces ADR-012) | Proposed |
+| ADR-022 | UI-free session crate, backend tick, events | Proposed |
+| ADR-023 | Webview loads nothing from the network; own `ul-asset://` protocol | Proposed |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
@@ -68,6 +72,53 @@ Follow the accepted ones; a proposed one becomes binding once the user accepts i
 - Unit tests sit next to the code in `#[cfg(test)] mod tests`.
 - Errors are typed with `thiserror` in the library crates.
 
+## Migration to Tauri 2 (branch `migration/tauri`)
+
+The window moves from egui to Tauri 2 (ADR-020 to ADR-023). The plan is in `docs/migration/plan.md`. The parity
+checklist is `docs/migration/feature-inventar.md` (IDs `M-xx.y`), and deviations go into
+`docs/migration/paritaet.md`.
+
+- **Stack:**
+  - Tauri 2 backend in `apps/underline-tauri/src-tauri`, binary `underline-tauri` (renamed to `underline` at
+    cutover; it keeps the `mcp` subcommand).
+  - Svelte 5 + TypeScript + Vite frontend in `apps/underline-tauri/ui`.
+  - Orchestration without UI in `crates/underline-session`.
+  - Editor logic without egui in `crates/underline-editor-core` (also builds for `wasm32-unknown-unknown`).
+  - Source view on CodeMirror 6 with `@replit/codemirror-vim`. The facade is an own `contenteditable` driven by
+    the Rust editor core.
+- **Legacy:** `apps/underline-desktop` and `crates/underline-editor` (egui) stay unchanged as the reference until the
+  user confirms parity. Nothing is deleted before that.
+- **Tools:** Node comes from nvm, so run `source ~/.nvm/nvm.sh` first. On Linux, Tauri needs `pkg-config`,
+  `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`, `libgtk-3-dev`, `librsvg2-dev`, `libxdo-dev` and `libssl-dev`.
+- **Start:** `cd apps/underline-tauri && cargo tauri dev`, or `npm run tauri dev` in `apps/underline-tauri/ui`.
+  Pass a workspace with `cargo tauri dev -- -- ~/notes`.
+- **Build:** `cd apps/underline-tauri && cargo tauri build`. Bundles are AppImage and deb on Linux, NSIS on Windows,
+  dmg on macOS.
+- **Frontend checks** in `apps/underline-tauri/ui`: `npm run lint`, `npm run format:check`, `npm run check`
+  (svelte-check), `npm test` (Vitest).
+- **Frontend dev server for app-tester:** `npm run dev` in `apps/underline-tauri/ui` serves
+  `http://localhost:1420`.
+  - Outside Tauri, the frontend installs a typed IPC mock (`mockIPC`), so Playwright can test flows without the
+    backend.
+  - Test the real app with `cargo tauri dev` and read the Rust log in that terminal.
+- **IPC types:** commands, events and DTOs are generated into `apps/underline-tauri/ui/src/lib/bindings.ts` by
+  tauri-specta on every debug start. Never edit the file by hand. A Rust test fails when it is outdated.
+- **Conventions:**
+  - Tauri commands are a thin layer: parse, lock the session, call `underline-session`, map errors to `UiError`.
+  - No domain logic in commands or in Svelte components.
+  - Doc comments and test names cite the use case and the inventory ID (`UC-005`, `M-10.8`).
+  - UI texts are taken over verbatim from the egui app.
+  - Plugins and capabilities stay minimal (plan section 8). A new plugin needs a reason in an ADR.
+- **Workflow per feature (plan section 9):**
+  1. Commands and events.
+  2. UI.
+  3. Tests.
+  4. rust-reviewer: fix the Muss-Findings.
+  5. ux-reviewer: fix the Muss-Findings.
+  6. app-tester against the inventory.
+  7. Tick the inventory item.
+  8. Commit, one commit per feature.
+
 ## Verification
 
 Run these after every change and report any that could not be completed:
@@ -76,4 +127,6 @@ Run these after every change and report any that could not be completed:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+# Tauri frontend, in apps/underline-tauri/ui:
+npm run lint && npm run format:check && npm run check && npm test
 ```

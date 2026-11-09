@@ -1,0 +1,26 @@
+/*
+ * Placeholder colours until the theme palettes arrive as CSS variables
+ * (M-01.6, feature F1).
+ */
+:root {
+  --background: #ffffff;
+  --text: #1f2328;
+  --button: #eef0f2;
+  --button-hover: #e1e4e8;
+  --button-text: #1f2328;
+  --border: #c4c9cf;
+  --focus: #2f6fd6;
+
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--background);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
