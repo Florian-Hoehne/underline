@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "What the main window may do: events and the app's own commands.",
+  "description": "What the main window may do: events, show itself after the first render, and the app's own commands.",
   "windows": ["main"],
-  "permissions": ["core:event:default", "allow-app-start"]
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-show",
+    "allow-app-start",
+    "allow-settings-quick",
+    "allow-wiki-check"
+  ]
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-wiki-check"
+description = "Enables the wiki_check command without any pre-configured scope."
+commands.allow = ["wiki_check"]
+
+[[permission]]
+identifier = "deny-wiki-check"
+description = "Denies the wiki_check command without any pre-configured scope."
+commands.deny = ["wiki_check"]

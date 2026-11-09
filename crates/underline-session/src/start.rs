@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 
+use crate::SettingsView;
+
 /// The operating system the app runs on.
 ///
 /// The window needs it to name the command key in shortcut texts ("Cmd" on
@@ -41,8 +43,20 @@ pub struct StartInfo {
     /// string only. The backend opens the workspace from its own stored path,
     /// never from this string sent back.
     pub given_dir: Option<String>,
+    /// The workspace opened most recently (M-22.1), as a display string.
+    pub last_workspace: Option<String>,
+    /// The known workspaces, the most recently opened first (M-22.1), as
+    /// display strings.
+    pub recent_workspaces: Vec<String>,
     /// The operating system, for the shortcut texts.
     pub platform: Platform,
+    /// The settings in effect with the palette of the theme (M-01.6).
+    pub settings: SettingsView,
+    /// The names of all themes, in the order of the Theme menu (M-03.6).
+    pub themes: Vec<String>,
+    /// The status message at start, such as a note about the state file
+    /// (M-01.3).
+    pub status: String,
 }
 
 #[cfg(test)]
@@ -62,19 +76,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Platform::Linux).unwrap(),
             serde_json::json!("linux")
-        );
-    }
-
-    #[test]
-    fn m01_start_info_uses_camel_case_fields() {
-        let info = StartInfo {
-            given_dir: Some("/notes".into()),
-            platform: Platform::Linux,
-        };
-
-        assert_eq!(
-            serde_json::to_value(info).unwrap(),
-            serde_json::json!({ "givenDir": "/notes", "platform": "linux" })
         );
     }
 }

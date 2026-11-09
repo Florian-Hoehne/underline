@@ -2,7 +2,8 @@
 //! (`allow-<command>`), which `capabilities/main.json` grants to the window.
 
 fn main() {
-    let manifest = tauri_build::AppManifest::new().commands(&["app_start"]);
+    let manifest =
+        tauri_build::AppManifest::new().commands(&["app_start", "settings_quick", "wiki_check"]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");
 }

@@ -1,21 +1,98 @@
 /*
- * Placeholder colours until the theme palettes arrive as CSS variables
- * (M-01.6, feature F1).
+ * The window's base look (M-01.5, M-01.6).
+ *
+ * Fonts: DejaVu Sans and DejaVu Sans Mono, bundled with the app (ADR-023,
+ * no CDN); their licence is in assets/fonts/LICENSE.
+ *
+ * Colours: the theme's palette arrives as `--ui-*` (shell roles) and
+ * `--palette-*` (every palette colour) on <html>, set by lib/theme.ts before
+ * the window is shown. The system colours below only stand in when the
+ * backend could not be asked for the settings.
  */
-:root {
-  --background: #ffffff;
-  --text: #1f2328;
-  --button: #eef0f2;
-  --button-hover: #e1e4e8;
-  --button-text: #1f2328;
-  --border: #c4c9cf;
-  --focus: #2f6fd6;
 
+@font-face {
+  font-family: 'DejaVu Sans';
+  src: url('./assets/fonts/DejaVuSans.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'DejaVu Sans';
+  src: url('./assets/fonts/DejaVuSans-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'DejaVu Sans';
+  src: url('./assets/fonts/DejaVuSans-Oblique.ttf') format('truetype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'DejaVu Sans';
+  src: url('./assets/fonts/DejaVuSans-BoldOblique.ttf') format('truetype');
+  font-weight: 700;
+  font-style: italic;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'DejaVu Sans Mono';
+  src: url('./assets/fonts/DejaVuSansMono.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'DejaVu Sans Mono';
+  src: url('./assets/fonts/DejaVuSansMono-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --ui-surface: Canvas;
+  --ui-field: Field;
+  --ui-text: CanvasText;
+  --ui-hint: GrayText;
+  --ui-button: ButtonFace;
+  --ui-chosen: Highlight;
+  --ui-chosen-text: HighlightText;
+  --ui-border: GrayText;
+  --ui-focus: Highlight;
+  --ui-rule: GrayText;
+
+  /* A 4 px spacing scale and one type size for the chrome. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius: 4px;
+  --font-ui: 'DejaVu Sans', sans-serif;
+  --font-mono: 'DejaVu Sans Mono', monospace;
+
+  color-scheme: light dark;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ui-text);
+  background: var(--ui-surface);
+}
+
+:root[data-scheme='light'] {
   color-scheme: light;
-  font-family: system-ui, sans-serif;
-  font-size: 15px;
-  color: var(--text);
-  background: var(--background);
+}
+
+:root[data-scheme='dark'] {
+  color-scheme: dark;
 }
 
 html,
@@ -23,4 +100,38 @@ body,
 #app {
   height: 100%;
   margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--ui-surface);
+}
+
+/* Buttons share one look: the palette's button fill with an outline that
+   stands 3:1 apart from the bars (NFR-010). */
+.ui-button {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  color: var(--ui-text);
+  background: var(--ui-button);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.ui-button:hover {
+  color: var(--ui-chosen-text);
+  background: var(--ui-chosen);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }

@@ -15,7 +15,8 @@
     "windows": [
       {
         "label": "main",
-        "title": "Underline"
+        "title": "Underline",
+        "visible": false
       }
     ],
     "security": {

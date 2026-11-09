@@ -9,13 +9,25 @@
 
 mod bindings;
 mod commands;
+mod events;
+mod ticker;
 
 use std::io;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use tauri::{Manager, RunEvent};
 use underline_core::Workspace;
 use underline_session::Session;
+
+use crate::commands::SharedSession;
+use crate::ticker::Waker;
+
+/// The window starts hidden and the frontend shows it after its first
+/// render, in the colours of the theme (plan section 14). Should the
+/// frontend fail to load, the window is shown after this time anyway.
+const SHOW_WINDOW_AT_THE_LATEST: Duration = Duration::from_secs(3);
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -62,22 +74,67 @@ fn serve_mcp(given: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// M-01.1: opens the window; the window learns the given directory through
-/// `app_start`.
+/// `app_start`. M-01.3: the app state is read before the window opens, as in
+/// the egui app.
 fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
     let bindings = bindings::builder();
     #[cfg(debug_assertions)]
-    if let Err(error) = bindings::export(&bindings, bindings::BINDINGS_PATH) {
-        eprintln!("The TypeScript bindings could not be written: {error}");
+    {
+        if let Err(error) = bindings::export(&bindings, bindings::BINDINGS_PATH) {
+            eprintln!("The TypeScript bindings could not be written: {error}");
+        }
+        if let Err(error) = bindings::export_palettes(bindings::PALETTES_PATH) {
+            eprintln!("The palettes could not be written: {error}");
+        }
     }
 
-    tauri::Builder::default()
-        .manage(Mutex::new(Session::new(given)))
+    // The waker stays in the managed state, so the tick thread runs until the
+    // process ends; the exit handler below writes the app state last.
+    let (waker, wakes) = Waker::new();
+    let app = tauri::Builder::default()
+        .manage(SharedSession::new(Mutex::new(Session::load(
+            given,
+            Instant::now(),
+        ))))
+        .manage(waker)
         .invoke_handler(bindings.invoke_handler())
         .setup(move |app| {
             bindings.mount_events(app);
+            ticker::spawn(app.handle().clone(), wakes)?;
+            show_window_at_the_latest(app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?;
+    app.run(|app, event| {
+        // M-22.1: the app state is written when the app ends.
+        if let RunEvent::Exit = event {
+            if let Err(error) = app.state::<SharedSession>().lock().write_state_now() {
+                eprintln!("The app state could not be written at the end: {error}");
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Shows the main window after [`SHOW_WINDOW_AT_THE_LATEST`] if the
+/// frontend has not shown it.
+fn show_window_at_the_latest(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(SHOW_WINDOW_AT_THE_LATEST);
+        let shown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(window) = app.get_webview_window("main") {
+                if !window.is_visible().unwrap_or(true) {
+                    eprintln!("The window did not show itself; showing it now");
+                    if let Err(error) = window.show() {
+                        eprintln!("The window could not be shown: {error}");
+                    }
+                }
+            }
+        }));
+        if shown.is_err() {
+            eprintln!("Showing the window at the latest failed");
+        }
+    });
 }
 
 /// `~/Underline` (or `%USERPROFILE%\Underline` on Windows), as in the egui app.

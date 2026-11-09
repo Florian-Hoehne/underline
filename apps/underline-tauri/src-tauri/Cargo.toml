@@ -19,6 +19,7 @@ underline-core.workspace = true
 underline-mcp.workspace = true
 underline-session = { workspace = true, features = ["specta"] }
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2.12", features = ["specta"] }
 parking_lot = "0.12"
 # Typed bindings for the window (plan section 4). Release candidates: pinned
@@ -29,4 +30,3 @@ tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 
 [dev-dependencies]
 tauri = { version = "2.12", features = ["specta", "test"] }
-serde_json.workspace = true

@@ -1,21 +1,33 @@
 //! Typed bindings for the window (plan section 4): `tauri-specta` registers
-//! the commands and writes `ui/src/lib/bindings.ts` from their Rust types.
+//! the commands and events and writes `ui/src/lib/bindings.ts` from their Rust
+//! types. Next to them, the palettes of all themes are written to
+//! `ui/src/lib/palettes.generated.json` for the mock backend and the
+//! frontend's contrast test (plan section 14).
 //!
-//! Debug builds write the file on every start; the test below fails when the
+//! Debug builds write both files on every start; the tests below fail when a
 //! checked-in file is outdated.
 
 use std::path::Path;
 
 use specta_typescript::Typescript;
 use tauri::Runtime;
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{collect_commands, collect_events, Builder};
+use underline_session::PaletteView;
 
 use crate::commands;
+use crate::events::{SettingsEvent, StatusEvent};
 
 /// Where the generated bindings live.
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/lib/bindings.ts");
 
-/// All commands the window can call, with their types.
+/// Where the generated palettes live.
+pub const PALETTES_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../ui/src/lib/palettes.generated.json"
+);
+
+/// All commands the window can call and all events it gets, with their
+/// types.
 ///
 /// `disable_serde_phases()` exports one TypeScript type per DTO instead of a
 /// `_Serialize`/`_Deserialize` pair. That is fine because the DTOs have one
@@ -23,7 +35,12 @@ pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/
 /// it deserializes must not rely on it and needs its own phases.
 pub fn builder<R: Runtime>() -> Builder<R> {
     Builder::new()
-        .commands(collect_commands![commands::app_start])
+        .commands(collect_commands![
+            commands::app_start,
+            commands::settings_quick,
+            commands::wiki_check
+        ])
+        .events(collect_events![StatusEvent, SettingsEvent])
         .disable_serde_phases()
 }
 
@@ -35,9 +52,30 @@ pub fn export<R: Runtime>(
     builder.export(Typescript::default(), path)
 }
 
+/// The palettes of all themes as JSON, in the order of the Theme menu.
+pub fn palettes_json() -> String {
+    let mut json = serde_json::to_string_pretty(&PaletteView::all())
+        .expect("palettes are plain strings and flags");
+    json.push('\n');
+    json
+}
+
+/// Writes [`palettes_json`] to `path`.
+pub fn export_palettes(path: impl AsRef<Path>) -> std::io::Result<()> {
+    std::fs::write(path, palettes_json())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads a checked-in file; Git may check it out with CRLF line endings
+    /// on Windows.
+    fn checked_in(path: &str) -> String {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n")
+    }
 
     /// Run with `UNDERLINE_UPDATE_BINDINGS=1` (or start a debug build of the
     /// app) to rewrite the checked-in file.
@@ -53,13 +91,23 @@ mod tests {
             std::fs::write(BINDINGS_PATH, &generated).expect("the bindings are written");
             return;
         }
-        // Git may check the file out with CRLF line endings on Windows.
-        let checked_in = std::fs::read_to_string(BINDINGS_PATH)
-            .unwrap_or_default()
-            .replace("\r\n", "\n");
         assert!(
-            checked_in == generated.replace("\r\n", "\n"),
+            checked_in(BINDINGS_PATH) == generated.replace("\r\n", "\n"),
             "{BINDINGS_PATH} is outdated: run `UNDERLINE_UPDATE_BINDINGS=1 cargo test -p \
+             underline-tauri bindings` or start a debug build of the app, then commit the file"
+        );
+    }
+
+    /// M-01.6: the palettes the frontend tests use are those of the themes.
+    #[test]
+    fn checked_in_palettes_are_current() {
+        if std::env::var_os("UNDERLINE_UPDATE_BINDINGS").is_some() {
+            export_palettes(PALETTES_PATH).expect("the palettes are written");
+            return;
+        }
+        assert!(
+            checked_in(PALETTES_PATH) == palettes_json(),
+            "{PALETTES_PATH} is outdated: run `UNDERLINE_UPDATE_BINDINGS=1 cargo test -p \
              underline-tauri bindings` or start a debug build of the app, then commit the file"
         );
     }

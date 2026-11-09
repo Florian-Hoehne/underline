@@ -25,17 +25,17 @@ Allgemeine Konventionen der heutigen UI:
 - [ ] **M-01.1** `underline [DIR]` öffnet das Fenster mit DIR. Ohne DIR öffnet es den zuletzt offenen Workspace,
   sonst den leeren Bildschirm (M-02). Ausgewertet wird nur das erste Positionsargument, es gibt kein `--help`
   (`main.rs:18-56`).
-- [ ] **M-01.2** `underline mcp [DIR]` startet den MCP-Server über stdio, ohne Fenster. Ohne DIR nimmt er
+- [x] **M-01.2** `underline mcp [DIR]` startet den MCP-Server über stdio, ohne Fenster. Ohne DIR nimmt er
   `~/Underline` ($HOME, sonst %USERPROFILE%, sonst `.`). Der Server folgt dem gespeicherten Agent-Zugriff
   (UC-017 BR-007). **Wichtig:** MCP-Install trägt den Pfad der laufenden Binary (`current_exe`) in die
   Agent-Konfigurationen ein, also muss auch die Tauri-Binary `mcp` verstehen.
-- [ ] **M-01.3** App-State: `<data_dir>/underline/state.yaml`. Ist kein Pfad verfügbar, liegt der State nur im
+- [x] **M-01.3** App-State: `<data_dir>/underline/state.yaml`. Ist kein Pfad verfügbar, liegt der State nur im
   Speicher. Ein Lade-Hinweis erscheint als Status „Note: {notice}“.
-- [ ] **M-01.4** Fenstertitel ist immer „Underline“. Grösse ist Standard, ohne Mindestgrösse und ohne Icon.
+- [x] **M-01.4** Fenstertitel ist immer „Underline“. Grösse ist Standard, ohne Mindestgrösse und ohne Icon.
   Fenstergeometrie wird nicht gespeichert.
-- [ ] **M-01.5** Schriften: DejaVu Sans (Facade, 15 pt) und Monospace 14 pt (Quelle, Code) sind eingebettet
+- [x] **M-01.5** Schriften: DejaVu Sans (Facade, 15 pt) und Monospace 14 pt (Quelle, Code) sind eingebettet
   (`underline_editor::fonts`).
-- [ ] **M-01.6** Theme: die `Palette` des Themes bestimmt alle UI-Farben (`app:4934-4952`): Panel, Hintergrund,
+- [x] **M-01.6** Theme: die `Palette` des Themes bestimmt alle UI-Farben (`app:4934-4952`): Panel, Hintergrund,
   Code-Hintergrund, Link, Text, Auswahl (`chosen`/`chosen_text`) und Buttons. Es gibt 11 Themes (`Theme::ALL`).
 
 ## M-02 Leerer Bildschirm (UC-002 A2)
@@ -45,17 +45,17 @@ Allgemeine Konventionen der heutigen UI:
 
 ## M-03 Top-Bar und Menü
 
-- [ ] **M-03.1** Burger-Button (a11y „Menu“, Hover „Hide the menu“/„Show the menu“) schaltet die Menüleiste um.
+- [x] **M-03.1** Burger-Button (a11y „Menu“, Hover „Hide the menu“/„Show the menu“) schaltet die Menüleiste um.
   Die Einstellung `show_menu_bar` wird sofort gespeichert.
 - [ ] **M-03.2** Lupe (a11y „Search“, Hover „Search notes  Ctrl+Shift+F“) schaltet das Such-Overlay um. Öffnen
   fokussiert das Feld, Schliessen leert den Text.
-- [ ] **M-03.3** Ist die Menüleiste ausgeblendet, zeigt die Top-Bar den Ordnernamen des Workspace fett und
+- [x] **M-03.3** Ist die Menüleiste ausgeblendet, zeigt die Top-Bar den Ordnernamen des Workspace fett und
   gekürzt, ohne Workspace „No workspace open“.
 - [ ] **M-03.4** Menü **File**: „New note…“ (ohne Workspace deaktiviert), „Open workspace…“ (schliesst den
   Create-Dialog), „New workspace…“ (schliesst den Open-Dialog).
-- [ ] **M-03.5** Menü **Workspace**: Feld „Wiki project URL“ mit „Check“ oder Enter. Danach Status „Wiki repository:
+- [x] **M-03.5** Menü **Workspace**: Feld „Wiki project URL“ mit „Check“ oder Enter. Danach Status „Wiki repository:
   {clone_url}“ oder der Fehler, das Menü schliesst. *Stub, nirgends angebunden und nicht gespeichert.*
-- [ ] **M-03.6** Menü **Theme**: Radio-Liste aller Themes. Die Wahl wird sofort gespeichert, das Menü schliesst.
+- [x] **M-03.6** Menü **Theme**: Radio-Liste aller Themes. Die Wahl wird sofort gespeichert, das Menü schliesst.
 - [ ] **M-03.7** Menü **Settings**: „Settings…“ mit Shortcut-Text „Ctrl+,“ schaltet das Einstellungsfenster um.
 
 ## M-04 Statusleiste (FR-020, FR-021)
@@ -85,7 +85,7 @@ Reihenfolge von links nach rechts:
   Open.
 - [ ] **M-04.6** Undo für einen abgehakten Todo („Todo {name} is as before“) und für einen gelöschten Todo
   („Todo {name} is back“). Beide stehen *vor* dem Text.
-- [ ] **M-04.7** Text: Workspace-Pfad und Status, getrennt durch „  |  “.
+- [x] **M-04.7** Text: Workspace-Pfad und Status, getrennt durch „  |  “.
 - [ ] **M-04.8** Nach einem Export: „Open“ (Systemprogramm) und „Show“ (Fenster „Approximated blocks“).
 - [ ] **M-04.9** Nach Agent-Änderungen: bis zu 3 Buttons „Open“/„Open {title}“, die neueste zuerst.
 - [ ] **M-04.10** Undo nach dem Löschen einer Notiz. Das Angebot verschwindet, sobald sich der Status ändert.
