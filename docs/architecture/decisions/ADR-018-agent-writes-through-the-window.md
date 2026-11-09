@@ -1,6 +1,6 @@
 # ADR-018: Agent changes go through the running window by request files in `.underline/agents/`
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-09
 **Requirements:** FR-056, FR-057, NFR-006, NFR-008, NFR-016, UC-019 A5, A6, A11, BR-004, BR-007, BR-010, UC-017 BR-007
 
