@@ -83,6 +83,9 @@ pub struct FacadeView {
     /// content in view, and a scroll offset it asked for.
     minimap: bool,
     marks: Vec<Mark>,
+    /// UC-008 BR-008: the search hits of the minimap, from this frame's
+    /// layout.
+    hits: Vec<minimap::Hit>,
     /// The bars are older than the layout, and when they were built.
     marks_dirty: bool,
     marks_built: std::time::Instant,
@@ -92,6 +95,9 @@ pub struct FacadeView {
     /// anything is typed): the block they come before, and how many empty
     /// lines are shown there, the cursor on the last one.
     gap: Option<Gap>,
+    /// UC-010 BR-004: the text and background colors the blocks were laid
+    /// out in; another theme lays them out again.
+    colors: Option<([u8; 4], [u8; 4])>,
     blink: Blink,
     /// Where the blocks were drawn last, on the screen: the top left of the
     /// first block, and the part of the screen they cover.
@@ -164,11 +170,13 @@ impl FacadeView {
             folds_seen: None,
             minimap: true,
             marks: Vec::new(),
+            hits: Vec::new(),
             marks_dirty: true,
             marks_built: std::time::Instant::now(),
             visible: (0.0, 0.0),
             scroll_to: None,
             gap: None,
+            colors: None,
             blink: Blink::default(),
             drawn: None,
         }
@@ -302,11 +310,19 @@ impl FacadeView {
         if let Some(strip) = strip {
             let content = self.tops.last().copied().unwrap_or(0.0) + 2.0 * PADDING;
             let (_, background) = source.colors();
+            // Blinking asks for frames only while there are hits.
+            let shown = self.hits.is_empty() || minimap::found_shown(ui, source.minimap_blink());
+            let found = minimap::Hits {
+                hits: &self.hits,
+                shown,
+                color: crate::source_view::found_hit_color(source.palette()),
+            };
             if let Some(offset) = minimap::show(
                 ui,
                 self.id,
                 strip,
                 &self.marks,
+                found,
                 content,
                 self.visible,
                 rgba(background).gamma_multiply(0.9),
@@ -321,6 +337,12 @@ impl FacadeView {
     /// Draws the facade itself.
     fn show_editor(&mut self, ui: &mut egui::Ui, source: &mut SourceView) -> bool {
         let (foreground, background) = source.colors();
+        if self.colors != Some((foreground, background)) {
+            self.colors = Some((foreground, background));
+            self.galleys.clear();
+            self.tops.clear();
+            self.marks_dirty = true;
+        }
         let theme = Theme {
             text: rgba(foreground),
             strong: ui.visuals().strong_text_color(),
@@ -395,7 +417,7 @@ impl FacadeView {
             }
 
             if response.has_focus() && self.enlarged.is_none() {
-                let vim_escape = source.keys.mode == InputMode::Vim;
+                let keys_escape = source.keys.mode != InputMode::Normal;
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
                         self.id,
@@ -403,8 +425,8 @@ impl FacadeView {
                             tab: true,
                             horizontal_arrows: true,
                             vertical_arrows: true,
-                            // Vim needs Esc for itself (BR-009).
-                            escape: vim_escape,
+                            // Vim and Nano need Esc for themselves (BR-009, BR-010).
+                            escape: keys_escape,
                         },
                     )
                 });
@@ -437,6 +459,8 @@ impl FacadeView {
             let (sel_start, sel_end) = source.selection();
             // UC-008 BR-008: the words of the search, as char ranges.
             let found = source.found_ranges().to_vec();
+            let hit_fill = crate::source_view::found_color(source.palette());
+            let hit_line = crate::source_view::found_hit_color(source.palette());
             // UC-019 BR-006: the agent cursors, as char ranges.
             let agent_marks = source.agent_mark_ranges();
             let mut named = std::collections::HashSet::new();
@@ -563,26 +587,29 @@ impl FacadeView {
                         to_char(block.source_offset(0)),
                         to_char(block.source_offset(count)),
                     );
-                    let marks: Vec<(usize, usize, Color32)> = found
+                    // A hit is underlined too, so it is told from a selection.
+                    type Paint = (usize, usize, Color32, Option<Color32>);
+                    let marks: Vec<Paint> = found
                         .iter()
                         .filter(|r| r.end > first && r.start < last)
-                        .map(|r| (r.start, r.end, crate::source_view::FOUND_COLOR))
+                        .map(|r| (r.start, r.end, hit_fill, Some(hit_line)))
                         .chain((sel_start != sel_end).then_some((
                             sel_start,
                             sel_end,
                             ui.visuals().selection.bg_fill,
+                            None,
                         )))
                         .collect();
                     if !marks.is_empty() {
                         let ats: Vec<usize> = (0..=count)
                             .map(|i| to_char(block.source_offset(i)))
                             .collect();
-                        for (start, end, fill) in marks {
+                        for (start, end, fill, line) in marks {
                             let from = ats.iter().position(|&at| at >= start);
                             let to = ats.iter().rposition(|&at| at <= end);
                             if let (Some(from), Some(to)) = (from, to) {
                                 if from < to {
-                                    paint_selection(&painter, &laid, top, from, to, fill);
+                                    paint_selection(&painter, &laid, top, (from, to), fill, line);
                                 }
                             }
                         }
@@ -713,20 +740,23 @@ impl FacadeView {
             let bytes = rope.char_to_byte(start)..rope.char_to_byte(end);
             Some(blocks_to_html(&self.blocks, bytes))
         });
-        if self.minimap && self.marks_dirty {
-            if self.marks.is_empty() || self.marks_built.elapsed() >= MARKS_EVERY {
-                let (foreground, _) = source.colors();
-                let theme = Theme {
-                    text: rgba(foreground),
-                    strong: ui.visuals().strong_text_color(),
-                    link: ui.visuals().hyperlink_color,
-                    code_bg: ui.visuals().code_bg_color,
-                    weak: rgba(foreground).gamma_multiply(0.55),
-                };
-                self.build_marks(ui, source, &theme);
-            } else {
-                ui.ctx().request_repaint_after(MARKS_EVERY);
+        if self.minimap {
+            let (foreground, _) = source.colors();
+            let theme = Theme {
+                text: rgba(foreground),
+                strong: ui.visuals().strong_text_color(),
+                link: ui.visuals().hyperlink_color,
+                code_bg: ui.visuals().code_bg_color,
+                weak: rgba(foreground).gamma_multiply(0.55),
+            };
+            if self.marks_dirty {
+                if self.marks.is_empty() || self.marks_built.elapsed() >= MARKS_EVERY {
+                    self.build_marks(ui, source, &theme);
+                } else {
+                    ui.ctx().request_repaint_after(MARKS_EVERY);
+                }
             }
+            self.hits = self.found_hits(ui, source, &theme);
         }
         changed
     }
@@ -1208,6 +1238,63 @@ impl FacadeView {
             before: next,
             lines: breaks - 1,
         })
+    }
+
+    /// UC-008 BR-008: the search hits for the minimap, each at its word as
+    /// the block's text is laid out, like the minimap's own bars. The hits
+    /// come sorted, so one walk over the blocks finds them all.
+    fn found_hits(
+        &mut self,
+        ui: &egui::Ui,
+        source: &mut SourceView,
+        theme: &Theme,
+    ) -> Vec<minimap::Hit> {
+        let found = source.found_ranges().to_vec();
+        let rope = source.document().rope().clone();
+        let width = self.width.max(1.0);
+        let ends = |b: &Block| b.span.end.max(b.runs.last().map_or(0, |r| r.end));
+        let mut index = 0;
+        let mut hits = Vec::with_capacity(found.len());
+        for r in &found {
+            let byte = rope.char_to_byte(r.start.min(rope.len_chars()));
+            let end = rope.char_to_byte(r.end.min(rope.len_chars()));
+            while self.blocks.get(index).is_some_and(|b| ends(b) < byte) {
+                index += 1;
+            }
+            let Some(block) = self.blocks.get(index) else {
+                break;
+            };
+            if self.hidden.get(index).copied().unwrap_or(false) || index + 1 >= self.tops.len() {
+                continue;
+            }
+            let (Some(from), to) = (block.facade_index(byte), block.facade_index(end)) else {
+                continue;
+            };
+            let top = PADDING + self.tops[index];
+            let laid = self.laid(ui, source, theme, index);
+            if !laid.text_shown {
+                continue;
+            }
+            let start = laid
+                .galley
+                .pos_from_ccursor(CCursor::new(laid.prefix + from));
+            let stop = laid
+                .galley
+                .pos_from_ccursor(CCursor::new(laid.prefix + to.unwrap_or(from).max(from)));
+            // A hit wrapped onto the next row is marked where it starts.
+            let right = if stop.top() > start.top() {
+                start.left() + 4.0
+            } else {
+                stop.left()
+            };
+            hits.push(minimap::Hit {
+                top: top + laid.offset.y + start.top(),
+                height: start.height(),
+                left: (laid.offset.x + start.left()) / width,
+                width: (right - start.left()).max(1.0) / width,
+            });
+        }
+        hits
     }
 
     /// The first block that ends at source byte `byte` or after it.
@@ -2097,13 +2184,15 @@ fn prefix_chars(kind: &BlockKind) -> usize {
     prefix_text(kind).chars().count()
 }
 
+/// Paints the fill of the facade indices `from` to `to` of a block, row by
+/// row, and a line under it when `line` is given (a search hit).
 fn paint_selection(
     painter: &egui::Painter,
     laid: &Laid,
     top: Pos2,
-    from: usize,
-    to: usize,
+    (from, to): (usize, usize),
     color: Color32,
+    line: Option<Color32>,
 ) {
     let start = laid
         .galley
@@ -2124,11 +2213,15 @@ fn paint_selection(
         } else {
             row.rect.max.x
         };
-        painter.rect_filled(
-            Rect::from_min_max(top + Vec2::new(x0, y0), top + Vec2::new(x1, y1)),
-            0.0,
-            color,
-        );
+        let rect = Rect::from_min_max(top + Vec2::new(x0, y0), top + Vec2::new(x1, y1));
+        painter.rect_filled(rect, 0.0, color);
+        if let Some(line) = line {
+            let y = rect.bottom() - 1.0;
+            painter.line_segment(
+                [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                egui::Stroke::new(2.0_f32, line),
+            );
+        }
     }
 }
 
@@ -3419,6 +3512,96 @@ mod tests {
                 source.show(ui);
             });
         });
+    }
+
+    /// UC-010 BR-004: another theme colors the facade's text at once, not
+    /// only the blocks edited after the change.
+    #[test]
+    fn uc010_theme_change_recolors_the_facade() {
+        let mut h = Harness::new("# Title\n\nSome text.\n");
+        h.frame(vec![]);
+        let light = Arc::new(HighlightSet::new(true).with_theme(underline_core::Theme::Light));
+        h.source.set_highlight_set(light);
+        h.frame(vec![]);
+        let (foreground, _) = h.source.colors();
+        let text = rgba(foreground);
+        let colors: Vec<Color32> = h
+            .facade
+            .galleys
+            .values()
+            .flat_map(|g| g.rows.iter())
+            .flat_map(|row| row.visuals.mesh.vertices.iter().map(|v| v.color))
+            .collect();
+        assert!(!colors.is_empty());
+        assert!(colors.contains(&text), "the body text takes the new color");
+    }
+
+    /// UC-008 BR-008: a search of the Vim or Nano keys marks its hits like
+    /// the search of the window, together with it, in the text and in the
+    /// minimap of both views.
+    #[test]
+    fn uc008_vim_and_nano_searches_mark_their_hits() {
+        let mut h = Harness::new("alpha beta\ngamma beta\nalpha\n");
+        h.source.set_input_mode(InputMode::Vim);
+        h.source.set_cursor_anchor(0, 0);
+        h.source.focus_cursor();
+        source_frame(&mut h, vec![]);
+        source_frame(&mut h, vec![]);
+        assert!(h.source.found_ranges().is_empty());
+        source_frame(&mut h, keys("/beta<CR>"));
+        assert_eq!(h.source.found_ranges(), [6..10, 17..21]);
+        // In the minimap only the word is marked, not its whole line.
+        let hits = h.source.found_hits();
+        assert_eq!(hits.len(), 2);
+        assert!(hits[0].left > 0.0 && hits[0].width < 0.2, "{:?}", hits[0]);
+        assert!(hits[1].top > hits[0].top);
+        // With the search of the window, both are marked.
+        h.source
+            .set_search(Some(underline_core::Query::parse("gamma")));
+        assert_eq!(h.source.found_ranges(), [6..10, 11..16, 17..21]);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let hits = h.facade.hits.clone();
+        assert_eq!(hits.len(), 3);
+        assert!(hits.iter().all(|hit| hit.width < 0.5), "{hits:?}");
+        // Taken from the laid-out text: the paragraph is one row, "alpha
+        // beta gamma beta alpha", so the hits follow each other in it.
+        assert!(hits[0].left > 0.02, "{hits:?}");
+        assert!(hits
+            .windows(2)
+            .all(|w| w[0].left < w[1].left && w[0].top == w[1].top));
+        // Escape in normal mode, or `:noh`, ends the Vim search.
+        h.source.focus_cursor();
+        source_frame(&mut h, vec![]);
+        source_frame(&mut h, vec![]);
+        source_frame(&mut h, keys("<Esc>"));
+        assert_eq!(h.source.found_ranges().to_vec(), vec![11..16]);
+        source_frame(&mut h, keys("/beta<CR>"));
+        assert_eq!(h.source.found_ranges().len(), 3);
+        source_frame(&mut h, keys(":noh<CR>"));
+        assert_eq!(h.source.found_ranges().to_vec(), vec![11..16]);
+        // `n` searches on and marks the hits again, as in Vim.
+        source_frame(&mut h, keys("n"));
+        assert_eq!(h.source.found_ranges().len(), 3);
+        // The normal keys have no search of their own.
+        source_frame(&mut h, keys("/beta<CR>"));
+        h.source.set_input_mode(InputMode::Normal);
+        assert_eq!(h.source.found_ranges().to_vec(), vec![11..16]);
+
+        let mut h = Harness::new("one\ntwo\none\n");
+        h.source.set_input_mode(InputMode::Nano);
+        h.source.focus_cursor();
+        source_frame(&mut h, vec![]);
+        source_frame(&mut h, keys("<C-w>one<CR>"));
+        assert_eq!(h.source.found_ranges(), [0..3, 8..11]);
+        assert!(h
+            .source
+            .input_status()
+            .unwrap()
+            .text()
+            .contains("End search"));
+        source_frame(&mut h, keys("<Esc>"));
+        assert!(h.source.found_ranges().is_empty());
     }
 
     /// TC-005-14 steps 1 to 7, 9, 10: the Vim keys in the source view.

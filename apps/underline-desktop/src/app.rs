@@ -33,7 +33,7 @@ use underline_core::{
     todos_fingerprint, Day, Todo, TodoError, TodoFilter, TodoListState,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
-use underline_editor::{AgentMark, FOUND_COLOR};
+use underline_editor::{found_color, AgentMark};
 use underline_editor::{
     ClipImage, EditorCommand, FacadeView, InputMode, InputStatus, KeysMode, SharedClipboard,
     SourceView, SystemClipboard, Tool,
@@ -106,6 +106,11 @@ pub struct UnderlineApp {
     search_asked: Option<(String, u64)>,
     search_cursor: Option<usize>,
     focus_search: bool,
+    /// UC-008: whether the search overlay is open.
+    search_open: bool,
+    /// Where the magnifier of the top bar is, so pressing it is no click
+    /// outside the overlay.
+    magnifier_rect: Option<egui::Rect>,
     /// Counts the changes of the note overview, so a search runs again.
     overview_generation: u64,
     /// UC-008 A6: the find field of the active tab.
@@ -583,6 +588,7 @@ fn found_list(
     result: Option<&SearchResult>,
     text: &str,
     cursor: Option<(usize, Option<usize>)>,
+    hit_fill: egui::Color32,
 ) -> Option<FoundChoice> {
     let Some(result) = result else {
         ui.weak("Searching…");
@@ -635,7 +641,7 @@ fn found_list(
                     &line.shown[mark.clone()],
                     0.0,
                     egui::TextFormat {
-                        background: FOUND_COLOR,
+                        background: hit_fill,
                         ..egui::TextFormat::simple(font.clone(), color)
                     },
                 );
@@ -1135,62 +1141,67 @@ fn editor_status_line(
     effective: &underline_core::Effective,
     quick: &mut Vec<(SettingKey, String)>,
 ) {
-    // The switches and the place first, from the right; the keys get the
-    // rest of the line, so nothing overlaps in a narrow window.
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        {
-            // A narrow window gets the short names of the switches, so the
-            // place and the keys keep their room.
-            let narrow = ui.available_width() < 720.0;
-            let name = |long: &'static str, short: &'static str| if narrow { short } else { long };
-            let mut copy = effective.copy_on_select;
-            if ui
-                .toggle_value(&mut copy, name("Copy on select", "Copy"))
-                .on_hover_text("Put a selection on the clipboard as soon as it is made")
-                .changed()
+    // The badge of the mode first, on the left, as the most important;
+    // then the switches and the place from the right; the rest of the keys
+    // get what is left, so nothing overlaps in a narrow window.
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        let accent = keys.map(|keys| mode_badge(ui, keys, palette));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             {
-                quick.push((SettingKey::CopyOnSelect, copy.to_string()));
-            }
-            let mut minimap = effective.show_minimap;
-            if ui
-                .toggle_value(&mut minimap, name("Minimap", "Map"))
-                .on_hover_text("Show or hide the minimap beside the editor")
-                .changed()
-            {
-                quick.push((SettingKey::ShowMinimap, minimap.to_string()));
-            }
-            ui.separator();
-            let mut mode = effective.input_mode;
-            egui::ComboBox::from_id_salt("input-mode")
-                .selected_text(if narrow {
-                    mode.label().to_owned()
-                } else {
-                    format!("Keys: {}", mode.label())
-                })
-                .show_ui(ui, |ui| {
-                    for each in InputMode::ALL {
-                        ui.selectable_value(&mut mode, *each, each.label());
-                    }
-                });
-            if mode != effective.input_mode {
-                quick.push((SettingKey::InputMode, mode.label().to_owned()));
-            }
-            ui.separator();
-            place_box(ui, &place, palette);
-        }
-        let rest = ui.available_rect_before_wrap();
-        ui.allocate_new_ui(
-            egui::UiBuilder::new()
-                .max_rect(rest)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            |ui| {
-                // Nothing on the left reaches into the switches.
-                ui.set_clip_rect(rest.intersect(ui.clip_rect()));
-                if let Some(keys) = keys {
-                    keys_status(ui, keys, palette);
+                // A narrow window gets the short names of the switches, so the
+                // place and the keys keep their room.
+                let narrow = ui.available_width() < 720.0;
+                let name =
+                    |long: &'static str, short: &'static str| if narrow { short } else { long };
+                let mut copy = effective.copy_on_select;
+                if ui
+                    .toggle_value(&mut copy, name("Copy on select", "Copy"))
+                    .on_hover_text("Put a selection on the clipboard as soon as it is made")
+                    .changed()
+                {
+                    quick.push((SettingKey::CopyOnSelect, copy.to_string()));
                 }
-            },
-        );
+                let mut minimap = effective.show_minimap;
+                if ui
+                    .toggle_value(&mut minimap, name("Minimap", "Map"))
+                    .on_hover_text("Show or hide the minimap beside the editor")
+                    .changed()
+                {
+                    quick.push((SettingKey::ShowMinimap, minimap.to_string()));
+                }
+                ui.separator();
+                let mut mode = effective.input_mode;
+                egui::ComboBox::from_id_salt("input-mode")
+                    .selected_text(if narrow {
+                        mode.label().to_owned()
+                    } else {
+                        format!("Keys: {}", mode.label())
+                    })
+                    .show_ui(ui, |ui| {
+                        for each in InputMode::ALL {
+                            ui.selectable_value(&mut mode, *each, each.label());
+                        }
+                    });
+                if mode != effective.input_mode {
+                    quick.push((SettingKey::InputMode, mode.label().to_owned()));
+                }
+                ui.separator();
+                place_box(ui, &place, palette);
+            }
+            let rest = ui.available_rect_before_wrap();
+            ui.allocate_new_ui(
+                egui::UiBuilder::new()
+                    .max_rect(rest)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| {
+                    // Nothing on the left reaches into the switches.
+                    ui.set_clip_rect(rest.intersect(ui.clip_rect()));
+                    if let (Some(keys), Some(accent)) = (keys, accent) {
+                        keys_status(ui, keys, accent, palette);
+                    }
+                },
+            );
+        });
     });
 }
 
@@ -1215,11 +1226,9 @@ fn place_box(ui: &mut egui::Ui, place: &underline_editor::CursorPlace, palette: 
         });
 }
 
-/// FR-026: the part of the status line for Vim or Nano keys. The badge and
-/// the keys of the commands take the theme's color of the mode, so they
-/// stand apart from the rest; commands that do not fit are left out whole,
-/// the least important first.
-fn keys_status(ui: &mut egui::Ui, keys: &InputStatus, palette: &Palette) {
+/// FR-026: the badge of the key map and its mode, in the theme's color of
+/// the mode; gives that color for the rest of the keys.
+fn mode_badge(ui: &mut egui::Ui, keys: &InputStatus, palette: &Palette) -> egui::Color32 {
     let color = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
     let [normal, insert, visual, command] = palette.mode_colors();
     let fill = match keys.mode {
@@ -1229,11 +1238,21 @@ fn keys_status(ui: &mut egui::Ui, keys: &InputStatus, palette: &Palette) {
         Some(KeysMode::Normal) | None => normal,
     };
     let accent = color(fill);
+    // A narrow line shows only the mode, the key map is in the switch.
     let badge = match keys.mode {
+        Some(mode) if ui.available_width() < 450.0 => mode.label().to_owned(),
         Some(mode) => format!("{} · {}", keys.keymap.label(), mode.label()),
         None => keys.keymap.label().to_owned(),
     };
     status_badge(ui, &badge, accent, color(palette.text_on(fill)));
+    accent
+}
+
+/// FR-026: the rest of the status line for Vim or Nano keys: what is typed
+/// but not done yet, and the commands, their keys in the mode's `accent`;
+/// commands that do not fit are left out whole, the least important first.
+fn keys_status(ui: &mut egui::Ui, keys: &InputStatus, accent: egui::Color32, palette: &Palette) {
+    let color = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
     if !keys.pending.is_empty() {
         ui.add(
             egui::Label::new(egui::RichText::new(&keys.pending).monospace().color(accent))
@@ -1304,6 +1323,26 @@ fn burger_button(ui: &mut egui::Ui) -> egui::Response {
             egui::Stroke::new(1.5_f32, visuals.fg_stroke.color),
         );
     }
+    response
+}
+
+/// The magnifier button of the top bar: a ring and a handle, painted.
+fn magnifier_button(ui: &mut egui::Ui) -> egui::Response {
+    let size = egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Search"));
+    let visuals = ui.style().interact(&response);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, visuals.rounding, visuals.weak_bg_fill);
+    }
+    let stroke = egui::Stroke::new(1.5_f32, visuals.fg_stroke.color);
+    let radius = rect.width() * 0.22;
+    let center = rect.center() - egui::vec2(radius * 0.35, radius * 0.35);
+    ui.painter().circle_stroke(center, radius, stroke);
+    let start = center + egui::vec2(radius, radius) * std::f32::consts::FRAC_1_SQRT_2;
+    ui.painter()
+        .line_segment([start, start + egui::vec2(radius, radius) * 0.8], stroke);
     response
 }
 
@@ -1432,6 +1471,8 @@ impl UnderlineApp {
             search_asked: None,
             search_cursor: None,
             focus_search: false,
+            search_open: false,
+            magnifier_rect: None,
             overview_generation: 0,
             find: None,
             export: None,
@@ -4535,6 +4576,119 @@ impl UnderlineApp {
         }
     }
 
+    /// UC-008 steps 1 and 2: the search overlay over the window: a field
+    /// and the found notes and lines under it, opened with the magnifier or
+    /// Ctrl+Shift+F. A click opens a place and keeps the overlay open, Enter
+    /// opens the chosen place and closes it; Escape or a click outside
+    /// closes it. Closing ends the search, so its words are no longer
+    /// marked (A2).
+    fn search_overlay(&mut self, ctx: &egui::Context) {
+        if !self.search_open {
+            return;
+        }
+        let screen = ctx.screen_rect();
+        let width = (screen.width() - 32.0).clamp(200.0, 640.0);
+        let hit_fill = found_color(self.settings.palette());
+        let entries: Vec<(usize, Option<usize>)> = self
+            .search_result
+            .iter()
+            .flat_map(|r| r.found.iter().enumerate())
+            .flat_map(|(n, note)| {
+                std::iter::once((n, None)).chain((0..note.lines.len()).map(move |l| (n, Some(l))))
+            })
+            .collect();
+        let mut chosen = None;
+        let mut close = false;
+        let area = egui::Area::new(egui::Id::new("search-overlay"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 44.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(width);
+                    let field = ui.add(
+                        egui::TextEdit::singleline(&mut self.search_text)
+                            .hint_text("Search notes")
+                            .desired_width(f32::INFINITY),
+                    );
+                    if std::mem::take(&mut self.focus_search) {
+                        field.request_focus();
+                    }
+                    // Another text gives other entries: none is chosen yet.
+                    if field.changed() {
+                        self.search_cursor = None;
+                    }
+                    // BR-007: arrows, Enter, and Escape in the field.
+                    let (down, up, enter) = ui.input(|i| {
+                        (
+                            i.key_pressed(egui::Key::ArrowDown),
+                            i.key_pressed(egui::Key::ArrowUp),
+                            i.key_pressed(egui::Key::Enter),
+                        )
+                    });
+                    // Escape is the overlay's alone in this frame.
+                    let escape =
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                    if escape {
+                        close = true;
+                    } else if (field.has_focus() || field.lost_focus()) && !entries.is_empty() {
+                        let last = entries.len() - 1;
+                        if down {
+                            self.search_cursor =
+                                Some(self.search_cursor.map_or(0, |c| (c + 1).min(last)));
+                            field.request_focus();
+                        }
+                        if up {
+                            self.search_cursor =
+                                Some(self.search_cursor.map_or(0, |c| c.saturating_sub(1)));
+                            field.request_focus();
+                        }
+                        if enter {
+                            let (n, line) = entries[self.search_cursor.unwrap_or(0).min(last)];
+                            chosen = self
+                                .search_result
+                                .as_ref()
+                                .map(|r| choice(&r.found[n], line));
+                            close = true;
+                        }
+                    }
+                    if self.search_text.trim().is_empty() {
+                        return;
+                    }
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .max_height((screen.height() * 0.6).min(480.0))
+                        .show(ui, |ui| {
+                            if let Some(clicked) = found_list(
+                                ui,
+                                self.search_result.as_ref(),
+                                &self.search_text,
+                                self.search_cursor.and_then(|c| entries.get(c).copied()),
+                                hit_fill,
+                            ) {
+                                chosen = Some(clicked);
+                            }
+                        });
+                });
+            });
+        // A press on the magnifier is no press outside: the magnifier
+        // closes the overlay itself.
+        let magnifier = self.magnifier_rect;
+        let outside = ctx.input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer.interact_pos().is_some_and(|pos| {
+                    !area.response.rect.contains(pos) && !magnifier.is_some_and(|m| m.contains(pos))
+                })
+        });
+        if let Some(found) = chosen {
+            self.open_found(found);
+        }
+        if close || outside {
+            self.search_open = false;
+            self.search_text.clear();
+            self.search_cursor = None;
+        }
+    }
+
     /// The menus of the menu bar: File, Workspace, and Settings.
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         let command = if cfg!(target_os = "macos") {
@@ -4577,6 +4731,18 @@ impl UnderlineApp {
                     ui.close_menu();
                 }
             });
+        });
+        // UC-010 BR-004: every theme one click away, applied and stored at
+        // once like a quick switch.
+        ui.menu_button("Theme", |ui| {
+            let current = self.settings.effective.theme;
+            for theme in Theme::ALL {
+                if ui.radio(*theme == current, theme.label()).clicked() {
+                    self.settings
+                        .quick_change(SettingKey::Theme, theme.label().to_owned());
+                    ui.close_menu();
+                }
+            }
         });
         ui.menu_button("Settings", |ui| {
             // UC-010 BR-006: the settings window.
@@ -5870,6 +6036,7 @@ impl eframe::App for UnderlineApp {
                 egui::Key::F,
             )
         }) {
+            self.search_open = true;
             self.focus_search = true;
         } else if self.settings.effective.input_mode == Keys::Normal
             && self.tabs.active().is_some()
@@ -5916,6 +6083,21 @@ impl eframe::App for UnderlineApp {
                     self.settings
                         .quick_change(SettingKey::ShowMenuBar, (!shown).to_string());
                 }
+                // UC-008 step 1: the magnifier opens the search overlay.
+                let search_hint = if cfg!(target_os = "macos") {
+                    "Search notes  Cmd+Shift+F"
+                } else {
+                    "Search notes  Ctrl+Shift+F"
+                };
+                let magnifier = magnifier_button(ui).on_hover_text(search_hint);
+                self.magnifier_rect = Some(magnifier.rect);
+                if magnifier.clicked() {
+                    self.search_open = !self.search_open;
+                    self.focus_search = self.search_open;
+                    if !self.search_open {
+                        self.search_text.clear();
+                    }
+                }
                 if shown {
                     self.menu_bar(ui);
                 } else {
@@ -5927,6 +6109,8 @@ impl eframe::App for UnderlineApp {
                 }
             });
         });
+
+        self.search_overlay(ctx);
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             let mut parts = Vec::new();
@@ -6218,65 +6402,6 @@ impl eframe::App for UnderlineApp {
                         self.start_new_note();
                     }
                 });
-                // UC-008 step 1: the search field above the note overview.
-                let field = ui.add(
-                    egui::TextEdit::singleline(&mut self.search_text)
-                        .hint_text(if cfg!(target_os = "macos") {
-                            "Search notes  Cmd+Shift+F"
-                        } else {
-                            "Search notes  Ctrl+Shift+F"
-                        })
-                        .desired_width(f32::INFINITY),
-                );
-                if std::mem::take(&mut self.focus_search) {
-                    field.request_focus();
-                }
-                let searching = !self.search_text.trim().is_empty();
-                let mut found_choice = None;
-                // BR-007: arrows, Enter, and Escape in the search field.
-                let entries: Vec<(usize, Option<usize>)> = self
-                    .search_result
-                    .iter()
-                    .flat_map(|r| r.found.iter().enumerate())
-                    .flat_map(|(n, note)| {
-                        std::iter::once((n, None))
-                            .chain((0..note.lines.len()).map(move |l| (n, Some(l))))
-                    })
-                    .collect();
-                if field.has_focus() || field.lost_focus() {
-                    let (down, up, enter, escape) = ui.input(|i| {
-                        (
-                            i.key_pressed(egui::Key::ArrowDown),
-                            i.key_pressed(egui::Key::ArrowUp),
-                            i.key_pressed(egui::Key::Enter),
-                            i.key_pressed(egui::Key::Escape),
-                        )
-                    });
-                    if escape {
-                        // A2: the search is cleared.
-                        self.search_text.clear();
-                        self.search_cursor = None;
-                    } else if !entries.is_empty() {
-                        let last = entries.len() - 1;
-                        if down {
-                            self.search_cursor =
-                                Some(self.search_cursor.map_or(0, |c| (c + 1).min(last)));
-                            field.request_focus();
-                        }
-                        if up {
-                            self.search_cursor =
-                                Some(self.search_cursor.map_or(0, |c| c.saturating_sub(1)));
-                            field.request_focus();
-                        }
-                        if enter {
-                            let (n, line) = entries[self.search_cursor.unwrap_or(0).min(last)];
-                            found_choice = self
-                                .search_result
-                                .as_ref()
-                                .map(|r| choice(&r.found[n], line));
-                        }
-                    }
-                }
                 ui.separator();
                 let mut selected = None;
                 let mut renaming = None;
@@ -6290,17 +6415,7 @@ impl eframe::App for UnderlineApp {
                     .flat_map(|w| w.listing().notes.iter().map(|n| (n.id.clone(), n.format)))
                     .collect();
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    if searching {
-                        if let Some(clicked) = found_list(
-                            ui,
-                            self.search_result.as_ref(),
-                            &self.search_text,
-                            self.search_cursor.and_then(|c| entries.get(c).copied()),
-                        ) {
-                            found_choice = Some(clicked);
-                        }
-                    }
-                    for entry in self.overview.iter().filter(|_| !searching) {
+                    for entry in &self.overview {
                         let active = self.tabs.active().is_some_and(|(n, _)| n == &entry.id);
                         // UC-011 step 2: the mark of a changed note.
                         let label = match marks.get(&entry.id) {
@@ -6361,7 +6476,7 @@ impl eframe::App for UnderlineApp {
                         }
                     }
                     // UC-007 A5: the deleted notes, at the end of the overview.
-                    if !self.deleted.is_empty() && !searching {
+                    if !self.deleted.is_empty() {
                         ui.separator();
                         egui::CollapsingHeader::new(format!(
                             "Deleted notes ({})",
@@ -6406,9 +6521,6 @@ impl eframe::App for UnderlineApp {
                 }
                 if let Some(deleted) = restoring {
                     self.restore_deleted(deleted, false);
-                }
-                if let Some(found) = found_choice {
-                    self.open_found(found);
                 }
                 if let Some((id, kind)) = exporting {
                     self.start_export(id, Some(kind));
@@ -6698,6 +6810,7 @@ impl eframe::App for UnderlineApp {
             let effective = &self.settings.effective;
             tab.facade.set_minimap(effective.show_minimap);
             tab.view.set_minimap(effective.show_minimap);
+            tab.view.set_minimap_blink(effective.blink_found_in_minimap);
             tab.view.set_copy_on_select(effective.copy_on_select);
             tab.view.set_input_mode(effective.input_mode);
             tab.view

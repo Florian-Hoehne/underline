@@ -186,10 +186,12 @@ pub enum SettingKey {
     /// The menu bar at the top of the window, switched by its burger
     /// button.
     ShowMenuBar,
+    /// UC-008 BR-008: search hits blink in the minimap.
+    BlinkFoundInMinimap,
 }
 
 impl SettingKey {
-    pub const ALL: [SettingKey; 12] = [
+    pub const ALL: [SettingKey; 13] = [
         SettingKey::DefaultFormat,
         SettingKey::Theme,
         SettingKey::InputMode,
@@ -202,6 +204,7 @@ impl SettingKey {
         SettingKey::OverviewWidth,
         SettingKey::ToolPanelWidth,
         SettingKey::ShowMenuBar,
+        SettingKey::BlinkFoundInMinimap,
     ];
 
     /// The key in the settings file.
@@ -219,6 +222,7 @@ impl SettingKey {
             SettingKey::OverviewWidth => "overview_width",
             SettingKey::ToolPanelWidth => "tool_panel_width",
             SettingKey::ShowMenuBar => "show_menu_bar",
+            SettingKey::BlinkFoundInMinimap => "blink_found_in_minimap",
         }
     }
 }
@@ -262,6 +266,8 @@ pub struct Settings {
     pub tool_panel_width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_menu_bar: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blink_found_in_minimap: Option<bool>,
 }
 
 /// The settings of a workspace settings file (UC-001, UC-002).
@@ -377,6 +383,7 @@ impl Settings {
             SettingKey::OverviewWidth => self.overview_width.map(|v| v.to_string()),
             SettingKey::ToolPanelWidth => self.tool_panel_width.map(|v| v.to_string()),
             SettingKey::ShowMenuBar => self.show_menu_bar.map(bool_text),
+            SettingKey::BlinkFoundInMinimap => self.blink_found_in_minimap.map(bool_text),
         }
     }
 
@@ -402,6 +409,9 @@ impl Settings {
             SettingKey::OverviewWidth => self.overview_width = parsed.overview_width,
             SettingKey::ToolPanelWidth => self.tool_panel_width = parsed.tool_panel_width,
             SettingKey::ShowMenuBar => self.show_menu_bar = parsed.show_menu_bar,
+            SettingKey::BlinkFoundInMinimap => {
+                self.blink_found_in_minimap = parsed.blink_found_in_minimap;
+            }
         }
         Ok(())
     }
@@ -543,6 +553,8 @@ pub struct Effective {
     /// Whether the menu bar is shown; hidden, the window shows the name of
     /// the workspace in its place.
     pub show_menu_bar: bool,
+    /// UC-008 BR-008: whether search hits blink in the minimap.
+    pub blink_found_in_minimap: bool,
     /// UC-017 A1: the workspace lowers agent access below the user's level.
     pub agent_access_lowered: bool,
     /// UC-010 BR-008: the workspace settings ask for more agent access than
@@ -582,6 +594,10 @@ impl Effective {
             overview_width: ws.overview_width.or(user.overview_width).unwrap_or(200),
             tool_panel_width: ws.tool_panel_width.or(user.tool_panel_width).unwrap_or(240),
             show_menu_bar: ws.show_menu_bar.or(user.show_menu_bar).unwrap_or(false),
+            blink_found_in_minimap: ws
+                .blink_found_in_minimap
+                .or(user.blink_found_in_minimap)
+                .unwrap_or(true),
             agent_access_lowered: ws.agent_access.is_some_and(|w| w < user_access),
             agent_access_refused: ws.agent_access.is_some_and(|w| w > user_access),
         }
@@ -663,6 +679,7 @@ mod tests {
             (200, 240)
         );
         assert!(!effective.show_menu_bar, "the menu bar starts hidden");
+        assert!(effective.blink_found_in_minimap);
     }
 
     /// The burger button's switch of the menu bar is stored like any

@@ -1904,3 +1904,25 @@ hidden, the name of the workspace stands in its place. It starts hidden, and the
 
 UC-010 should list the setting in BR-001 and name the burger button as a quick switch; UC-001 and UC-002 should name
 the File menu as the place to open and create a workspace.
+
+## OQ-189: Which searches mark their hits, where, and how does a search end?
+
+**Element:** UC-008 steps 1–2, A2, BR-007, BR-008; UC-005 BR-009, BR-010; FR-030; UC-010 BR-001, BR-004
+**Raised by:** Implementation, 2026-11-09
+**Blocking:** No
+**Status:** Open
+**Assumed:** As the user asked:
+- The search of the workspace is an overlay over the window, a field with the found notes and lines under it, opened
+  with a magnifier in the top bar or Ctrl+Shift+F; the note overview no longer holds the search field. A click opens a
+  place and keeps the overlay; Enter opens the chosen place and closes it; Escape or a click outside closes it, which
+  ends the search.
+- The hits of every search are marked in the note, in both editing views, and in the minimap: the search of the
+  workspace, the find field of the note, and the last search of the Vim keys (`/`) or the Nano keys (`Ctrl+W`). Escape
+  in Vim's normal mode or `:noh` ends the Vim search, Escape ends the Nano search.
+- The minimap works like a sieve while there are hits: the note in it is veiled and only the found words shine through,
+  at their place in the line, in the theme's color for hits. They blink; the setting "Search hits in the minimap" shows
+  them steadily instead. It starts blinking.
+- Hits are marked in a color of the theme, not one color for all themes.
+- The menu bar has a menu "Theme" with every theme.
+
+UC-008 should take in the overlay and the other searches; UC-010 BR-001 should list the new setting.

@@ -12,6 +12,7 @@ use eframe::egui::{
 };
 use underline_core::{LineSide, NoteFormat, Query};
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
+use underline_facade::themes::Palette;
 
 use crate::blink::Blink;
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
@@ -64,6 +65,10 @@ impl CursorPlace {
     }
 }
 
+/// What the search hits were found for: the revision of the text and the
+/// pattern of the Vim or Nano search.
+type FoundKey = (u64, Option<String>);
+
 /// The agent cursor of one agent in a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentMark {
@@ -72,8 +77,18 @@ pub struct AgentMark {
     pub name: String,
 }
 
-/// The mark of a word found by a search (UC-008 BR-008), behind the text.
-pub const FOUND_COLOR: Color32 = Color32::from_rgba_premultiplied(110, 85, 0, 110);
+/// UC-008 BR-008: the mark of a word found by a search, behind the text,
+/// in the theme's color for hits.
+pub fn found_color(palette: &Palette) -> Color32 {
+    let [r, g, b] = palette.found_background();
+    Color32::from_rgb(r, g, b)
+}
+
+/// UC-008 BR-008: the color of a search hit in the minimap, the theme's.
+pub(crate) fn found_hit_color(palette: &Palette) -> Color32 {
+    let [r, g, b] = palette.found();
+    Color32::from_rgb(r, g, b)
+}
 /// How often the minimap is drawn anew while the text changes.
 pub(crate) const MARKS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
 /// How often typing finds the sections again while nothing is folded.
@@ -94,6 +109,9 @@ pub struct SourceView {
     anchor: usize,
     /// The blink of the cursor (UC-005).
     blink: Blink,
+    /// UC-008 BR-008: whether the search hits blink in the minimap of
+    /// both views (a setting).
+    minimap_blink: bool,
     scroll_to_cursor: bool,
     focus: bool,
     galleys: HashMap<u64, Arc<Galley>>,
@@ -165,9 +183,10 @@ pub struct SourceView {
     /// Whether line numbers are shown, and on which side (UC-010).
     line_numbers: (bool, LineSide),
     /// UC-008 BR-008: the search whose words are marked, and their places
-    /// for the revision of the text they were found in.
+    /// for the revision of the text and the pattern of the Vim or Nano
+    /// search they were found with.
     search: Option<Query>,
-    found: (Option<u64>, Vec<Range<usize>>),
+    found: (Option<FoundKey>, Vec<Range<usize>>),
     /// UC-019 BR-006: the agent cursors shown.
     agent_marks: Vec<AgentMark>,
 }
@@ -197,6 +216,7 @@ impl SourceView {
             scroll_to_cursor: false,
             blink: Blink::default(),
             focus: false,
+            minimap_blink: true,
             galleys: HashMap::new(),
             deadline: None,
             uncolored: false,
@@ -279,23 +299,42 @@ impl SourceView {
     }
 
     /// The occurrences of the search words in the text, as char ranges,
-    /// sorted; worked out again when the text changed.
+    /// sorted: those of the search of the window (UC-008) and those of the
+    /// last search of the Vim or Nano keys, wherever the search came from;
+    /// worked out again when the text or a search changed.
+    /// Ranges of different searches may overlap.
     pub fn found_ranges(&mut self) -> &[std::ops::Range<usize>] {
         let revision = self.doc.revision();
-        if self.found.0 != Some(revision) {
-            let ranges = match &self.search {
-                Some(query) => {
-                    let text = self.doc.text();
-                    let rope = self.doc.rope();
-                    query
-                        .occurrences(&text)
-                        .into_iter()
-                        .map(|r| rope.byte_to_char(r.start)..rope.byte_to_char(r.end))
-                        .collect()
-                }
-                None => Vec::new(),
-            };
-            self.found = (Some(revision), ranges);
+        let fresh =
+            self.found.0.as_ref().is_some_and(|(r, pattern)| {
+                *r == revision && pattern.as_deref() == self.keys.search()
+            });
+        if !fresh {
+            let key = (revision, self.keys.search().map(str::to_owned));
+            if self.search.is_none() && key.1.is_none() {
+                self.found = (Some(key), Vec::new());
+                return &self.found.1;
+            }
+            let text = self.doc.text();
+            let rope = self.doc.rope();
+            let mut bytes: Vec<Range<usize>> = self
+                .search
+                .as_ref()
+                .map(|query| query.occurrences(&text))
+                .unwrap_or_default();
+            if let Some(pattern) = key.1.as_deref().filter(|p| !p.is_empty()) {
+                bytes.extend(
+                    text.match_indices(pattern)
+                        .map(|(at, found)| at..at + found.len()),
+                );
+            }
+            bytes.sort_by_key(|r| (r.start, r.end));
+            bytes.dedup();
+            let ranges = bytes
+                .into_iter()
+                .map(|r| rope.byte_to_char(r.start)..rope.byte_to_char(r.end))
+                .collect();
+            self.found = (Some(key), ranges);
         }
         &self.found.1
     }
@@ -628,6 +667,47 @@ impl SourceView {
         self.minimap = shown;
     }
 
+    /// UC-008 BR-008: lets the search hits blink in the minimap of both
+    /// views, or shows them steadily.
+    pub fn set_minimap_blink(&mut self, blink: bool) {
+        self.minimap_blink = blink;
+    }
+
+    /// Whether the search hits blink in the minimap.
+    pub(crate) fn minimap_blink(&self) -> bool {
+        self.minimap_blink
+    }
+
+    /// The theme's palette (UC-010).
+    pub(crate) fn palette(&self) -> &'static Palette {
+        self.highlight.set().palette()
+    }
+
+    /// UC-008 BR-008: the search hits for the minimap, each at its word:
+    /// the row of its line it wraps into, and its columns.
+    pub(crate) fn found_hits(&mut self) -> Vec<minimap::Hit> {
+        self.found_ranges();
+        let rope = self.doc.rope();
+        let columns = self.columns.max(1);
+        self.found
+            .1
+            .iter()
+            .filter_map(|r| {
+                let line = rope.char_to_line(r.start);
+                let column = r.start - rope.line_to_char(line);
+                let top = *self.tops.get(line)?;
+                let (row, at) = (column / columns, column % columns);
+                let length = (r.end - r.start).clamp(1, columns - at);
+                Some(minimap::Hit {
+                    top: PADDING + top + row as f32 * self.row_height,
+                    height: self.row_height,
+                    left: at as f32 / columns as f32,
+                    width: length as f32 / columns as f32,
+                })
+            })
+            .collect()
+    }
+
     /// Chooses the input mode: normal, Vim, or Nano (FR-024, FR-025).
     pub fn set_input_mode(&mut self, mode: InputMode) {
         self.keys.mode = mode;
@@ -843,11 +923,20 @@ impl SourceView {
             }
             let content = self.tops.last().copied().unwrap_or(0.0) + 2.0 * PADDING;
             let (_, background) = self.highlight.colors();
+            let hits = self.found_hits();
+            // Blinking asks for frames only while there are hits.
+            let shown = hits.is_empty() || minimap::found_shown(ui, self.minimap_blink);
+            let found = minimap::Hits {
+                hits: &hits,
+                shown,
+                color: found_hit_color(self.palette()),
+            };
             if let Some(offset) = minimap::show(
                 ui,
                 self.id,
                 strip,
                 &self.marks,
+                found,
                 content,
                 self.visible,
                 color(background).gamma_multiply(0.9),
@@ -936,7 +1025,7 @@ impl SourceView {
             }
 
             if response.has_focus() {
-                let vim_escape = self.keys.mode == InputMode::Vim;
+                let keys_escape = self.keys.mode != InputMode::Normal;
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
                         self.id,
@@ -944,8 +1033,8 @@ impl SourceView {
                             tab: true,
                             horizontal_arrows: true,
                             vertical_arrows: true,
-                            // Vim needs Esc for itself (BR-009).
-                            escape: vim_escape,
+                            // Vim and Nano need Esc for themselves (BR-009, BR-010).
+                            escape: keys_escape,
                         },
                     )
                 });
@@ -968,6 +1057,8 @@ impl SourceView {
             let (selection_start, selection_end) = self.selection();
             let selection_color = ui.visuals().selection.bg_fill;
             let found = self.found_ranges().to_vec();
+            let hit_fill = found_color(self.palette());
+            let hit_line = found_hit_color(self.palette());
             let mut exact_changed = false;
             // UC-004 BR-012: the arrows of the section headings shown.
             let heading_lines: HashMap<usize, Section> = {
@@ -1025,7 +1116,9 @@ impl SourceView {
                 // Selection and found words behind the text, row by row.
                 let line_start = self.doc.rope().line_to_char(line);
                 let line_len = self.doc.line_text(line).chars().count();
-                let paint_span = |from: usize, to: usize, fill: Color32| {
+                // A hit is underlined too, in the theme's color for hits, so
+                // it is told from a selection in every theme.
+                let paint_span = |from: usize, to: usize, fill: Color32, line: Option<Color32>| {
                     let from = from.max(line_start);
                     let to = to.min(line_start + line_len + 1);
                     if from >= to {
@@ -1051,14 +1144,18 @@ impl SourceView {
                                 .map_or(wrap_width, |r| r.rect.max.x + 6.0)
                         };
                         let y = row as f32 * row_height;
-                        painter.rect_filled(
-                            Rect::from_min_max(
-                                top + Vec2::new(x0, y),
-                                top + Vec2::new(x1, y + row_height),
-                            ),
-                            0.0,
-                            fill,
+                        let rect = Rect::from_min_max(
+                            top + Vec2::new(x0, y),
+                            top + Vec2::new(x1, y + row_height),
                         );
+                        painter.rect_filled(rect, 0.0, fill);
+                        if let Some(line) = line {
+                            let y = rect.bottom() - 1.0;
+                            painter.line_segment(
+                                [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                                egui::Stroke::new(2.0_f32, line),
+                            );
+                        }
                     }
                 };
                 // UC-008 BR-008: the words of the search, marked.
@@ -1067,10 +1164,10 @@ impl SourceView {
                     .iter()
                     .take_while(|r| r.start <= line_start + line_len)
                 {
-                    paint_span(range.start, range.end, FOUND_COLOR);
+                    paint_span(range.start, range.end, hit_fill, Some(hit_line));
                 }
                 if selection_start != selection_end {
-                    paint_span(selection_start, selection_end, selection_color);
+                    paint_span(selection_start, selection_end, selection_color, None);
                 }
                 // UC-019 BR-006: the agent cursor behind the lines.
                 if let Some(mark) = self.agent_marks.iter().find(|m| {

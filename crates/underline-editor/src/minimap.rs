@@ -11,6 +11,30 @@ pub(crate) const WIDTH: f32 = 80.0;
 const GAP: f32 = 4.0;
 /// The largest scale: a short note is not stretched over the strip.
 const MAX_SCALE: f32 = 0.2;
+/// How long a blinking search hit is shown, in seconds.
+const FOUND_ON: f64 = 0.6;
+/// How long it is hidden then, in seconds.
+const FOUND_OFF: f64 = 0.4;
+
+/// UC-008 BR-008: whether the search hits are shown in the strip now; they
+/// blink when `blink` is set (a setting), and ask for the frame that turns
+/// them on or off.
+pub(crate) fn found_shown(ui: &egui::Ui, blink: bool) -> bool {
+    if !blink {
+        return true;
+    }
+    let phase = ui.input(|i| i.time) % (FOUND_ON + FOUND_OFF);
+    let shown = phase < FOUND_ON;
+    let turn = if shown {
+        FOUND_ON
+    } else {
+        FOUND_ON + FOUND_OFF
+    };
+    let next = turn - phase;
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs_f64(next.max(0.01)));
+    shown
+}
 
 /// One bar: where it is in the view's content, how much of the width it
 /// takes (0 to 1), and its color.
@@ -19,6 +43,24 @@ pub(crate) struct Mark {
     pub top: f32,
     pub height: f32,
     pub width: f32,
+    pub color: Color32,
+}
+
+/// UC-008 BR-008: one search hit in the strip: where it is in the view's
+/// content, and where in the width (0 to 1), so only the word is marked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Hit {
+    pub top: f32,
+    pub height: f32,
+    pub left: f32,
+    pub width: f32,
+}
+
+/// UC-008 BR-008: the search hits of a view, and whether they are shown in
+/// this frame (they blink).
+pub(crate) struct Hits<'a> {
+    pub hits: &'a [Hit],
+    pub shown: bool,
     pub color: Color32,
 }
 
@@ -39,13 +81,19 @@ fn scale(strip: Rect, content: f32) -> f32 {
 }
 
 /// Draws the strip in `strip` for content of `content` points, of which
-/// `visible` (from, to) is in view, and handles its pointer. Returns the
-/// scroll offset to show, when the user clicked or dragged.
+/// `visible` (from, to) is in view, with the search hits `found` over it,
+/// and handles its pointer. Returns the scroll offset to show, when the
+/// user clicked or dragged.
+///
+/// While there are hits the strip works like a sieve: the note behind it
+/// is veiled, and the hits shine through where they are, with a glow.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &egui::Ui,
     id: egui::Id,
     strip: Rect,
     marks: &[Mark],
+    found: Hits<'_>,
     content: f32,
     visible: (f32, f32),
     background: Color32,
@@ -90,6 +138,11 @@ pub(crate) fn show(
             );
         }
     }
+    // UC-008 BR-008: the sieve. While there are hits the note is veiled,
+    // under the mark of the visible part, and the hits blink through it.
+    if !found.hits.is_empty() {
+        painter.rect_filled(strip, 0.0, Color32::from_black_alpha(150));
+    }
     // The visible part.
     let (from, to) = visible;
     let marked = Rect::from_min_max(
@@ -102,6 +155,29 @@ pub(crate) fn show(
     let tint = ui.visuals().selection.bg_fill;
     painter.rect_filled(marked, 2.0, tint.gamma_multiply(0.35));
     painter.rect_stroke(marked, 2.0, egui::Stroke::new(1.0_f32, tint));
+    // Each hit at its word, at least 3 by 2 pixels so a single one is seen,
+    // with a glow; hits on the same pixel are drawn once, so thousands of
+    // hits cost no more than the strip has pixels.
+    if found.shown {
+        let mut drawn = std::collections::HashSet::new();
+        for hit in found.hits {
+            let core = Rect::from_min_size(
+                Pos2::new(
+                    inner.left() + hit.left.clamp(0.0, 1.0) * inner.width(),
+                    strip.top() + hit.top * scale,
+                ),
+                Vec2::new(
+                    (hit.width * inner.width()).max(3.0),
+                    (hit.height * scale).max(2.0),
+                ),
+            );
+            if !drawn.insert((core.left() as i32, core.top() as i32)) {
+                continue;
+            }
+            painter.rect_filled(core.expand(2.5), 3.0, found.color.gamma_multiply(0.3));
+            painter.rect_filled(core, 1.0, found.color);
+        }
+    }
 
     let pointer = response.interact_pointer_pos()?;
     if !(response.clicked() || response.dragged() || response.is_pointer_button_down_on()) {

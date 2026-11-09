@@ -20,7 +20,7 @@ pub use document::{Document, Edit};
 pub use facade_view::FacadeView;
 pub use keys::{EditorCommand, InputMode, InputStatus, KeyMap, KeysMode};
 pub use source_view::{
-    AgentMark, CursorPlace, SourceView, AGENT_BAR_COLOR, AGENT_COLOR, FOUND_COLOR,
+    found_color, AgentMark, CursorPlace, SourceView, AGENT_BAR_COLOR, AGENT_COLOR,
 };
 pub use toolbar::Tool;
 

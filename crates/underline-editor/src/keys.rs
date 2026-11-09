@@ -147,6 +147,17 @@ impl Keys {
         }
     }
 
+    /// UC-008 BR-008: the pattern of the last search of the Vim or Nano
+    /// keys while its hits are marked, which the views mark like any
+    /// search.
+    pub fn search(&self) -> Option<&str> {
+        match self.mode {
+            InputMode::Normal => None,
+            InputMode::Vim => self.vim.search.as_deref().filter(|_| self.vim.marked),
+            InputMode::Nano => self.nano.search.as_deref().filter(|_| self.nano.marked),
+        }
+    }
+
     /// FR-026: the active mode and its most important commands, for the
     /// editor's status line (UC-005).
     pub fn status(&self) -> Option<InputStatus> {
@@ -195,6 +206,9 @@ struct Vim {
     /// `"+` was typed: the next yank or put uses the clipboard.
     clipboard: bool,
     search: Option<String>,
+    /// UC-008 BR-008: whether the hits of `search` are marked; Escape or
+    /// `:noh` ends the marking, the next search or `n` starts it again.
+    marked: bool,
 }
 
 /// Where a motion leads, and how an operator takes it.
@@ -287,6 +301,15 @@ impl Vim {
         }
         match key {
             Key::Escape => {
+                // UC-008 BR-008: Escape in normal mode, with nothing typed,
+                // ends the search, so its hits are no longer marked.
+                let idle = matches!(self.mode, VimMode::Normal)
+                    && self.count.is_empty()
+                    && self.operator.is_none()
+                    && self.pending.is_none();
+                if idle {
+                    self.marked = false;
+                }
                 self.reset();
                 if let VimMode::Visual { .. } = self.mode {
                     let at = self.visual_cursor;
@@ -531,6 +554,7 @@ impl Vim {
                 let Some(pattern) = self.search.clone() else {
                     return false;
                 };
+                self.marked = true;
                 if let Some(at) = t.find(&pattern, cursor, c == 'n') {
                     self.set(at, t);
                 }
@@ -947,12 +971,14 @@ impl Vim {
         true
     }
 
-    /// `:w`, `:q`, `:wq`, `:x`, and `/pattern`.
+    /// `:w`, `:q`, `:wq`, `:x`, `/pattern`, and `:noh` (`:nohlsearch`),
+    /// which ends the search (UC-008 BR-008).
     fn execute(&mut self, line: &str, t: &mut dyn Target) -> bool {
         if let Some(pattern) = line.strip_prefix('/') {
             if !pattern.is_empty() {
                 self.search = Some(pattern.to_owned());
             }
+            self.marked = self.search.is_some();
             let cursor = t.cursor().0;
             if let Some(at) = self.search.clone().and_then(|p| t.find(&p, cursor, true)) {
                 t.set_cursor(at, at);
@@ -960,6 +986,7 @@ impl Vim {
             return false;
         }
         match line.trim_start_matches(':').trim() {
+            "noh" | "nohl" | "nohlsearch" => self.marked = false,
             "w" => t.command(EditorCommand::Store),
             "q" | "q!" => t.command(EditorCommand::Close),
             "wq" | "x" => {
@@ -986,18 +1013,22 @@ impl Vim {
                     .chain(self.operator.map(|(op, _)| op))
                     .chain(self.pending)
                     .collect(),
-                vec![
-                    ("i", "insert"),
-                    ("v", "visual"),
-                    (":w", "store"),
-                    (":q", "close"),
-                    ("dd", "delete line"),
-                    ("yy", "yank"),
-                    ("p", "put"),
-                    ("u", "undo"),
-                    ("Ctrl+R", "redo"),
-                    ("/ n", "search"),
-                ],
+                (self.search.is_some() && self.marked)
+                    .then_some(("Esc", "end search"))
+                    .into_iter()
+                    .chain([
+                        ("i", "insert"),
+                        ("v", "visual"),
+                        (":w", "store"),
+                        (":q", "close"),
+                        ("dd", "delete line"),
+                        ("yy", "yank"),
+                        ("p", "put"),
+                        ("u", "undo"),
+                        ("Ctrl+R", "redo"),
+                        ("/ n", "search"),
+                    ])
+                    .collect(),
             ),
             VimMode::Insert => status(
                 KeysMode::Insert,
@@ -1037,6 +1068,9 @@ struct Nano {
     /// The search prompt of Ctrl+W, while it is open.
     prompt: Option<String>,
     search: Option<String>,
+    /// UC-008 BR-008: whether the hits of `search` are marked; Escape or
+    /// `:noh` ends the marking, the next search or `n` starts it again.
+    marked: bool,
 }
 
 impl Nano {
@@ -1061,6 +1095,8 @@ impl Nano {
                             if !pattern.is_empty() {
                                 self.search = Some(pattern);
                             }
+                            // Searching again marks the hits again.
+                            self.marked = self.search.is_some();
                             let cursor = t.cursor().0;
                             if let Some(at) =
                                 self.search.clone().and_then(|p| t.find(&p, cursor, true))
@@ -1134,6 +1170,8 @@ impl Nano {
                     }
                 }
                 (Key::W, true, false) => self.prompt = Some(String::new()),
+                // UC-008 BR-008: Escape ends the search and its marks.
+                (Key::Escape, false, false) => self.marked = false,
                 (Key::U, false, true) => {
                     t.undo();
                     changed = true;
@@ -1174,16 +1212,20 @@ impl Nano {
             ),
             None => status(
                 String::new(),
-                vec![
-                    ("^O", "Store"),
-                    ("^X", "Close"),
-                    ("^K", "Cut line"),
-                    ("^U", "Paste"),
-                    ("^W", "Where is"),
-                    ("M-U", "Undo"),
-                    ("M-E", "Redo"),
-                    ("^A/^E", "Line start/end"),
-                ],
+                (self.search.is_some() && self.marked)
+                    .then_some(("Esc", "End search"))
+                    .into_iter()
+                    .chain([
+                        ("^O", "Store"),
+                        ("^X", "Close"),
+                        ("^K", "Cut line"),
+                        ("^U", "Paste"),
+                        ("^W", "Where is"),
+                        ("M-U", "Undo"),
+                        ("M-E", "Redo"),
+                        ("^A/^E", "Line start/end"),
+                    ])
+                    .collect(),
             ),
         }
     }

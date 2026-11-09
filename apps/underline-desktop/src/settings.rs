@@ -390,6 +390,7 @@ fn label(key: SettingKey) -> &'static str {
         SettingKey::OverviewWidth => "Note overview width",
         SettingKey::ToolPanelWidth => "Tool panel width",
         SettingKey::ShowMenuBar => "Menu bar",
+        SettingKey::BlinkFoundInMinimap => "Search hits in the minimap",
     }
 }
 
@@ -466,6 +467,7 @@ fn value_widget(
         SettingKey::OverviewWidth => number(ui, key, shown.overview_width, 100..=1000),
         SettingKey::ToolPanelWidth => number(ui, key, shown.tool_panel_width, 100..=1000),
         SettingKey::ShowMenuBar => check(ui, key, shown.show_menu_bar, "Shown"),
+        SettingKey::BlinkFoundInMinimap => check(ui, key, shown.blink_found_in_minimap, "Blinking"),
     }
 }
 

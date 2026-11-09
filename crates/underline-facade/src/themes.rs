@@ -38,6 +38,55 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// UC-008 BR-008: the color of search hits: the first of the theme's
+    /// number, string, keyword, heading, and function colors that stands
+    /// apart from its links and from the fill of a selection
+    /// ([`Palette::chosen`]), so a hit is not taken for either.
+    /// Its fill behind the text must stand apart from the selection's too.
+    pub fn found(&self) -> Rgb {
+        let candidates = [
+            self.number,
+            self.string,
+            self.keyword,
+            self.heading,
+            self.function,
+        ];
+        // How far a color is from links and selection, the fill scaled so
+        // that 45 apart counts as 80.
+        let apart = |c: Rgb| {
+            distance(c, self.link)
+                .min(distance(c, self.chosen()))
+                .min(distance(self.fill_of(c), self.chosen()) * 80.0 / 45.0)
+        };
+        candidates
+            .into_iter()
+            .find(|&c| apart(c) >= 80.0)
+            .unwrap_or_else(|| {
+                // None far enough: the one farthest from both.
+                candidates
+                    .into_iter()
+                    .max_by(|&a, &b| apart(a).total_cmp(&apart(b)))
+                    .unwrap_or(self.number)
+            })
+    }
+
+    /// UC-008 BR-008: the fill behind a search hit in the text: the note
+    /// background tinted with [`Palette::found`], as far as the text on it
+    /// stays readable (NFR-010).
+    pub fn found_background(&self) -> Rgb {
+        self.fill_of(self.found())
+    }
+
+    /// The note background tinted with `color` as far as the text on it
+    /// stays readable, at most halfway.
+    fn fill_of(&self, color: Rgb) -> Rgb {
+        (0..=10_u8)
+            .rev()
+            .map(|step| mix(self.background, color, f32::from(step) / 20.0))
+            .find(|&fill| contrast(self.foreground, fill) >= 4.5)
+            .unwrap_or(self.background)
+    }
+
     /// The fill of a box set into the panel, such as the cursor place in the
     /// editor's status line: the panel, made darker until it stands apart
     /// from it, but no further. A panel too dark for that is lightened
@@ -345,6 +394,21 @@ mod tests {
             check("weak", p.weak, p.background, 3.0);
             check("weak on panel", p.weak, p.panel, 3.0);
             check("text on an inset", p.foreground, p.inset(), 4.5);
+            // UC-008 BR-008: hits stand out behind the text and in the
+            // minimap, and the text on them stays readable.
+            check("text on a hit", p.foreground, p.found_background(), 4.5);
+            check(
+                "hit fill against the note",
+                p.found_background(),
+                p.background,
+                1.15,
+            );
+            check("hit in the minimap", p.found(), p.background, 2.5);
+            // The hit's line under the text (its fill may come close to a
+            // selection's in muted dark themes, the line does not).
+            if distance(p.found(), p.chosen()) < 80.0 || distance(p.found(), p.link) < 60.0 {
+                too_close.push(format!("{}: hit and selection or link", theme.label()));
+            }
             check("inset against the panel", p.inset(), p.panel, 1.2);
             // FR-026: the badges and command keys of the input modes in the
             // editor's status line, apart from each other.
