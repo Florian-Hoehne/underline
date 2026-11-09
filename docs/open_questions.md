@@ -1618,3 +1618,33 @@ Answer: Install asks whether to switch it on.
 **Resolved in:** [UC-016](use_cases/UC-016-install-mcp-server.md)
 
 Answer: No; only in the section Agents of the settings.
+
+## OQ-162: What does an agent experience while the MCP server is switched off?
+
+**Element:** UC-017 step 7, A2, BR-001
+**Raised by:** /use-case-spec UC-017, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
+
+Answer: The server answers but refuses every request about notes, giving the reason.
+
+## OQ-163: Where can agent access be switched besides the settings?
+
+**Element:** UC-017 step 2, BR-002
+**Raised by:** /use-case-spec UC-017, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
+
+Answer: With an entry in the status bar, which changes the user setting.
+
+## OQ-164: Does Underline show whether an agent is connected?
+
+**Element:** UC-017 step 5, A3, A4, BR-004
+**Raised by:** /use-case-spec UC-017, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
+
+Answer: Yes, with the names the tools give when they connect.
