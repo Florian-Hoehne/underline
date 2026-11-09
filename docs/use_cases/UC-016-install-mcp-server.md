@@ -31,8 +31,8 @@
 **Trigger:** The MCP server is switched off in the settings (UC-010 BR-008) (step 3)  
 **Flow:**
 
-1. The system says that an agent reaches the notes only while the MCP server is on, and asks whether to switch it on for the user.
-2. When the user agrees, the system switches it on (UC-017) and continues at step 4; otherwise it continues at step 4 and the report says the server is off.
+1. The system says that an agent reaches the notes only while agent access is on, and asks whether to allow agents to read, or to read and write, for the user.
+2. When the user chooses one, the system sets agent access so (UC-017) and continues at step 4; otherwise it continues at step 4 and the report says the server is off.
 
 ### A2: Already installed
 

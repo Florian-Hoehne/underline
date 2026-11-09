@@ -133,7 +133,7 @@
 | Minimap                | Shown or hidden                                                        | Shown            |
 | Copy on select         | On or off                                                              | On               |
 | Git sync interval      | 1 to 60 minutes                                                        | 5 minutes        |
-| MCP server             | On or off; a workspace can only switch it off (BR-008)                 | Off              |
+| Agent access           | Off, read only, or read and write; a workspace can only lower it (BR-008) | Off           |
 | Note overview width    | 100 to 1,000 pixels                                                    | 200 pixels       |
 | Tool panel width       | 100 to 1,000 pixels                                                    | 240 pixels       |
 | Default format         | Markdown or AsciiDoc; only for a workspace (UC-001 BR-005)             | —                |
@@ -166,4 +166,4 @@ The workspace settings file lies in the workspace, so when the workspace is a gi
 
 ### BR-008: The MCP server only with the user's consent
 
-Only the user settings can switch the MCP server on (FR-059). A workspace can switch it off for itself, but a workspace settings file that switches it on is not followed and the status bar says so, so a workspace taken from someone else, for example by cloning a repository, never gives an agent access to the notes (NFR-015, NFR-016).
+Only the user settings can let agents read or write the notes (FR-059). A workspace can lower agent access for itself, to read only or off, but a workspace settings file that raises it is not followed and the status bar says so, so a workspace taken from someone else, for example by cloning a repository, never gives an agent access to the notes (NFR-015, NFR-016).

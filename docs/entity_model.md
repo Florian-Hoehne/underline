@@ -126,7 +126,7 @@ The settings of the user settings file or of one workspace settings file.
 | copy_on_select     | Whether a selection is copied to the clipboard at once             | Boolean   | 1                | Optional |
 | show_minimap       | Whether the minimap is shown beside the editor                     | Boolean   | 1                | Optional |
 | git_sync_interval  | Minutes between two git syncs                                      | Integer   | 10               | Optional, Min: 1, Max: 60 |
-| mcp_server_enabled | Whether the MCP server lets an agent reach the notes               | Boolean   | 1                | Optional |
+| agent_access       | What the MCP server lets an agent do with the notes                | String    | 14               | Optional, Values: Off, Read only, Read and write |
 | overview_width     | Width of the note overview, in pixels                              | Integer   | 10               | Optional, Min: 100, Max: 1000 |
 | tool_panel_width   | Width of the tool panel, in pixels                                 | Integer   | 10               | Optional, Min: 100, Max: 1000 |
 
@@ -139,9 +139,9 @@ The settings of the user settings file or of one workspace settings file.
   Markdown on a tie or without notes.
 - In the user settings every setting has a value; the built-in default fills any value the user never set (theme
   Light, input mode Normal, line numbers shown on the left, minimap shown, copy on select on, git sync every 5
-  minutes, MCP server off, note overview 200 and tool panel 240 pixels wide).
+  minutes, agent access off, note overview 200 and tool panel 240 pixels wide).
 - In workspace settings an empty value means that the user setting applies.
-- Workspace settings can switch the MCP server off but never on; only the user settings can switch it on.
+- Workspace settings can lower agent access (to read only or off) but never raise it; only the user settings can raise it.
 - A setting the user changes in the interface is stored in the workspace settings when they already give it a value,
   otherwise in the user settings.
 

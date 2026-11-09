@@ -1648,3 +1648,23 @@ Answer: With an entry in the status bar, which changes the user setting.
 **Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
 
 Answer: Yes, with the names the tools give when they connect.
+
+## OQ-165: May an agent reach the notes while the Underline window is closed?
+
+**Element:** UC-017 A5, BR-007
+**Raised by:** spec review UC-017, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
+
+Answer: Yes, as the stored setting says.
+
+## OQ-166: Is there a read-only level of agent access?
+
+**Element:** UC-017 A6, BR-002, FR-059
+**Raised by:** spec review UC-017, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
+
+Answer: Yes: off, read only, read and write; FR-059, UC-010, and the entity model follow it.
