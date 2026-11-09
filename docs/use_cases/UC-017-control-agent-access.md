@@ -8,7 +8,7 @@
 **Secondary Actor:** Agent  
 **Goal:** An agent reaches the user's notes only as far as the user allows it, off, read only, or read and write, and the user sees at any time what is allowed and which agent is connected.  
 **Trigger:** The user changes agent access, or an agent connects or disconnects.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-057, FR-058, FR-059, NFR-015, NFR-016](../requirements.md)
 
