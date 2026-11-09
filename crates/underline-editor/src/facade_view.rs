@@ -429,6 +429,9 @@ impl FacadeView {
             let (sel_start, sel_end) = source.selection();
             // UC-008 BR-008: the words of the search, as char ranges.
             let found = source.found_ranges().to_vec();
+            // UC-019 BR-006: the agent cursors, as char ranges.
+            let agent_marks = source.agent_mark_ranges();
+            let mut named = std::collections::HashSet::new();
             let rope = source.document().rope().clone();
             let pointer = ui.input(|i| i.pointer.hover_pos());
             let mut toggle = None;
@@ -575,6 +578,41 @@ impl FacadeView {
                                 }
                             }
                         }
+                    }
+                }
+                // UC-019 BR-006: the agent cursor beside the blocks of its lines.
+                {
+                    let block = &self.blocks[index];
+                    let to_char = |offset: usize| rope.byte_to_char(offset.min(rope.len_bytes()));
+                    let (first, last) = (to_char(block.span.start), to_char(block.span.end));
+                    for (range, name) in &agent_marks {
+                        let touches = range.start < last.max(first + 1) && first < range.end;
+                        if !touches {
+                            continue;
+                        }
+                        let height = laid.galley.size().y.max(8.0);
+                        painter.rect_filled(
+                            Rect::from_min_size(top, Vec2::new(width, height)),
+                            0.0,
+                            crate::source_view::AGENT_COLOR,
+                        );
+                        painter.line_segment(
+                            [top + Vec2::new(-6.0, 0.0), top + Vec2::new(-6.0, height)],
+                            Stroke::new(3.0_f32, crate::source_view::AGENT_BAR_COLOR),
+                        );
+                        if named.insert(name.clone()) {
+                            painter.text(
+                                top + Vec2::new(
+                                    (laid.galley.rect.right() + 16.0).min(width - 80.0),
+                                    0.0,
+                                ),
+                                egui::Align2::LEFT_TOP,
+                                name,
+                                FontId::proportional(BODY_SIZE * 0.8),
+                                crate::source_view::AGENT_BAR_COLOR,
+                            );
+                        }
+                        break;
                     }
                 }
                 if laid.text_shown {

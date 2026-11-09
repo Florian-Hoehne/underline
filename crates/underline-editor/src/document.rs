@@ -18,6 +18,8 @@ pub struct Document {
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     revision: u64,
+    /// The next edit starts an undo step of its own.
+    sealed: bool,
 }
 
 impl Document {
@@ -83,11 +85,17 @@ impl Document {
         });
         let line = self.rope.char_to_line(edit.at.min(self.rope.len_chars()));
         match self.undo.last_mut() {
-            Some(last) if merges(last, &edit) => merge(last, edit),
+            Some(last) if !self.sealed && merges(last, &edit) => merge(last, edit),
             _ => self.undo.push(edit),
         }
+        self.sealed = false;
         self.redo.clear();
         line
+    }
+
+    /// UC-019 BR-007: the next edit is not undone together with the last.
+    pub fn seal(&mut self) {
+        self.sealed = true;
     }
 
     /// Takes back the last edit; returns the char index to put the cursor at
@@ -203,5 +211,21 @@ mod tests {
         assert_eq!(doc.text(), "alpha\ngamma\n");
         doc.replace(0..0, "x");
         assert_eq!(doc.redo(), None);
+    }
+
+    /// UC-019 BR-007: an edit after a seal is undone on its own.
+    #[test]
+    fn uc019_sealed_edits_are_steps_of_their_own() {
+        let mut doc = Document::new("");
+        doc.replace(0..0, "ab");
+        doc.seal();
+        doc.replace(2..2, "cd");
+        doc.seal();
+        doc.replace(4..4, "ef");
+        assert_eq!(doc.text(), "abcdef");
+        doc.undo();
+        assert_eq!(doc.text(), "abcd");
+        doc.undo();
+        assert_eq!(doc.text(), "ab");
     }
 }

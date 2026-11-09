@@ -4,6 +4,7 @@
 //! also the layout of a GitHub or GitLab wiki repository. That keeps the local
 //! store, git sync, and MCP access working on the same files.
 
+mod agent_write;
 mod agents;
 mod atomic;
 mod autosave;
@@ -31,6 +32,12 @@ mod tabs;
 mod watcher;
 mod workspace;
 
+pub use agent_write::{
+    answer_for_tab, answer_request, apply_splice, apply_to_file, create_for_agent, merge_splice,
+    plan_for_tab, plan_splice, remove_window_presence, renew_window_presence, send_request,
+    take_answer, take_requests, window_runs, withdraw_request, AgentAnswer, AgentChange,
+    AgentRequest, Merged, Splice, WriteProblem,
+};
 pub use agents::{
     agent_access_now, connected_agents, presence_path, remove_presence, stored_agent_access,
     write_presence, Presence, Reading, AGENTS_FOLDER, PRESENCE_RENEW, PRESENCE_STALE,

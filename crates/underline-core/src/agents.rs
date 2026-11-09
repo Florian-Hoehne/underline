@@ -73,6 +73,8 @@ pub struct Reading {
     pub lines: (usize, usize),
     /// Milliseconds since the Unix epoch.
     pub at: u64,
+    /// UC-019 BR-006: the agent wrote these lines rather than read them.
+    pub wrote: bool,
 }
 
 impl Reading {
@@ -81,7 +83,20 @@ impl Reading {
         let at = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
-        Reading { note, lines, at }
+        Reading {
+            note,
+            lines,
+            at,
+            wrote: false,
+        }
+    }
+
+    /// UC-019 BR-006: the same, for lines the agent wrote.
+    pub fn written(self) -> Self {
+        Reading {
+            wrote: true,
+            ..self
+        }
     }
 
     /// Whether the agent cursor still marks it at `now` (BR-006).
@@ -107,7 +122,8 @@ impl Presence {
         let mut text = format!("name: {name}\nrefused: {}\n", self.refused);
         if let Some(r) = &self.reading {
             text.push_str(&format!(
-                "reading: {} {} {} {}\n",
+                "{}: {} {} {} {}\n",
+                if r.wrote { "wrote" } else { "reading" },
                 r.lines.0,
                 r.lines.1,
                 r.at,
@@ -125,7 +141,11 @@ impl Presence {
                 presence.name = (!name.is_empty()).then(|| name.to_owned());
             } else if let Some(refused) = line.strip_prefix("refused: ") {
                 presence.refused = refused.trim() == "true";
-            } else if let Some(reading) = line.strip_prefix("reading: ") {
+            } else if let Some((reading, wrote)) = line
+                .strip_prefix("reading: ")
+                .map(|r| (r, false))
+                .or_else(|| line.strip_prefix("wrote: ").map(|r| (r, true)))
+            {
                 let mut parts = reading.splitn(4, ' ');
                 let mut number = || parts.next().and_then(|p| p.parse::<u64>().ok());
                 if let (Some(from), Some(to), Some(at)) = (number(), number(), number()) {
@@ -134,6 +154,7 @@ impl Presence {
                             note: NoteId::from_relative(note),
                             lines: (from as usize, to as usize),
                             at,
+                            wrote,
                         });
                     }
                 }
@@ -275,7 +296,7 @@ mod tests {
         let presence = Presence {
             name: Some("Cursor".into()),
             refused: true,
-            reading: Some(Reading::now(NoteId::from_relative("Work/My Plan"), (3, 9))),
+            reading: Some(Reading::now(NoteId::from_relative("Work/My Plan"), (3, 9)).written()),
         };
         let reading = presence.reading.clone().unwrap();
         assert!(reading.shown_at(SystemTime::now()));

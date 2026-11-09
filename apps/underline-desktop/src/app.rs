@@ -1,9 +1,15 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::settings::SettingsState;
 use eframe::egui;
+use underline_core::{
+    answer_for_tab, answer_request, apply_to_file, connected_agents, find_note, plan_for_tab,
+    remove_window_presence, renew_window_presence, take_requests, AgentAccess, AgentAnswer,
+    AgentChange, AgentRequest, Presence, WriteProblem, READING_SHOWN, UNNAMED_AGENT,
+};
 use underline_core::{
     asciidoc_anchor, check_directory, check_open_directory, check_readable_directory,
     create_workspace, dropped_link, embed_file, format_local_time, heading_anchor, heading_title,
@@ -21,9 +27,8 @@ use underline_core::{
     Choice, CompleteError, Distance, FileChange, Hunk, Joining, LineKind, OnlyDiffers, Side,
     SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
 };
-use underline_core::{connected_agents, AgentAccess, Presence};
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
-use underline_editor::FOUND_COLOR;
+use underline_editor::{AgentMark, FOUND_COLOR};
 use underline_editor::{
     ClipImage, EditorCommand, FacadeView, InputMode, SharedClipboard, SourceView, SystemClipboard,
     Tool,
@@ -393,6 +398,31 @@ struct AgentsView {
     /// once a second.
     connected: Vec<Presence>,
     connected_checked: Option<Instant>,
+    /// ADR-018: when the requests of the servers were looked at last.
+    requests_checked: Option<Instant>,
+    /// UC-018 BR-006, UC-019 BR-006: the agent cursor of each agent: the
+    /// note, its lines (from 1), since when, whether written, and the time
+    /// of the reading it came from.
+    marks: HashMap<String, AgentCursor>,
+    /// UC-019 BR-010: the report of changes to notes not open.
+    changed: Option<AgentReport>,
+}
+
+/// UC-019 BR-006: where an agent read or wrote last.
+#[derive(Clone)]
+struct AgentCursor {
+    note: NoteId,
+    lines: (usize, usize),
+    since: Instant,
+    wrote: bool,
+    reading_at: u64,
+}
+
+/// UC-019 BR-010: an agent created or changed notes that are not open.
+struct AgentReport {
+    status: String,
+    agent: String,
+    items: Vec<(&'static str, NoteId)>,
 }
 
 /// UC-016 A1, A2: what the section asks before installing.
@@ -2825,8 +2855,217 @@ impl UnderlineApp {
         {
             self.agents.connected_checked = Some(Instant::now());
             self.agents.connected = connected_agents(workspace.root(), SystemTime::now());
+            // ADR-018: the servers hand their changes to this window.
+            let _ = renew_window_presence(workspace.root());
+            let now = Instant::now();
+            for presence in &self.agents.connected {
+                let Some(reading) = &presence.reading else {
+                    continue;
+                };
+                let name = presence.shown_name().to_owned();
+                let known = self.agents.marks.get(&name).map(|m| m.reading_at);
+                if known != Some(reading.at) && reading.shown_at(SystemTime::now()) {
+                    let fresh = !self.agents.marks.get(&name).is_some_and(|m| {
+                        m.since.elapsed() < Duration::from_millis(1500)
+                            && m.note == reading.note
+                            && m.lines == reading.lines
+                    });
+                    let since = if fresh {
+                        now
+                    } else {
+                        self.agents.marks[&name].since
+                    };
+                    self.agents.marks.insert(
+                        name,
+                        AgentCursor {
+                            note: reading.note.clone(),
+                            lines: reading.lines,
+                            since,
+                            wrote: reading.wrote,
+                            reading_at: reading.at,
+                        },
+                    );
+                }
+            }
         }
+        if !self.agents.connected.is_empty()
+            && self
+                .agents
+                .requests_checked
+                .is_none_or(|t| t.elapsed() >= Duration::from_millis(100))
+        {
+            self.agents.requests_checked = Some(Instant::now());
+            self.take_agent_requests();
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        self.show_agent_cursors();
         ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// UC-018 BR-006, UC-019 BR-006: each open note shows the cursors of
+    /// the connected agents that read or wrote in it within 10 seconds, as
+    /// far as access allows.
+    fn show_agent_cursors(&mut self) {
+        let access = self.settings.effective.agent_access;
+        let connected: HashSet<String> = self
+            .agents
+            .connected
+            .iter()
+            .map(|p| p.shown_name().to_owned())
+            .collect();
+        self.agents
+            .marks
+            .retain(|name, m| connected.contains(name) && m.since.elapsed() <= READING_SHOWN);
+        let marks = &self.agents.marks;
+        for (id, tab) in self.tabs.iter_mut() {
+            let mut shown: Vec<AgentMark> = marks
+                .iter()
+                .filter(|(_, m)| &m.note == id)
+                .filter(|(_, m)| {
+                    if m.wrote {
+                        access.writes()
+                    } else {
+                        access.reads()
+                    }
+                })
+                .map(|(name, m)| AgentMark {
+                    lines: m.lines.0.saturating_sub(1)..m.lines.1.max(m.lines.0),
+                    name: name.clone(),
+                })
+                .collect();
+            shown.sort_by_key(|m| m.lines.start);
+            tab.view.set_agent_marks(shown);
+        }
+        if !self.agents.marks.is_empty() {
+            self.ctx.request_repaint_after(Duration::from_millis(500));
+        }
+    }
+
+    /// ADR-018: answers the changes the MCP servers handed to the window.
+    fn take_agent_requests(&mut self) {
+        let Some(root) = self.workspace.as_ref().map(|w| w.root().to_owned()) else {
+            return;
+        };
+        for (id, request) in take_requests(&root, SystemTime::now()) {
+            let answer = self.agent_request(&request);
+            if let Err(err) = answer_request(&root, &id, &answer) {
+                self.status = format!("An agent's change could not be answered: {err}");
+            }
+        }
+    }
+
+    /// UC-019 steps 2–4, A1–A10, BR-004, BR-010: one change of an agent.
+    fn agent_request(&mut self, request: &AgentRequest) -> AgentAnswer {
+        let agent = request
+            .agent
+            .clone()
+            .unwrap_or_else(|| UNNAMED_AGENT.to_owned());
+        // UC-017 BR-002: the window follows the access in effect, too.
+        if !self.settings.effective.agent_access.writes() {
+            return AgentAnswer::refused(&WriteProblem::Write {
+                note: request.note.clone(),
+                reason: "Underline allows agents only to read the notes of this workspace".into(),
+            });
+        }
+        let Some(workspace) = self.workspace.as_mut() else {
+            return AgentAnswer::refused(&WriteProblem::Busy);
+        };
+        let open = match &request.change {
+            AgentChange::Create { .. } => None,
+            _ => match find_note(&workspace.notes_now().notes, &request.note) {
+                Ok(entry) => {
+                    let path = workspace.file_of(&entry);
+                    self.tabs
+                        .iter()
+                        .find(|(_, tab)| tab.path == path)
+                        .map(|(id, _)| (id.clone(), entry))
+                }
+                Err(err) => return AgentAnswer::refused(&err.into()),
+            },
+        };
+        let Some((tab_id, entry)) = open else {
+            let (answer, changed) = apply_to_file(workspace, &request.note, &request.change);
+            if let Some(note) = changed {
+                let verb = if matches!(request.change, AgentChange::Create { .. }) {
+                    "created"
+                } else {
+                    "changed"
+                };
+                self.report_agent_change(&agent, verb, note);
+            }
+            return answer;
+        };
+        let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|(id, _)| **id == tab_id)
+            .map(|(_, tab)| tab)
+        else {
+            return AgentAnswer::refused(&WriteProblem::Busy);
+        };
+        if tab.saving {
+            return AgentAnswer::refused(&WriteProblem::Busy);
+        }
+        let base = tab.on_disk.clone();
+        let current = tab.view.document().text();
+        let merged = match plan_for_tab(&entry, &base, &current, &request.change) {
+            Ok(merged) => merged,
+            Err(problem) => return AgentAnswer::refused(&problem),
+        };
+        tab.view
+            .apply_agent_edit(merged.range.clone(), &merged.replacement);
+        let text = tab.view.document().text();
+        let started = Instant::now();
+        if let Err(err) = self.saver.save_now(&tab.path, &text) {
+            // A9: the tab keeps the change; the agent is told why.
+            tab.autosave.changed(started);
+            return AgentAnswer::refused(&WriteProblem::Write {
+                note: entry.id.as_str().to_owned(),
+                reason: err,
+            });
+        }
+        tab.on_disk = text;
+        tab.autosave.stored(started);
+        tab.error = None;
+        self.agents.marks.insert(
+            agent,
+            AgentCursor {
+                note: tab_id,
+                lines: merged.lines,
+                since: Instant::now(),
+                wrote: true,
+                reading_at: 0,
+            },
+        );
+        answer_for_tab(&entry.id, &merged)
+    }
+
+    /// UC-019 BR-010: says in the status bar which notes not open an agent
+    /// created or changed; changes in a row are reported together.
+    fn report_agent_change(&mut self, agent: &str, verb: &'static str, note: NoteId) {
+        let mut items = match self.agents.changed.take() {
+            Some(report) if report.status == self.status && report.agent == agent => report.items,
+            _ => Vec::new(),
+        };
+        items.retain(|(_, n)| *n != note);
+        items.push((verb, note));
+        let mut parts: Vec<String> = Vec::new();
+        for verb in ["created", "changed"] {
+            let notes: Vec<String> = items
+                .iter()
+                .filter(|(v, _)| *v == verb)
+                .map(|(_, n)| n.title())
+                .collect();
+            if !notes.is_empty() {
+                parts.push(format!("{verb} {}", notes.join(", ")));
+            }
+        }
+        self.status = format!("{agent} {}", parts.join(" and "));
+        self.agents.changed = Some(AgentReport {
+            status: self.status.clone(),
+            agent: agent.to_owned(),
+            items,
+        });
     }
 
     /// UC-017 step 1, A1, A2, A4: the agents entry of the status bar and its
@@ -5045,6 +5284,10 @@ impl eframe::App for UnderlineApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let _ = self.flush_all();
         let _ = self.state.write();
+        // ADR-018: servers write the files themselves from now on.
+        if let Some(workspace) = &self.workspace {
+            remove_window_presence(workspace.root());
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -5201,6 +5444,7 @@ impl eframe::App for UnderlineApp {
             }
             let mut undo = false;
             let mut opening = None;
+            let mut opening_note: Option<NoteId> = None;
             let mut sync_now = false;
             ui.horizontal(|ui| {
                 // UC-011 step 1: the branch and the number of changes.
@@ -5334,6 +5578,24 @@ impl eframe::App for UnderlineApp {
                         report.shown = true;
                     }
                 }
+                // UC-019 BR-010: open a note an agent changed.
+                if let Some(report) = self
+                    .agents
+                    .changed
+                    .as_ref()
+                    .filter(|r| r.status == self.status)
+                {
+                    for (_, note) in report.items.iter().rev().take(3) {
+                        let text = if report.items.len() == 1 {
+                            "Open".to_owned()
+                        } else {
+                            format!("Open {}", note.title())
+                        };
+                        if ui.small_button(text).clicked() {
+                            opening_note = Some(note.clone());
+                        }
+                    }
+                }
                 // UC-007 A4: offered while the report of the deletion shows.
                 match &self.undo_delete {
                     Some(offer) if offer.status == self.status => {
@@ -5348,6 +5610,9 @@ impl eframe::App for UnderlineApp {
                 .is_some_and(|offer| offer.status != self.status)
             {
                 self.undo_delete = None;
+            }
+            if let Some(note) = opening_note {
+                self.open_note(&note);
             }
             if let Some(target) = opening {
                 self.open_with_system(&target);

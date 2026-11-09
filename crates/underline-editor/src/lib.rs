@@ -18,7 +18,7 @@ pub use clipboard::{
 pub use document::{Document, Edit};
 pub use facade_view::FacadeView;
 pub use keys::{EditorCommand, InputMode};
-pub use source_view::{SourceView, FOUND_COLOR};
+pub use source_view::{AgentMark, SourceView, AGENT_BAR_COLOR, AGENT_COLOR, FOUND_COLOR};
 pub use toolbar::Tool;
 
 #[cfg(test)]

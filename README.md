@@ -13,7 +13,7 @@ together with an AI agent.
 | `crates/underline-core` | Workspaces (directories of `.md` and `.adoc` notes in any folder, minus hidden and git-ignored ones), settings in `underline.yaml`, the state between starts (per workspace in a hidden `.underline/` folder that git ignores by itself), atomic writes, git through the installed `git` |
 | `crates/underline-facade` | Facade engine: one format module per note format (Markdown, AsciiDoc) |
 | `crates/underline-wiki` | GitHub and GitLab wiki remotes (project URL to `.wiki.git` repository) |
-| `crates/underline-mcp` | Model Context Protocol server with `list_notes`, `search_notes`, `read_note` and `write_note` tools |
+| `crates/underline-mcp` | Model Context Protocol server: look up notes (`list_notes`, `search_notes`, `read_note`) and write them (`create_note`, `replace_in_note`, `insert_into_note`, `rewrite_note`) |
 
 ## Build and run
 

@@ -8,14 +8,16 @@ pub mod install;
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Value};
 use underline_core::{
-    find_note, list_for_agent, read_for_agent, remove_presence, search_for_agent,
-    stored_agent_access, user_settings_path, write_presence, AgentAccess, Note, NoteId, Presence,
-    Reading, Workspace, PRESENCE_RENEW,
+    apply_to_file, find_note, list_for_agent, read_for_agent, remove_presence, search_for_agent,
+    send_request, stored_agent_access, take_answer, user_settings_path, window_runs,
+    withdraw_request, write_presence, AgentAccess, AgentAnswer, AgentChange, AgentRequest,
+    NoteFormat, NoteId, Presence, Reading, Workspace, WriteProblem, PRESENCE_RENEW,
 };
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -36,7 +38,12 @@ pub struct Server {
     user_settings: Option<PathBuf>,
     /// What the window is told about the connected agent (UC-017 BR-004).
     presence: Arc<Mutex<Presence>>,
+    /// ADR-018: counts the requests handed to the window.
+    sent: AtomicU64,
 }
+
+/// ADR-018: how long the server waits for the window's answer.
+const ANSWER_WAIT: Duration = Duration::from_secs(1);
 
 impl Server {
     /// A server for `workspace` that follows the user settings of this
@@ -52,6 +59,7 @@ impl Server {
             workspace,
             user_settings,
             presence: Arc::default(),
+            sent: AtomicU64::new(1),
         }
     }
 
@@ -144,16 +152,10 @@ impl Server {
 
     fn call_tool(&self, params: &Value) -> Value {
         let args = &params["arguments"];
-        let page = || {
-            args["page"]
-                .as_str()
-                .or(args["note"].as_str())
-                .map(NoteId::from_title)
-        };
         let name = params["name"].as_str();
         let outcome = match self.allowed(name) {
             Err(reason) => Err(reason),
-            Ok(()) => self.run_tool(name, args, page),
+            Ok(()) => self.run_tool(name, args),
         };
         let (texts, is_error) = match outcome {
             Ok(texts) => (texts, false),
@@ -170,7 +172,7 @@ impl Server {
     fn allowed(&self, name: Option<&str>) -> Result<(), String> {
         let writes = match name {
             Some("list_notes" | "search_notes" | "read_note") => false,
-            Some("write_note") => true,
+            Some("create_note" | "replace_in_note" | "insert_into_note" | "rewrite_note") => true,
             _ => return Ok(()),
         };
         let access = self
@@ -189,12 +191,70 @@ impl Server {
         }
     }
 
-    fn run_tool(
-        &self,
-        name: Option<&str>,
-        args: &Value,
-        page: impl Fn() -> Option<NoteId>,
-    ) -> Result<Vec<String>, String> {
+    /// UC-019, ADR-018: makes `change` to the note `note`: through the
+    /// running window, which knows what the user typed and not saved, or
+    /// itself while no window runs.
+    fn change(&self, note: &str, change: AgentChange) -> Result<Vec<String>, String> {
+        let root = self.workspace.root();
+        let answer = if window_runs(root, SystemTime::now()) {
+            let id = format!(
+                "{}-{}",
+                std::process::id(),
+                self.sent.fetch_add(1, Ordering::Relaxed)
+            );
+            let request = AgentRequest {
+                agent: self.presence().name,
+                note: note.to_owned(),
+                change: change.clone(),
+            };
+            send_request(root, &id, &request).map_err(|e| e.to_string())?;
+            match self.await_answer(&id, ANSWER_WAIT) {
+                Some(answer) => answer,
+                // Not taken: the window is gone, or hangs.
+                None if withdraw_request(root, &id) => {
+                    if window_runs(root, SystemTime::now()) {
+                        return Err(WriteProblem::Busy.to_string());
+                    }
+                    self.apply_itself(note, &change)
+                }
+                // Taken: the window answers in a moment.
+                None => self
+                    .await_answer(&id, ANSWER_WAIT)
+                    .ok_or_else(|| WriteProblem::Busy.to_string())?,
+            }
+        } else {
+            self.apply_itself(note, &change)
+        };
+        if !answer.ok {
+            return Err(answer.message);
+        }
+        if let (Some(id), Some(lines), Ok(mut presence)) =
+            (&answer.note, answer.lines, self.presence.lock())
+        {
+            presence.reading = Some(Reading::now(NoteId::from_relative(id), lines).written());
+        }
+        Ok(vec![answer.message])
+    }
+
+    fn apply_itself(&self, note: &str, change: &AgentChange) -> AgentAnswer {
+        let mut workspace = self.workspace.clone();
+        apply_to_file(&mut workspace, note, change).0
+    }
+
+    fn await_answer(&self, id: &str, wait: Duration) -> Option<AgentAnswer> {
+        let until = Instant::now() + wait;
+        loop {
+            if let Some(answer) = take_answer(self.workspace.root(), id) {
+                return Some(answer);
+            }
+            if Instant::now() >= until {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn run_tool(&self, name: Option<&str>, args: &Value) -> Result<Vec<String>, String> {
         let text = |key: &str| args[key].as_str().map(str::trim).filter(|t| !t.is_empty());
         let line = |key: &str| -> Result<Option<usize>, String> {
             match &args[key] {
@@ -246,17 +306,58 @@ impl Server {
                 }
                 Ok(vec![read.text.clone(), read.summary()])
             }
-            Some("write_note") => match (page(), args["body"].as_str()) {
-                (Some(id), Some(body)) => self
-                    .workspace
-                    .write(&Note {
-                        id: id.clone(),
-                        body: body.to_owned(),
-                    })
-                    .map(|()| vec![format!("saved {id}")])
-                    .map_err(|e| e.to_string()),
-                _ => Err("missing argument `page` or `body`".to_owned()),
-            },
+            // UC-019 A1.
+            Some("create_note") => {
+                let note = text("note").ok_or("missing argument `note`")?;
+                let format = match text("format") {
+                    None => None,
+                    Some(f) if f.eq_ignore_ascii_case("markdown") => Some(NoteFormat::Markdown),
+                    Some(f) if f.eq_ignore_ascii_case("asciidoc") => Some(NoteFormat::AsciiDoc),
+                    Some(f) => {
+                        return Err(format!("`format` is `markdown` or `asciidoc`, not `{f}`"))
+                    }
+                };
+                let body = args["text"].as_str().unwrap_or_default().to_owned();
+                self.change(note, AgentChange::Create { format, text: body })
+            }
+            // UC-019 steps 1–3, A4–A10.
+            Some("replace_in_note") => {
+                let note = text("note").ok_or("missing argument `note`")?;
+                let old = args["old_text"]
+                    .as_str()
+                    .ok_or("missing argument `old_text`")?;
+                let new = args["new_text"]
+                    .as_str()
+                    .ok_or("missing argument `new_text`")?;
+                self.change(
+                    note,
+                    AgentChange::Replace {
+                        old: old.to_owned(),
+                        new: new.to_owned(),
+                    },
+                )
+            }
+            Some("insert_into_note") => {
+                let note = text("note").ok_or("missing argument `note`")?;
+                let body = args["text"].as_str().ok_or("missing argument `text`")?;
+                self.change(
+                    note,
+                    AgentChange::Insert {
+                        before_line: line("before_line")?,
+                        text: body.to_owned(),
+                    },
+                )
+            }
+            Some("rewrite_note") => {
+                let note = text("note").ok_or("missing argument `note`")?;
+                let body = args["text"].as_str().ok_or("missing argument `text`")?;
+                self.change(
+                    note,
+                    AgentChange::Rewrite {
+                        text: body.to_owned(),
+                    },
+                )
+            }
             other => Err(format!("unknown tool: {}", other.unwrap_or(""))),
         }
     }
@@ -330,12 +431,51 @@ fn tools() -> Value {
             },
         },
         {
-            "name": "write_note",
-            "description": "Create or replace a note's text, in its note format.",
+            "name": "create_note",
+            "description": "Create a note with a text, in the workspace's default note format unless `format` names one. Fails when the note exists.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "note": note, "body": { "type": "string" } },
-                "required": ["note", "body"],
+                "properties": {
+                    "note": { "type": "string", "description": "Folder and title of the new note, such as `Projects/Plan`" },
+                    "text": { "type": "string", "description": "The text, in the note format" },
+                    "format": { "type": "string", "enum": ["markdown", "asciidoc"] },
+                },
+                "required": ["note", "text"],
+            },
+        },
+        {
+            "name": "replace_in_note",
+            "description": "Replace a passage of a note. `old_text` must occur exactly once in the note as stored, character for character; read the note first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note": note,
+                    "old_text": { "type": "string" },
+                    "new_text": { "type": "string" },
+                },
+                "required": ["note", "old_text", "new_text"],
+            },
+        },
+        {
+            "name": "insert_into_note",
+            "description": "Insert text before a line of a note, or at its end without `before_line`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "note": note,
+                    "text": { "type": "string" },
+                    "before_line": { "type": "integer", "minimum": 1, "description": "Line counted from 1; after the last line means the end" },
+                },
+                "required": ["note", "text"],
+            },
+        },
+        {
+            "name": "rewrite_note",
+            "description": "Replace the whole text of a note. Prefer replace_in_note for a part.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "note": note, "text": { "type": "string" } },
+                "required": ["note", "text"],
             },
         },
     ])
@@ -401,7 +541,7 @@ mod tests {
             1,
             "tools/call",
             json!({
-                "name": "write_note", "arguments": { "page": "Plan", "body": "- ship it" },
+                "name": "create_note", "arguments": { "note": "Plan", "text": "- ship it" },
             }),
         );
         assert_eq!(write["result"]["isError"], false);
@@ -432,7 +572,7 @@ mod tests {
         let response = call(&server, 1, "initialize", json!({}));
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         let tools = call(&server, 2, "tools/list", json!({}));
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
         remove(&server);
     }
 
@@ -461,12 +601,12 @@ mod tests {
         );
         assert_eq!(server.presence().shown_name(), "Claude Code");
         let tools = call(&server, 2, "tools/list", json!({}));
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
         for (name, args) in [
             ("list_notes", json!({})),
             ("search_notes", json!({ "words": "x" })),
             ("read_note", json!({ "page": "Plan" })),
-            ("write_note", json!({ "page": "Plan", "body": "x" })),
+            ("create_note", json!({ "note": "Plan", "text": "x" })),
         ] {
             assert_eq!(tool(&server, name, args), (true, REFUSED_OFF.to_owned()));
         }
@@ -477,8 +617,8 @@ mod tests {
         assert!(
             !tool(
                 &server,
-                "write_note",
-                json!({ "page": "Plan", "body": "x" })
+                "create_note",
+                json!({ "note": "Plan", "text": "x" })
             )
             .0
         );
@@ -507,7 +647,7 @@ mod tests {
             (false, "plan".into())
         );
         for page in ["Plan", "New"] {
-            let (error, text) = tool(&server, "write_note", json!({ "page": page, "body": "x" }));
+            let (error, text) = tool(&server, "create_note", json!({ "note": page, "text": "x" }));
             assert!(error);
             assert_eq!(text, REFUSED_READ_ONLY);
         }
@@ -527,7 +667,11 @@ mod tests {
         let root = server.workspace.root();
         std::fs::write(root.join("underline.yaml"), "agent_access: read only\n").unwrap();
         assert!(!tool(&server, "list_notes", json!({})).0);
-        let (error, text) = tool(&server, "write_note", json!({ "page": "New", "body": "x" }));
+        let (error, text) = tool(
+            &server,
+            "create_note",
+            json!({ "note": "New", "text": "x" }),
+        );
         assert!(error && text == REFUSED_READ_ONLY);
         remove(&server);
     }
@@ -623,6 +767,128 @@ mod tests {
             json!({ "note": "Plan", "from_line": "x" }),
         );
         assert!(error && bad.contains("line number"));
+        remove(&server);
+    }
+
+    /// TC-019-01 to TC-019-03, TC-019-15: without a window the server
+    /// writes the files itself; the lines written are told to the window.
+    #[test]
+    fn uc019_tc15_writes_without_the_window() {
+        let server = server("uc019-direct");
+        let root = server.workspace.root().to_owned();
+        let (error, created) = tool(
+            &server,
+            "create_note",
+            json!({ "note": "Plan", "text": "# Plan\n- draft\n- ship\n" }),
+        );
+        assert!(!error, "{created}");
+        let (error, changed) = tool(
+            &server,
+            "replace_in_note",
+            json!({ "note": "Plan", "old_text": "- draft", "new_text": "- final draft" }),
+        );
+        assert!(!error && changed.contains("line 2"), "{changed}");
+        let wrote = server.presence().reading.unwrap();
+        assert!(wrote.wrote && wrote.lines == (2, 2));
+        assert!(
+            !tool(
+                &server,
+                "insert_into_note",
+                json!({ "note": "Plan", "text": "- done" })
+            )
+            .0
+        );
+        assert!(
+            !tool(
+                &server,
+                "insert_into_note",
+                json!({ "note": "Plan", "text": "- review", "before_line": 3 })
+            )
+            .0
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("Plan.md")).unwrap(),
+            "# Plan\n- final draft\n- review\n- ship\n- done"
+        );
+        let (error, missing) = tool(
+            &server,
+            "replace_in_note",
+            json!({ "note": "Plan", "old_text": "zebra", "new_text": "x" }),
+        );
+        assert!(error && missing.contains("does not occur"), "{missing}");
+        let (error, format) = tool(
+            &server,
+            "create_note",
+            json!({ "note": "X", "text": "", "format": "word" }),
+        );
+        assert!(error && format.contains("markdown"));
+        assert!(
+            !tool(
+                &server,
+                "rewrite_note",
+                json!({ "note": "Plan", "text": "# Plan\n" })
+            )
+            .0
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("Plan.md")).unwrap(),
+            "# Plan\n"
+        );
+        remove(&server);
+    }
+
+    /// ADR-018: while a window runs, the change goes through it.
+    #[test]
+    fn uc019_changes_go_through_the_running_window() {
+        let server = server("uc019-window");
+        let root = server.workspace.root().to_owned();
+        std::fs::write(root.join("Plan.md"), "a\n").unwrap();
+        underline_core::renew_window_presence(&root).unwrap();
+        let window = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    let requests = underline_core::take_requests(&root, SystemTime::now());
+                    if let Some((id, request)) = requests.into_iter().next() {
+                        assert_eq!(request.note, "Plan");
+                        let answer = AgentAnswer {
+                            ok: true,
+                            message: "changed Plan in the tab".into(),
+                            note: Some("Plan".into()),
+                            lines: Some((1, 1)),
+                        };
+                        underline_core::answer_request(&root, &id, &answer).unwrap();
+                        return true;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                false
+            })
+        };
+        let (error, text) = tool(
+            &server,
+            "replace_in_note",
+            json!({ "note": "Plan", "old_text": "a", "new_text": "b" }),
+        );
+        assert!(window.join().unwrap());
+        assert_eq!((error, text.as_str()), (false, "changed Plan in the tab"));
+        // The file is the window's to write.
+        assert_eq!(
+            std::fs::read_to_string(root.join("Plan.md")).unwrap(),
+            "a\n"
+        );
+
+        // A window that does not answer: busy, and nothing written.
+        let (error, text) = tool(
+            &server,
+            "rewrite_note",
+            json!({ "note": "Plan", "text": "c" }),
+        );
+        assert!(error && text == WriteProblem::Busy.to_string(), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("Plan.md")).unwrap(),
+            "a\n"
+        );
         remove(&server);
     }
 }

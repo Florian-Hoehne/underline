@@ -24,6 +24,20 @@ use underline_facade::formatting::{apply_format, Format};
 use underline_facade::sections::{section_at, sections, Section, SectionKey};
 
 const FONT_SIZE: f32 = 14.0;
+/// UC-019 BR-006, UC-018 BR-006: the agent cursor: the lines an agent read
+/// or wrote last, marked behind the text, with the agent's name.
+pub const AGENT_COLOR: Color32 = Color32::from_rgba_premultiplied(30, 90, 170, 60);
+/// The bar and the name of the agent cursor.
+pub const AGENT_BAR_COLOR: Color32 = Color32::from_rgb(40, 120, 220);
+
+/// The agent cursor of one agent in a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentMark {
+    /// The lines marked, counted from 0, the end not included.
+    pub lines: Range<usize>,
+    pub name: String,
+}
+
 /// The mark of a word found by a search (UC-008 BR-008), behind the text.
 pub const FOUND_COLOR: Color32 = Color32::from_rgba_premultiplied(110, 85, 0, 110);
 /// How often the minimap is drawn anew while the text changes.
@@ -118,6 +132,8 @@ pub struct SourceView {
     /// for the revision of the text they were found in.
     search: Option<Query>,
     found: (Option<u64>, Vec<Range<usize>>),
+    /// UC-019 BR-006: the agent cursors shown.
+    agent_marks: Vec<AgentMark>,
 }
 
 /// What a paste brings.
@@ -181,7 +197,39 @@ impl SourceView {
             line_numbers: (true, LineSide::Left),
             search: None,
             found: (None, Vec::new()),
+            agent_marks: Vec::new(),
         }
+    }
+
+    /// UC-018 BR-006, UC-019 BR-006: shows the agent cursors `marks`.
+    pub fn set_agent_marks(&mut self, marks: Vec<AgentMark>) {
+        self.agent_marks = marks;
+    }
+
+    /// The agent cursors shown, as char ranges of whole lines, with names.
+    pub fn agent_mark_ranges(&self) -> Vec<(Range<usize>, String)> {
+        let rope = self.doc.rope();
+        let lines = rope.len_lines();
+        self.agent_marks
+            .iter()
+            .filter(|m| m.lines.start < lines)
+            .map(|m| {
+                let end = m.lines.end.max(m.lines.start + 1).min(lines);
+                (
+                    rope.line_to_char(m.lines.start)..rope.line_to_char(end),
+                    m.name.clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// UC-019 step 4, BR-007: an agent's change, as one undo step of its own;
+    /// the cursor and the selection stay at the same place of the content,
+    /// and the view does not scroll.
+    pub fn apply_agent_edit(&mut self, range: Range<usize>, text: &str) {
+        self.doc.seal();
+        self.apply_edits(&[(range, text.to_owned())]);
+        self.doc.seal();
     }
 
     /// UC-008 BR-008: marks every occurrence of the words of `query`, or
@@ -964,6 +1012,30 @@ impl SourceView {
                 }
                 if selection_start != selection_end {
                     paint_span(selection_start, selection_end, selection_color);
+                }
+                // UC-019 BR-006: the agent cursor behind the lines.
+                if let Some(mark) = self.agent_marks.iter().find(|m| {
+                    m.lines.contains(&line) || (m.lines.is_empty() && m.lines.start == line)
+                }) {
+                    let height = rows as f32 * row_height;
+                    painter.rect_filled(
+                        Rect::from_min_size(top, Vec2::new(wrap_width, height)),
+                        0.0,
+                        AGENT_COLOR,
+                    );
+                    painter.line_segment(
+                        [top + Vec2::new(-3.0, 0.0), top + Vec2::new(-3.0, height)],
+                        Stroke::new(3.0_f32, AGENT_BAR_COLOR),
+                    );
+                    if line == mark.lines.start || line == first {
+                        painter.text(
+                            top + Vec2::new(galley.rect.right() + 16.0, 0.0),
+                            egui::Align2::LEFT_TOP,
+                            &mark.name,
+                            egui::FontId::proportional(font.size * 0.8),
+                            AGENT_BAR_COLOR,
+                        );
+                    }
                 }
                 let folded_heading = heading_lines
                     .get(&line)
