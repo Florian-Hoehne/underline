@@ -277,6 +277,9 @@ impl Workspace {
             return result;
         }
         self.rescan();
+        // UC-006 BR-006, UC-020 BR-005: todo links follow the note. A todo
+        // that cannot be stored keeps the old link, shown as missing.
+        let _ = crate::todos::relink_todos(self.root(), &planned.from, &planned.to);
         Ok(())
     }
 }
@@ -548,5 +551,24 @@ mod tests {
             fs::read_to_string(sandbox.0.join("Plan.md")).unwrap(),
             "keep"
         );
+    }
+
+    /// UC-006 BR-006, TC-020-07: todo links follow a moved note.
+    #[test]
+    fn uc006_br006_todo_links_follow() {
+        let root =
+            std::env::temp_dir().join(format!("underline-uc006-todo-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Plan.md"), "plan").unwrap();
+        let mut todo = crate::todos::create_todo(&root, "Ship").unwrap();
+        todo.link(&NoteId::from_relative("Plan"));
+        crate::todos::save_todo(&root, &todo).unwrap();
+        let mut workspace = Workspace::open(&root).unwrap();
+        let m = planned("Plan", "Work/Project-Plan", "Project Plan");
+        workspace.move_note(&m, "plan").unwrap();
+        let todos = crate::todos::load_todos(&root);
+        assert_eq!(todos.todos[0].links, ["Work/Project-Plan"]);
+        fs::remove_dir_all(&root).unwrap();
     }
 }

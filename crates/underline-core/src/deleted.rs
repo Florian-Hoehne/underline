@@ -44,6 +44,9 @@ impl DeletedNote {
 /// Why a note could not be deleted (UC-007 A3, A8).
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteProblem {
+    /// UC-007 A2, BR-009: todos link to the note.
+    #[error("the note cannot be deleted while todos link to it: {}", .0.join(", "))]
+    LinkedByTodos(Vec<String>),
     /// A8: the Underline folder cannot take the note.
     #[error("the note cannot be kept among the deleted notes: {0}")]
     CannotKeep(io::Error),
@@ -69,6 +72,11 @@ impl Workspace {
         at: Timestamp,
     ) -> Result<DeletedNote, DeleteProblem> {
         let io = |action| move |source| DeleteProblem::Io { action, source };
+        let todos = crate::todos::load_todos(self.root());
+        let linking: Vec<String> = todos.linking(id).iter().map(|t| t.name()).collect();
+        if !linking.is_empty() {
+            return Err(DeleteProblem::LinkedByTodos(linking));
+        }
         let format = self
             .format_of(id)
             .ok_or_else(|| io("find the note")(io::Error::from(io::ErrorKind::NotFound)))?;
@@ -108,6 +116,11 @@ impl Workspace {
 
     /// UC-007 A8 step 2: removes the note `id` for good, without keeping it.
     pub fn delete_note_for_good(&mut self, id: &NoteId) -> Result<(), DeleteProblem> {
+        let todos = crate::todos::load_todos(self.root());
+        let linking: Vec<String> = todos.linking(id).iter().map(|t| t.name()).collect();
+        if !linking.is_empty() {
+            return Err(DeleteProblem::LinkedByTodos(linking));
+        }
         let format = self.format_of(id).ok_or_else(|| DeleteProblem::Io {
             action: "find the note",
             source: io::Error::from(io::ErrorKind::NotFound),
@@ -447,5 +460,25 @@ mod tests {
             workspace.delete_note_for_good(&id("Plan")).unwrap();
             assert!(!sandbox.0.join("Plan.md").exists());
         }
+    }
+
+    /// TC-007 A2, TC-020-07: a note a todo links to is not deleted.
+    #[test]
+    fn uc007_a2_uc020_tc07_linked_note_not_deleted() {
+        let sandbox = Sandbox::new("todo-link", &[("Plan.md", "plan")]);
+        let mut todo = crate::todos::create_todo(&sandbox.0, "Ship").unwrap();
+        todo.link(&id("Plan"));
+        crate::todos::save_todo(&sandbox.0, &todo).unwrap();
+        let mut workspace = sandbox.open();
+        let problem = workspace.delete_note(&id("Plan"), 1).unwrap_err();
+        assert_eq!(
+            problem.to_string(),
+            "the note cannot be deleted while todos link to it: #1 Ship"
+        );
+        assert!(workspace.delete_note_for_good(&id("Plan")).is_err());
+        assert_eq!(sandbox.read("Plan.md"), "plan");
+        todo.unlink("Plan");
+        crate::todos::save_todo(&sandbox.0, &todo).unwrap();
+        assert!(workspace.delete_note(&id("Plan"), 2).is_ok());
     }
 }

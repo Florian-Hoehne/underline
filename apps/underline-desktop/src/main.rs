@@ -8,6 +8,7 @@
 
 mod app;
 mod settings;
+mod todos_panel;
 
 use std::io;
 use std::path::PathBuf;

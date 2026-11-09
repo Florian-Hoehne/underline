@@ -60,6 +60,9 @@ pub struct Presence {
     pub refused: bool,
     /// UC-018 BR-006: where the agent read last.
     pub reading: Option<Reading>,
+    /// UC-020 A8: what the agent did last with a todo, such as "created
+    /// todo #3", and when (milliseconds since the Unix epoch).
+    pub todo_change: Option<(u64, String)>,
 }
 
 /// UC-018 BR-006: how long the agent cursor marks the lines an agent read.
@@ -120,6 +123,12 @@ impl Presence {
             .unwrap_or("")
             .replace(['\n', '\r'], " ");
         let mut text = format!("name: {name}\nrefused: {}\n", self.refused);
+        if let Some((at, change)) = &self.todo_change {
+            text.push_str(&format!(
+                "todo: {at} {}\n",
+                change.replace(['\n', '\r'], " ")
+            ));
+        }
         if let Some(r) = &self.reading {
             text.push_str(&format!(
                 "{}: {} {} {} {}\n",
@@ -139,6 +148,12 @@ impl Presence {
             if let Some(name) = line.strip_prefix("name: ") {
                 let name = name.trim();
                 presence.name = (!name.is_empty()).then(|| name.to_owned());
+            } else if let Some(change) = line.strip_prefix("todo: ") {
+                if let Some((at, text)) = change.split_once(' ') {
+                    if let Ok(at) = at.parse() {
+                        presence.todo_change = Some((at, text.to_owned()));
+                    }
+                }
             } else if let Some(refused) = line.strip_prefix("refused: ") {
                 presence.refused = refused.trim() == "true";
             } else if let Some((reading, wrote)) = line
@@ -297,6 +312,7 @@ mod tests {
             name: Some("Cursor".into()),
             refused: true,
             reading: Some(Reading::now(NoteId::from_relative("Work/My Plan"), (3, 9)).written()),
+            todo_change: Some((17, "created todo #3".into())),
         };
         let reading = presence.reading.clone().unwrap();
         assert!(reading.shown_at(SystemTime::now()));

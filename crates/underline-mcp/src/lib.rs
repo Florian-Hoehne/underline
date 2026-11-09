@@ -14,10 +14,11 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Value};
 use underline_core::{
-    apply_to_file, find_note, list_for_agent, read_for_agent, remove_presence, search_for_agent,
-    send_request, stored_agent_access, take_answer, user_settings_path, window_runs,
-    withdraw_request, write_presence, AgentAccess, AgentAnswer, AgentChange, AgentRequest,
-    NoteFormat, NoteId, Presence, Reading, Workspace, WriteProblem, PRESENCE_RENEW,
+    apply_to_file, create_todo, delete_todo, find_note, list_for_agent, load_todos, read_for_agent,
+    remove_presence, save_todo, search_for_agent, send_request, stored_agent_access, take_answer,
+    user_settings_path, window_runs, withdraw_request, write_presence, AgentAccess, AgentAnswer,
+    AgentChange, AgentRequest, Day, NoteFormat, NoteId, Presence, Reading, Todo, TodoError,
+    Workspace, WriteProblem, PRESENCE_RENEW,
 };
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -171,7 +172,8 @@ impl Server {
     /// UC-017 BR-001, A6: whether the stored level allows the tool `name`.
     fn allowed(&self, name: Option<&str>) -> Result<(), String> {
         let writes = match name {
-            Some("list_notes" | "search_notes" | "read_note") => false,
+            Some("list_notes" | "search_notes" | "read_note" | "list_todos") => false,
+            Some("create_todo" | "update_todo" | "delete_todo") => true,
             Some("create_note" | "replace_in_note" | "insert_into_note" | "rewrite_note") => true,
             _ => return Ok(()),
         };
@@ -358,9 +360,139 @@ impl Server {
                     },
                 )
             }
+            // UC-020 A8.
+            Some("list_todos") => {
+                let todos = load_todos(self.workspace.root());
+                let wanted = text("status").unwrap_or("open").to_lowercase();
+                let shown: Vec<String> = todos
+                    .todos
+                    .iter()
+                    .filter(|t| match wanted.as_str() {
+                        "done" => t.is_done(),
+                        "all" => true,
+                        _ => !t.is_done(),
+                    })
+                    .map(todo_line)
+                    .collect();
+                Ok(vec![if shown.is_empty() {
+                    format!("There are no {wanted} todos.")
+                } else {
+                    shown.join("\n")
+                }])
+            }
+            Some("create_todo") => {
+                let title = args["title"].as_str().unwrap_or_default();
+                let mut todo =
+                    create_todo(self.workspace.root(), title).map_err(|e| e.to_string())?;
+                let changed = self.fill_todo(&mut todo, args);
+                if changed.is_err() {
+                    let _ = delete_todo(self.workspace.root(), todo.number);
+                }
+                changed?;
+                self.todo_done(format!("created todo {}", todo.name()));
+                Ok(vec![format!("created {}", todo_line(&todo))])
+            }
+            Some("update_todo") => {
+                let number = args["number"].as_u64().ok_or("missing argument `number`")?;
+                let todos = load_todos(self.workspace.root());
+                let mut todo = todos
+                    .get(number)
+                    .cloned()
+                    .ok_or_else(|| TodoError::NoSuchTodo(number).to_string())?;
+                if let Some(title) = args["title"].as_str() {
+                    todo.set_title(title).map_err(|e| e.to_string())?;
+                }
+                if let Some(done) = args["done"].as_bool() {
+                    todo.set_done(done);
+                }
+                if let Some(note) = text("unlink") {
+                    if !todo.unlink(note) {
+                        return Err(format!("todo #{number} does not link to `{note}`"));
+                    }
+                }
+                self.fill_todo(&mut todo, args)?;
+                self.todo_done(format!("changed todo {}", todo.name()));
+                Ok(vec![format!("changed {}", todo_line(&todo))])
+            }
+            Some("delete_todo") => {
+                let number = args["number"].as_u64().ok_or("missing argument `number`")?;
+                let todo = delete_todo(self.workspace.root(), number).map_err(|e| e.to_string())?;
+                self.todo_done(format!("deleted todo {}", todo.name()));
+                Ok(vec![format!("deleted {}", todo.name())])
+            }
             other => Err(format!("unknown tool: {}", other.unwrap_or(""))),
         }
     }
+
+    /// UC-020 A8: the fields an agent gives for a todo, checked, and the
+    /// todo stored.
+    fn fill_todo(&self, todo: &mut Todo, args: &Value) -> Result<(), String> {
+        let day = |key: &str| -> Result<Option<Option<Day>>, String> {
+            match args[key].as_str().map(str::trim) {
+                None => Ok(None),
+                Some("") => Ok(Some(None)),
+                Some(text) => text
+                    .parse()
+                    .map(|d| Some(Some(d)))
+                    .map_err(|e: TodoError| e.to_string()),
+            }
+        };
+        if let Some(due) = day("due")? {
+            todo.due = due;
+        }
+        if let Some(scheduled) = day("scheduled")? {
+            todo.scheduled = scheduled;
+        }
+        if let Some(urgency) = args["urgency"].as_str() {
+            todo.urgency = urgency.parse()?;
+        }
+        let mut links: Vec<&str> = args["links"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if let Some(link) = args["link"].as_str() {
+            links.push(link);
+        }
+        if !links.is_empty() {
+            let notes = self.workspace.notes_now().notes;
+            for link in links {
+                let entry = find_note(&notes, link).map_err(|e| e.to_string())?;
+                todo.link(&entry.id);
+            }
+        }
+        save_todo(self.workspace.root(), todo).map_err(|e| e.to_string())
+    }
+
+    /// UC-020 A8 step 2: tells the window what the agent did.
+    fn todo_done(&self, change: String) {
+        let at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        if let Ok(mut presence) = self.presence.lock() {
+            presence.todo_change = Some((at, change));
+        }
+    }
+}
+
+/// UC-020 A8: one todo as a line for the agent.
+fn todo_line(todo: &Todo) -> String {
+    let mut line = format!(
+        "#{} {} · {} · {}",
+        todo.number,
+        todo.title,
+        if todo.is_done() { "done" } else { "open" },
+        todo.urgency.label().to_lowercase()
+    );
+    if let Some(due) = todo.due {
+        line.push_str(&format!(" · due {due}"));
+    }
+    if let Some(scheduled) = todo.scheduled {
+        line.push_str(&format!(" · scheduled {scheduled}"));
+    }
+    if !todo.links.is_empty() {
+        line.push_str(&format!(" · notes: {}", todo.links.join(", ")));
+    }
+    line
 }
 
 /// UC-018 BR-002: a note named by its folder and title.
@@ -428,6 +560,56 @@ fn tools() -> Value {
                     "to_line": { "type": "integer", "minimum": 1, "description": "Last line to read" },
                 },
                 "required": ["note"],
+            },
+        },
+        {
+            "name": "list_todos",
+            "description": "List the todos of the workspace: number, title, open or done, urgency, due and scheduled day, and the notes they link.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "status": { "type": "string", "enum": ["open", "done", "all"] } },
+            },
+        },
+        {
+            "name": "create_todo",
+            "description": "Create a todo. Days are YYYY-MM-DD; urgency is low, normal, high, or critical; links name notes as listed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                    "due": { "type": "string" },
+                    "scheduled": { "type": "string" },
+                    "urgency": { "type": "string", "enum": ["low", "normal", "high", "critical"] },
+                    "links": { "type": "array", "items": { "type": "string" } },
+                },
+                "required": ["title"],
+            },
+        },
+        {
+            "name": "update_todo",
+            "description": "Change a todo: title, due or scheduled day (an empty text removes it), urgency, done (true or false), link or unlink a note.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "number": { "type": "integer" },
+                    "title": { "type": "string" },
+                    "due": { "type": "string" },
+                    "scheduled": { "type": "string" },
+                    "urgency": { "type": "string", "enum": ["low", "normal", "high", "critical"] },
+                    "done": { "type": "boolean" },
+                    "link": { "type": "string" },
+                    "unlink": { "type": "string" },
+                },
+                "required": ["number"],
+            },
+        },
+        {
+            "name": "delete_todo",
+            "description": "Delete a todo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "number": { "type": "integer" } },
+                "required": ["number"],
             },
         },
         {
@@ -572,7 +754,7 @@ mod tests {
         let response = call(&server, 1, "initialize", json!({}));
         assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
         let tools = call(&server, 2, "tools/list", json!({}));
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 11);
         remove(&server);
     }
 
@@ -601,7 +783,7 @@ mod tests {
         );
         assert_eq!(server.presence().shown_name(), "Claude Code");
         let tools = call(&server, 2, "tools/list", json!({}));
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 11);
         for (name, args) in [
             ("list_notes", json!({})),
             ("search_notes", json!({ "words": "x" })),
@@ -888,6 +1070,77 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("Plan.md")).unwrap(),
             "a\n"
+        );
+        remove(&server);
+    }
+
+    /// TC-020-09, UC-020 A8: agents list todos at read only, and change
+    /// them at read and write.
+    #[test]
+    fn uc020_tc09_agent_manages_todos() {
+        let server = server_with("uc020", "read only");
+        let root = server.workspace.root().to_owned();
+        std::fs::write(root.join("Plan.md"), "plan").unwrap();
+        create_todo(&root, "Ship").unwrap();
+        assert_eq!(
+            tool(&server, "list_todos", json!({})),
+            (false, "#1 Ship · open · normal".into())
+        );
+        let (error, text) = tool(&server, "update_todo", json!({ "number": 1, "done": true }));
+        assert!(error && text == REFUSED_READ_ONLY);
+
+        set_access(&server, "read and write");
+        let (error, text) = tool(
+            &server,
+            "create_todo",
+            json!({ "title": "Review", "links": ["plan"], "due": "2026-11-20", "urgency": "high" }),
+        );
+        assert!(!error, "{text}");
+        assert_eq!(
+            text,
+            "created #2 Review · open · high · due 2026-11-20 · notes: Plan"
+        );
+        assert_eq!(
+            server.presence().todo_change.unwrap().1,
+            "created todo #2 Review"
+        );
+        assert!(!tool(&server, "update_todo", json!({ "number": 1, "done": true })).0);
+        assert_eq!(
+            tool(&server, "list_todos", json!({ "status": "done" })).1,
+            "#1 Ship · done · normal"
+        );
+        let (error, text) = tool(
+            &server,
+            "update_todo",
+            json!({ "number": 2, "due": "2026-02-30" }),
+        );
+        assert!(error && text.contains("not a day"), "{text}");
+        let (error, text) = tool(
+            &server,
+            "create_todo",
+            json!({ "title": "X", "links": ["Nowhere"] }),
+        );
+        assert!(error && text.contains("no note"), "{text}");
+        assert_eq!(load_todos(&root).todos.len(), 2);
+        assert!(
+            !tool(
+                &server,
+                "update_todo",
+                json!({ "number": 2, "due": "", "unlink": "Plan" })
+            )
+            .0
+        );
+        assert_eq!(
+            tool(&server, "list_todos", json!({})).1,
+            "#2 Review · open · high"
+        );
+        assert!(!tool(&server, "delete_todo", json!({ "number": 2 })).0);
+        assert!(tool(&server, "delete_todo", json!({ "number": 2 })).0);
+
+        set_access(&server, "off");
+        assert_eq!(
+            tool(&server, "list_todos", json!({})),
+            (true, REFUSED_OFF.to_owned())
         );
         remove(&server);
     }

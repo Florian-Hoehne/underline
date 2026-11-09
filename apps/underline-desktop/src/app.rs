@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::settings::SettingsState;
+use crate::todos_panel::{todos_ui, TodoAction, TodosView};
 use eframe::egui;
 use underline_core::{
     answer_for_tab, answer_request, apply_to_file, connected_agents, find_note, plan_for_tab,
@@ -26,6 +27,10 @@ use underline_core::{
     resolve_place, restore_committed, BranchState, Branches, ChangeKind, ChangeTracker, Changes,
     Choice, CompleteError, Distance, FileChange, Hunk, Joining, LineKind, OnlyDiffers, Side,
     SwitchError, SyncMode, SyncOutcome, SyncRequest, Syncer,
+};
+use underline_core::{
+    create_todo, delete_todo, load_todos, restore_todo, save_todo, todo_number_of,
+    todos_fingerprint, Todo, TodoError,
 };
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::{AgentMark, FOUND_COLOR};
@@ -138,6 +143,12 @@ pub struct UnderlineApp {
     abort_confirm: bool,
     /// UC-016: the section "Agents" of the settings.
     agents: AgentsView,
+    /// UC-020: the section "Todos" of the tool panel.
+    todos: TodosView,
+    /// UC-020 A10: the changes the todo conflicts were looked for in.
+    todos_conflicts_seen: Option<u64>,
+    /// UC-020 A8: the last todo change of each agent that was reported.
+    agent_todo_seen: HashMap<String, u64>,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -1229,6 +1240,9 @@ impl UnderlineApp {
             conflict_cursor: 0,
             abort_confirm: false,
             agents: AgentsView::default(),
+            todos: TodosView::default(),
+            todos_conflicts_seen: None,
+            agent_todo_seen: HashMap::new(),
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -2235,27 +2249,39 @@ impl UnderlineApp {
         let root = self.workspace.as_ref().map(|w| w.root().to_path_buf());
         let has_git = self.tracker.is_some();
         let mut change_action = None;
+        let notes: Vec<NoteId> = self
+            .workspace
+            .as_ref()
+            .map(|w| w.listing().notes.iter().map(|e| e.id.clone()).collect())
+            .unwrap_or_default();
+        let active_note = self.tabs.active().map(|(id, _)| id.clone());
+        let mut todo_actions = Vec::new();
         if self.tabs.active().is_none() {
-            // UC-011: the changes show also without an open note.
-            if has_git {
+            // UC-011: the changes show also without an open note; UC-020:
+            // so do the todos.
+            if self.workspace.is_some() {
                 let width = self.settings.effective.tool_panel_width as f32;
                 egui::SidePanel::right(egui::Id::new(("tools", self.settings.width_generation)))
                     .resizable(true)
                     .default_width(width)
                     .show(ctx, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            change_action = changes_ui(
-                                ui,
-                                self.changes.as_ref(),
-                                self.chosen_change.as_ref(),
-                                self.shown_diff.as_ref(),
-                                std::mem::take(&mut self.show_changes),
-                                &mut self.commit,
-                            );
+                            todo_actions = todos_ui(ui, &mut self.todos, None, &notes);
+                            if has_git {
+                                change_action = changes_ui(
+                                    ui,
+                                    self.changes.as_ref(),
+                                    self.chosen_change.as_ref(),
+                                    self.shown_diff.as_ref(),
+                                    std::mem::take(&mut self.show_changes),
+                                    &mut self.commit,
+                                );
+                            }
                         });
                     });
             }
             self.change_action(change_action);
+            self.todo_actions(todo_actions);
             return;
         }
         let Some((_, tab)) = self.tabs.active_mut() else {
@@ -2303,6 +2329,7 @@ impl UnderlineApp {
                                 ui.weak("Not saved yet");
                             }
                         });
+                    todo_actions = todos_ui(ui, &mut self.todos, active_note.as_ref(), &notes);
                     if has_git {
                         change_action = changes_ui(
                             ui,
@@ -2361,6 +2388,7 @@ impl UnderlineApp {
                 .quick_change(SettingKey::ToolPanelWidth, width.to_string());
         }
         self.change_action(change_action);
+        self.todo_actions(todo_actions);
     }
 
     /// UC-011 steps 5–8, A4–A6: what the user did in the changes.
@@ -2859,6 +2887,13 @@ impl UnderlineApp {
             let _ = renew_window_presence(workspace.root());
             let now = Instant::now();
             for presence in &self.agents.connected {
+                // UC-020 A8 step 2: the status bar names the agent and the todo.
+                if let Some((at, change)) = &presence.todo_change {
+                    let name = presence.shown_name().to_owned();
+                    if self.agent_todo_seen.insert(name.clone(), *at) != Some(*at) {
+                        self.status = format!("{name} {change}");
+                    }
+                }
                 let Some(reading) = &presence.reading else {
                     continue;
                 };
@@ -2900,6 +2935,151 @@ impl UnderlineApp {
         }
         self.show_agent_cursors();
         ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// UC-020 A7, A9, A10: reads the todos again when their files changed,
+    /// tries to store what could not be stored, and looks for todos in
+    /// conflict after a sync.
+    fn poll_todos(&mut self) {
+        let Some(root) = self.workspace.as_ref().map(|w| w.root().to_owned()) else {
+            return;
+        };
+        if self
+            .todos
+            .checked
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.todos.checked = Some(Instant::now());
+        let unstored: Vec<Todo> = self
+            .todos
+            .unstored
+            .values()
+            .map(|(t, _)| t.clone())
+            .collect();
+        for todo in unstored {
+            if save_todo(&root, &todo).is_ok() {
+                self.todos.unstored.remove(&todo.number);
+            }
+        }
+        let fingerprint = todos_fingerprint(&root);
+        if fingerprint != self.todos.fingerprint {
+            self.todos.fingerprint = fingerprint;
+            self.todos.replace(load_todos(&root));
+        }
+        if self.todos_conflicts_seen != Some(self.changes_generation) {
+            self.todos_conflicts_seen = Some(self.changes_generation);
+            let paths: Vec<String> = self
+                .conflicts()
+                .into_iter()
+                .map(|c| c.path)
+                .filter(|p| todo_number_of(p).is_some())
+                .collect();
+            if paths.is_empty() {
+                self.todos.conflicts.clear();
+                return;
+            }
+            let joining = self.git.joining(&root).unwrap_or(Joining::Merge);
+            match self.git.todo_conflicts(&root, &paths, joining) {
+                Ok((conflicts, renumbered)) => {
+                    self.todos.conflicts = conflicts;
+                    if !renumbered.is_empty() {
+                        // A11: the todos created here got new numbers.
+                        let moved: Vec<String> = renumbered
+                            .iter()
+                            .map(|(old, new)| format!("Todo #{old} is now #{new}"))
+                            .collect();
+                        self.status = moved.join("; ");
+                        self.todos.fingerprint.clear();
+                        self.after_resolving();
+                    }
+                }
+                Err(err) => self.status = format!("The todos in conflict cannot be read: {err}"),
+            }
+        }
+    }
+
+    /// UC-020 A5 step 2: brings the deleted todo back.
+    fn undo_todo_delete(&mut self) {
+        let (Some((todo, _)), Some(root)) = (
+            self.todos.deleted.take(),
+            self.workspace.as_ref().map(|w| w.root().to_owned()),
+        ) else {
+            return;
+        };
+        self.status = match restore_todo(&root, &todo) {
+            Ok(()) => format!("Todo {} is back", todo.name()),
+            Err(err) => format!("Todo {} could not be brought back: {err}", todo.name()),
+        };
+        self.todos.fingerprint.clear();
+        self.todos.checked = None;
+    }
+
+    /// UC-020: carries out what the user asked for in the section "Todos".
+    fn todo_actions(&mut self, actions: Vec<TodoAction>) {
+        let Some(root) = self.workspace.as_ref().map(|w| w.root().to_owned()) else {
+            return;
+        };
+        for action in actions {
+            match action {
+                // Steps 3–4, A3.
+                TodoAction::Create(title) => match create_todo(&root, &title) {
+                    Ok(todo) => {
+                        self.todos.new_title.clear();
+                        self.todos.new_problem = None;
+                        self.status = format!("Created todo {}", todo.name());
+                    }
+                    Err(err @ (TodoError::NoTitle | TodoError::LongTitle)) => {
+                        self.todos.new_problem = Some(err.to_string());
+                    }
+                    Err(err) => self.status = format!("The todo could not be created: {err}"),
+                },
+                // Steps 5–10, A2, A4, A9.
+                TodoAction::Save(todo) => match save_todo(&root, &todo) {
+                    Ok(()) => {
+                        self.todos.unstored.remove(&todo.number);
+                    }
+                    Err(err @ TodoError::Write(_)) => {
+                        self.status = format!("Todo #{} could not be stored: {err}", todo.number);
+                        self.todos
+                            .unstored
+                            .insert(todo.number, (todo, err.to_string()));
+                    }
+                    Err(err) => self.todos.edit.problem = Some(err.to_string()),
+                },
+                // A5.
+                TodoAction::Delete(number) => match delete_todo(&root, number) {
+                    Ok(todo) => {
+                        self.status = format!("Deleted todo {}", todo.name());
+                        self.todos.deleted = Some((todo, self.status.clone()));
+                        self.todos.open = None;
+                    }
+                    Err(err) => self.status = format!("The todo could not be deleted: {err}"),
+                },
+                TodoAction::Open(note) => self.open_note(&note),
+                // A6 step 3.
+                TodoAction::MissingNote(link) => {
+                    self.status =
+                        format!("The note {link} no longer exists; remove the link with ×");
+                }
+                // A10 step 3.
+                TodoAction::Resolve(number, version) => {
+                    match self.git.resolve_todo(&root, number, version.as_ref()) {
+                        Ok(()) => {
+                            self.todos.conflicts.retain(|c| c.number != number);
+                            self.after_resolving();
+                        }
+                        Err(err) => {
+                            self.status = format!("Todo #{number} could not be resolved: {err}");
+                        }
+                    }
+                }
+            }
+        }
+        self.todos.fingerprint.clear();
+        self.todos.checked = None;
+        self.poll_todos();
     }
 
     /// UC-018 BR-006, UC-019 BR-006: each open note shows the cursors of
@@ -3699,6 +3879,7 @@ impl UnderlineApp {
     fn apply_settings(&mut self, ctx: &egui::Context) {
         self.settings.poll();
         self.poll_agents(ctx);
+        self.poll_todos();
         let theme = self.settings.effective.theme;
         if self.applied_theme != Some(theme) {
             self.applied_theme = Some(theme);
@@ -5445,6 +5626,7 @@ impl eframe::App for UnderlineApp {
             let mut undo = false;
             let mut opening = None;
             let mut opening_note: Option<NoteId> = None;
+            let mut undo_todo = false;
             let mut sync_now = false;
             ui.horizontal(|ui| {
                 // UC-011 step 1: the branch and the number of changes.
@@ -5564,6 +5746,17 @@ impl eframe::App for UnderlineApp {
                 if self.workspace.is_some() {
                     self.agents_status(ui);
                 }
+                // UC-020 A5: undo the deletion of a todo.
+                if self
+                    .todos
+                    .deleted
+                    .as_ref()
+                    .is_some_and(|(_, status)| *status == self.status)
+                {
+                    // Before the report: buttons right of a long report
+                    // were not reached.
+                    undo_todo = ui.small_button("Undo").clicked();
+                }
                 ui.label(parts.join("  |  "));
                 // UC-009 step 5, A2: open the export, show the approximated blocks.
                 if let Some(report) = self
@@ -5613,6 +5806,9 @@ impl eframe::App for UnderlineApp {
             }
             if let Some(note) = opening_note {
                 self.open_note(&note);
+            }
+            if undo_todo {
+                self.undo_todo_delete();
             }
             if let Some(target) = opening {
                 self.open_with_system(&target);

@@ -29,6 +29,7 @@ mod settings;
 mod state;
 mod sync;
 mod tabs;
+mod todos;
 mod watcher;
 mod workspace;
 
@@ -94,6 +95,11 @@ pub use state::{
 };
 pub use sync::{Distance, SyncMode, SyncOutcome, SyncRequest, Syncer, AUTO_PREFIX};
 pub use tabs::{Opened, TabList, MAX_TABS};
+pub use todos::{
+    create_todo, delete_todo, load_todos, relink_todos, restore_todo, save_todo, todo_number_of,
+    todo_relative_path, todos_fingerprint, todos_folder, Day, Todo, TodoConflict, TodoError,
+    TodoStatus, Todos, Urgency, MAX_TODO_TITLE, TODOS_FOLDER,
+};
 pub use watcher::{
     outside_copy_path, WorkspaceEvent, WorkspaceWatcher, BULK_CHANGES, WATCH_COLLECT,
 };
