@@ -8,7 +8,7 @@
 **Secondary Actor:** User  
 **Goal:** An agent finds out which notes the workspace holds, finds the notes that concern its work, and reads them, in their note format, so it can use them; the user sees in an open note where the agent reads.  
 **Trigger:** The agent asks Underline's MCP server for the notes, for a search, or for a note.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-054, FR-055, FR-057, FR-058, NFR-003, NFR-015, NFR-016](../requirements.md)
 
