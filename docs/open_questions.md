@@ -1565,9 +1565,12 @@ Answer: One version is chosen for the whole file; the other is kept as a copy ne
 **Element:** UC-015 BR-007, UC-019
 **Raised by:** spec review UC-015, 2026-11-07
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
 
 An agent writing a note through the MCP server (UC-019) could write into a note with open conflict places. To be decided with UC-019: refuse, read only, or allow.
+
+Answer: An agent's change is refused until the user has resolved the conflicts; reading goes on.
 
 ## OQ-157: Which workspace does an installed MCP server serve?
 
@@ -1718,3 +1721,33 @@ Answer: Yes, the agent cursor marks the lines read in an open note, as for writi
 **Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md), [UC-017](use_cases/UC-017-control-agent-access.md)
 
 Answer: Yes; it shows at every level that allows what the agent does, and is hidden only while access is off or no agent is connected.
+
+## OQ-172: How does an agent change a note?
+
+**Element:** UC-019 step 1, A1, BR-003
+**Raised by:** /use-case-spec UC-019, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
+
+Answer: It creates a note, replaces a passage it quotes exactly, inserts text before a line or at the end, or replaces the whole text.
+
+## OQ-173: What happens to an agent's change while the user is typing in the note?
+
+**Element:** UC-019 A5, A6, BR-004
+**Raised by:** /use-case-spec UC-019, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
+
+Answer: It is merged into the tab; when it touches a line the user changed and has not saved, it is refused.
+
+## OQ-174: Can the user undo an agent's change?
+
+**Element:** UC-019 A11, BR-007
+**Raised by:** /use-case-spec UC-019, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-019](use_cases/UC-019-write-note-as-agent.md)
+
+Answer: Yes, in the open tab, each change of an agent as one step.
