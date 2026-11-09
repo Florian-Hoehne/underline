@@ -8,7 +8,7 @@
 **Secondary Actor:** User  
 **Goal:** An agent creates a note or changes part of a note through Underline's MCP server, in the note's format, and the user sees the change and where the agent writes in the open note, without losing anything typed.  
 **Trigger:** The agent asks the MCP server to create a note or to change one.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-056, FR-057, FR-058, NFR-006, NFR-008, NFR-015, NFR-016](../requirements.md)
 
