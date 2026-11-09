@@ -1,0 +1,26 @@
+[package]
+name = "f0-editor"
+description = "Spike F0: Tauri 2 shell measuring who should own the note text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "f0-editor"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+f0-model = { path = "../model", features = ["real-facade"] }
+tauri = { version = "2.12", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+parking_lot = "0.12"
+
+[features]
+# Serve the built frontend from `ui/dist` (what `cargo tauri build` turns on);
+# without it the window loads the dev server.
+custom-protocol = ["tauri/custom-protocol"]

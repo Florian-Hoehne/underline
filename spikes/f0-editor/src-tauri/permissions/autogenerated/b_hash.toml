@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-b-hash"
+description = "Enables the b_hash command without any pre-configured scope."
+commands.allow = ["b_hash"]
+
+[[permission]]
+identifier = "deny-b-hash"
+description = "Denies the b_hash command without any pre-configured scope."
+commands.deny = ["b_hash"]

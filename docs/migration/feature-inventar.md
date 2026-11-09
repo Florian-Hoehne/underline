@@ -619,3 +619,12 @@ Was hier steht, wird **nicht** stillschweigend übernommen oder korrigiert. Ents
 | D-14 | Der Editor meldet keine Accessibility-Knoten; IME-Komposition ist unsichtbar. | `sv:1225` |
 | D-15 | Drop von Links aus dem Browser (FR-034) ist nicht umgesetzt. | – |
 | D-16 | Viel synchrone Git- und Datei-E/A im UI-Thread; Repaint mindestens jede Sekunde. | `app:3218` u. a. |
+| D-17 | Facade: Enter und danach Backspace verschluckt ein Leerzeichen (`image block` wird zu `imageblock`). Gefunden im Spike F0, in der egui-App nicht nachgeprüft. | `fv:1628-1656`, `fv:1789-1851` |
+| D-18 | `insert_typed` verschiebt die Quell-Offsets von Tabellenzellen nicht; sie sind bis zum nächsten vollständigen Parsen falsch. | `facade/blocks.rs:165-244` |
+
+Entscheidung (2026-11-09):
+
+- D-01 bis D-09, D-11, D-17 und D-18 werden in der Tauri-App behoben und in `paritaet.md` als gewollte Abweichung
+  geführt.
+- Die egui-App bleibt die unveränderte Referenz.
+- D-10 und D-12 bis D-16 bleiben wie heute.

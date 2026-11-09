@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-render-range"
+description = "Enables the a_render_range command without any pre-configured scope."
+commands.allow = ["a_render_range"]
+
+[[permission]]
+identifier = "deny-a-render-range"
+description = "Denies the a_render_range command without any pre-configured scope."
+commands.deny = ["a_render_range"]

@@ -1,0 +1,146 @@
+[
+  {
+    "config": "3697 blocks, content-visibility auto, contenteditable",
+    "step": "replace",
+    "median": 1,
+    "p99": 2.000000000003638
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, contenteditable",
+    "step": "select",
+    "median": 271,
+    "p99": 282
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, contenteditable",
+    "step": "layout",
+    "median": 422.00000000000364,
+    "p99": 438
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, contenteditable",
+    "step": "position",
+    "median": 0,
+    "p99": 1
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, contenteditable",
+    "step": "frame",
+    "median": 24,
+    "p99": 38
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, contenteditable",
+    "step": "total",
+    "median": 717,
+    "p99": 750.0000000000018
+  },
+  {
+    "config": "3697 blocks, content-visibility off, contenteditable",
+    "step": "replace",
+    "median": 1,
+    "p99": 5
+  },
+  {
+    "config": "3697 blocks, content-visibility off, contenteditable",
+    "step": "select",
+    "median": 5,
+    "p99": 12
+  },
+  {
+    "config": "3697 blocks, content-visibility off, contenteditable",
+    "step": "layout",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "3697 blocks, content-visibility off, contenteditable",
+    "step": "position",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "3697 blocks, content-visibility off, contenteditable",
+    "step": "frame",
+    "median": 27,
+    "p99": 33
+  },
+  {
+    "config": "3697 blocks, content-visibility off, contenteditable",
+    "step": "total",
+    "median": 33,
+    "p99": 50
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, not editable",
+    "step": "replace",
+    "median": 0,
+    "p99": 1
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, not editable",
+    "step": "select",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, not editable",
+    "step": "layout",
+    "median": 271,
+    "p99": 278.0000000000073
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, not editable",
+    "step": "position",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, not editable",
+    "step": "frame",
+    "median": 299,
+    "p99": 309
+  },
+  {
+    "config": "3697 blocks, content-visibility auto, not editable",
+    "step": "total",
+    "median": 567,
+    "p99": 584
+  },
+  {
+    "config": "3697 blocks, content-visibility off, not editable",
+    "step": "replace",
+    "median": 0,
+    "p99": 1
+  },
+  {
+    "config": "3697 blocks, content-visibility off, not editable",
+    "step": "select",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "3697 blocks, content-visibility off, not editable",
+    "step": "layout",
+    "median": 4.999999999992724,
+    "p99": 13.000000000007276
+  },
+  {
+    "config": "3697 blocks, content-visibility off, not editable",
+    "step": "position",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "3697 blocks, content-visibility off, not editable",
+    "step": "frame",
+    "median": 29,
+    "p99": 35.999999999992724
+  },
+  {
+    "config": "3697 blocks, content-visibility off, not editable",
+    "step": "total",
+    "median": 33,
+    "p99": 49
+  }
+]

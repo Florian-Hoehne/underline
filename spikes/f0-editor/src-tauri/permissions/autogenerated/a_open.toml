@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-open"
+description = "Enables the a_open command without any pre-configured scope."
+commands.allow = ["a_open"]
+
+[[permission]]
+identifier = "deny-a-open"
+description = "Denies the a_open command without any pre-configured scope."
+commands.deny = ["a_open"]

@@ -1,0 +1,24 @@
+[package]
+name = "f0-model"
+description = "Spike F0: the owner of the note text (rope, facade blocks, patches), shared by variant A (backend) and B (wasm)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Variant A (native): the real `underline_facade::blocks`. Without it, the
+# wasm-buildable copy in `blocks_copy.rs` is used (variant B).
+real-facade = ["dep:underline-facade", "dep:underline-core"]
+
+[dependencies]
+underline-editor-core = { path = "../../../crates/underline-editor-core" }
+underline-facade = { path = "../../../crates/underline-facade", optional = true }
+underline-core = { path = "../../../crates/underline-core", optional = true }
+comrak = { version = "0.49", default-features = false }
+ropey = "1.6"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+underline-facade = { path = "../../../crates/underline-facade" }
+underline-core = { path = "../../../crates/underline-core" }

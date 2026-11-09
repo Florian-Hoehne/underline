@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-b-text"
+description = "Enables the b_text command without any pre-configured scope."
+commands.allow = ["b_text"]
+
+[[permission]]
+identifier = "deny-b-text"
+description = "Denies the b_text command without any pre-configured scope."
+commands.deny = ["b_text"]

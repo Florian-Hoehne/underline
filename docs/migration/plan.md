@@ -373,7 +373,28 @@ und Stelle (`fv:1561-1600`). Die Migration folgt dem Code.
 - **Ablösung:** Ob die Windows-Release-Binary ohne Konsole startet (`windows_subsystem`), muss mit dem
   `mcp`-Subcommand über Pipes auf Windows geprüft werden.
 
-## 15. Offene Entscheidungen (ursprüngliche Fragen)
+## 15. Ergebnis Spike F0 (2026-11-09)
+
+Entschieden ist Variante A, Text im Backend ([ADR-024](../architecture/decisions/ADR-024-the-backend-owns-the-note-text.md)).
+Messungen und Methode stehen in `spikes/f0-editor/RESULTS.md`.
+
+Vorgaben für F3 und F5:
+
+- Die Facade wird virtualisiert: ein Fenster von Blöcken im DOM, Platzhalterhöhen für den Rest, kein
+  `content-visibility`.
+- Enter und Backspace parsen in der Facade inkrementell.
+- Der Tastenbefehl rechnet nur Edit und Patch. Highlighting, Treffer, Minimap und Sektionen kommen danach als
+  Events.
+- Die Bearbeitungsregeln der Facade (`facade_view.rs`) ziehen nach `underline-editor-core` um.
+- Messpunkt: Nachmessen mit der Spike-Methode. Schafft die Facade weniger als 90 % der Tasten im nächsten Frame,
+  wechseln wir per ADR zu Variante B.
+- In F3/F5 wird nachgeholt, was der Spike nicht getestet hat:
+  - echte Tasten über `xdotool` (`sudo apt install xdotool`), Tottasten und Compose;
+  - eine AsciiDoc-Notiz;
+  - Bearbeiten über das Tippen hinaus und Scrollen im virtualisierten Bereich.
+- D-17 und D-18 werden in der Tauri-App behoben.
+
+## 16. Offene Entscheidungen (ursprüngliche Fragen)
 
 - **F-1 Frontend:** Svelte 5 + TS (empfohlen), React + TS oder Leptos?
 - **F-2 Vim-Verhalten:** der eigene Rust-Automat in beiden Ansichten (empfohlen, exakte Parität) oder

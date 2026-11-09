@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-text"
+description = "Enables the a_text command without any pre-configured scope."
+commands.allow = ["a_text"]
+
+[[permission]]
+identifier = "deny-a-text"
+description = "Denies the a_text command without any pre-configured scope."
+commands.deny = ["a_text"]

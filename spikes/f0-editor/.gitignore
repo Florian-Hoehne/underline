@@ -1,0 +1,6 @@
+/target
+/.tools
+/ui/node_modules
+/ui/dist
+/ui/src/wasm-pkg
+/src-tauri/gen

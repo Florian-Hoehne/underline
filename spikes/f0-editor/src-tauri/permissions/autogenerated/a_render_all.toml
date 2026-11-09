@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-render-all"
+description = "Enables the a_render_all command without any pre-configured scope."
+commands.allow = ["a_render_all"]
+
+[[permission]]
+identifier = "deny-a-render-all"
+description = "Denies the a_render_all command without any pre-configured scope."
+commands.deny = ["a_render_all"]

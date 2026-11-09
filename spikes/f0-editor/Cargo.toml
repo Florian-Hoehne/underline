@@ -1,0 +1,16 @@
+# Spike F0 (docs/migration/plan.md section 6): its own workspace, so the root
+# workspace (`cargo clippy --workspace`, `cargo test --workspace`) stays
+# unaffected. Nothing here is production code.
+[workspace]
+resolver = "2"
+members = ["model", "src-tauri", "wasm"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[profile.release]
+# Like a shipped build would be: optimized, no debug info.
+opt-level = 3

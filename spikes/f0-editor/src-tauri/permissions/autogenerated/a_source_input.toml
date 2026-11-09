@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-source-input"
+description = "Enables the a_source_input command without any pre-configured scope."
+commands.allow = ["a_source_input"]
+
+[[permission]]
+identifier = "deny-a-source-input"
+description = "Denies the a_source_input command without any pre-configured scope."
+commands.deny = ["a_source_input"]

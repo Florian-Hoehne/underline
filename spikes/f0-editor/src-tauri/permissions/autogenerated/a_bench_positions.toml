@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-bench-positions"
+description = "Enables the a_bench_positions command without any pre-configured scope."
+commands.allow = ["a_bench_positions"]
+
+[[permission]]
+identifier = "deny-a-bench-positions"
+description = "Denies the a_bench_positions command without any pre-configured scope."
+commands.deny = ["a_bench_positions"]

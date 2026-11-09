@@ -1,0 +1,146 @@
+[
+  {
+    "config": "200 blocks, content-visibility auto, contenteditable",
+    "step": "replace",
+    "median": 0,
+    "p99": 1
+  },
+  {
+    "config": "200 blocks, content-visibility auto, contenteditable",
+    "step": "select",
+    "median": 4,
+    "p99": 7
+  },
+  {
+    "config": "200 blocks, content-visibility auto, contenteditable",
+    "step": "layout",
+    "median": 4,
+    "p99": 6
+  },
+  {
+    "config": "200 blocks, content-visibility auto, contenteditable",
+    "step": "position",
+    "median": 0,
+    "p99": 1.0000000000002274
+  },
+  {
+    "config": "200 blocks, content-visibility auto, contenteditable",
+    "step": "frame",
+    "median": 26,
+    "p99": 38
+  },
+  {
+    "config": "200 blocks, content-visibility auto, contenteditable",
+    "step": "total",
+    "median": 33,
+    "p99": 50
+  },
+  {
+    "config": "200 blocks, content-visibility off, contenteditable",
+    "step": "replace",
+    "median": 0,
+    "p99": 1.0000000000004547
+  },
+  {
+    "config": "200 blocks, content-visibility off, contenteditable",
+    "step": "select",
+    "median": 2,
+    "p99": 3.0000000000004547
+  },
+  {
+    "config": "200 blocks, content-visibility off, contenteditable",
+    "step": "layout",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "200 blocks, content-visibility off, contenteditable",
+    "step": "position",
+    "median": 0,
+    "p99": 1.0000000000004547
+  },
+  {
+    "config": "200 blocks, content-visibility off, contenteditable",
+    "step": "frame",
+    "median": 31,
+    "p99": 33.000000000000455
+  },
+  {
+    "config": "200 blocks, content-visibility off, contenteditable",
+    "step": "total",
+    "median": 33,
+    "p99": 34.000000000000455
+  },
+  {
+    "config": "200 blocks, content-visibility auto, not editable",
+    "step": "replace",
+    "median": 0,
+    "p99": 1.0000000000004547
+  },
+  {
+    "config": "200 blocks, content-visibility auto, not editable",
+    "step": "select",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "200 blocks, content-visibility auto, not editable",
+    "step": "layout",
+    "median": 5,
+    "p99": 14
+  },
+  {
+    "config": "200 blocks, content-visibility auto, not editable",
+    "step": "position",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "200 blocks, content-visibility auto, not editable",
+    "step": "frame",
+    "median": 28,
+    "p99": 44
+  },
+  {
+    "config": "200 blocks, content-visibility auto, not editable",
+    "step": "total",
+    "median": 33.00000000000091,
+    "p99": 50.00000000000091
+  },
+  {
+    "config": "200 blocks, content-visibility off, not editable",
+    "step": "replace",
+    "median": 0,
+    "p99": 1
+  },
+  {
+    "config": "200 blocks, content-visibility off, not editable",
+    "step": "select",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "200 blocks, content-visibility off, not editable",
+    "step": "layout",
+    "median": 1.9999999999990905,
+    "p99": 2
+  },
+  {
+    "config": "200 blocks, content-visibility off, not editable",
+    "step": "position",
+    "median": 0,
+    "p99": 0
+  },
+  {
+    "config": "200 blocks, content-visibility off, not editable",
+    "step": "frame",
+    "median": 31.00000000000091,
+    "p99": 33.00000000000091
+  },
+  {
+    "config": "200 blocks, content-visibility off, not editable",
+    "step": "total",
+    "median": 33.00000000000091,
+    "p99": 34.00000000000091
+  }
+]

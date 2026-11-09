@@ -1,0 +1,31 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Spike F0: the window may only call the spike's own commands.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-config",
+    "allow-note",
+    "allow-a-open",
+    "allow-a-source-input",
+    "allow-a-facade-input",
+    "allow-a-source-input-async",
+    "allow-a-facade-input-async",
+    "allow-a-render-all",
+    "allow-a-text",
+    "allow-a-block-text",
+    "allow-a-bench-positions",
+    "allow-b-open",
+    "allow-b-mirror",
+    "allow-b-text",
+    "allow-b-hash",
+    "allow-hash-of",
+    "allow-save-results",
+    "allow-log",
+    "allow-quit",
+    "allow-a-render-range",
+    "allow-a-block-count"
+  ]
+}

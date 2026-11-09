@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-a-block-text"
+description = "Enables the a_block_text command without any pre-configured scope."
+commands.allow = ["a_block_text"]
+
+[[permission]]
+identifier = "deny-a-block-text"
+description = "Denies the a_block_text command without any pre-configured scope."
+commands.deny = ["a_block_text"]
