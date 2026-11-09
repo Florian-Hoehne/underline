@@ -1,7 +1,8 @@
 # ADR-012: An own editor widget on egui for the source view and the facade
 
-**Status:** Accepted
-**Date:** 2026-11-06
+**Status:** Superseded
+**Superseded by:** ADR-021
+**Date:** 2026-11-09
 **Requirements:** FR-008, FR-009, FR-010, FR-018, FR-023, FR-024, FR-025, FR-027, FR-030, FR-031, FR-033, FR-034,
 FR-044, NFR-002, NFR-005, NFR-007, NFR-011, NFR-013
 

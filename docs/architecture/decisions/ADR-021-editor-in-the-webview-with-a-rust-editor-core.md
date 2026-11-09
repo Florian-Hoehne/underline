@@ -1,9 +1,9 @@
 # ADR-021: Edit notes in the webview with CodeMirror 6, an own facade surface, and the Rust editor core
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-09
 **Requirements:** NFR-002, NFR-007, NFR-011, NFR-012, NFR-013, C-002
-**Supersedes:** ADR-012 (on acceptance)
+**Supersedes:** ADR-012
 
 ## Context
 

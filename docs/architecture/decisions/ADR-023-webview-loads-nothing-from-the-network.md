@@ -1,6 +1,6 @@
 # ADR-023: The webview loads nothing from the network; workspace files and web images come through an own protocol
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-09
 **Requirements:** NFR-015, NFR-014, NFR-016
 

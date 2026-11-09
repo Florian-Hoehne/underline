@@ -1,6 +1,6 @@
 # ADR-022: A UI-free session crate drives the window by a backend tick and pushes changes as events
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-09
 **Requirements:** NFR-005, NFR-008, NFR-009, NFR-002, NFR-013
 

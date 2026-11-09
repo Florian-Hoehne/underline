@@ -1,7 +1,8 @@
 # ADR-001: Build the desktop app in Rust with egui/eframe
 
-**Status:** Accepted
-**Date:** 2026-11-06
+**Status:** Superseded
+**Superseded by:** ADR-020
+**Date:** 2026-11-09
 **Requirements:** C-001, NFR-001, NFR-002, NFR-013
 
 ## Context

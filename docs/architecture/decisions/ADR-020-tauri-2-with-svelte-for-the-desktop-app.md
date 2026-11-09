@@ -1,9 +1,9 @@
 # ADR-020: Build the desktop window with Tauri 2 and a Svelte/TypeScript frontend
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-09
 **Requirements:** C-001, NFR-013, NFR-001, NFR-002, NFR-011
-**Supersedes:** ADR-001 (on acceptance)
+**Supersedes:** ADR-001
 
 ## Context
 

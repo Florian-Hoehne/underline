@@ -39,7 +39,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 
 | ADR     | Decision                                              | Status   |
 |---------|-------------------------------------------------------|----------|
-| ADR-001 | Rust with egui/eframe, crate layout, CI checks        | Accepted |
+| ADR-001 | Rust with egui/eframe, crate layout, CI checks        | Superseded by ADR-020 |
 | ADR-002 | MCP server over stdio (`underline mcp <dir>`)         | Accepted |
 | ADR-003 | Facade engine crate, comrak and own AsciiDoc parser   | Accepted |
 | ADR-004 | Layered YAML settings in `underline.yaml`             | Accepted |
@@ -50,7 +50,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-009 | Offline diagrams: Mermaid with `merman`, PlantUML's JavaScript build in QuickJS, rasterized with resvg | Accepted |
 | ADR-010 | Code and markup highlighting with syntect, palettes per theme | Accepted |
 | ADR-011 | Watch the workspace with notify, poll as fallback | Accepted |
-| ADR-012 | Own editor widget on egui (rope, block facade, key maps), prototype first | Accepted |
+| ADR-012 | Own editor widget on egui (rope, block facade, key maps), prototype first | Superseded by ADR-021 |
 | ADR-013 | Web images are the editor's only network access, a plain request through ureq | Accepted |
 | ADR-014 | Clipboard through arboard; HTML converted to and from markup | Accepted |
 | ADR-015 | Exports from the facade's blocks; PDF set by Typst as a library | Accepted |
@@ -58,10 +58,10 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-017 | MCP install edits each agent tool's user configuration file | Accepted |
 | ADR-018 | Agent changes go through the running window by request files | Accepted |
 | ADR-019 | Todos as one YAML file each in `.todos/`, never merged line by line | Accepted |
-| ADR-020 | Tauri 2 with a Svelte/TypeScript frontend (replaces ADR-001 on acceptance) | Proposed |
-| ADR-021 | Editor in the webview: CodeMirror 6, own facade surface, Rust editor core (replaces ADR-012) | Proposed |
-| ADR-022 | UI-free session crate, backend tick, events | Proposed |
-| ADR-023 | Webview loads nothing from the network; own `ul-asset://` protocol | Proposed |
+| ADR-020 | Tauri 2 with a Svelte/TypeScript frontend (replaces ADR-001) | Accepted |
+| ADR-021 | Editor in the webview: CodeMirror 6, own facade surface, Rust editor core (replaces ADR-012) | Accepted |
+| ADR-022 | UI-free session crate, backend tick, events | Accepted |
+| ADR-023 | Webview loads nothing from the network; own `ul-asset://` protocol | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
