@@ -24,7 +24,7 @@
 5. The user chooses a linked note in a row (FR-066).
 6. The system opens the note in a tab of its own; the tab "Todos" stays open.
 7. When the work is done, the user marks the todo done in its row (FR-068).
-8. The system stores it as done (UC-020 step 10), and the row leaves the list of open todos.
+8. The system stores it as done (UC-020 step 10), the row leaves the list of open todos, and the status bar reports it with "Undo", which makes the todo open again.
 
 ## Alternative Flows
 
@@ -114,4 +114,16 @@ The sort and the filter last chosen are kept for each workspace on this computer
 
 ### BR-006: One tab
 
-There is at most one tab "Todos" per window; opening it again shows the open one.
+There is at most one tab "Todos" per window; opening it again shows the open one. It does not count towards the limit of open note tabs (UC-004), and it closes with its workspace.
+
+### BR-007: Choosing the sort
+
+The sort is chosen in the tab, or by choosing the heading of the column "Due" or "Urgency".
+
+### BR-008: Keyboard
+
+In the table, the arrow keys move between rows, Space marks the chosen todo done or open again, and Enter opens its first linked note.
+
+### BR-009: Linked notes in a row
+
+A row names up to two linked notes and how many more there are, such as "Plan, Ideas +2"; all are listed in the section "Todos" (A4).
