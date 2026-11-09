@@ -7,7 +7,7 @@
 **Primary Actor:** User  
 **Goal:** The user sees the todos of the workspace in one list, sorted by due date or urgency and filtered by open or done, notices what is overdue, opens the notes a todo is about, and marks todos done one after the other.  
 **Trigger:** The user opens the tab "Todos", or chooses the overdue todos in the status bar.  
-**Status:** Draft  
+**Status:** Reviewed  
 
 **Requirements:** [FR-066, FR-067, FR-068](../requirements.md)
 
