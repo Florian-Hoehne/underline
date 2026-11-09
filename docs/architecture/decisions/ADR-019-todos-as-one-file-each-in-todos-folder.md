@@ -1,6 +1,6 @@
 # ADR-019: Todos as one YAML file each in `.todos/`, never merged line by line
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-11-09
 **Requirements:** FR-062 to FR-068, NFR-006, UC-020 BR-002, BR-004, BR-006, BR-008, A10, A11, ADR-004, ADR-005, ADR-006, ADR-008
 
