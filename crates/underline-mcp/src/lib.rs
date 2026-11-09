@@ -4,6 +4,8 @@
 //! read and edit the same notes. Messages are JSON-RPC 2.0, one per line,
 //! as in the MCP stdio transport.
 
+pub mod install;
+
 use serde_json::{json, Value};
 use underline_core::{Note, NoteId, Workspace};
 

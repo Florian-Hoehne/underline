@@ -224,7 +224,13 @@ impl SettingsState {
 
     /// The settings window (UC-010 step 2): "For me" and "This workspace".
     /// `derived` is the note format the workspace's notes give.
-    pub fn show_window(&mut self, ctx: &egui::Context, derived: Option<NoteFormat>) {
+    /// `extra` adds the section "Agents" (UC-016) at the end.
+    pub fn show_window(
+        &mut self,
+        ctx: &egui::Context,
+        derived: Option<NoteFormat>,
+        extra: impl FnOnce(&mut egui::Ui),
+    ) {
         if !self.open {
             return;
         }
@@ -304,6 +310,11 @@ impl SettingsState {
                             ui.end_row();
                         }
                     });
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new("Agents")
+                    .id_salt("agents")
+                    .default_open(true)
+                    .show(ui, extra);
             });
         for (key, value) in changes {
             self.change(self.scope, key, value);

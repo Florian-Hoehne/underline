@@ -37,6 +37,9 @@ use underline_facade::index::{indexes, Indexes};
 use underline_facade::rename::{links_to_note, rename_note, Edit, OpenNotes, Renamed};
 use underline_facade::themes::Palette;
 use underline_facade::Registry;
+use underline_mcp::install::{
+    self as mcp_install, InstallError, InstallState, Places, Server, Tool as AgentTool,
+};
 use underline_wiki::WikiRemote;
 
 /// Main window: note overview on the left, editor in the middle, status bar
@@ -127,6 +130,8 @@ pub struct UnderlineApp {
     /// and the question before aborting the sync.
     conflict_cursor: usize,
     abort_confirm: bool,
+    /// UC-016: the section "Agents" of the settings.
+    agents: AgentsView,
     /// The note chosen in the note overview while it has the keyboard.
     overview_chosen: Option<NoteId>,
     undo_delete: Option<UndoDelete>,
@@ -373,6 +378,35 @@ struct SyncView {
     distance: Distance,
     /// A9: Underline closes once the sync ended, or at this time.
     closing: Option<Instant>,
+}
+
+/// The section "Agents" (UC-016): each tool's state, checked when the
+/// settings open, the last report, and a question waiting for an answer.
+#[derive(Default)]
+struct AgentsView {
+    states: Vec<(AgentTool, Result<InstallState, String>)>,
+    was_open: bool,
+    report: Option<String>,
+    asking: Option<AgentQuestion>,
+}
+
+/// UC-016 A1, A2: what the section asks before installing.
+#[derive(Clone, Copy)]
+enum AgentQuestion {
+    SwitchOn(AgentTool),
+    Replace(AgentTool),
+}
+
+/// What the user did in the section "Agents".
+enum AgentAction {
+    /// Install, replacing an entry for another place with `true`.
+    Install(AgentTool, bool),
+    /// A1: install although the MCP server stays off.
+    InstallOnly(AgentTool),
+    SwitchOnAndInstall(AgentTool),
+    Remove(AgentTool),
+    Copy,
+    Cancel,
 }
 
 /// "just now", "2 min ago", "3 h ago".
@@ -907,6 +941,108 @@ fn changes_ui(
     action
 }
 
+/// UC-016 steps 2–3, A1–A5: the section "Agents" of the settings.
+fn agents_ui(
+    ui: &mut egui::Ui,
+    agents: &AgentsView,
+    server: Option<&Server>,
+    mcp_on: bool,
+) -> Option<AgentAction> {
+    let Some(server) = server else {
+        ui.weak("Open a workspace to connect agents to it.");
+        return None;
+    };
+    let mut action = None;
+    ui.weak(format!(
+        "Let an agent tool reach the notes of {} through Underline's MCP server.",
+        server.workspace.display()
+    ));
+    if !mcp_on {
+        ui.weak("The MCP server is off; agents reach the notes only while it is on.");
+    }
+    egui::Grid::new("agents-grid")
+        .num_columns(3)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            for (tool, state) in &agents.states {
+                ui.label(tool.name());
+                match state {
+                    Ok(InstallState::NotFound) => {
+                        ui.weak("not found");
+                        ui.add_enabled(false, egui::Button::new("Install"));
+                    }
+                    Ok(InstallState::NotInstalled) => {
+                        ui.label("not installed");
+                        if ui.button("Install").clicked() {
+                            action = Some(AgentAction::Install(*tool, false));
+                        }
+                    }
+                    Ok(InstallState::Installed(name)) => {
+                        ui.label(format!("installed as {name}"));
+                        if ui.button("Remove").clicked() {
+                            action = Some(AgentAction::Remove(*tool));
+                        }
+                    }
+                    Ok(InstallState::ForAnotherPlace(name)) => {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            format!("{name}: installed for another place"),
+                        );
+                        if ui.button("Install").clicked() {
+                            action = Some(AgentAction::Install(*tool, false));
+                        }
+                    }
+                    Err(err) => {
+                        ui.colored_label(ui.visuals().warn_fg_color, "cannot be read")
+                            .on_hover_text(err);
+                        ui.label("");
+                    }
+                }
+                ui.end_row();
+            }
+        });
+    match agents.asking {
+        Some(AgentQuestion::SwitchOn(tool)) => {
+            ui.label(
+                "Agents reach the notes only while the MCP server is on. Switch it on for you?",
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Switch on and install").clicked() {
+                    action = Some(AgentAction::SwitchOnAndInstall(tool));
+                }
+                if ui.button("Install only").clicked() {
+                    action = Some(AgentAction::InstallOnly(tool));
+                }
+                if ui.button("Cancel").clicked() {
+                    action = Some(AgentAction::Cancel);
+                }
+            });
+        }
+        Some(AgentQuestion::Replace(tool)) => {
+            ui.horizontal(|ui| {
+                if ui.button("Replace").clicked() {
+                    action = Some(AgentAction::Install(tool, true));
+                }
+                if ui.button("Cancel").clicked() {
+                    action = Some(AgentAction::Cancel);
+                }
+            });
+        }
+        None => {}
+    }
+    if let Some(report) = &agents.report {
+        ui.label(report);
+    }
+    if ui
+        .button("Copy configuration")
+        .on_hover_text("For any other agent tool")
+        .clicked()
+    {
+        action = Some(AgentAction::Copy);
+    }
+    action
+}
+
 /// The note format of `id` among `formats`.
 fn entry_format(
     formats: &std::collections::HashMap<NoteId, NoteFormat>,
@@ -1050,6 +1186,7 @@ impl UnderlineApp {
             sync: SyncView::default(),
             conflict_cursor: 0,
             abort_confirm: false,
+            agents: AgentsView::default(),
             overview_chosen: None,
             undo_delete: None,
             deleted: Vec::new(),
@@ -2662,6 +2799,103 @@ impl UnderlineApp {
         }
     }
 
+    /// The MCP server entry of the open workspace: this Underline serving it.
+    fn mcp_server(&self) -> Option<Server> {
+        let workspace = self.workspace.as_ref()?;
+        Some(Server {
+            program: std::env::current_exe().ok()?,
+            workspace: workspace.root().to_owned(),
+        })
+    }
+
+    fn check_agents(&mut self, server: Option<&Server>) {
+        let places = Places::of_this_computer();
+        self.agents.states = match server {
+            Some(server) => AgentTool::ALL
+                .iter()
+                .map(|tool| {
+                    (
+                        *tool,
+                        mcp_install::state(*tool, &places, server).map_err(|e| e.to_string()),
+                    )
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+    }
+
+    /// UC-016 steps 3–5, A1–A4, A6.
+    fn agent_action(&mut self, action: AgentAction, server: Option<&Server>) {
+        let Some(server) = server else {
+            return;
+        };
+        let places = Places::of_this_computer();
+        let workspace = server
+            .workspace
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.agents.asking = None;
+        match action {
+            AgentAction::Cancel => {}
+            AgentAction::Copy => {
+                self.ctx.copy_text(server.snippet());
+                self.agents.report = Some(format!(
+                    "Copied the configuration of {workspace}. Its command: {}",
+                    server.command_line()
+                ));
+            }
+            AgentAction::Remove(tool) => {
+                self.agents.report = Some(match mcp_install::remove(tool, &places, server) {
+                    Ok(()) => format!("Removed {workspace} from {}.", tool.name()),
+                    Err(err) => format!("{} was not changed: {err}", tool.name()),
+                });
+            }
+            AgentAction::SwitchOnAndInstall(tool) => {
+                // A1: the user agreed to switch the MCP server on.
+                self.settings.change(
+                    crate::settings::Scope::Me,
+                    SettingKey::McpServerEnabled,
+                    Some("true".into()),
+                );
+                self.agent_action(AgentAction::InstallOnly(tool), Some(server));
+                return;
+            }
+            AgentAction::Install(tool, false) if !self.settings.effective.mcp_server_enabled => {
+                // A1: asked first.
+                self.agents.asking = Some(AgentQuestion::SwitchOn(tool));
+                self.agents.report = None;
+                return;
+            }
+            AgentAction::Install(tool, _) | AgentAction::InstallOnly(tool) => {
+                let replace = matches!(action, AgentAction::Install(_, true));
+                self.agents.report = Some(
+                    match mcp_install::install(tool, &places, server, replace) {
+                        Ok(name) => {
+                            let mut report = format!(
+                            "Installed {workspace} in {} as {name}; restart {} if it does not show it yet.",
+                            tool.name(),
+                            tool.name()
+                        );
+                            if !self.settings.effective.mcp_server_enabled {
+                                report.push_str(" The MCP server is off, so the agent cannot reach the notes yet.");
+                            }
+                            report
+                        }
+                        // A2: the entry starts another Underline.
+                        Err(InstallError::ForAnotherPlace(_)) => {
+                            self.agents.asking = Some(AgentQuestion::Replace(tool));
+                            "An entry for this workspace starts another Underline. Replace it?"
+                                .into()
+                        }
+                        Err(err) => format!("{} was not changed: {err}", tool.name()),
+                    },
+                );
+            }
+        }
+        self.check_agents(Some(server));
+    }
+
     /// UC-014 step 1: starts a sync after saving the open notes; `asked`
     /// when the user asked, so a refusal is reported (A10).
     fn request_sync(&mut self, mode: SyncMode, asked: bool) {
@@ -3140,7 +3374,21 @@ impl UnderlineApp {
             self.settings.open = !self.settings.open;
         }
         let derived = self.workspace.as_ref().map(|w| w.default_format());
-        self.settings.show_window(ctx, derived);
+        // UC-016 BR-006: the tools' states, checked whenever the settings open.
+        let server = self.mcp_server();
+        if self.settings.open && !self.agents.was_open {
+            self.check_agents(server.as_ref());
+        }
+        self.agents.was_open = self.settings.open;
+        let mut agent_action = None;
+        let agents = &self.agents;
+        let mcp_on = self.settings.effective.mcp_server_enabled;
+        self.settings.show_window(ctx, derived, |ui| {
+            agent_action = agents_ui(ui, agents, server.as_ref(), mcp_on);
+        });
+        if let Some(action) = agent_action {
+            self.agent_action(action, server.as_ref());
+        }
         for message in self.settings.take_messages() {
             self.status = message;
         }
