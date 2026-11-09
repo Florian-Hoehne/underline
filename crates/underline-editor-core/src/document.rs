@@ -6,8 +6,11 @@ use ropey::Rope;
 /// One change: at char index `at`, `removed` was replaced by `inserted`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
+    /// The char index where the change starts.
     pub at: usize,
+    /// The text the change replaced.
     pub removed: String,
+    /// The text the change put in its place.
     pub inserted: String,
 }
 
@@ -23,6 +26,7 @@ pub struct Document {
 }
 
 impl Document {
+    /// A document with `text` and an empty history.
     pub fn new(text: &str) -> Self {
         Self {
             rope: Rope::from_str(text),
@@ -40,6 +44,7 @@ impl Document {
         }
     }
 
+    /// The text as a rope.
     pub fn rope(&self) -> &Rope {
         &self.rope
     }
@@ -49,14 +54,17 @@ impl Document {
         self.revision
     }
 
+    /// The whole text as a string.
     pub fn text(&self) -> String {
         self.rope.to_string()
     }
 
+    /// The length of the text in chars.
     pub fn len_chars(&self) -> usize {
         self.rope.len_chars()
     }
 
+    /// The number of lines of the text.
     pub fn len_lines(&self) -> usize {
         self.rope.len_lines()
     }

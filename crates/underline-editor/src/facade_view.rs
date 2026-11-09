@@ -26,10 +26,10 @@ use underline_facade::sections::Section;
 
 use crate::blink::Blink;
 use crate::enlarged::{Enlarged, Shown};
-use crate::keys::{EditorCommand, InputMode, Target};
+use crate::keys::{EditorCommand, KeysInputMode, Target};
 use crate::minimap::{self, Mark};
 use crate::source_view::{paint_fold_arrow, Pasted, MARKS_EVERY};
-use crate::{fonts, SourceView, Tool};
+use crate::{fonts, toolbar, SourceView};
 
 const PADDING: f32 = 12.0;
 const BLOCK_GAP: f32 = 8.0;
@@ -417,7 +417,7 @@ impl FacadeView {
             }
 
             if response.has_focus() && self.enlarged.is_none() {
-                let keys_escape = source.keys.mode != InputMode::Normal;
+                let keys_escape = source.keys.mode != KeysInputMode::Normal;
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
                         self.id,
@@ -1429,7 +1429,7 @@ impl FacadeView {
         // order, the same as in the source view; a line is a block here
         // (OQ-077). What they leave is handled as usual right after.
         for raw in raw_events {
-            let events = if source.keys.mode == InputMode::Normal {
+            let events = if source.keys.mode == KeysInputMode::Normal {
                 vec![raw]
             } else {
                 self.reparse(source);
@@ -1440,7 +1440,7 @@ impl FacadeView {
                     ui,
                     theme,
                 };
-                let (rest, edited) = keys.handle(vec![raw], &mut target);
+                let (rest, edited) = keys.handle(vec![raw], crate::keys::to_core, &mut target);
                 source.keys = keys;
                 changed |= edited;
                 self.scroll_to_cursor = true;
@@ -1658,7 +1658,7 @@ impl FacadeView {
             }
             return false;
         };
-        if let Some(tool) = Tool::for_key(key, modifiers) {
+        if let Some(tool) = toolbar::for_key(key, modifiers) {
             return source.apply_tool(tool);
         }
         let count = self.blocks[index].text().chars().count();
@@ -2491,6 +2491,7 @@ mod tests {
     use super::*;
     use crate::clipboard::{ClipContent, ClipImage, MemoryClipboard};
     use crate::keys::{EditorCommand, InputMode};
+    use crate::Tool;
     use std::time::{Duration, Instant};
     use underline_facade::highlight::HighlightSet;
 

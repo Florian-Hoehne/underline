@@ -12,6 +12,7 @@ dejavu.workspace = true
 eframe.workspace = true
 ropey.workspace = true
 underline-core.workspace = true
+underline-editor-core.workspace = true
 underline-facade.workspace = true
 # The clipboard with HTML and images (ADR-014); the version egui uses.
 arboard = { version = "3.7", default-features = false, features = ["image-data"] }

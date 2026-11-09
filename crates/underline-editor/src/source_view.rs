@@ -16,10 +16,12 @@ use underline_facade::themes::Palette;
 
 use crate::blink::Blink;
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
-use crate::document::Document;
-use crate::keys::{EditorCommand, InputMode, InputStatus, Keys, Target};
+use crate::keys::{
+    mode_to_core, to_core, EditorCommand, InputMode, InputStatus, Keys, KeysInputMode, Target,
+};
 use crate::minimap::{self, Mark};
-use crate::Tool;
+use crate::toolbar::{self, Tool};
+use underline_editor_core::Document;
 use underline_facade::blocks::{link_at, parse_blocks};
 use underline_facade::clip::html_to_markup;
 use underline_facade::formatting::{apply_format, Format};
@@ -452,7 +454,7 @@ impl SourceView {
     /// of the note's format; link and image are asked for first and come
     /// back through [`Self::take_request`].
     pub fn apply_tool(&mut self, tool: Tool) -> bool {
-        match tool.format() {
+        match toolbar::format(tool) {
             Some(format) => self.apply_format(&format),
             None => {
                 self.request = Some(tool);
@@ -710,7 +712,7 @@ impl SourceView {
 
     /// Chooses the input mode: normal, Vim, or Nano (FR-024, FR-025).
     pub fn set_input_mode(&mut self, mode: InputMode) {
-        self.keys.mode = mode;
+        self.keys.mode = mode_to_core(mode);
     }
 
     /// FR-026: the active input mode and its most important commands, for
@@ -1025,7 +1027,7 @@ impl SourceView {
             }
 
             if response.has_focus() {
-                let keys_escape = self.keys.mode != InputMode::Normal;
+                let keys_escape = self.keys.mode != KeysInputMode::Normal;
                 ui.memory_mut(|m| {
                     m.set_focus_lock_filter(
                         self.id,
@@ -1391,11 +1393,11 @@ impl SourceView {
         // FR-024, FR-025: each event goes to the Vim or Nano keys first, in
         // order; what they leave is handled as usual right after.
         for raw in raw_events {
-            let events = if self.keys.mode == InputMode::Normal {
+            let events = if self.keys.mode == KeysInputMode::Normal {
                 vec![raw]
             } else {
                 let mut keys = std::mem::take(&mut self.keys);
-                let (rest, edited) = keys.handle(vec![raw], &mut SourceTarget(self));
+                let (rest, edited) = keys.handle(vec![raw], to_core, &mut SourceTarget(self));
                 self.keys = keys;
                 changed |= edited;
                 self.scroll_to_cursor = true;
@@ -1465,7 +1467,7 @@ impl SourceView {
         if self.fold_key(key, modifiers) {
             return false;
         }
-        if let Some(tool) = Tool::for_key(key, modifiers) {
+        if let Some(tool) = toolbar::for_key(key, modifiers) {
             return self.apply_tool(tool);
         }
         let rope_len = self.doc.len_chars();
