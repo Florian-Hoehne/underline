@@ -57,6 +57,7 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-016 | The system's file dialogs through rfd | Accepted |
 | ADR-017 | MCP install edits each agent tool's user configuration file | Accepted |
 | ADR-018 | Agent changes go through the running window by request files | Accepted |
+| ADR-019 | Todos as one YAML file each in `.todos/`, never merged line by line | Proposed |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
