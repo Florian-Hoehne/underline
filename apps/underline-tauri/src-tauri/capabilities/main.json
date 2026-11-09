@@ -8,6 +8,14 @@
     "core:window:allow-show",
     "allow-app-start",
     "allow-settings-quick",
-    "allow-wiki-check"
+    "allow-wiki-check",
+    "allow-ws-start",
+    "allow-ws-recent",
+    "allow-ws-open",
+    "allow-ws-check-new",
+    "allow-ws-create",
+    "allow-tab-open",
+    "allow-tab-activate",
+    "allow-tab-close"
   ]
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ws-check-new"
+description = "Enables the ws_check_new command without any pre-configured scope."
+commands.allow = ["ws_check_new"]
+
+[[permission]]
+identifier = "deny-ws-check-new"
+description = "Denies the ws_check_new command without any pre-configured scope."
+commands.deny = ["ws_check_new"]

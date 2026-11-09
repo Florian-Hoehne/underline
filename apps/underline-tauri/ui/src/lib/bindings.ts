@@ -27,15 +27,152 @@ export const commands = {
 	 *  bar says the repository or why the URL does not fit. Nothing is stored.
 	 */
 	wikiCheck: (url: string) => typedError<null, UiError>(__TAURI_INVOKE("wiki_check", { url })),
+	/**
+	 *  M-01.1, UC-002 A1/A2: opens the workspace given on the command line,
+	 *  else the one opened last. The window shows its loading state until the
+	 *  answer comes; `Problem` shows the Open dialog with what stands in the
+	 *  way. Only the first call opens anything.
+	 */
+	wsStart: () => typedError<StartOpened, UiError>(__TAURI_INVOKE("ws_start")),
+	/**
+	 *  M-21.1, UC-002 step 2: the recently opened workspaces, the most recent
+	 *  first, for the Open dialog.
+	 */
+	wsRecent: () => typedError<string[], UiError>(__TAURI_INVOKE("ws_recent")),
+	/**
+	 *  M-21.1, UC-002 steps 4–9: opens the directory the user chose in the Open
+	 *  dialog, or says what stands in the way. With `anyway`, a directory inside
+	 *  a workspace is opened all the same (A5 step 2, A6).
+	 */
+	wsOpen: (path: string, anyway: boolean) => typedError<OpenAnswer, UiError>(__TAURI_INVOKE("ws_open", { path, anyway })),
+	/**
+	 *  M-21.2, UC-001 step 2: checks the directory of the Create dialog's first
+	 *  stage; the answer is the next stage or the first one with the problem.
+	 */
+	wsCheckNew: (path: string) => typedError<CreateAnswer, UiError>(__TAURI_INVOKE("ws_check_new", { path })),
+	/**
+	 *  M-21.2, UC-001 step 5, A3: creates the workspace and opens it with its
+	 *  Home note; a failure is said in the status bar (A5, A6).
+	 */
+	wsCreate: (request: NewWorkspaceRequest) => typedError<CreateAnswer, UiError>(__TAURI_INVOKE("ws_create", { request })),
+	/**
+	 *  M-05.2, UC-004 step 2: opens the note `note` of the overview in a tab, or
+	 *  activates its tab, and moves it to the top of the overview.
+	 */
+	tabOpen: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_open", { note })),
+	/**  M-06.2, UC-004 A5: activates the tab of `note`. */
+	tabActivate: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_activate", { note })),
+	/**  M-06.3, UC-004 A5: closes the tab of `note`. */
+	tabClose: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_close", { note })),
 };
 
 /** Events */
 export const events = {
+	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
+	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
+	workspace: makeEvent<WorkspaceEvent, WorkspaceEvent>("workspace"),
 };
 
 /* Types */
+/**  The stage the Create dialog goes to (M-21.2, UC-001). */
+export type CreateAnswer = 
+/**
+ *  The dialog closes: the workspace was created, or creating it failed
+ *  and the status says why (A5, A6).
+ */
+{ stage: "done" } | 
+/**
+ *  Step 3: the directory may take the workspace; the format and the git
+ *  option are asked next.
+ */
+{ stage: "options"; 
+/**  The directory, as typed. */
+directory: string } | 
+/**  Step 1 again, saying why the directory was refused (A1, A7). */
+{ stage: "directory"; 
+/**  The text of the path field. */
+path: string; 
+/**  Why, as the egui app says it. */
+problem: string; 
+/**  A1, A2: the directory that holds files, to open it instead. */
+offer: string | null };
+
+/**  The editing view a tab shows its note in (UC-004 BR-003). */
+export type EditingViewName = 
+/**  The markup as it is stored. */
+"source" | 
+/**  The formatted note. */
+"facade";
+
+/**  A note format as the Create dialog names it (UC-001 BR-001). */
+export type FormatName = 
+/**  Markdown, preselected. */
+"Markdown" | 
+/**  AsciiDoc. */
+"AsciiDoc";
+
+/**  What the user chose in the Create dialog (UC-001 steps 1–4, A3). */
+export type NewWorkspaceRequest = {
+	/**  The directory, as the Options stage named it. */
+	directory: string,
+	/**  The default format of new notes. */
+	format: FormatName,
+	/**  "Create as git repository". */
+	git: boolean,
+	/**  The address of the git remote; empty for none. Only used with `git`. */
+	remote: string,
+};
+
+/**  The answer to choosing a directory to open (UC-002 step 4). */
+export type OpenAnswer = 
+/**
+ *  The dialog closes: the workspace is open now, was open already (A9),
+ *  or there was nothing to open; a failure is in the status.
+ */
+{ kind: "done" } | 
+/**  The dialog shows what stands in the way (A3, A5, A7, A11). */
+{ kind: "problem"; 
+/**  The text of the path field. */
+path: string; 
+/**  Why the directory cannot be opened, as the egui app says it. */
+problem: string; 
+/**  What the dialog offers instead. */
+offer: OpenOffer | null; 
+/**  The recently opened workspaces, without one that is gone (A3). */
+recent: string[] };
+
+/**
+ *  What the Open dialog offers besides choosing another directory
+ *  (M-21.1).
+ */
+export type OpenOffer = 
+/**  UC-002 A3, A4: "Create a new workspace there". */
+{ kind: "create"; 
+/**  The directory that does not exist. */
+directory: string } | 
+/**  UC-002 A5, A6: "Open {outer}" and "Open {inner} anyway". */
+{ kind: "outer"; 
+/**  The workspace the directory lies in. */
+outer: string; 
+/**  The chosen directory. */
+inner: string };
+
+/**  M-05.2: the note overview changed. */
+export type OverviewEvent = OverviewItem[];
+
+/**  One line of the note overview (M-05.2, UC-002 BR-008). */
+export type OverviewItem = {
+	/**
+	 *  The note, by its id (`guide/Getting-Started`), which the window sends
+	 *  back to open it.
+	 */
+	note: string,
+	/**  The title, with the folder when the title occurs more than once. */
+	label: string,
+};
+
 /**
  *  The palette of one theme, as `#rrggbb` strings.
  * 
@@ -164,6 +301,11 @@ export type SettingsView = {
 	showMenuBar: boolean,
 	/**  Whether search hits blink in the minimap (UC-008 BR-008). */
 	blinkFoundInMinimap: boolean,
+	/**
+	 *  Q-03: grows each time a settings file was read again; the window
+	 *  then sets the panels back to `overview_width` and `tool_panel_width`.
+	 */
+	widthGeneration: number,
 };
 
 /**  What the window needs to know when it starts (M-01). */
@@ -194,6 +336,17 @@ export type StartInfo = {
 	status: string,
 };
 
+/**
+ *  What `ws_start` did (M-01.1): the answer, and the workspace part of the
+ *  window afterwards.
+ */
+export type StartOpened = {
+	/**  `Problem` shows the Open dialog, as the egui app does at start. */
+	answer: OpenAnswer,
+	/**  The workspace, overview and tabs after opening. */
+	snapshot: WorkspaceSnapshot,
+};
+
 /**  M-04.7: the status message changed. */
 export type StatusEvent = StatusView;
 
@@ -201,6 +354,47 @@ export type StatusEvent = StatusView;
 export type StatusView = {
 	/**  The text, as the egui app shows it; empty when there is none. */
 	text: string,
+};
+
+/**  One tab of the tab bar (M-06.1). */
+export type TabView = {
+	/**  The note the tab shows, by its id. */
+	note: string,
+	/**
+	 *  The title, marked " (deleted)" when the note was deleted outside.
+	 *  The marks for a failed save (" ⚠") and for unstored changes (" •")
+	 *  come with the editor (feature F3).
+	 */
+	label: string,
+	/**  The note's file, shown when the pointer rests on the tab. */
+	path: string,
+	/**  The editing view of the tab (M-06.7). */
+	view: EditingViewName,
+};
+
+/**  M-06: the tab bar changed. */
+export type TabsEvent = TabsView;
+
+/**  The tab bar (M-06): the note tabs left to right and the active one. */
+export type TabsView = {
+	/**  The note tabs, left to right. */
+	tabs: TabView[],
+	/**
+	 *  The note of the active note tab; `None` without tabs. The note
+	 *  overview marks it even while the tab "Todos" is the active one; the
+	 *  tab bar then marks the tab "Todos" instead.
+	 */
+	active: string | null,
+	/**  The tab "Todos"; its list comes with feature F15. */
+	todoList: TodoTabView,
+};
+
+/**  The tab "Todos" (M-06.5, UC-021 BR-005), as it is remembered. */
+export type TodoTabView = {
+	/**  The tab is open. */
+	open: boolean,
+	/**  The tab is the active one; no note tab is then. */
+	active: boolean,
 };
 
 /**
@@ -232,6 +426,30 @@ export type UiErrorKind =
 "invalid" | 
 /**  A failure the user cannot act on. */
 "internal";
+
+/**  M-21.3, M-03.3, M-04.7: a workspace was opened; `null` while none is. */
+export type WorkspaceEvent = WorkspaceView | null;
+
+/**
+ *  The workspace part of the window at once: what `ws_start` returns, so
+ *  the window leaves its loading state with everything in place.
+ */
+export type WorkspaceSnapshot = {
+	/**  The open workspace, if any. */
+	workspace: WorkspaceView | null,
+	/**  The note overview. */
+	overview: OverviewItem[],
+	/**  The tab bar. */
+	tabs: TabsView,
+};
+
+/**  The open workspace as the window names it (M-03.3, M-04.7). */
+export type WorkspaceView = {
+	/**  The workspace's directory, as the status bar shows it. */
+	root: string,
+	/**  The folder name, which the top bar shows without the menu bar. */
+	name: string,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

@@ -46,6 +46,9 @@ pub struct SettingsState {
     effective: Effective,
     /// Messages for the status bar.
     messages: Vec<String>,
+    /// Counts the times a settings file was read again (Q-03): each time,
+    /// the panels go back to their stored widths, as in the egui app.
+    width_generation: u32,
 }
 
 impl SettingsState {
@@ -69,6 +72,7 @@ impl SettingsState {
             broken: Vec::new(),
             effective: Effective::default(),
             messages: Vec::new(),
+            width_generation: 0,
         };
         state.read_user();
         state.recompute();
@@ -79,6 +83,25 @@ impl SettingsState {
     #[must_use]
     pub fn effective(&self) -> &Effective {
         &self.effective
+    }
+
+    /// Q-03, M-05.1: grows each time a settings file is read again after it
+    /// changed outside; the window then sets the panels back to the widths
+    /// in effect, as egui does with its `width_generation`. The settings
+    /// window (feature F10) bumps it too when it changes a width.
+    #[must_use]
+    pub fn width_generation(&self) -> u32 {
+        self.width_generation
+    }
+
+    /// The directory of the user settings file, which is never a workspace
+    /// (UC-002 BR-007).
+    #[must_use]
+    pub fn user_settings_dir(&self) -> Option<PathBuf> {
+        self.user_path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_owned)
     }
 
     /// Messages for the status bar since the last call.
@@ -139,6 +162,7 @@ impl SettingsState {
             Ok(settings) => {
                 self.broken.retain(|p| p != &path);
                 self.workspace = Some((root, settings, shared));
+                self.width_generation = self.width_generation.wrapping_add(1);
                 self.recompute();
             }
             Err(err) => self.broken_file(&path, &err),
@@ -157,6 +181,7 @@ impl SettingsState {
         };
         if modified(path) != self.user_seen {
             self.read_user();
+            self.width_generation = self.width_generation.wrapping_add(1);
             self.recompute();
         }
     }
@@ -258,7 +283,7 @@ impl SettingsState {
     /// the theme (M-01.6).
     #[must_use]
     pub fn view(&self) -> SettingsView {
-        SettingsView::of(&self.effective)
+        SettingsView::of(&self.effective, self.width_generation)
     }
 }
 
@@ -353,12 +378,15 @@ pub struct SettingsView {
     pub show_menu_bar: bool,
     /// Whether search hits blink in the minimap (UC-008 BR-008).
     pub blink_found_in_minimap: bool,
+    /// Q-03: grows each time a settings file was read again; the window
+    /// then sets the panels back to `overview_width` and `tool_panel_width`.
+    pub width_generation: u32,
 }
 
 impl SettingsView {
-    /// The view of `effective`.
+    /// The view of `effective`, with the panel widths' generation (Q-03).
     #[must_use]
-    pub fn of(effective: &Effective) -> Self {
+    pub fn of(effective: &Effective, width_generation: u32) -> Self {
         Self {
             theme: effective.theme.label().to_owned(),
             palette: PaletteView::of(underline_facade::themes::palette(effective.theme)),
@@ -375,6 +403,7 @@ impl SettingsView {
             tool_panel_width: effective.tool_panel_width,
             show_menu_bar: effective.show_menu_bar,
             blink_found_in_minimap: effective.blink_found_in_minimap,
+            width_generation,
         }
     }
 }
@@ -574,6 +603,52 @@ mod tests {
     }
 
     #[test]
+    fn q03_m05_1_reading_the_user_file_again_resets_the_panel_widths() {
+        let dir = temp_dir("width-user");
+        let start = Instant::now();
+        fs::create_dir_all(dir.join("home")).unwrap();
+        let mut state = SettingsState::with_user_file(Some(user_file(&dir)), start);
+        assert_eq!(state.width_generation(), 0);
+
+        state.poll(start + USER_SETTINGS_POLL);
+        assert_eq!(state.width_generation(), 0, "an unchanged file is not read");
+
+        fs::write(user_file(&dir), "overview_width: 300\n").unwrap();
+        state.poll(start + USER_SETTINGS_POLL * 2);
+
+        assert_eq!(state.width_generation(), 1);
+        assert_eq!(state.view().width_generation, 1);
+        assert_eq!(state.view().overview_width, 300);
+    }
+
+    #[test]
+    fn q03_m05_1_a_quick_change_keeps_the_panel_widths() {
+        let dir = temp_dir("width-quick");
+        let mut state = state_in(&dir);
+
+        state.quick_change(SettingKey::OverviewWidth, "320".into());
+
+        assert_eq!(state.effective().overview_width, 320);
+        assert_eq!(state.width_generation(), 0);
+    }
+
+    #[test]
+    fn q03_reading_the_workspace_file_again_resets_the_panel_widths() {
+        let dir = temp_dir("width-workspace");
+        let root = dir.join("ws");
+        fs::create_dir_all(&root).unwrap();
+        let mut state = state_in(&dir);
+        state.open_workspace(&root, &Git::new());
+        assert_eq!(state.width_generation(), 0, "opening is no reading again");
+        fs::write(root.join(SETTINGS_FILE_NAME), "overview_width: 260\n").unwrap();
+
+        state.reload_workspace();
+
+        assert_eq!(state.width_generation(), 1);
+        assert_eq!(state.effective().overview_width, 260);
+    }
+
+    #[test]
     fn uc010_m20_6_an_own_change_is_not_read_again() {
         let dir = temp_dir("own-change");
         let start = Instant::now();
@@ -675,7 +750,7 @@ mod tests {
             ..Effective::default()
         };
 
-        let view = SettingsView::of(&effective);
+        let view = SettingsView::of(&effective, 0);
 
         assert_eq!(view.theme, "GitHub Dark");
         assert!(view.show_menu_bar);

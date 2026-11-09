@@ -71,7 +71,7 @@ describe('M-03 top bar', () => {
 
   it('M-03.3 without the menu bar, names the workspace by its folder', async () => {
     const shell = await connectedShell();
-    shell.workspaceRoot = '/home/me/Notes';
+    shell.workspace = { root: '/home/me/Notes', name: 'Notes' };
 
     render(TopBar, { props: { shell } });
 

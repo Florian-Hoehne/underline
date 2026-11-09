@@ -1,33 +1,88 @@
 //! The session of one window: what was given on the command line, the app
-//! state, the settings and the status message, driven by [`Session::tick`]
-//! (ADR-022).
+//! state, the settings, the open workspace with its overview and tabs, and
+//! the status message, driven by [`Session::tick`] (ADR-022).
 
-use std::path::PathBuf;
+mod workspace;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
-use underline_core::{Effective, StateError, StateNotice, StateStore};
+use underline_core::{Effective, Git, OwnWrites, StateError, StateNotice, StateStore};
+use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
 use crate::settings::theme_names;
+use crate::workspace_view::{TabsView, WorkspaceView};
 use crate::{Event, Platform, SettingName, SettingsState, StartInfo, StatusView};
+
+use self::workspace::OpenWorkspace;
+
+/// Wakes the tick at once (ADR-022), for example when the workspace
+/// watcher has changes. Without one set, waking does nothing.
+#[derive(Clone)]
+pub(crate) struct Wake(Arc<dyn Fn() + Send + Sync>);
+
+impl Wake {
+    pub(crate) fn wake(&self) {
+        (self.0)();
+    }
+}
+
+impl Default for Wake {
+    fn default() -> Self {
+        Self(Arc::new(|| {}))
+    }
+}
+
+impl std::fmt::Debug for Wake {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Wake")
+    }
+}
 
 /// The state of one window.
 ///
-/// The workspace, the tabs and the background services are ported here from
-/// the egui app feature by feature.
-#[derive(Debug)]
+/// The background services and the editor are ported here from the egui
+/// app feature by feature.
 pub struct Session {
     /// The authority for the folder. The window only gets a display string of
     /// it (`StartInfo::given_dir`) and never sends a path back.
     given_dir: Option<PathBuf>,
-    /// The known workspaces (M-22.1).
+    /// Whether the workspace to start with was opened (M-01.1).
+    started: bool,
+    /// The known workspaces (M-22.1) and the remembered tabs (M-22.2).
     state: StateStore,
     /// The user and workspace settings (UC-010).
     settings: SettingsState,
     /// The one status message of the status bar (M-04.7).
     status: String,
+    /// The installed git program (ADR-006).
+    git: Git,
+    /// The format modules, which write a new workspace's Home note.
+    formats: Registry,
+    /// The files Underline writes itself, which the watcher leaves out; the
+    /// note saver of feature F3 records into the same.
+    own_writes: OwnWrites,
+    /// Wakes the tick when a background service has news.
+    wake: Wake,
+    /// The open workspace (UC-002).
+    open: Option<OpenWorkspace>,
+    /// The workspace or the tab bar may have changed since the window was
+    /// told; their views are built only then, not every tick.
+    views_dirty: bool,
     /// What the window was told last, so only changes become events.
     told: Told,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("given_dir", &self.given_dir)
+            .field("status", &self.status)
+            .field("open", &self.open)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The state the window was told last.
@@ -36,6 +91,11 @@ struct Told {
     status: String,
     /// The settings in effect; the view is built only when they changed.
     settings: Effective,
+    width_generation: u32,
+    workspace: Option<WorkspaceView>,
+    /// The overview by the generation of the workspace it was taken from.
+    overview: Option<(PathBuf, u64)>,
+    tabs: TabsView,
 }
 
 impl Session {
@@ -64,12 +124,23 @@ impl Session {
         let told = Told {
             status: String::new(),
             settings: settings.effective().clone(),
+            width_generation: settings.width_generation(),
+            workspace: None,
+            overview: None,
+            tabs: TabsView::default(),
         };
         let mut session = Self {
             given_dir,
+            started: false,
             state,
             settings,
             status: String::new(),
+            git: Git::new(),
+            formats: Registry::default(),
+            own_writes: OwnWrites::default(),
+            wake: Wake::default(),
+            open: None,
+            views_dirty: false,
             told,
         };
         if let Some(notice) = notice {
@@ -78,6 +149,13 @@ impl Session {
         session.take_settings_messages();
         session.told.status.clone_from(&session.status);
         session
+    }
+
+    /// Sets what wakes the tick when a background service of the session,
+    /// such as the workspace watcher, has news (ADR-022). Services started
+    /// before keep the earlier one.
+    pub fn set_wake(&mut self, wake: impl Fn() + Send + Sync + 'static) {
+        self.wake = Wake(Arc::new(wake));
     }
 
     /// What the window needs to know when it starts (M-01).
@@ -106,6 +184,12 @@ impl Session {
         &self.status
     }
 
+    /// The root of the open workspace, if one is open.
+    #[must_use]
+    pub fn workspace_root(&self) -> Option<&Path> {
+        self.open.as_ref().map(OpenWorkspace::root)
+    }
+
     /// The settings of the window (UC-010).
     #[must_use]
     pub fn settings(&self) -> &SettingsState {
@@ -130,10 +214,13 @@ impl Session {
         };
     }
 
-    /// The work of one tick at `now` (ADR-022): the user settings file is
-    /// looked at every 500 ms (M-20.6), the app state is written once a
-    /// change is due (M-22.1). Returns what changed for the window.
+    /// The work of one tick at `now` (ADR-022): the changes from outside
+    /// the workspace watcher reports are taken in (ADR-011), the user
+    /// settings file is looked at every 500 ms (M-20.6), the app state is
+    /// written once a change is due (M-22.1). Returns what changed for the
+    /// window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
+        self.handle_outside_changes();
         self.settings.poll(now);
         self.take_settings_messages();
         if let Err(err) = self.state.write_if_due(now) {
@@ -161,9 +248,35 @@ impl Session {
     /// The changes since the window was told last, as events.
     pub fn take_events(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
-        if self.settings.effective() != &self.told.settings {
+        if self.settings.effective() != &self.told.settings
+            || self.settings.width_generation() != self.told.width_generation
+        {
             self.told.settings = self.settings.effective().clone();
+            self.told.width_generation = self.settings.width_generation();
             events.push(Event::Settings(Box::new(self.settings.view())));
+        }
+        let dirty = std::mem::take(&mut self.views_dirty);
+        if dirty {
+            let workspace = self.workspace_view();
+            if workspace != self.told.workspace {
+                self.told.workspace.clone_from(&workspace);
+                events.push(Event::Workspace(workspace));
+            }
+        }
+        let overview = self
+            .open
+            .as_ref()
+            .map(|open| (open.root().to_owned(), open.overview_generation));
+        if overview != self.told.overview {
+            self.told.overview = overview;
+            events.push(Event::Overview(self.overview_items()));
+        }
+        if dirty {
+            let tabs = self.tabs_view();
+            if tabs != self.told.tabs {
+                self.told.tabs = tabs.clone();
+                events.push(Event::Tabs(tabs));
+            }
         }
         if self.status != self.told.status {
             self.told.status.clone_from(&self.status);

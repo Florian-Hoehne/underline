@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ws-create"
+description = "Enables the ws_create command without any pre-configured scope."
+commands.allow = ["ws_create"]
+
+[[permission]]
+identifier = "deny-ws-create"
+description = "Denies the ws_create command without any pre-configured scope."
+commands.deny = ["ws_create"]

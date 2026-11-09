@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ws-start"
+description = "Enables the ws_start command without any pre-configured scope."
+commands.allow = ["ws_start"]
+
+[[permission]]
+identifier = "deny-ws-start"
+description = "Denies the ws_start command without any pre-configured scope."
+commands.deny = ["ws_start"]

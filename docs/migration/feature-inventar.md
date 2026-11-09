@@ -22,7 +22,7 @@ Allgemeine Konventionen der heutigen UI:
 
 ## M-01 Start und Kommandozeile
 
-- [ ] **M-01.1** `underline [DIR]` öffnet das Fenster mit DIR. Ohne DIR öffnet es den zuletzt offenen Workspace,
+- [x] **M-01.1** `underline [DIR]` öffnet das Fenster mit DIR. Ohne DIR öffnet es den zuletzt offenen Workspace,
   sonst den leeren Bildschirm (M-02). Ausgewertet wird nur das erste Positionsargument, es gibt kein `--help`
   (`main.rs:18-56`).
 - [x] **M-01.2** `underline mcp [DIR]` startet den MCP-Server über stdio, ohne Fenster. Ohne DIR nimmt er
@@ -40,7 +40,7 @@ Allgemeine Konventionen der heutigen UI:
 
 ## M-02 Leerer Bildschirm (UC-002 A2)
 
-- [ ] **M-02.1** Bei einem Drittel der Höhe, zentriert: Überschrift „No workspace is open“, darunter die Buttons
+- [x] **M-02.1** Bei einem Drittel der Höhe, zentriert: Überschrift „No workspace is open“, darunter die Buttons
   „Open workspace…“ und „New workspace…“. Top-Bar und Statusleiste bleiben sichtbar.
 
 ## M-03 Top-Bar und Menü
@@ -51,7 +51,7 @@ Allgemeine Konventionen der heutigen UI:
   fokussiert das Feld, Schliessen leert den Text.
 - [x] **M-03.3** Ist die Menüleiste ausgeblendet, zeigt die Top-Bar den Ordnernamen des Workspace fett und
   gekürzt, ohne Workspace „No workspace open“.
-- [ ] **M-03.4** Menü **File**: „New note…“ (ohne Workspace deaktiviert), „Open workspace…“ (schliesst den
+- [x] **M-03.4** Menü **File**: „New note…“ (ohne Workspace deaktiviert), „Open workspace…“ (schliesst den
   Create-Dialog), „New workspace…“ (schliesst den Open-Dialog).
 - [x] **M-03.5** Menü **Workspace**: Feld „Wiki project URL“ mit „Check“ oder Enter. Danach Status „Wiki repository:
   {clone_url}“ oder der Fehler, das Menü schliesst. *Stub, nirgends angebunden und nicht gespeichert.*
@@ -92,9 +92,9 @@ Reihenfolge von links nach rechts:
 
 ## M-05 Notizübersicht links (UC-002, FR-017)
 
-- [ ] **M-05.1** Panel in der Breite veränderbar (100–1000, Start aus `overview_width`). Beim Loslassen nach mehr
+- [x] **M-05.1** Panel in der Breite veränderbar (100–1000, Start aus `overview_width`). Beim Loslassen nach mehr
   als 1 px Änderung wird die Breite sofort gespeichert. Kopf: „Notes“ und Button „New note…“.
-- [ ] **M-05.2** Liste aus `note_overview`: zuletzt geöffnete zuerst, dann der Rest nach Titel A–Z (BR-008). Ein
+- [x] **M-05.2** Liste aus `note_overview`: zuletzt geöffnete zuerst, dann der Rest nach Titel A–Z (BR-008). Ein
   Klick öffnet die Notiz, die dabei nach oben wandert.
 - [ ] **M-05.3** Git-Buchstabe hinter dem Titel: N grün, D rot, R blau, C orange, sonst M amber. Tabs mit
   ungespeicherten Änderungen zeigen M, aber nur in Git-Workspaces.
@@ -118,7 +118,7 @@ Reihenfolge von links nach rechts:
   einer Notiz deaktiviert ihn, lässt ihn aber offen.
 - [ ] **M-06.6** Höchstens 100 Tabs (`MAX_TABS`). Ein weiterer schliesst den am längsten unbenutzten Tab, Status
   „Closed the tab {t}, used longest ago“. *Speicherfehler werden dabei heute ignoriert (Defekt D-07).*
-- [ ] **M-06.7** Tabs, aktiver Tab und Ansicht je Tab werden beim Öffnen des Workspace wiederhergestellt. Ohne
+- [x] **M-06.7** Tabs, aktiver Tab und Ansicht je Tab werden beim Öffnen des Workspace wiederhergestellt. Ohne
   gemerkten Tab wird `first_note` geöffnet.
 
 ## M-07 Notiz lesen (UC-004)
@@ -564,14 +564,14 @@ Reihenfolge von links nach rechts:
 
 ## M-21 Workspace öffnen, anlegen, schliessen (UC-001, UC-002)
 
-- [ ] **M-21.1** Dialog Open:
+- [x] **M-21.1** Dialog Open:
   - „Recently opened:“, „Another directory:“ als Pfadfeld (*kein Systemdialog*).
   - Angebote: „Create a new workspace there“, „Open {outer}“, „Open {inner} anyway“. Sonst „{p}. Choose another
     directory.“
   - Ist es derselbe Workspace, schliesst nur der Dialog.
   - Vorher wird gespeichert, sonst „The workspace stays open, because …“.
   - „Opened {root}“ samt Hinweisen zu den Einstellungen.
-- [ ] **M-21.2** Dialog Create in drei Schritten:
+- [x] **M-21.2** Dialog Create in drei Schritten:
   1. Verzeichnis, mit „Open it as a workspace instead“.
   2. Format und „Create as git repository“ (aus).
   3. Optionaler Remote mit dem Hinweis „The remote is not contacted now; …“.
@@ -587,9 +587,9 @@ Reihenfolge von links nach rechts:
 
 ## M-22 Persistenz
 
-- [ ] **M-22.1** `<data_dir>/underline/state.yaml`: letzter und zuletzt geöffnete Workspaces, geschrieben 500 ms
+- [x] **M-22.1** `<data_dir>/underline/state.yaml`: letzter und zuletzt geöffnete Workspaces, geschrieben 500 ms
   nach einer Änderung und beim Beenden.
-- [ ] **M-22.2** `<ws>/.underline/state.yaml`: Tabs (Notiz, Position, Ansicht, aktiv), „zuletzt geöffnet“ je Notiz,
+- [x] **M-22.2** `<ws>/.underline/state.yaml`: Tabs (Notiz, Position, Ansicht, aktiv), „zuletzt geöffnet“ je Notiz,
   Zustand des Todos-Tabs.
 - [ ] **M-22.3** Einstellungen in `~/underline.yaml` und `<ws>/underline.yaml`, sofort geschrieben.
 - [ ] **M-22.4** Nicht gespeichert: Fenstergeometrie, Klappzustände, Web-Zustimmung, letzter Export-Ordner,

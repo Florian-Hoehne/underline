@@ -19,15 +19,8 @@
   const shown = $derived(shell.settings?.showMenuBar ?? false);
   const searchHint = $derived(`Search notes  ${shell.command}+Shift+F`);
 
-  /** M-03.3: the folder name of the workspace, as the egui app shows it. */
-  const workspaceName = $derived.by(() => {
-    const root = shell.workspaceRoot;
-    if (root === null) {
-      return 'No workspace open';
-    }
-    const parts = root.split(/[\\/]/).filter(Boolean);
-    return parts.at(-1) ?? root;
-  });
+  /** M-03.3: the folder name of the workspace, as the backend names it. */
+  const workspaceName = $derived(shell.workspace?.name ?? 'No workspace open');
 
   function toggleSearch() {
     shell.searchOpen = !shell.searchOpen;

@@ -19,7 +19,9 @@
 //! ([`UiError`]), what the window learns on start ([`StartInfo`], M-01), the
 //! settings state machine ([`SettingsState`], UC-010), the theme palettes
 //! ([`PaletteView`], M-01.6), the app state (M-01.3, M-22.1) and the status
-//! message (M-04.7).
+//! message (M-04.7). Feature F2 adds the workspace: the Open and Create
+//! dialogs (UC-001, UC-002, M-21), the note overview (M-05), the tabs
+//! (M-06) and what is remembered of them (M-22.2).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -30,6 +32,7 @@ mod palette;
 mod session;
 mod settings;
 mod start;
+mod workspace_view;
 
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
@@ -40,3 +43,7 @@ pub use settings::{
     USER_SETTINGS_POLL,
 };
 pub use start::{Platform, StartInfo};
+pub use workspace_view::{
+    CreateAnswer, EditingViewName, FormatName, NewWorkspaceRequest, OpenAnswer, OpenOffer,
+    OverviewItem, StartOpened, TabView, TabsView, TodoTabView, WorkspaceSnapshot, WorkspaceView,
+};

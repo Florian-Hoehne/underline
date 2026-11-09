@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 
+use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
 
 /// The status message of the status bar (M-04.7).
@@ -22,4 +23,10 @@ pub enum Event {
     /// The settings in effect changed (UC-010); boxed, as it is much larger
     /// than a status.
     Settings(Box<SettingsView>),
+    /// A workspace was opened (M-21.3); `None` while none is open.
+    Workspace(Option<WorkspaceView>),
+    /// The note overview changed (M-05.2).
+    Overview(Vec<OverviewItem>),
+    /// The tab bar changed (M-06).
+    Tabs(TabsView),
 }

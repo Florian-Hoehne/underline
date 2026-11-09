@@ -368,6 +368,8 @@ und Stelle (`fv:1561-1600`). Die Migration folgt dem Code.
   - Das Drittel der Höhe (M-02.1) wird auf den Mittelbereich zwischen Top-Bar und Statusleiste bezogen.
   - Solange `app_start` den letzten Workspace öffnet, gibt es einen Lade- bzw. Fehlerzustand, damit der leere
     Bildschirm nicht kurz aufblitzt.
+- **F3 (aus dem Review von F2):** Die Tab-Leiste wird ein `tablist` mit Pfeiltasten und rovierendem `tabindex`,
+  sobald der Editor als `tabpanel` dahintersteht. Gleiche Tab-Titel bleiben wie in egui ohne Ordner.
 - **Laufend:** Die Liste der Commands steht dreifach (Builder, `build.rs`, Capability). Ein Test über die
   Command-Namen des Builders soll die Abweichung verhindern; er entsteht spätestens mit dem zweiten Command.
 - **Ablösung:** Ob die Windows-Release-Binary ohne Konsole startet (`windows_subsystem`), muss mit dem

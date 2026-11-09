@@ -26,6 +26,9 @@ const shell = new Shell();
 await Promise.all([shell.connect(), loadFonts()]);
 const app = mount(App, { target, props: { shell } });
 await tick();
+// M-01.1: the workspace to start with opens while the window shows its
+// loading state.
+void shell.startWorkspace();
 // Not in requestAnimationFrame: WebKitGTK runs no frames for a hidden window.
 if (inTauri) {
   void showWindow();

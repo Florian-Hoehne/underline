@@ -91,11 +91,13 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
     // The waker stays in the managed state, so the tick thread runs until the
     // process ends; the exit handler below writes the app state last.
     let (waker, wakes) = Waker::new();
+    let mut session = Session::load(given, Instant::now());
+    // ADR-011, ADR-022: the workspace watcher wakes the tick when it has
+    // changes.
+    let wake = waker.clone();
+    session.set_wake(move || wake.wake());
     let app = tauri::Builder::default()
-        .manage(SharedSession::new(Mutex::new(Session::load(
-            given,
-            Instant::now(),
-        ))))
+        .manage(SharedSession::new(Mutex::new(session)))
         .manage(waker)
         .invoke_handler(bindings.invoke_handler())
         .setup(move |app| {
