@@ -371,6 +371,24 @@ fn collect<'a>(
                         },
                     );
                 }
+                // UC-005: an item still empty (just made by Enter) is a
+                // block of its own, so it shows and holds the cursor.
+                if blocks.len() == first {
+                    let pos = item.data.borrow().sourcepos;
+                    let span = lines.block_span(pos.start.line, pos.end.line, source);
+                    // Its text, still empty, starts after the marker.
+                    let line = source[span.clone()].lines().next().unwrap_or("");
+                    let at = span.start + line.len();
+                    blocks.push(Block {
+                        kind: BlockKind::ListItem {
+                            depth,
+                            marker: None,
+                            checked: None,
+                        },
+                        span,
+                        runs: vec![identity_run("", at, at, Style::default())],
+                    });
+                }
                 // The first paragraph of the item carries its marker.
                 if let Some(Block {
                     kind:
@@ -417,7 +435,13 @@ fn collect<'a>(
             } else {
                 span.clone()
             };
-            let text = source[inner.clone()].trim_end_matches('\n').to_owned();
+            // Only the break ending the last line goes; an empty last line
+            // (just made by Enter) stays, so it shows and holds the cursor.
+            let inner_text = &source[inner.clone()];
+            let text = inner_text
+                .strip_suffix('\n')
+                .unwrap_or(inner_text)
+                .to_owned();
             let end = inner.start + text.len();
             blocks.push(Block {
                 kind: BlockKind::Code {
@@ -824,5 +848,39 @@ mod tests {
         assert_eq!(link_at(&blocks, note.find("now").unwrap()), None);
         let slug = |t: &str| t.to_lowercase().replace(' ', "-");
         assert_eq!(heading_offset(&blocks, "getting-started", slug), Some(2));
+    }
+
+    /// UC-005: an empty list item and an empty last code line, as Enter
+    /// makes them, are kept, so the facade can show the cursor there.
+    #[test]
+    fn uc005_empty_items_and_code_lines_are_kept() {
+        let empty_item = |note: &str, format| {
+            let blocks = parse_blocks(note, format);
+            let items: Vec<_> = blocks
+                .iter()
+                .filter(|b| matches!(b.kind, BlockKind::ListItem { .. }))
+                .map(|b| (b.text(), b.kind.clone()))
+                .collect();
+            assert_eq!(items.len(), 3, "{note:?}: {blocks:?}");
+            assert!(
+                items.iter().any(|(text, kind)| text.is_empty()
+                    && matches!(
+                        kind,
+                        BlockKind::ListItem {
+                            marker: Some(_),
+                            ..
+                        }
+                    )),
+                "{note:?}: {items:?}"
+            );
+        };
+        empty_item("- a\n- b\n- \n", NoteFormat::Markdown);
+        empty_item("- a\n- \n- b\n", NoteFormat::Markdown);
+        empty_item("* a\n* b\n* \n", NoteFormat::AsciiDoc);
+
+        let code = |note: &str| parse_blocks(note, NoteFormat::Markdown)[0].text();
+        assert_eq!(code("```\na\n```\n"), "a");
+        assert_eq!(code("```\na\n\n```\n"), "a\n");
+        assert_eq!(code("```\n\n```\n"), "");
     }
 }

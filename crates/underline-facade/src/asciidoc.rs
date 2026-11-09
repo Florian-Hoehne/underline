@@ -476,7 +476,12 @@ impl Parser<'_, '_> {
                 l.start + indent..l.start + l.text.len()
             }))
             .collect();
-        let runs = self.inline(&pieces);
+        let mut runs = self.inline(&pieces);
+        if runs.is_empty() {
+            // UC-005: an item still empty (just made by Enter); its text
+            // starts after the marker.
+            runs.push(identity_run("", pieces[0].start, Style::default()));
+        }
         self.blocks.push(Block {
             kind: BlockKind::ListItem {
                 depth: item.depth,
@@ -787,7 +792,8 @@ fn list_item(line: &str) -> Option<Item> {
         return None;
     }
     let after = &rest[count..];
-    if !after.starts_with(' ') || after.trim().is_empty() {
+    // UC-005: `* ` with nothing after it yet is the item Enter just made.
+    if !after.starts_with(' ') {
         return None;
     }
     let depth = if number.is_some() || first == '-' {

@@ -739,7 +739,8 @@ impl<'a> HtmlWriter<'a> {
             }
             BlockKind::Code { language } => {
                 let code = block.text();
-                match diagram_svg(language, &code) {
+                let code = code.trim_end_matches('\n');
+                match diagram_svg(language, code) {
                     Some(Ok(svg)) => {
                         let svg = svg.trim_start_matches(|c| c != '<');
                         let svg = match svg.strip_prefix("<?xml") {
@@ -750,11 +751,10 @@ impl<'a> HtmlWriter<'a> {
                     }
                     Some(Err(error)) => {
                         self.missing.push(format!("a {language} diagram ({error})"));
-                        let _ =
-                            writeln!(self.out, "<pre><code>{}</code></pre>", escape_html(&code));
+                        let _ = writeln!(self.out, "<pre><code>{}</code></pre>", escape_html(code));
                     }
                     None => {
-                        let colored = self.code(language, &code);
+                        let colored = self.code(language, code);
                         let _ = writeln!(self.out, "<pre><code>{colored}</code></pre>");
                     }
                 }
@@ -1056,7 +1056,8 @@ impl TypstWriter<'_> {
             }
             BlockKind::Code { language } => {
                 let code = block.text();
-                match diagram_svg(language, &code) {
+                let code = code.trim_end_matches('\n');
+                match diagram_svg(language, code) {
                     Some(Ok(svg)) => {
                         let name = self.file("svg", svg.into_bytes());
                         let _ = write!(
@@ -1067,7 +1068,7 @@ impl TypstWriter<'_> {
                     }
                     Some(Err(error)) => {
                         self.missing.push(format!("a {language} diagram ({error})"));
-                        let _ = write!(self.out, "#raw(block: true, {})", typst_string(&code));
+                        let _ = write!(self.out, "#raw(block: true, {})", typst_string(code));
                     }
                     None => {
                         let _ = write!(

@@ -13,6 +13,7 @@ use eframe::egui::{
 use underline_core::{LineSide, NoteFormat, Query};
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
+use crate::blink::Blink;
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
 use crate::document::Document;
 use crate::keys::{EditorCommand, InputMode, Keys, Target};
@@ -58,6 +59,8 @@ pub struct SourceView {
     /// Cursor and selection anchor, as char indices.
     cursor: usize,
     anchor: usize,
+    /// The blink of the cursor (UC-005).
+    blink: Blink,
     scroll_to_cursor: bool,
     focus: bool,
     galleys: HashMap<u64, Arc<Galley>>,
@@ -159,6 +162,7 @@ impl SourceView {
             cursor: 0,
             anchor: 0,
             scroll_to_cursor: false,
+            blink: Blink::default(),
             focus: false,
             galleys: HashMap::new(),
             deadline: None,
@@ -1065,10 +1069,12 @@ impl SourceView {
             // Cursor.
             let cursor_rect = self.cursor_rect(ui, &font, origin, row_height);
             if response.has_focus() {
-                painter.line_segment(
-                    [cursor_rect.center_top(), cursor_rect.center_bottom()],
-                    Stroke::new(2.0_f32, foreground),
-                );
+                if self.blink.shown(ui, (self.cursor, self.anchor)) {
+                    painter.line_segment(
+                        [cursor_rect.center_top(), cursor_rect.center_bottom()],
+                        Stroke::new(2.0_f32, foreground),
+                    );
+                }
                 ui.ctx()
                     .output_mut(|o| o.ime = Some(egui::output::IMEOutput { rect, cursor_rect }));
             }

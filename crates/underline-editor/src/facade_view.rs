@@ -24,6 +24,7 @@ use underline_facade::highlight::highlight_code;
 use underline_facade::images::{ImageError, ImageSource, ImageState, Images};
 use underline_facade::sections::Section;
 
+use crate::blink::Blink;
 use crate::enlarged::{Enlarged, Shown};
 use crate::keys::{EditorCommand, InputMode, Target};
 use crate::minimap::{self, Mark};
@@ -87,6 +88,11 @@ pub struct FacadeView {
     marks_built: std::time::Instant,
     visible: (f32, f32),
     scroll_to: Option<f32>,
+    /// Where the cursor stands on empty new lines (after Enter, before
+    /// anything is typed): the block they come before, and how many empty
+    /// lines are shown there, the cursor on the last one.
+    gap: Option<Gap>,
+    blink: Blink,
     /// Where the blocks were drawn last, on the screen: the top left of the
     /// first block, and the part of the screen they cover.
     drawn: Option<(Pos2, Rect)>,
@@ -162,6 +168,8 @@ impl FacadeView {
             marks_built: std::time::Instant::now(),
             visible: (0.0, 0.0),
             scroll_to: None,
+            gap: None,
+            blink: Blink::default(),
             drawn: None,
         }
     }
@@ -672,10 +680,12 @@ impl FacadeView {
             // Cursor, and the format indicator (FR-011).
             if let Some(cursor_rect) = self.cursor_rect(ui, source, &theme, origin) {
                 if response.has_focus() {
-                    painter.line_segment(
-                        [cursor_rect.center_top(), cursor_rect.center_bottom()],
-                        Stroke::new(2.0_f32, theme.text),
-                    );
+                    if self.blink.shown(ui, source.cursor_anchor()) {
+                        painter.line_segment(
+                            [cursor_rect.center_top(), cursor_rect.center_bottom()],
+                            Stroke::new(2.0_f32, theme.text),
+                        );
+                    }
                     ui.ctx().output_mut(|o| {
                         o.ime = Some(egui::output::IMEOutput { rect, cursor_rect })
                     });
@@ -739,12 +749,23 @@ impl FacadeView {
             self.galleys.clear();
             self.tops.clear();
         }
+        // The cursor may have just started a new paragraph, in this frame.
+        let gap = self.cursor_gap(source);
+        if gap != self.gap {
+            self.gap = gap;
+            self.tops.clear();
+        }
         if self.tops.len() == self.blocks.len() + 1 {
             return;
         }
         let mut tops = Vec::with_capacity(self.blocks.len() + 1);
         let mut y = 0.0;
+        let gap = self.gap.map_or(0.0, |g| g.height(ui));
+        let gap_before = self.gap.map(|g| g.before);
         for index in 0..self.blocks.len() {
+            if gap_before == Some(index) {
+                y += gap;
+            }
             tops.push(y);
             if self.hidden.get(index).copied().unwrap_or(false) {
                 continue;
@@ -759,6 +780,9 @@ impl FacadeView {
                 _ => 0.0,
             };
             y += laid.height + BLOCK_GAP + extra;
+        }
+        if gap_before == Some(self.blocks.len()) {
+            y += gap;
         }
         tops.push(y);
         self.tops = tops;
@@ -1156,14 +1180,49 @@ impl FacadeView {
         self.position_at(source, source.cursor_anchor().0)
     }
 
+    /// UC-005: the empty lines the cursor stands on, when it starts a new,
+    /// still empty paragraph: outside every block, after a blank line. An
+    /// empty paragraph is no block, so without this the cursor would stay
+    /// at the end of the block before until something is typed. Each more
+    /// Enter there adds a line.
+    fn cursor_gap(&self, source: &SourceView) -> Option<Gap> {
+        let rope = source.document().rope();
+        let cursor = source.cursor_anchor().0.min(rope.len_chars());
+        let breaks = line_breaks_before(rope, cursor);
+        if self.blocks.is_empty() {
+            // A note of only, say, a comment has no blocks but text.
+            if !rope.slice(..cursor).chars().all(char::is_whitespace) {
+                return None;
+            }
+            return Some(Gap {
+                before: 0,
+                lines: breaks + 1,
+            });
+        }
+        let byte = rope.char_to_byte(cursor);
+        let next = self
+            .block_ending_at_or_after(byte)
+            .unwrap_or(self.blocks.len());
+        let inside = self.blocks.get(next).is_some_and(|b| byte >= b.span.start);
+        (!inside && breaks >= 2).then(|| Gap {
+            before: next,
+            lines: breaks - 1,
+        })
+    }
+
+    /// The first block that ends at source byte `byte` or after it.
+    fn block_ending_at_or_after(&self, byte: usize) -> Option<usize> {
+        self.blocks
+            .iter()
+            .position(|b| byte <= b.span.end.max(b.runs.last().map_or(0, |r| r.end)))
+    }
+
     /// The block holding char `char` of the text, and the facade index in it.
     fn position_at(&self, source: &SourceView, char: usize) -> Option<(usize, usize)> {
         let rope = source.document().rope();
         let byte = rope.char_to_byte(char.min(rope.len_chars()));
         let index = self
-            .blocks
-            .iter()
-            .position(|b| byte <= b.span.end.max(b.runs.last().map_or(0, |r| r.end)))
+            .block_ending_at_or_after(byte)
             .unwrap_or(self.blocks.len().checked_sub(1)?);
         let block = &self.blocks[index];
         let at = block
@@ -1183,6 +1242,15 @@ impl FacadeView {
         theme: &Theme,
         origin: Pos2,
     ) -> Option<Rect> {
+        if let Some(gap) = self.gap {
+            // The last of the empty lines above block `gap.before`.
+            let row = body_row_height(ui);
+            let top = self.tops.get(gap.before)? - gap.height(ui) + (gap.lines - 1) as f32 * row;
+            return Some(Rect::from_min_size(
+                origin + Vec2::new(0.0, top),
+                Vec2::new(2.0, row),
+            ));
+        }
         let (index, at) = self.cursor_position(source)?;
         let laid = self.laid(ui, source, theme, index);
         let pos = laid.galley.pos_from_ccursor(CCursor::new(laid.prefix + at));
@@ -1463,6 +1531,39 @@ impl FacadeView {
     ) -> bool {
         if source.fold_key(key, modifiers) {
             return false;
+        }
+        // UC-005: on the empty lines of a new paragraph, Enter adds one more
+        // and Backspace takes the last one away again.
+        let gap = (!modifiers.command && !modifiers.alt)
+            .then(|| self.cursor_gap(source))
+            .flatten();
+        if let (Some(gap), Key::Enter | Key::Backspace) = (gap, key) {
+            if self.delete_selection(source) && key == Key::Backspace {
+                return true;
+            }
+            let (cursor, _) = source.cursor_anchor();
+            if key == Key::Enter {
+                source.replace(cursor..cursor, "\n");
+            } else {
+                // Back over the spaces to the line break before them; from
+                // the first empty line, back over the whole paragraph break.
+                let rope = source.document().rope();
+                let mut start = cursor;
+                let mut breaks = 0;
+                while start > 0 && (breaks == 0 || gap.lines == 1) {
+                    match rope.char(start - 1) {
+                        '\n' => breaks += 1,
+                        '\r' => {}
+                        // Spaces ending the paragraph (a hard break) stay.
+                        ' ' | '\t' if breaks < 2 => {}
+                        _ => break,
+                    }
+                    start -= 1;
+                }
+                source.replace(start..cursor, "");
+            }
+            self.scroll_to_cursor = true;
+            return true;
         }
         let Some((index, at)) = self.cursor_position(source) else {
             if key == Key::Enter {
@@ -1956,6 +2057,42 @@ fn prefix_text(kind: &BlockKind) -> String {
     prefix
 }
 
+/// The height of one line of body text.
+fn body_row_height(ui: &egui::Ui) -> f32 {
+    ui.fonts(|f| f.row_height(&FontId::proportional(BODY_SIZE)))
+}
+
+/// The empty lines the cursor stands on (see [`FacadeView::cursor_gap`]).
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Gap {
+    /// The block they come before (the number of blocks: at the end).
+    before: usize,
+    /// How many empty lines are shown, at least one.
+    lines: usize,
+}
+
+impl Gap {
+    /// The height the empty lines take, with the gap after them.
+    fn height(self, ui: &egui::Ui) -> f32 {
+        self.lines as f32 * body_row_height(ui) + BLOCK_GAP
+    }
+}
+
+/// The line breaks right before char `at` of `rope`, with only spaces
+/// between them; two or more mean a blank line, where a paragraph starts.
+fn line_breaks_before(rope: &ropey::Rope, at: usize) -> usize {
+    let mut chars = rope.chars_at(at);
+    let mut breaks = 0;
+    while let Some(c) = chars.prev() {
+        match c {
+            '\n' => breaks += 1,
+            ' ' | '\t' | '\r' => {}
+            _ => break,
+        }
+    }
+    breaks
+}
+
 fn prefix_chars(kind: &BlockKind) -> usize {
     prefix_text(kind).chars().count()
 }
@@ -2340,17 +2477,30 @@ mod tests {
         }
 
         fn frame(&mut self, events: Vec<Event>) {
+            self.frame_output(events);
+        }
+
+        fn frame_output(&mut self, events: Vec<Event>) -> egui::FullOutput {
             let input = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
                 events,
                 ..Default::default()
             };
             let (source, facade) = (&mut self.source, &mut self.facade);
-            let _ = self.ctx.run(input, |ctx| {
+            self.ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     facade.show(ui, source);
                 });
-            });
+            })
+        }
+
+        /// Where the cursor is drawn, as told to the input method.
+        fn cursor_rect(&mut self) -> Rect {
+            self.frame_output(vec![])
+                .platform_output
+                .ime
+                .expect("the facade has the focus")
+                .cursor_rect
         }
 
         /// Puts the cursor after the first occurrence of `marker` in the text.
@@ -2404,6 +2554,227 @@ mod tests {
         h.key(Key::Enter);
         h.frame(vec![Event::Text("Next".into())]);
         assert_eq!(h.text(), "1. first\n2. second\n\nPara\n\nNext\n");
+    }
+
+    /// UC-005: after Enter at the end of a paragraph the cursor stands at
+    /// once on the new, empty line below it, also between two paragraphs;
+    /// what is typed then shows there.
+    #[test]
+    fn uc005_enter_moves_the_cursor_to_the_new_line_at_once() {
+        for (note, after) in [("Para\n", "Para"), ("Para\n\nLast\n", "Para")] {
+            let mut h = Harness::new(note);
+            h.cursor_after(after);
+            let before = h.cursor_rect();
+            // Within the very frame of the key, not only the one after it.
+            let empty = h
+                .frame_output(vec![Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }])
+                .platform_output
+                .ime
+                .expect("the facade has the focus")
+                .cursor_rect;
+            assert!(
+                empty.top() >= before.bottom(),
+                "{note:?}: {before:?} {empty:?}"
+            );
+            assert!(
+                empty.left() < before.left(),
+                "{note:?}: {before:?} {empty:?}"
+            );
+            h.frame(vec![Event::Text("N".into())]);
+            let typed = h.cursor_rect();
+            assert!(
+                (typed.top() - empty.top()).abs() < 1.0,
+                "{note:?}: {empty:?} {typed:?}"
+            );
+            assert!(h.text().starts_with("Para\n\nN"), "{}", h.text());
+        }
+    }
+
+    /// UC-005: Enter in a list item or in a code block, also in the last
+    /// one, moves the cursor at once to the new item or line.
+    #[test]
+    fn uc005_enter_in_lists_and_code_moves_the_cursor_at_once() {
+        for (note, after, typed, format) in [
+            (
+                "- one\n- two\n",
+                "two",
+                "- one\n- two\n- N\n",
+                NoteFormat::Markdown,
+            ),
+            (
+                "- one\n- two\n",
+                "one",
+                "- one\n- N\n- two\n",
+                NoteFormat::Markdown,
+            ),
+            (
+                "```\ncode\n```\n",
+                "code",
+                "```\ncode\nN\n```\n",
+                NoteFormat::Markdown,
+            ),
+            (
+                "* one\n* two\n",
+                "two",
+                "* one\n* two\n* N\n",
+                NoteFormat::AsciiDoc,
+            ),
+        ] {
+            let mut h = Harness::with_format(note, format);
+            h.cursor_after(after);
+            let before = h.cursor_rect();
+            let empty = h
+                .frame_output(vec![Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }])
+                .platform_output
+                .ime
+                .expect("the facade has the focus")
+                .cursor_rect;
+            assert!(
+                empty.top() >= before.bottom() - 1.0,
+                "{note:?}: {before:?} {empty:?}"
+            );
+            assert!(
+                empty.left() < before.left(),
+                "{note:?}: {before:?} {empty:?}"
+            );
+            h.frame(vec![Event::Text("N".into())]);
+            assert_eq!(h.text(), typed);
+            let after_typing = h.cursor_rect();
+            assert!(
+                (after_typing.top() - empty.top()).abs() < 1.0,
+                "{note:?}: {empty:?} {after_typing:?}"
+            );
+        }
+    }
+
+    /// UC-005: each more Enter on the empty lines of a new paragraph moves
+    /// the cursor one line further down, at the end of the note and between
+    /// paragraphs; Backspace takes them away one by one and then leaves the
+    /// paragraph as it was; what is typed lands on the last empty line.
+    #[test]
+    fn uc005_enter_again_moves_the_cursor_further_down() {
+        for note in ["Para\n", "Para\n\nLast\n"] {
+            let mut h = Harness::new(note);
+            h.cursor_after("Para");
+            let start = h.cursor_rect();
+            let mut last = start;
+            let mut tops = Vec::new();
+            for _ in 0..3 {
+                h.key(Key::Enter);
+                let now = h.cursor_rect();
+                assert!(
+                    now.top() >= last.bottom() - 1.0,
+                    "{note:?}: {last:?} {now:?}"
+                );
+                tops.push(now.top());
+                last = now;
+            }
+            for expected in [tops[1], tops[0], start.top()] {
+                h.key(Key::Backspace);
+                let now = h.cursor_rect();
+                assert!(
+                    (now.top() - expected).abs() < 1.0,
+                    "{note:?}: {now:?} {expected} in {:?}",
+                    h.text()
+                );
+            }
+            assert_eq!(h.text(), note, "Backspace leaves the paragraph");
+            for _ in 0..3 {
+                h.key(Key::Enter);
+            }
+            h.frame(vec![Event::Text("N".into())]);
+            assert!(h.text().starts_with("Para\n\n\n\nN"), "{}", h.text());
+        }
+    }
+
+    /// UC-005: in an empty note Enter and Backspace add and take away empty
+    /// lines; Shift+Enter on empty lines adds one line like Enter.
+    #[test]
+    fn uc005_empty_lines_in_an_empty_note_and_with_shift() {
+        let mut h = Harness::new("");
+        let first = h.cursor_rect();
+        h.key(Key::Enter);
+        h.key(Key::Enter);
+        assert_eq!(h.text(), "\n\n");
+        assert!(h.cursor_rect().top() > first.bottom());
+        h.key(Key::Backspace);
+        h.key(Key::Backspace);
+        assert_eq!(h.text(), "");
+        assert!((h.cursor_rect().top() - first.top()).abs() < 1.0);
+
+        // A note with text but no blocks: Backspace deletes as usual.
+        let mut h = Harness::new("<!-- c -->");
+        h.source.set_cursor_anchor(10, 10);
+        h.key(Key::Backspace);
+        assert_eq!(h.text(), "<!-- c --");
+
+        // Spaces ending the paragraph stay when its break is taken away.
+        let mut h = Harness::new("Para  \n");
+        h.cursor_after("Para  ");
+        h.key(Key::Enter);
+        h.key(Key::Backspace);
+        assert_eq!(h.text(), "Para  \n");
+
+        let mut h = Harness::new("Para\n");
+        h.cursor_after("Para");
+        h.key(Key::Enter);
+        h.frame(vec![Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::SHIFT,
+        }]);
+        assert_eq!(h.text(), "Para\n\n\n\n");
+    }
+
+    /// UC-005: Backspace in the empty item Enter just made takes it away
+    /// again, back to the end of the item before.
+    #[test]
+    fn uc005_backspace_takes_an_empty_item_away() {
+        for (note, format) in [
+            ("- one\n", NoteFormat::Markdown),
+            ("* one\n", NoteFormat::AsciiDoc),
+        ] {
+            let mut h = Harness::with_format(note, format);
+            h.cursor_after("one");
+            let start = h.cursor_rect();
+            h.key(Key::Enter);
+            h.key(Key::Backspace);
+            assert_eq!(h.text(), note, "{note:?}");
+            assert!(
+                (h.cursor_rect().left() - start.left()).abs() < 1.0,
+                "{note:?}"
+            );
+            h.frame(vec![Event::Text("s".into())]);
+            assert!(h.text().contains("ones"), "{}", h.text());
+        }
+    }
+
+    #[test]
+    fn line_breaks_before_count_blank_lines() {
+        assert_eq!(
+            line_breaks_before(&ropey::Rope::from_str("A\r\n\r\nB"), 5),
+            2
+        );
+        let rope = ropey::Rope::from_str("Para\n\nNext\n \n\nx");
+        assert_eq!(line_breaks_before(&rope, 6), 2);
+        assert_eq!(line_breaks_before(&rope, 4), 0);
+        assert_eq!(line_breaks_before(&rope, 5), 1);
+        assert_eq!(line_breaks_before(&rope, 14), 3);
+        assert_eq!(line_breaks_before(&rope, 0), 0);
     }
 
     /// UC-005, ADR-003: in an AsciiDoc note, typed text joins its block

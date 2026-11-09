@@ -2,6 +2,7 @@
 //! that lays out only the visible lines, and later the facade on the same
 //! text.
 
+mod blink;
 mod clipboard;
 mod document;
 mod enlarged;
