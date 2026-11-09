@@ -18,6 +18,81 @@ pub enum EditorCommand {
     Close,
 }
 
+/// FR-026: the key map an [`InputStatus`] is of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyMap {
+    Vim,
+    Nano,
+}
+
+impl KeyMap {
+    /// The name the status line shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            KeyMap::Vim => "VIM",
+            KeyMap::Nano => "NANO",
+        }
+    }
+}
+
+/// FR-026, BR-009: the Vim mode an [`InputStatus`] shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeysMode {
+    Normal,
+    Insert,
+    Visual,
+    VisualLine,
+    /// A command line after `:` or `/`.
+    Command,
+}
+
+impl KeysMode {
+    /// The name the status line shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            KeysMode::Normal => "NORMAL",
+            KeysMode::Insert => "INSERT",
+            KeysMode::Visual => "VISUAL",
+            KeysMode::VisualLine => "VISUAL LINE",
+            KeysMode::Command => "COMMAND",
+        }
+    }
+}
+
+/// FR-026, UC-005: what the editor's status line shows of an input mode
+/// other than the normal keys: the key map, its mode (Vim only), what is
+/// typed but not done yet, and the most important commands as keys and
+/// action. The commands come most important first: when the line is too
+/// short, the last ones are left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputStatus {
+    pub keymap: KeyMap,
+    pub mode: Option<KeysMode>,
+    /// A count, operator, or command line typed in Vim, or the search
+    /// prompt of Nano.
+    pub pending: String,
+    /// The commands, as (keys, action).
+    pub hints: Vec<(&'static str, &'static str)>,
+}
+
+impl InputStatus {
+    /// All of it as one line of text, where colors cannot be shown.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let mut parts = vec![self.keymap.label().to_owned()];
+        parts.extend(self.mode.map(|mode| mode.label().to_owned()));
+        if !self.pending.is_empty() {
+            parts.push(self.pending.clone());
+        }
+        parts.extend(
+            self.hints
+                .iter()
+                .map(|(keys, what)| format!("{keys} {what}")),
+        );
+        parts.join("  ")
+    }
+}
+
 /// What a view gives the keys. Places are char indices of the note's text.
 pub(crate) trait Target {
     fn len(&self) -> usize;
@@ -72,8 +147,9 @@ impl Keys {
         }
     }
 
-    /// FR-026: the active mode and its most important commands.
-    pub fn status(&self) -> Option<String> {
+    /// FR-026: the active mode and its most important commands, for the
+    /// editor's status line (UC-005).
+    pub fn status(&self) -> Option<InputStatus> {
         match self.mode {
             InputMode::Normal => None,
             InputMode::Vim => Some(self.vim.status()),
@@ -895,25 +971,58 @@ impl Vim {
         false
     }
 
-    fn status(&self) -> String {
+    fn status(&self) -> InputStatus {
+        let status = |mode, pending, hints| InputStatus {
+            keymap: KeyMap::Vim,
+            mode: Some(mode),
+            pending,
+            hints,
+        };
         match &self.mode {
-            VimMode::Normal => {
-                let pending: String = self
-                    .count
+            VimMode::Normal => status(
+                KeysMode::Normal,
+                self.count
                     .chars()
                     .chain(self.operator.map(|(op, _)| op))
                     .chain(self.pending)
-                    .collect();
-                format!(
-                    "-- NORMAL -- {pending}  i insert · v visual · dd delete line · yy yank · p put · u undo · Ctrl+R redo · /search n · :w store · :q close"
-                )
-            }
-            VimMode::Insert => "-- INSERT --  Esc normal mode".to_owned(),
-            VimMode::Visual { lines, .. } => format!(
-                "-- VISUAL{} --  d delete · y yank · c change · Esc normal mode",
-                if *lines { " LINE" } else { "" }
+                    .collect(),
+                vec![
+                    ("i", "insert"),
+                    ("v", "visual"),
+                    (":w", "store"),
+                    (":q", "close"),
+                    ("dd", "delete line"),
+                    ("yy", "yank"),
+                    ("p", "put"),
+                    ("u", "undo"),
+                    ("Ctrl+R", "redo"),
+                    ("/ n", "search"),
+                ],
             ),
-            VimMode::Command(line) => line.clone(),
+            VimMode::Insert => status(
+                KeysMode::Insert,
+                String::new(),
+                vec![("Esc", "normal mode")],
+            ),
+            VimMode::Visual { lines, .. } => status(
+                if *lines {
+                    KeysMode::VisualLine
+                } else {
+                    KeysMode::Visual
+                },
+                String::new(),
+                vec![
+                    ("d", "delete"),
+                    ("y", "yank"),
+                    ("c", "change"),
+                    ("Esc", "normal mode"),
+                ],
+            ),
+            VimMode::Command(line) => status(
+                KeysMode::Command,
+                line.clone(),
+                vec![("Enter", "run"), ("Esc", "cancel")],
+            ),
         }
     }
 }
@@ -1051,10 +1160,31 @@ impl Nano {
         (through, changed)
     }
 
-    fn status(&self) -> String {
+    fn status(&self) -> InputStatus {
+        let status = |pending, hints| InputStatus {
+            keymap: KeyMap::Nano,
+            mode: None,
+            pending,
+            hints,
+        };
         match &self.prompt {
-            Some(prompt) => format!("Search: {prompt}   (Enter find · Ctrl+C cancel)"),
-            None => "^K Cut line  ^U Paste  ^W Where is  M-U Undo  M-E Redo  ^A/^E Line start/end  ^O Store  ^X Close".to_owned(),
+            Some(prompt) => status(
+                format!("Search: {prompt}"),
+                vec![("Enter", "find"), ("^C", "cancel")],
+            ),
+            None => status(
+                String::new(),
+                vec![
+                    ("^O", "Store"),
+                    ("^X", "Close"),
+                    ("^K", "Cut line"),
+                    ("^U", "Paste"),
+                    ("^W", "Where is"),
+                    ("M-U", "Undo"),
+                    ("M-E", "Redo"),
+                    ("^A/^E", "Line start/end"),
+                ],
+            ),
         }
     }
 }

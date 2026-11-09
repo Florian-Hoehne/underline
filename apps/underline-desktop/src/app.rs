@@ -35,8 +35,8 @@ use underline_core::{
 use underline_core::{InputMode as Keys, NoteEntry, Query, SearchRequest, SearchResult, Searcher};
 use underline_editor::{AgentMark, FOUND_COLOR};
 use underline_editor::{
-    ClipImage, EditorCommand, FacadeView, InputMode, SharedClipboard, SourceView, SystemClipboard,
-    Tool,
+    ClipImage, EditorCommand, FacadeView, InputMode, InputStatus, KeysMode, SharedClipboard,
+    SourceView, SystemClipboard, Tool,
 };
 use underline_facade::blocks::{heading_offset, parse_blocks};
 use underline_facade::diagram::Diagrams;
@@ -1121,22 +1121,31 @@ fn system_locale() -> String {
         .unwrap_or_default()
 }
 
-/// UC-005: the status line under the editor: on the left where the cursor
-/// is and what is selected, on the right the quick switches of UC-010 A3
+/// UC-005: the status line under the editor. On the left, with Vim or Nano
+/// keys, a badge of the key map and its mode in a color of the theme, what
+/// is typed but not done yet, and the most important commands (FR-026) as
+/// far as they fit; on the right, always, where the cursor is and what is
+/// selected in a box of its own, then the quick switches of UC-010 A3
 /// (input mode, minimap, copy on select), stored like any setting.
 fn editor_status_line(
     ui: &mut egui::Ui,
     place: underline_editor::CursorPlace,
+    keys: Option<&InputStatus>,
+    palette: &Palette,
     effective: &underline_core::Effective,
     quick: &mut Vec<(SettingKey, String)>,
 ) {
-    // The switches first, from the right; the place gets the rest of the
-    // line and is cut short there, so nothing overlaps in a narrow window.
+    // The switches and the place first, from the right; the keys get the
+    // rest of the line, so nothing overlaps in a narrow window.
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         {
+            // A narrow window gets the short names of the switches, so the
+            // place and the keys keep their room.
+            let narrow = ui.available_width() < 720.0;
+            let name = |long: &'static str, short: &'static str| if narrow { short } else { long };
             let mut copy = effective.copy_on_select;
             if ui
-                .toggle_value(&mut copy, "Copy on select")
+                .toggle_value(&mut copy, name("Copy on select", "Copy"))
                 .on_hover_text("Put a selection on the clipboard as soon as it is made")
                 .changed()
             {
@@ -1144,7 +1153,7 @@ fn editor_status_line(
             }
             let mut minimap = effective.show_minimap;
             if ui
-                .toggle_value(&mut minimap, "Minimap")
+                .toggle_value(&mut minimap, name("Minimap", "Map"))
                 .on_hover_text("Show or hide the minimap beside the editor")
                 .changed()
             {
@@ -1153,7 +1162,11 @@ fn editor_status_line(
             ui.separator();
             let mut mode = effective.input_mode;
             egui::ComboBox::from_id_salt("input-mode")
-                .selected_text(format!("Keys: {}", mode.label()))
+                .selected_text(if narrow {
+                    mode.label().to_owned()
+                } else {
+                    format!("Keys: {}", mode.label())
+                })
                 .show_ui(ui, |ui| {
                     for each in InputMode::ALL {
                         ui.selectable_value(&mut mode, *each, each.label());
@@ -1162,6 +1175,8 @@ fn editor_status_line(
             if mode != effective.input_mode {
                 quick.push((SettingKey::InputMode, mode.label().to_owned()));
             }
+            ui.separator();
+            place_box(ui, &place, palette);
         }
         let rest = ui.available_rect_before_wrap();
         ui.allocate_new_ui(
@@ -1169,10 +1184,105 @@ fn editor_status_line(
                 .max_rect(rest)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(place.label()).weak()).truncate());
+                // Nothing on the left reaches into the switches.
+                ui.set_clip_rect(rest.intersect(ui.clip_rect()));
+                if let Some(keys) = keys {
+                    keys_status(ui, keys, palette);
+                }
             },
         );
     });
+}
+
+/// UC-005: where the cursor is and what is selected, in a box of its own
+/// on the theme's inset fill, in every input mode.
+fn place_box(ui: &mut egui::Ui, place: &underline_editor::CursorPlace, palette: &Palette) {
+    let color = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
+    egui::Frame::none()
+        .fill(color(palette.inset()))
+        .rounding(4.0)
+        .inner_margin(egui::Margin::symmetric(8.0, 1.0))
+        .show(ui, |ui| {
+            // One line, cut short only when nothing else is left.
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(place.label())
+                        .monospace()
+                        .color(color(palette.foreground)),
+                )
+                .truncate(),
+            );
+        });
+}
+
+/// FR-026: the part of the status line for Vim or Nano keys. The badge and
+/// the keys of the commands take the theme's color of the mode, so they
+/// stand apart from the rest; commands that do not fit are left out whole,
+/// the least important first.
+fn keys_status(ui: &mut egui::Ui, keys: &InputStatus, palette: &Palette) {
+    let color = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
+    let [normal, insert, visual, command] = palette.mode_colors();
+    let fill = match keys.mode {
+        Some(KeysMode::Insert) => insert,
+        Some(KeysMode::Visual | KeysMode::VisualLine) => visual,
+        Some(KeysMode::Command) => command,
+        Some(KeysMode::Normal) | None => normal,
+    };
+    let accent = color(fill);
+    let badge = match keys.mode {
+        Some(mode) => format!("{} · {}", keys.keymap.label(), mode.label()),
+        None => keys.keymap.label().to_owned(),
+    };
+    status_badge(ui, &badge, accent, color(palette.text_on(fill)));
+    if !keys.pending.is_empty() {
+        ui.add(
+            egui::Label::new(egui::RichText::new(&keys.pending).monospace().color(accent))
+                .truncate(),
+        );
+    }
+    let weak = color(palette.weak);
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let format = |font_id, color| egui::TextFormat {
+        font_id,
+        color,
+        valign: egui::Align::Center,
+        ..Default::default()
+    };
+    for (index, (key, action)) in keys.hints.iter().enumerate() {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(key, 0.0, format(mono.clone(), accent));
+        job.append(action, 6.0, format(body.clone(), weak));
+        let galley = ui.fonts(|f| f.layout_job(job));
+        // Between two commands a double gap, so they read as pairs.
+        let gap = ui.spacing().item_spacing.x;
+        // The first command comes after a separator, which needs room too.
+        let separator = if index == 0 { 2.0 * gap + 1.0 } else { 0.0 };
+        if galley.size().x + 2.0 * gap + separator > ui.available_width() {
+            break;
+        }
+        if index == 0 {
+            ui.separator();
+        }
+        ui.add_space(gap);
+        ui.label(galley);
+    }
+}
+
+/// A badge of the status line: `text` on a rounded `fill`, in
+/// `text_color`, which the theme picks to stand out on the fill.
+fn status_badge(ui: &mut egui::Ui, text: &str, fill: egui::Color32, text_color: egui::Color32) {
+    let font = egui::FontId::new(
+        egui::TextStyle::Small.resolve(ui.style()).size.max(11.0),
+        egui::FontFamily::Proportional,
+    );
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, text_color);
+    let padding = egui::vec2(7.0, 2.0);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + 2.0 * padding, egui::Sense::hover());
+    ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
+    ui.painter().galley(rect.min + padding, galley, text_color);
 }
 
 /// The burger button of the top bar: three lines, painted, so it needs no
@@ -6076,14 +6186,6 @@ impl eframe::App for UnderlineApp {
                     self.restore_deleted(offer.deleted, offer.reopen);
                 }
             }
-            // FR-026: the input mode and its most important commands.
-            if let Some(status) = self
-                .tabs
-                .active()
-                .and_then(|(_, tab)| tab.view.input_status())
-            {
-                ui.label(egui::RichText::new(status).monospace());
-            }
         });
 
         if self.workspace.is_none() {
@@ -6613,7 +6715,15 @@ impl eframe::App for UnderlineApp {
             if let Some(status) = status {
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(status), |ui| {
                     ui.set_clip_rect(status.intersect(ui.clip_rect()));
-                    editor_status_line(ui, tab.view.cursor_place(), effective, &mut quick);
+                    let keys = tab.view.input_status();
+                    editor_status_line(
+                        ui,
+                        tab.view.cursor_place(),
+                        keys.as_ref(),
+                        self.settings.palette(),
+                        effective,
+                        &mut quick,
+                    );
                 });
             }
             persist |= switched;

@@ -38,6 +38,87 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// The fill of a box set into the panel, such as the cursor place in the
+    /// editor's status line: the panel, made darker until it stands apart
+    /// from it, but no further. A panel too dark for that is lightened
+    /// towards the text instead.
+    pub fn inset(&self) -> Rgb {
+        let apart = |towards: Rgb| {
+            (1..=20_u8)
+                .map(move |step| mix(self.panel, towards, f32::from(step) / 40.0))
+                .find(|&fill| contrast(fill, self.panel) >= 1.2)
+        };
+        apart([0; 3])
+            .or_else(|| apart(self.foreground))
+            .unwrap_or(self.code_background)
+    }
+
+    /// FR-026: the colors of the input modes in the editor's status line,
+    /// as normal, insert, visual, and command: each the first of its
+    /// colors of the theme that is far enough from the ones before, so the
+    /// modes look apart in every theme.
+    pub fn mode_colors(&self) -> [Rgb; 4] {
+        let wishes = [
+            [
+                self.link,
+                self.function,
+                self.kind,
+                self.heading,
+                self.variable,
+            ],
+            [
+                self.string,
+                self.number,
+                self.heading,
+                self.kind,
+                self.variable,
+            ],
+            [
+                self.keyword,
+                self.kind,
+                self.heading,
+                self.number,
+                self.variable,
+            ],
+            [
+                self.function,
+                self.number,
+                self.kind,
+                self.heading,
+                self.variable,
+            ],
+        ];
+        let mut chosen = [[0; 3]; 4];
+        for (at, wish) in wishes.into_iter().enumerate() {
+            chosen[at] = wish
+                .into_iter()
+                .find(|&c| chosen[..at].iter().all(|&o| distance(c, o) >= MODES_APART))
+                .unwrap_or(wish[0]);
+        }
+        chosen
+    }
+
+    /// The text on a badge filled with `fill`, such as the input mode in the
+    /// status line: the note background or the body text, whichever stands
+    /// out more, moved towards black or white only as far as NFR-010 needs.
+    pub fn text_on(&self, fill: Rgb) -> Rgb {
+        let base = if contrast(self.background, fill) >= contrast(self.foreground, fill) {
+            self.background
+        } else {
+            self.foreground
+        };
+        let end = if contrast([0; 3], fill) >= contrast([255; 3], fill) {
+            [0; 3]
+        } else {
+            [255; 3]
+        };
+        // Pure black or white stands out at least as much as any step.
+        (0..=20_u8)
+            .map(|step| mix(base, end, f32::from(step) / 20.0))
+            .find(|&text| contrast(text, fill) >= 4.5)
+            .unwrap_or(end)
+    }
+
     /// The fill of a switched-on toggle or a chosen entry: the panel moved a
     /// quarter of the way to the link color, so it stands out from the panel.
     pub fn chosen(&self) -> Rgb {
@@ -202,6 +283,18 @@ pub fn palette(theme: Theme) -> &'static Palette {
         .expect("every theme has a palette")
 }
 
+/// How far apart two mode colors are at least, as [`distance`].
+const MODES_APART: f32 = 60.0;
+
+/// The distance of two colors in RGB.
+fn distance(a: Rgb, b: Rgb) -> f32 {
+    a.iter()
+        .zip(b)
+        .map(|(&x, y)| (f32::from(x) - f32::from(y)).powi(2))
+        .sum::<f32>()
+        .sqrt()
+}
+
 /// The WCAG 2.1 contrast ratio of two colors, from 1 to 21 (NFR-010).
 pub fn contrast(a: Rgb, b: Rgb) -> f32 {
     fn luminance([r, g, b]: Rgb) -> f32 {
@@ -228,6 +321,7 @@ mod tests {
     #[test]
     fn uc010_tc17_every_theme_reaches_its_contrast() {
         let mut failures = Vec::new();
+        let mut too_close = Vec::new();
         for theme in Theme::ALL {
             let p = palette(*theme);
             let mut check = |name: &str, color: Rgb, on: Rgb, least: f32| {
@@ -250,6 +344,27 @@ mod tests {
             check("link", p.link, p.background, 4.5);
             check("weak", p.weak, p.background, 3.0);
             check("weak on panel", p.weak, p.panel, 3.0);
+            check("text on an inset", p.foreground, p.inset(), 4.5);
+            check("inset against the panel", p.inset(), p.panel, 1.2);
+            // FR-026: the badges and command keys of the input modes in the
+            // editor's status line, apart from each other.
+            let modes = p.mode_colors();
+            let names = ["normal", "insert", "visual", "command"];
+            for (at, (name, color)) in names.into_iter().zip(modes).enumerate() {
+                check(
+                    &format!("text on a {name} badge"),
+                    p.text_on(color),
+                    color,
+                    4.5,
+                );
+                check(&format!("{name} keys on panel"), color, p.panel, 3.0);
+                if modes[..at]
+                    .iter()
+                    .any(|&o| distance(color, o) < MODES_APART)
+                {
+                    too_close.push(format!("{}: {name} mode", theme.label()));
+                }
+            }
             for (name, color) in [
                 ("keyword", p.keyword),
                 ("string", p.string),
@@ -262,6 +377,10 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+        assert!(
+            too_close.is_empty(),
+            "too close to another mode: {too_close:#?}"
+        );
     }
 
     #[test]

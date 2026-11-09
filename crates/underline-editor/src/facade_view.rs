@@ -2457,12 +2457,9 @@ mod tests {
         view.select_chars(2..25);
         let place = view.cursor_place();
         assert_eq!((place.selected_chars, place.selected_lines), (23, 4));
-        assert_eq!(place.label(), "Ln 4, Col 3   4 lines selected");
+        assert_eq!(place.label(), "Ln 4, Col 3 · 4 lines");
         view.select_chars(8..12);
-        assert_eq!(
-            view.cursor_place().label(),
-            "Ln 3, Col 5   4 characters selected"
-        );
+        assert_eq!(view.cursor_place().label(), "Ln 3, Col 5 · 4 chars");
         // A whole line ends at the start of the next, which does not count.
         view.select_chars(0..8);
         let place = view.cursor_place();
@@ -3434,7 +3431,7 @@ mod tests {
         source_frame(&mut h, vec![]);
         source_frame(&mut h, vec![]);
         let vim = |h: &mut Harness, spec: &str| source_frame(h, keys(spec));
-        assert!(h.source.input_status().unwrap().contains("NORMAL"));
+        assert!(h.source.input_status().unwrap().text().contains("NORMAL"));
         vim(&mut h, "jdd");
         assert_eq!(h.text(), "alpha\ngamma\n");
         vim(&mut h, "p");
@@ -3446,12 +3443,15 @@ mod tests {
         vim(&mut h, "gg2dd");
         assert_eq!(h.text(), "beta\n");
         vim(&mut h, "inew");
-        assert!(h.source.input_status().unwrap().contains("INSERT"));
+        assert_eq!(
+            h.source.input_status().unwrap().mode,
+            Some(crate::keys::KeysMode::Insert)
+        );
         vim(&mut h, "<Esc>");
-        assert!(h.source.input_status().unwrap().contains("NORMAL"));
+        assert!(h.source.input_status().unwrap().text().contains("NORMAL"));
         assert_eq!(h.text(), "newbeta\n");
         vim(&mut h, "0ve");
-        assert!(h.source.input_status().unwrap().contains("VISUAL"));
+        assert!(h.source.input_status().unwrap().text().contains("VISUAL"));
         vim(&mut h, "y");
         assert_eq!(h.text(), "newbeta\n");
         vim(&mut h, "$P");
@@ -3508,7 +3508,12 @@ mod tests {
         h.source.focus_cursor();
         source_frame(&mut h, vec![]);
         source_frame(&mut h, vec![]);
-        assert!(h.source.input_status().unwrap().contains("^K Cut"));
+        assert!(h
+            .source
+            .input_status()
+            .unwrap()
+            .text()
+            .contains("^K Cut line"));
         source_frame(&mut h, keys("<C-k><Down><C-u>"));
         assert_eq!(h.text(), "one\nthree\ntwo\n");
         source_frame(&mut h, keys("<C-w>thr<CR>"));

@@ -16,7 +16,7 @@ use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 use crate::blink::Blink;
 use crate::clipboard::{ClipContent, ClipImage, SharedClipboard};
 use crate::document::Document;
-use crate::keys::{EditorCommand, InputMode, Keys, Target};
+use crate::keys::{EditorCommand, InputMode, InputStatus, Keys, Target};
 use crate::minimap::{self, Mark};
 use crate::Tool;
 use underline_facade::blocks::{link_at, parse_blocks};
@@ -49,16 +49,17 @@ pub struct CursorPlace {
 
 impl CursorPlace {
     /// The place as the status line shows it: "Ln 3, Col 5", then what is
-    /// selected, in chars within one line and in lines across several.
+    /// selected, as "· 4 chars" within one line and "· 3 lines" across
+    /// several.
     #[must_use]
     pub fn label(&self) -> String {
         let place = format!("Ln {}, Col {}", self.line, self.column);
         match (self.selected_chars, self.selected_lines) {
             (0, _) => place,
-            (1, _) => format!("{place}   1 character selected"),
+            (1, _) => format!("{place} · 1 char"),
             // Within one line: the chars.
-            (n, 0 | 1) => format!("{place}   {n} characters selected"),
-            (_, lines) => format!("{place}   {lines} lines selected"),
+            (n, 0 | 1) => format!("{place} · {n} chars"),
+            (_, lines) => format!("{place} · {lines} lines"),
         }
     }
 }
@@ -633,8 +634,8 @@ impl SourceView {
     }
 
     /// FR-026: the active input mode and its most important commands, for
-    /// the status bar.
-    pub fn input_status(&self) -> Option<String> {
+    /// the editor's status line (UC-005).
+    pub fn input_status(&self) -> Option<InputStatus> {
         self.keys.status()
     }
 

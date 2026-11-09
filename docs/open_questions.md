@@ -1887,6 +1887,10 @@ switches for the input mode, the minimap, and copy on select sit at its right en
 UC-005 and UC-010 should take this in: UC-010 A3 and TC-010-06 still place the quick switches in the toolbar. In the
 facade the line and column count in the markup, not in the rendered text.
 
+With Vim or Nano keys the same line also shows, at its left, the key map and its mode in a color of the theme, what is
+typed but not done yet, and the most important commands as far as they fit; UC-005 A6, A7, BR-009, BR-010 and FR-026
+still name the status bar of the window for this.
+
 ## OQ-188: Where are the commands of the window, and can the user hide them?
 
 **Element:** UC-010 BR-001, BR-006, A3; UC-001; UC-002
