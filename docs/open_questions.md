@@ -1668,3 +1668,43 @@ Answer: Yes, as the stored setting says.
 **Resolved in:** [UC-017](use_cases/UC-017-control-agent-access.md)
 
 Answer: Yes: off, read only, read and write; FR-059, UC-010, and the entity model follow it.
+
+## OQ-167: What can an agent look up besides listing and reading notes?
+
+**Element:** UC-018 steps 3–4, A4, A5, BR-004
+**Raised by:** /use-case-spec UC-018, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md)
+
+Answer: It can also search the notes, by the rules of the search of UC-008.
+
+## OQ-168: What does an agent get when it reads a note?
+
+**Element:** UC-018 step 6, A1
+**Raised by:** /use-case-spec UC-018, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md)
+
+Answer: The text in its note format, with the format and the number of lines; on request only a range of lines.
+
+## OQ-169: Does an agent read changes the user has not saved yet?
+
+**Element:** UC-018 BR-003
+**Raised by:** /use-case-spec UC-018, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md)
+
+Answer: No, it reads the notes as stored; unsaved changes are saved within a second.
+
+## OQ-170: Does the user see where an agent reads?
+
+**Element:** UC-018 step 7, BR-006, FR-057
+**Raised by:** /use-case-spec UC-018, 2026-11-09
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** [UC-018](use_cases/UC-018-look-up-notes.md)
+
+Answer: Yes, the agent cursor marks the lines read in an open note, as for writing.
