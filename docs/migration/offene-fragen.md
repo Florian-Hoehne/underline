@@ -45,3 +45,4 @@ raten, steht jede Frage hier, bis der Benutzer entscheidet. Fragen zur Produktsp
 | Q-37 | B3 | `wasm-bindgen` ist exakt gepinnt, die CLI muss dieselbe Version haben; ein Abhängigkeits-Update kann sie trennen (das Build-Skript bricht dann ab). Pin von automatischen Updates ausnehmen? | Pin bleibt, Skript prüft | offen |
 | Q-38 | F9 | Markierung der Workspace-Suche (M-13) im WASM oder im Backend? | entscheidet F9 | offen |
 | Q-39 | Phase 4 | WebView2 und WKWebView: Laden des WASM (`instantiateStreaming`, MIME von `.wasm` über `tauri://` bzw. `http://tauri.localhost`) ist nur unter WebKitGTK geprüft. | Prüfung in Phase 4 | offen |
+| Q-40 | B4 | Stürzt der Editor-Kern im Fenster ab (WASM-Trap), sind die Edits seit der letzten Bestätigung durch das Backend verloren (höchstens ein Frame plus ein Roundtrip). Wie soll der Benutzer davon erfahren? | der Tab wird aus dem Text des Backends neu geöffnet, Log-Eintrag | offen |

@@ -1,0 +1,22 @@
+[package]
+name = "underline-editor-wasm"
+description = "The editor of Underline compiled to WASM for the webview: a wasm-bindgen wrapper of the editor's tab (ADR-025)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# `cdylib` for the webview (`npm run wasm`), `rlib` so clippy and the golden
+# test run natively.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+underline-editor-core.workspace = true
+underline-editor-view.workspace = true
+underline-markup.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+wasm-bindgen.workspace = true

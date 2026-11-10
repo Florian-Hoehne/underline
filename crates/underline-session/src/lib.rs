@@ -47,10 +47,10 @@ mod start;
 mod workspace_view;
 
 pub use editor_view::{
-    ClipAction, CloseQuestion, EditorCommandName, EditorInput, EditorPatch, EditorState, FoundView,
-    HighlightView, KeyHintView, KeyName, KeysStatusView, NotePropertiesView, SectionView,
-    SectionsView, SpanStyle, TabPropertiesView, TextChange, ToolName, ToolView, VimChange,
-    VimModeName, VimState,
+    ClipAction, Clipped, CloseQuestion, EditorCommandName, EditorInput, EditorPatch, EditorState,
+    FoundView, HighlightView, KeyHintView, KeyName, KeysStatusView, NotePropertiesView,
+    SectionView, SectionsView, SpanStyle, TabPropertiesView, TabViews, TextChange, ToolName,
+    ToolView, VimChange, VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView, TextReplaced};

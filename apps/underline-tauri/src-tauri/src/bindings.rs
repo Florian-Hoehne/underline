@@ -12,7 +12,7 @@ use std::path::Path;
 use specta_typescript::Typescript;
 use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
-use underline_session::PaletteView;
+use underline_session::{Clipped, EditorPatch, FacadePatch, PaletteView, TabViews};
 
 use crate::commands;
 use crate::events::{
@@ -82,6 +82,11 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             PropertiesEvent,
             CloseQuestionEvent
         ])
+        // ADR-025: what crosses only between the window and the editor's
+        // WASM (`ui/src/lib/editor/core.ts`).
+        .typ::<Clipped<EditorPatch>>()
+        .typ::<Clipped<FacadePatch>>()
+        .typ::<TabViews>()
         .disable_serde_phases()
 }
 

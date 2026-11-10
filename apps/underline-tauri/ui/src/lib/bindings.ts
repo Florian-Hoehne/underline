@@ -324,6 +324,21 @@ export type ClipAction =
 "paste";
 
 /**
+ *  M-08.6, M-09.14, ADR-025: what copying, cutting or pasting in the
+ *  webview's editor gives: the markup for the clipboard, if any, and the
+ *  patch.
+ */
+export type Clipped<P> = {
+	/**
+	 *  The markup for the system clipboard; `None` with nothing selected
+	 *  or when pasting.
+	 */
+	copied: string | null,
+	/**  The patch for the view. */
+	patch: P,
+};
+
+/**
  *  M-06.3, M-21.4, UC-005 A14 step 3: "Changes not stored": closing failed
  *  to store, and the user decides.
  */
@@ -1204,6 +1219,18 @@ export type TabView = {
 	 *  "Not stored: {err}. Underline keeps trying."; `None` when it did not.
 	 */
 	saveError: string | null,
+};
+
+/**
+ *  M-08.8, M-12.2, ADR-025: what the webview's editor tells its view after
+ *  the inputs, as the backend's tick did (`ed-sections`, `ed-found`); each
+ *  only once it changed.
+ */
+export type TabViews = {
+	/**  The sections for the fold arrows. */
+	sections: SectionsView | null,
+	/**  The marked hits of the Nano search. */
+	found: FoundView | null,
 };
 
 /**  A table (M-09.5): its rows of cells, each cell its styled runs. */

@@ -483,6 +483,89 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
   den Session-Tests haben sich nur Zugriffspfade geändert (`tab.edit.editor`, `tab.edit.own_markup`, `commit` mit
   `FacadeModel`); keine Erwartung wurde geändert.
 - **`Maker.uncoloured`** wurde gesetzt, aber nie gelesen, und ist entfallen.
+- **Nachtrag nach dem Review (Soll):**
+  - **Schlüssel sind Hex-Strings.** `colors_key` und `diagram_key` geben 16 Hex-Zeichen zurück (`Fnv1a::hex()`), wie
+    `hash()`. Eine JavaScript-Zahl trägt nur 53 Bit exakt; als Strings kommen die Schlüssel unverändert über JSON
+    (`EnrichView` in 2.3, ab B5b). Auch der Farb-Cache des Backends führt sie als String.
+  - **Ein Diagramm-Schlüssel.** `session/diagrams.rs` rechnet seinen Schlüssel mit `diagram_hash` (FNV) statt mit
+    `DefaultHasher`. Der Bildname `diagram/{hash:016x}.svg` ist damit genau der `diagram_key` des Webviews.
+  - **Eine Regel für die Uhr.** Jede Methode mit `now_ms` (`sections_view`, `found_view`) setzt die Uhr über
+    `set_now`. Die Uhr hat eine Epoche je Tab und läuft nur vorwärts; nicht endliche Werte werden ignoriert.
+  - **Kollisionen** von 64-Bit-Schlüsseln werden hingenommen (etwa 1 zu 10^12 bei einigen Tausend Blöcken; sichtbar
+    wären nur Farben oder Bild eines anderen Blocks bis zur nächsten Änderung).
+
+### 7.2 Umsetzung B3c (2026-11-10): Stand und Abweichungen
+
+- **WASM-API in B3c:**
+  - Vorhanden sind die Funktionen von 2.2 für beide Ansichten, dazu `setMode`, `setView`, `setLooks`, `setNow`,
+    `views`, `text` und `hash`.
+  - Noch nicht vorhanden sind der Sync (`takeOutbox`, `acknowledge`, `syncedRev`, `inStep`, B4) und `enrich` (B5b).
+  - Geöffnet wird mit dem Konstruktor `new WasmTab(note, text, format, mac)` statt mit `open(TabOpenView)`; diesen
+    DTO gibt es erst mit `ed_open` in B5.
+  - `setView` nimmt ein Flag (Facade ja/nein). `select` antwortet wie alle Aufrufe mit JSON, hier mit einem
+    JSON-String.
+- **Aufbau:** Die Aufrufe liegen ohne wasm-bindgen in `crates/underline-editor-wasm/src/calls.rs` (JSON hinein und
+  heraus); `lib.rs` ist nur die Hülle `WasmTab`. Das Modul heisst `calls`, damit es die Crate `core` nicht verdeckt.
+- **Neue DTOs:** `Clipped<P>` (Zwischenablage) und `TabViews` (Sektionen und Treffer). `bindings.rs` exportiert sie
+  mit `.typ()`.
+- **Golden-Test:**
+  - `src/golden.rs` fährt drei Szenarien nativ (Quellansicht Markdown, Facade Markdown, Facade AsciiDoc) und schreibt
+    sie mit `UNDERLINE_UPDATE_GOLDEN=1` nach `golden/calls.json` (eingecheckt).
+  - `ui/src/lib/editor/core.test.ts` spielt dieselben Aufrufe gegen das WASM ab.
+  - Verglichen wird als JSON-Wert, nicht als Text: Im ganzen Workspace schaltet ein anderes Crate serde_jsons
+    `preserve_order` zu, und dann ändert sich die Reihenfolge der Schlüssel.
+- **Vitest:** `src/test-setup.ts` lädt das WASM mit `initSync` aus den Bytes. Node-`fs` kommt dabei über
+  `process.getBuiltinModule` (Node ≥ 22.3), damit es kein `@types/node` braucht. Der Pfad ist relativ zu
+  `process.cwd()`, weil jsdom `import.meta.url` als http-Adresse setzt.
+- **Start:** `main.ts` ruft `loadEditorCore()` beim Start ohne Warten auf. Ein Fehler landet nur in der Konsole, und
+  die App läuft weiter auf Variante A.
+- **Gemeinsam genutzt:** `EditorTab::bring_facade_up_to_date` (Parse und alle Views) nutzen die WASM-Hülle und die
+  Session gleichermassen.
+- **CSP:** Hinzu kommen `script-src 'self' 'wasm-unsafe-eval'` und `connect-src 'self'`.
+  - `connect-src` ist nötig, weil das Glue die `.wasm` per `fetch` lädt (`instantiateStreaming`; Spike
+    RESULTS.md:263).
+  - Im Smoke-Start (`npm run tauri dev`) lief die App, und der Dev-Server lieferte die Datei als `application/wasm`.
+  - Die Konsole des Webviews wurde nicht ausgelesen.
+- **`scripts/wasm.js`** nimmt `CARGO` als Ersatz für `cargo` und sagt, was fehlt (CLI-Version, cargo im `PATH`).
+- **Messung (Q-34), Node 24 / V8, nicht JavaScriptCore:**
+  - `.wasm` 1'117'610 Bytes roh, 362'492 Bytes mit gzip -9;
+  - `WebAssembly.compile` 1,5–5,5 ms, `initSync` 0,6 ms;
+  - Tab mit 10'000 Zeilen öffnen 4 ms, `facadeState` dieser Notiz 100 ms (alle Blöcke samt JSON, wie heute `fa_open`).
+  - Auf WebKitGTK wird in B5 gemessen.
+
+**Nachtrag nach dem Review von B3c:**
+
+- **Panik im WASM:**
+  - `#[wasm_bindgen(start)]` setzt beim Laden einen Panic-Hook, der die Meldung über `console.error` (eigener
+    `extern`-Import) schreibt, bevor die WASM-Instanz trapt (`panic = abort`).
+  - `core.ts` führt jeden Aufruf über einen Helfer:
+    - Ein `Error` aus `JsError` heisst „Argument falsch“, und der Tab arbeitet weiter.
+    - Ein Trap (`WebAssembly.RuntimeError`) oder die Glue-Meldung „recursive use of an object“ heisst „Kern kaputt“:
+      Der Tab wird freigegeben, `EditorCore.onDead` erfährt es einmal, und jeder spätere Aufruf wirft
+      `EditorCoreDead`.
+- **Wiederaufnahme (Haken für B4/B5):** Wer den `EditorCore` hält (die Registry `tabs.ts`), setzt `onDead`.
+  - Er öffnet den Tab neu aus dem Text des Backends (`ed_open`) bzw. mit Resync (3.10).
+  - Edits seit der letzten Bestätigung sind dann verloren. Das ist zu melden; der Text dafür ist eine Produktfrage für
+    B4.
+- **Ohne Panik:** `src/hostile.rs` prüft nativ alle Aufrufe in allen drei Modi auf drei Notizen (Emoji, CRLF, leer):
+  - Offsets am Ende, dahinter und mitten in einem Surrogatpaar;
+  - Bereiche rückwärts, fremde Revisionen, riesige Zeilen und Seiten;
+  - falsches JSON für jeden DTO-Parameter;
+  - dazu 60 zufällige Läufe mit je 150 Aufrufen.
+  - Es fand sich keine Panik; der Editor klemmt bereits an Textlänge und Zeichengrenzen.
+- **Fehler:**
+  - `CallError` ist ein `thiserror`-Enum (`Invalid`, `NoFormat`, `NoMode`, `Answer`); `JsError::from` übernimmt die
+    Meldung.
+  - `json()` gibt einen Fehler zurück, statt „null“ zu schreiben.
+  - Die Golden-Szenarien enthalten auch Fehlerschritte, die als `{ "error": … }` auf beiden Seiten verglichen werden.
+    Der Golden-Test nennt das erste abweichende Szenario mit seinem Schritt und unterscheidet eine fehlende von einer
+    ungültigen Datei.
+- **Build:**
+  - `scripts/wasm.js` baut mit `--locked`, gibt beim Scheitern den Hinweis auf `rustup target add` und bricht ab, wenn
+    `Cargo.lock` mehr als eine wasm-bindgen-Version hält.
+  - Die CI liest die Version aus `Cargo.lock` und verwendet sie für den Cache-Schlüssel und für die Installation.
+- **Uhr:** Ein Tab hat genau einen Taktgeber: in der Session `millis`, im Webview `performance.now()`. Eine frühere
+  Zeit drosselt nicht erneut (Test `adr025_an_earlier_time_does_not_throttle_anew`).
 
 ## 8. Risiken und offene Fragen (für `offene-fragen.md`)
 

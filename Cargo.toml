@@ -7,6 +7,7 @@ members = [
     "crates/underline-editor",
     "crates/underline-editor-core",
     "crates/underline-editor-view",
+    "crates/underline-editor-wasm",
     "crates/underline-facade",
     "crates/underline-markup",
     "crates/underline-mcp",
@@ -46,3 +47,6 @@ underline-markup = { path = "crates/underline-markup" }
 underline-session = { path = "crates/underline-session" }
 # Specta v2 is a release candidate: pinned exactly, as tauri-specta asks.
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+# ADR-025: pinned exactly; the CLI in `.tools/` must be the same version
+# (`apps/underline-tauri/ui/scripts/wasm.js` checks it).
+wasm-bindgen = "=0.2.130"

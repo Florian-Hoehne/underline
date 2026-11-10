@@ -44,7 +44,7 @@ pub(super) type Looks = (Theme, bool);
 
 /// M-09.4: the colours of code blocks, by theme, language and code, kept by
 /// the session, so switching the view does not colour them again.
-pub(in crate::session) type CodeColorCache = HashMap<u64, Option<CodeColors>>;
+pub(in crate::session) type CodeColorCache = HashMap<String, Option<CodeColors>>;
 
 /// M-09.6: what was found of the image files, by their place, and when.
 pub(in crate::session) type ImageCache = HashMap<PathBuf, (Instant, Result<String, FileProblem>)>;
@@ -280,7 +280,7 @@ impl Enrich for Maker<'_> {
 /// The key the colours of `code` in `language` are kept by, in `theme`:
 /// FNV-1a, so the webview makes the same key (ADR-025,
 /// `docs/migration/variante-b.md` section 2.3).
-pub(super) fn colors_key(theme: Theme, language: &str, code: &str) -> u64 {
+pub(super) fn colors_key(theme: Theme, language: &str, code: &str) -> String {
     underline_editor_view::views::colors_key(theme.label(), language, code)
 }
 
@@ -288,7 +288,7 @@ pub(super) fn colors_key(theme: Theme, language: &str, code: &str) -> u64 {
 /// is coloured.
 pub(super) fn remember_colors(
     cache: &Mutex<CodeColorCache>,
-    key: u64,
+    key: String,
     set: &HighlightSet,
     language: &str,
     code: &str,
@@ -296,7 +296,7 @@ pub(super) fn remember_colors(
     // Coloured without holding the cache, which another job may use.
     let colors = Some(code_colors(set, language, code)).filter(|c| !c.spans.is_empty());
     let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    if cache.len() >= CODE_COLORS_KEPT {
+    if cache.len() >= CODE_COLORS_KEPT && !cache.contains_key(&key) {
         cache.clear();
     }
     cache.insert(key, colors.clone());

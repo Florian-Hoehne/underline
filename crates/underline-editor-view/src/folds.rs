@@ -233,6 +233,7 @@ impl EditorTab {
     /// passed.
     pub fn sections_view(&mut self, note: &str, now_ms: f64) -> Option<SectionsView> {
         self.set_now(now_ms);
+        let now_ms = self.now_ms;
         let rev = self.editor.revision();
         let key = (rev, self.folds.version);
         if self.folds.told == Some(key) {
@@ -432,5 +433,20 @@ mod tests {
         tab.editor.set_selection(23, 23);
         tab.editor.key(Key::ArrowDown, Modifiers::default(), 1);
         assert_eq!(tab.cursor_line(), 6, "Down lands in the former body");
+    }
+
+    /// ADR-025: a time earlier than the clock (a host that asks with an
+    /// older time) neither moves the throttle back nor blocks the sections:
+    /// they come once 300 ms of the clock passed.
+    #[test]
+    fn adr025_an_earlier_time_does_not_throttle_anew() {
+        let mut tab = tab(TEXT);
+        assert!(tab.sections_view("A", 1000.0).is_some());
+        tab.editor.set_selection(0, 0);
+        tab.editor.type_text("x");
+
+        assert!(tab.sections_view("A", 200.0).is_none(), "too soon");
+        assert!(tab.sections_view("A", 1000.0 + SECTIONS_EVERY_MS).is_some());
+        assert_eq!(tab.folds.found_at, Some(1000.0 + SECTIONS_EVERY_MS));
     }
 }

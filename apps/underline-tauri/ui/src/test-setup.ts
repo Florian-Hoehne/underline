@@ -18,3 +18,19 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     disconnect(): void {}
   };
 }
+
+// ADR-025: the editor's WASM, loaded from its bytes, as Node fetches no
+// file URLs. Node's `fs` is taken at run time, so the frontend needs no Node
+// types.
+{
+  // jsdom gives `import.meta.url` an http address; Vitest runs in `ui/`.
+  type Fs = { readFileSync(path: string): Uint8Array<ArrayBuffer> };
+  const { process } = globalThis as unknown as {
+    process: { cwd(): string; getBuiltinModule(id: string): unknown };
+  };
+  const fs = process.getBuiltinModule('node:fs') as Fs;
+  const { loadEditorCoreSync } = await import('./lib/editor/core');
+  loadEditorCoreSync(
+    fs.readFileSync(`${process.cwd()}/src/lib/wasm/pkg/underline_editor_wasm_bg.wasm`),
+  );
+}

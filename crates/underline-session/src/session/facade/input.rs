@@ -12,11 +12,10 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
 
 use ropey::Rope;
 use underline_core::NoteId;
-use underline_editor_core::facade::{moved_indices, parse_all, splices, MakeViews, Part};
+use underline_editor_core::facade::{moved_indices, MakeViews, Part};
 use underline_editor_core::keys::InputMode as KeysInputMode;
 use underline_editor_view::views::{carry_colors, diagram_language, ViewMaker, WebWalker};
 use underline_editor_view::{EditorTab, FacadeCall, FacadeModel, Handled, Versioned};
@@ -85,31 +84,64 @@ impl MakeViews for Making<'_> {
     }
 }
 
+/// Makes all views of a note anew with the session's highlighting,
+/// diagrams and images, colouring code at once.
+struct AllViews<'a> {
+    ctx: &'a Context,
+    last_pictures: HashMap<usize, String>,
+}
+
+impl MakeViews for AllViews<'_> {
+    type View = BlockView;
+
+    fn all(&mut self, blocks: &[Block], text: &str, rope: &Rope) -> Vec<BlockView> {
+        let mut maker = Maker::new(self.ctx, std::mem::take(&mut self.last_pictures));
+        let views = maker.views(blocks, text, rope);
+        self.last_pictures = maker.last_pictures;
+        views
+    }
+
+    fn some(
+        &mut self,
+        blocks: &[Block],
+        range: Range<usize>,
+        part: Part<'_>,
+        rope: &Rope,
+    ) -> Vec<BlockView> {
+        let mut walker = WebWalker::part(part.text, part.from, part.origin);
+        let mut maker = Maker::new(self.ctx, std::mem::take(&mut self.last_pictures));
+        let views = ViewMaker::new(&mut maker, blocks).views_of_range(range, &mut walker, rope);
+        self.last_pictures = maker.last_pictures;
+        views
+    }
+
+    fn blocks_moved(&mut self, replaced: Range<usize>, grown: isize) {
+        let last = std::mem::take(&mut self.last_pictures);
+        self.last_pictures = moved_indices(last, replaced, grown);
+    }
+
+    fn made(&mut self, _index: usize, _view: &mut BlockView, _old: Option<&BlockView>) {}
+}
+
 impl Facade {
     /// Makes the blocks of `edit`'s text and their views anew, when they
     /// are not of its revision; the changes for the window.
     fn bring_up_to_date(&mut self, edit: &mut EditorTab, ctx: &Context) -> Vec<Versioned> {
-        let rev = edit.editor.revision();
-        let model = &mut edit.facade;
-        if model.parsed == Some(rev) {
+        if edit.facade.parsed == Some(edit.editor.revision()) {
             return Vec::new();
         }
-        let text = edit.editor.text();
-        let (blocks, refs) = parse_all(&text, edit.format);
-        let mut maker = Maker::new(ctx, self.last_pictures.clone());
-        let views = maker.views(&blocks, &text, edit.editor.document().rope());
+        let mut maker = AllViews {
+            ctx,
+            last_pictures: self.last_pictures.clone(),
+        };
+        let changes = edit.bring_facade_up_to_date(&mut maker);
         let mut last_pictures = maker.last_pictures;
-        last_pictures.retain(|index, _| *index < blocks.len());
-        let changes = splices(&model.views, &views);
-        model.views = views;
-        model.blocks = Arc::new(blocks);
-        model.parsed = Some(rev);
-        model.refs = refs;
+        last_pictures.retain(|index, _| *index < edit.facade.blocks.len());
         self.looks = Some(ctx.looks);
         self.last_pictures = last_pictures;
         // A job of the tick that runs now is for an older text.
         self.committed = self.next_seq;
-        model.versioned(changes)
+        changes
     }
 
     /// M-09.4, ADR-024: the code blocks of `model` sent without their

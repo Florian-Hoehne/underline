@@ -8368,6 +8368,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "underline-editor-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "underline-editor-core",
+ "underline-editor-view",
+ "underline-markup",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "underline-facade"
 version = "0.1.0"
 dependencies = [

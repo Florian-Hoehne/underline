@@ -12,6 +12,12 @@ const PRIME: u64 = 0x0100_0000_01b3;
 ///
 /// Unlike `std`'s `DefaultHasher`, its values are fixed, so the webview
 /// (WASM) and the backend make the same key of the same content.
+///
+/// Two different contents may get the same 64-bit hash. For the keys of
+/// colours and diagrams that is accepted: among the few thousand blocks a
+/// note holds, a collision has a chance of about 1 in 10^12, and it would
+/// show one block in the colours or the picture of another until it is
+/// edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fnv1a(u64);
 
@@ -51,13 +57,20 @@ impl Fnv1a {
     pub fn finish(self) -> u64 {
         self.0
     }
+
+    /// The hash as 16 hex digits. Keys that cross to the window take this
+    /// form: a JavaScript number holds only 53 bits exactly.
+    #[must_use]
+    pub fn hex(self) -> String {
+        format!("{:016x}", self.0)
+    }
 }
 
 /// ADR-025: the hash of `text` (its UTF-8 bytes) as 16 hex digits, which
 /// the webview and the backend compare to find out that their texts differ.
 #[must_use]
 pub fn hash(text: &str) -> String {
-    format!("{:016x}", Fnv1a::new().bytes(text.as_bytes()).finish())
+    Fnv1a::new().bytes(text.as_bytes()).hex()
 }
 
 #[cfg(test)]

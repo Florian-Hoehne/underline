@@ -570,3 +570,30 @@ pub struct HighlightView {
     /// The looks the spans refer to.
     pub styles: Vec<SpanStyle>,
 }
+
+/// M-08.6, M-09.14, ADR-025: what copying, cutting or pasting in the
+/// webview's editor gives: the markup for the clipboard, if any, and the
+/// patch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct Clipped<P> {
+    /// The markup for the system clipboard; `None` with nothing selected
+    /// or when pasting.
+    pub copied: Option<String>,
+    /// The patch for the view.
+    pub patch: P,
+}
+
+/// M-08.8, M-12.2, ADR-025: what the webview's editor tells its view after
+/// the inputs, as the backend's tick did (`ed-sections`, `ed-found`); each
+/// only once it changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct TabViews {
+    /// The sections for the fold arrows.
+    pub sections: Option<SectionsView>,
+    /// The marked hits of the Nano search.
+    pub found: Option<FoundView>,
+}

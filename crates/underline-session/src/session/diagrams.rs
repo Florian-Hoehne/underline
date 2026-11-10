@@ -10,10 +10,8 @@
 //! made anew for the next diagram; should the worker itself end, every
 //! diagram not rendered says so instead of waiting for ever.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -110,11 +108,11 @@ impl Drop for Alive {
     }
 }
 
-/// The key of a diagram: its language, its source and the theme's darkness.
+/// The key of a diagram: its language, its source and the theme's darkness,
+/// the same as the webview keeps its picture by (ADR-025,
+/// `underline_editor_view::views::diagram_key`), and the name of its picture.
 fn key(language: DiagramLanguage, source: &str, dark: bool) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    (language, source, dark).hash(&mut hasher);
-    hasher.finish()
+    underline_editor_view::views::diagram_hash(language, source, dark)
 }
 
 /// The key of the protocol path `diagram/{key}.svg` (with or without its

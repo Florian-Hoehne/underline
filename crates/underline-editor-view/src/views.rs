@@ -209,26 +209,31 @@ pub fn rendering_figure(language: DiagramLanguage) -> FigureView {
 }
 
 /// M-09.4, ADR-025: the key the colours of `code` in `language` are kept
-/// by, in the theme named `theme`: FNV-1a, the same in the backend and in
-/// the webview (`docs/migration/variante-b.md` section 2.3).
+/// by, in the theme named `theme`: FNV-1a as 16 hex digits, the same in the
+/// backend and in the webview, and exact in JavaScript
+/// (`docs/migration/variante-b.md` section 2.3).
 #[must_use]
-pub fn colors_key(theme: &str, language: &str, code: &str) -> u64 {
-    Fnv1a::new()
-        .field(theme)
-        .field(language)
-        .field(code)
-        .finish()
+pub fn colors_key(theme: &str, language: &str, code: &str) -> String {
+    Fnv1a::new().field(theme).field(language).field(code).hex()
 }
 
-/// M-09.7, ADR-025: the key the picture of the diagram `code` in
-/// `language` is kept by, on a dark or a light theme.
+/// M-09.7, ADR-025: the hash of the diagram `code` in `language` on a dark
+/// or a light theme; the backend names the diagram's picture by it
+/// (`diagram/{hash:016x}.svg`).
 #[must_use]
-pub fn diagram_key(language: DiagramLanguage, code: &str, dark: bool) -> u64 {
+pub fn diagram_hash(language: DiagramLanguage, code: &str, dark: bool) -> u64 {
     Fnv1a::new()
         .field(language.name())
         .field(code)
         .field(if dark { "dark" } else { "light" })
         .finish()
+}
+
+/// M-09.7, ADR-025: the key the picture of a diagram is kept by:
+/// [`diagram_hash`] as 16 hex digits, the name of its picture.
+#[must_use]
+pub fn diagram_key(language: DiagramLanguage, code: &str, dark: bool) -> String {
+    format!("{:016x}", diagram_hash(language, code, dark))
 }
 
 /// ADR-025: what a block shows besides its text: the colours of code and

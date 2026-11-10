@@ -29,8 +29,8 @@ pub struct CachedViews {
     theme: String,
     /// Whether the theme is dark, which the diagrams are drawn for.
     dark: bool,
-    colors: HashMap<u64, Option<CodeColors>>,
-    diagrams: HashMap<u64, FigureView>,
+    colors: HashMap<String, Option<CodeColors>>,
+    diagrams: HashMap<String, FigureView>,
     images: HashMap<String, FigureView>,
     /// M-09.7: the last picture of each diagram block, by block index.
     last_pictures: HashMap<usize, String>,
@@ -49,15 +49,15 @@ impl CachedViews {
 
     /// The colours `colors` of code kept by `key` ([`colors_key`]); `None`
     /// when nothing in the code is coloured.
-    pub fn insert_colors(&mut self, key: u64, colors: Option<CodeColors>) {
-        if self.colors.len() >= CODE_COLORS_KEPT {
+    pub fn insert_colors(&mut self, key: String, colors: Option<CodeColors>) {
+        if self.colors.len() >= CODE_COLORS_KEPT && !self.colors.contains_key(&key) {
             self.colors.clear();
         }
         self.colors.insert(key, colors);
     }
 
     /// The figure of a diagram kept by `key` ([`diagram_key`]).
-    pub fn insert_diagram(&mut self, key: u64, figure: FigureView) {
+    pub fn insert_diagram(&mut self, key: String, figure: FigureView) {
         self.diagrams.insert(key, figure);
     }
 

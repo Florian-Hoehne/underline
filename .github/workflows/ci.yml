@@ -17,7 +17,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+          # ADR-025: the editor's core runs in the webview as WASM.
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # ADR-025: the wasm-bindgen CLI in the version Cargo.lock pins (the
+      # crate is pinned with `=` in Cargo.toml), kept in .tools as on a
+      # developer's machine (docs/migration/variante-b.md, section 5). The
+      # version is read from Cargo.lock, so the cache key and the install
+      # follow a change of the pin; scripts/wasm.js refuses another CLI.
+      - name: wasm-bindgen version
+        id: wasm-bindgen
+        shell: bash
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          test "$(echo "$version" | wc -l)" -eq 1 && test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: .tools
+          key: wasm-bindgen-cli-${{ steps.wasm-bindgen.outputs.version }}-${{ runner.os }}
+      - name: wasm-bindgen CLI
+        shell: bash
+        run: |
+          version='${{ steps.wasm-bindgen.outputs.version }}'
+          if ! .tools/bin/wasm-bindgen --version 2>/dev/null | grep -qx "wasm-bindgen $version"; then
+            cargo install wasm-bindgen-cli --version "$version" --locked --root .tools
+          fi
       # Tauri (ADR-020) needs the WebKitGTK development packages on Linux.
       - if: runner.os == 'Linux'
         run: |
@@ -29,6 +54,8 @@ jobs:
           cache: npm
           cache-dependency-path: apps/underline-tauri/ui/package-lock.json
       # The frontend is checked and built first: the Tauri crate embeds ui/dist.
+      # `npm run check`, `npm test` and `npm run build` build the editor's WASM
+      # first (npm pre-hooks, scripts/wasm.js).
       - name: Frontend checks and build
         working-directory: apps/underline-tauri/ui
         run: |
@@ -41,3 +68,5 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # ADR-025: the crates the webview runs build for wasm32.
+      - run: cargo check --target wasm32-unknown-unknown -p underline-markup -p underline-editor-core -p underline-editor-view -p underline-editor-wasm

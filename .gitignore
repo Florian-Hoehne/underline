@@ -1,1 +1,5 @@
 /target
+# ADR-025: the wasm-bindgen CLI (docs/migration/variante-b.md section 5)
+/.tools/
+# ADR-025: the editor's WASM package, made by `npm run wasm`
+/apps/underline-tauri/ui/src/lib/wasm/pkg/

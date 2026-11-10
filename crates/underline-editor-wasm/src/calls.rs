@@ -1,0 +1,363 @@
+//! ADR-025: the editor's tab as the webview calls it, without wasm-bindgen:
+//! every argument and every answer that is more than a number or a flag is
+//! JSON of the DTOs in `bindings.ts`, so the native golden test drives the
+//! very calls the webview makes.
+//!
+//! No call panics, whatever its arguments: offsets past the end or inside a
+//! character are clamped by the editor, a revision that is not the text's is
+//! refused, and JSON that is not the DTO is a [`CallError`] (the tests in
+//! `hostile.rs`).
+//!
+//! **The clock.** The calls that find the sections and the Nano hits again
+//! at most every 300 ms (`views`) take the window's time in milliseconds,
+//! `performance.now()`; `setNow` sets it before an input. One tab has one
+//! clock with one epoch, and only the window feeds it: the session's clock
+//! (`millis` in `underline-session`) feeds the session's own tabs, never a
+//! tab in the webview. The clock never goes back.
+//!
+//! Calls that only read (`state`, `facadeState`, the keys) still take the
+//! tab mutably: they set the keys of the view first, and the facade's state
+//! parses the blocks when they are not of the text.
+
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use underline_editor_core::keys::InputMode as KeysInputMode;
+use underline_editor_view::editor_view::{
+    ClipAction, Clipped, EditorInput, TabViews, VimChange, VimState,
+};
+use underline_editor_view::facade_view::{FacadeAt, FacadeInput, RowsView};
+use underline_editor_view::{CachedViews, EditorTab, FacadeCall};
+use underline_markup::NoteFormat;
+
+/// Why a call of the webview could not be answered.
+#[derive(Debug, thiserror::Error)]
+pub enum CallError {
+    /// An argument is not the JSON of the DTO it should be.
+    #[error("{what} is not valid: {reason}")]
+    Invalid {
+        /// What the argument is, such as "The input".
+        what: &'static str,
+        /// What serde said of it.
+        reason: serde_json::Error,
+    },
+    /// The name of a note format that is none.
+    #[error("{0} is no note format")]
+    NoFormat(String),
+    /// The name of an input mode that is none.
+    #[error("{0} is no input mode")]
+    NoMode(String),
+    /// The answer could not be written as JSON.
+    #[error("The answer could not be written: {0}")]
+    Answer(serde_json::Error),
+}
+
+/// `value` as JSON.
+fn json<T: Serialize>(value: &T) -> Result<String, CallError> {
+    serde_json::to_string(value).map_err(CallError::Answer)
+}
+
+/// The DTO of the JSON `text`, which is `what`.
+fn parse<T: DeserializeOwned>(text: &str, what: &'static str) -> Result<T, CallError> {
+    serde_json::from_str(text).map_err(|reason| CallError::Invalid { what, reason })
+}
+
+/// The note format named `name` (`FormatName` in `bindings.ts`).
+fn format_of(name: &str) -> Result<NoteFormat, CallError> {
+    match name {
+        "Markdown" => Ok(NoteFormat::Markdown),
+        "AsciiDoc" => Ok(NoteFormat::AsciiDoc),
+        _ => Err(CallError::NoFormat(name.to_owned())),
+    }
+}
+
+/// The input mode of the settings named `name` (`InputModeName` of the
+/// window: `Normal`, `Vim` or `Nano`).
+fn mode_of(name: &str) -> Result<KeysInputMode, CallError> {
+    match name {
+        "Normal" => Ok(KeysInputMode::Normal),
+        "Vim" => Ok(KeysInputMode::Vim),
+        "Nano" => Ok(KeysInputMode::Nano),
+        _ => Err(CallError::NoMode(name.to_owned())),
+    }
+}
+
+/// One open tab in the webview (ADR-025): the editor's tab, the views of
+/// the facade made from what the backend sent, and what the window set.
+#[derive(Debug)]
+pub struct Core {
+    note: String,
+    mac: bool,
+    tab: EditorTab,
+    views: CachedViews,
+    /// The input mode of the settings.
+    setting: KeysInputMode,
+    /// The facade is shown, not the source view.
+    facade: bool,
+}
+
+impl Core {
+    /// The tab of `note` holding `text` in the format named `format`; `mac`
+    /// when Cmd is the command key.
+    ///
+    /// # Errors
+    ///
+    /// `format` names no note format.
+    pub fn open(note: &str, text: &str, format: &str, mac: bool) -> Result<Self, CallError> {
+        Ok(Self {
+            note: note.to_owned(),
+            mac,
+            tab: EditorTab::new(text, format_of(format)?),
+            views: CachedViews::default(),
+            setting: KeysInputMode::Normal,
+            facade: false,
+        })
+    }
+
+    /// M-11: the input mode of the settings, by name.
+    ///
+    /// # Errors
+    ///
+    /// `mode` names no input mode.
+    pub fn set_mode(&mut self, mode: &str) -> Result<(), CallError> {
+        self.setting = mode_of(mode)?;
+        Ok(())
+    }
+
+    /// M-07.2: the facade (`facade`) or the source view is shown.
+    pub fn set_view(&mut self, facade: bool) {
+        self.facade = facade;
+    }
+
+    /// The theme named `theme`, dark or not; what was sent for another
+    /// theme is let go.
+    pub fn set_looks(&mut self, theme: &str, dark: bool) {
+        self.views = CachedViews::new(theme, dark);
+    }
+
+    /// The window's clock, `performance.now()` in milliseconds
+    /// ([`EditorTab::set_now`]); set before an input. An earlier time or one
+    /// that is no finite number is ignored.
+    pub fn set_now(&mut self, now_ms: f64) {
+        self.tab.set_now(now_ms);
+    }
+
+    /// The keys of the source view: the Nano keys in the Nano mode, else
+    /// the usual keys; the source view's Vim keys are the window's (A-01).
+    fn source_keys(&mut self) {
+        self.tab.keys.mode = match self.setting {
+            KeysInputMode::Nano => KeysInputMode::Nano,
+            KeysInputMode::Normal | KeysInputMode::Vim => KeysInputMode::Normal,
+        };
+    }
+
+    /// The keys of the facade: those of the settings.
+    fn facade_keys_mode(&mut self) {
+        self.tab.keys.mode = self.setting;
+    }
+
+    /// `EditorState`: the text with its cursor, as the source view shows it.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn state(&mut self) -> Result<String, CallError> {
+        self.source_keys();
+        json(&self.tab.state(&self.note))
+    }
+
+    /// `EditorPatch` of one input of the source view (`EditorInput`).
+    ///
+    /// # Errors
+    ///
+    /// `input` is not an `EditorInput`.
+    pub fn input(&mut self, input: &str) -> Result<String, CallError> {
+        let input: EditorInput = parse(input, "The input")?;
+        self.source_keys();
+        json(&self.tab.source_input(input, self.mac).patch)
+    }
+
+    /// `EditorPatch | null`: the changes `changes` (`VimChange[]`) of the
+    /// window's Vim keys on revision `base`, the selection left at
+    /// `anchor`, `head`.
+    ///
+    /// # Errors
+    ///
+    /// `changes` is not a `VimChange[]`.
+    pub fn apply(
+        &mut self,
+        base: u32,
+        changes: &str,
+        anchor: u32,
+        head: u32,
+        new_step: bool,
+    ) -> Result<String, CallError> {
+        let changes: Vec<VimChange> = parse(changes, "The changes")?;
+        let handled = self
+            .tab
+            .source_apply(base, &changes, (anchor, head), new_step);
+        json(&handled.map(|handled| handled.patch))
+    }
+
+    /// The place for the status line (a JSON string) after the selection
+    /// was set at `anchor`, `head` of revision `rev`.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn select(&mut self, rev: u32, anchor: u32, head: u32) -> Result<String, CallError> {
+        json(&self.tab.select(rev, anchor, head))
+    }
+
+    /// `EditorPatch` after the fold arrow of the heading on `line`.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn fold(&mut self, line: u32) -> Result<String, CallError> {
+        json(&self.tab.fold_line(line).patch)
+    }
+
+    /// `KeysStatusView | null` of the source view, with the window's Vim
+    /// keys in the state `vim` (`VimState | null`).
+    ///
+    /// # Errors
+    ///
+    /// `vim` is not a `VimState` or `null`.
+    pub fn keys_status(&mut self, vim: &str) -> Result<String, CallError> {
+        let vim: Option<VimState> = parse(vim, "The Vim state")?;
+        self.source_keys();
+        json(&self.tab.source_keys_status(self.setting, vim))
+    }
+
+    /// `Clipped<EditorPatch>` of copying, cutting or pasting `text` in the
+    /// source view (`action`: `ClipAction`).
+    ///
+    /// # Errors
+    ///
+    /// `action` is not a `ClipAction`.
+    pub fn clipboard(&mut self, action: &str, text: Option<&str>) -> Result<String, CallError> {
+        let action: ClipAction = parse(action, "The clipboard action")?;
+        self.source_keys();
+        let (copied, patch) = match action {
+            ClipAction::Copy => self.tab.copy(),
+            ClipAction::Cut => {
+                let (copied, handled) = self.tab.cut();
+                (copied, handled.patch)
+            }
+            ClipAction::Paste => (None, self.tab.paste(text).patch),
+        };
+        json(&Clipped { copied, patch })
+    }
+
+    /// `FacadeState`: the whole facade, its blocks made when they are not
+    /// of the text.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn facade_state(&mut self) -> Result<String, CallError> {
+        self.facade_keys_mode();
+        self.tab.bring_facade_up_to_date(&mut self.views);
+        json(&self.tab.facade_state(&self.note))
+    }
+
+    /// `FacadePatch` of one input of the facade (`FacadeInput`) at the
+    /// selection `at` (`FacadeAt`), with the rows (`RowsView | null`) and
+    /// the clipboard's text the Vim keys asked for.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    pub fn facade_input(
+        &mut self,
+        at: &str,
+        input: &str,
+        rows: &str,
+        clipboard: Option<&str>,
+    ) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        let input: FacadeInput = parse(input, "The input")?;
+        let rows: Option<RowsView> = parse(rows, "The measure of the rows")?;
+        self.facade_keys_mode();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: &self.note,
+            at,
+            mac: self.mac,
+            earlier,
+            views: &mut self.views,
+        };
+        json(&self.tab.facade_input(call, input, rows, clipboard).patch)
+    }
+
+    /// `Clipped<FacadePatch>` of copying, cutting or pasting `text` in the
+    /// facade at the selection `at` (`FacadeAt`); `plain` pastes as typed.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    pub fn facade_clipboard(
+        &mut self,
+        at: &str,
+        action: &str,
+        plain: bool,
+        text: Option<&str>,
+    ) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        let action: ClipAction = parse(action, "The clipboard action")?;
+        self.facade_keys_mode();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: &self.note,
+            at,
+            mac: self.mac,
+            earlier,
+            views: &mut self.views,
+        };
+        let (copied, handled) = self.tab.facade_clipboard(call, action, plain, text);
+        json(&Clipped {
+            copied,
+            patch: handled.patch,
+        })
+    }
+
+    /// `KeysStatusView | null` of the facade.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn facade_keys(&mut self) -> Result<String, CallError> {
+        self.facade_keys_mode();
+        json(&self.tab.facade_keys_status())
+    }
+
+    /// `TabViews`: the sections and the Nano hits at `now_ms` (the window's
+    /// `performance.now()`, which also sets the clock), once they changed,
+    /// for the view shown.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn views(&mut self, now_ms: f64) -> Result<String, CallError> {
+        if self.facade {
+            self.facade_keys_mode();
+        } else {
+            self.source_keys();
+        }
+        let sections = self.tab.sections_view(&self.note, now_ms);
+        let found = self.tab.found_view(&self.note, now_ms);
+        json(&TabViews { sections, found })
+    }
+
+    /// The whole text, its line breaks as they are.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.tab.editor.text()
+    }
+
+    /// The hash of the text (`underline_editor_core::sync::hash`).
+    #[must_use]
+    pub fn hash(&self) -> String {
+        underline_editor_core::sync::hash(&self.tab.editor.text())
+    }
+}

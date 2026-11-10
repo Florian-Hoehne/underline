@@ -1,5 +1,6 @@
 import { mount, tick } from 'svelte';
 import App from './App.svelte';
+import { loadEditorCore } from './lib/editor/core';
 import { insideTauri } from './lib/mock-backend';
 import { Shell } from './lib/shell.svelte';
 import './app.css';
@@ -13,6 +14,12 @@ if (import.meta.env.DEV && !inTauri) {
   const { installMockBackend } = await import('./lib/mock-backend');
   installMockBackend();
 }
+
+// ADR-025: the editor's WASM compiles while the window starts; the editors
+// wait for it (docs/migration/variante-b.md, section 5).
+void loadEditorCore().catch((error: unknown) =>
+  console.error("The editor's core could not be loaded", error),
+);
 
 const target = document.getElementById('app');
 if (!target) {

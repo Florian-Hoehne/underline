@@ -4,3 +4,5 @@ package-lock.json
 # Generated from the Rust code (tauri-specta, palettes).
 src/lib/bindings.ts
 src/lib/palettes.generated.json
+# Generated from crates/underline-editor-wasm (npm run wasm, ADR-025).
+src/lib/wasm/pkg/

@@ -15,7 +15,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use underline_editor_core::facade::{
-    gap_at, refresh, Before, FacadeEdit, FacadeTarget, Gap, Gathered, MakeViews, Rows, Splice,
+    gap_at, parse_all, refresh, splices, Before, FacadeEdit, FacadeTarget, Gap, Gathered,
+    MakeViews, Rows, Splice,
 };
 use underline_editor_core::keys::InputMode as KeysInputMode;
 use underline_editor_core::{
@@ -266,7 +267,7 @@ pub struct EditorTab {
     found_told: Option<(u64, Option<String>)>,
     /// When the hits were found last, in milliseconds of the host's clock.
     found_at: Option<f64>,
-    /// The host's clock, in milliseconds.
+    /// The host's clock, in milliseconds ([`EditorTab::set_now`]).
     pub(crate) now_ms: f64,
 }
 
@@ -289,8 +290,18 @@ impl EditorTab {
 
     /// The host's clock is at `now_ms` milliseconds; the sections and hits
     /// are found again at most every 300 ms of it.
+    ///
+    /// One rule for the clock: every method that takes `now_ms` sets it
+    /// through here first, and so does the host before an input. The clock
+    /// has one epoch per tab and one host feeding it: a tab in the session
+    /// gets the session's `millis`, a tab in the webview the window's
+    /// `performance.now()`; no tab ever gets both. It only goes forward: an
+    /// earlier time keeps the later one, and a time that is no finite number
+    /// is ignored.
     pub fn set_now(&mut self, now_ms: f64) {
-        self.now_ms = now_ms;
+        if now_ms.is_finite() && now_ms > self.now_ms {
+            self.now_ms = now_ms;
+        }
     }
 
     /// UC-004 A7: shows `text` instead of the current text; the cursor stays
@@ -592,6 +603,8 @@ impl EditorTab {
     /// search, at most every [`FOUND_EVERY_MS`] (ADR-024). `None` while the
     /// window has them.
     pub fn found_view(&mut self, note: &str, now_ms: f64) -> Option<FoundView> {
+        self.set_now(now_ms);
+        let now_ms = self.now_ms;
         let rev = self.editor.revision();
         let search = self.keys.search().map(str::to_owned);
         let told = self.found_told.clone();
@@ -631,6 +644,28 @@ impl EditorTab {
         self.found_told = Some(key);
         self.found_at = Some(now_ms);
         view
+    }
+
+    /// M-09: parses the blocks of the text and makes all their views anew
+    /// with `views`, when they are not of the text's revision; the changes
+    /// for the window (none when they were).
+    pub fn bring_facade_up_to_date<M: MakeViews<View = BlockView>>(
+        &mut self,
+        views: &mut M,
+    ) -> Vec<Versioned> {
+        let rev = self.editor.revision();
+        if self.facade.parsed == Some(rev) {
+            return Vec::new();
+        }
+        let text = self.editor.text();
+        let (blocks, refs) = parse_all(&text, self.format);
+        let made = views.all(&blocks, &text, self.editor.document().rope());
+        let changes = splices(&self.facade.views, &made);
+        self.facade.views = made;
+        self.facade.blocks = Arc::new(blocks);
+        self.facade.parsed = Some(rev);
+        self.facade.refs = refs;
+        self.facade.versioned(changes)
     }
 
     /// M-11.4, FR-026: the left part of the status line while the facade
@@ -951,5 +986,19 @@ mod tests {
         let handled = tab.source_apply(base, &[change], (1, 1), false).unwrap();
         assert!(handled.patch.changes.is_empty(), "the window made them");
         assert_eq!(tab.editor.text(), "xb\n");
+    }
+
+    /// ADR-025: the clock only goes forward, and what is no finite time is
+    /// ignored.
+    #[test]
+    fn adr025_the_clock_goes_only_forward() {
+        let mut tab = EditorTab::new("", NoteFormat::Markdown);
+
+        tab.set_now(500.0);
+        tab.set_now(100.0);
+        tab.set_now(f64::NAN);
+        tab.set_now(f64::INFINITY);
+
+        assert!((tab.now_ms - 500.0).abs() < f64::EPSILON);
     }
 }

@@ -645,12 +645,13 @@ fn m09_6_targets_that_are_no_images() {
     );
 }
 
-/// The backend's views of `text` in `format`, with the colours of code, in
-/// the workspace `root`.
+/// The backend's views of `text` in `format`, with the colours of code of
+/// `theme` (dark or not), in the workspace `root`.
 fn backend_views(
     root: &Path,
     text: &str,
     format: NoteFormat,
+    (theme, dark): (underline_core::Theme, bool),
 ) -> (Vec<underline_facade::blocks::Block>, Vec<BlockView>) {
     let built = run(Job {
         seq: 1,
@@ -661,11 +662,11 @@ fn backend_views(
         blocks: None,
         last_pictures: std::collections::HashMap::new(),
         ctx: super::build::Context {
-            looks: (underline_core::Theme::Light, true),
+            looks: (theme, true),
             colors: Some(std::sync::Arc::new(
-                underline_facade::highlight::HighlightSet::for_theme(underline_core::Theme::Light),
+                underline_facade::highlight::HighlightSet::for_theme(theme),
             )),
-            dark: false,
+            dark,
             diagrams: None,
             code_colors: std::sync::Arc::default(),
             images: std::sync::Arc::default(),
@@ -676,64 +677,166 @@ fn backend_views(
     (built.blocks.to_vec(), built.views)
 }
 
-/// ADR-025, M-09.4, M-09.6, M-09.7, TC-004-02: the webview's views
-/// (`CachedViews`), given what the backend made of the colours and figures,
-/// are the backend's views, in Markdown and in AsciiDoc: the kinds, runs,
-/// offsets, prefixes and the numbers of the captions are made by the same
-/// code (`docs/migration/variante-b.md`, step B3b).
-#[test]
-fn adr025_cached_views_with_the_backends_figures_equal_the_backends_views() {
-    use underline_editor_core::facade::MakeViews;
+/// What the backend sends the webview of `backend`, the views of `blocks`
+/// in `theme` (dark or not): the colours of code, the figures of diagrams
+/// and images, by their keys; kept in views for the theme named `shown`.
+fn cache_of(
+    blocks: &[underline_facade::blocks::Block],
+    backend: &[BlockView],
+    (theme, dark): (underline_core::Theme, bool),
+    shown: &str,
+) -> underline_editor_view::CachedViews {
     use underline_editor_view::views::{colors_key, diagram_key, diagram_language};
-    use underline_editor_view::CachedViews;
     use underline_facade::blocks::BlockKind;
 
-    let dir = temp_dir("equivalence");
-    let root = dir.join("notes");
+    let mut cached = underline_editor_view::CachedViews::new(shown, dark);
+    for (block, view) in blocks.iter().zip(backend) {
+        let code: String = view.runs.iter().map(|r| r.text.as_str()).collect();
+        match &block.kind {
+            BlockKind::Code { language } => match diagram_language(&block.kind) {
+                Some(diagram) => cached.insert_diagram(
+                    diagram_key(diagram, &code, dark),
+                    view.figure.clone().unwrap(),
+                ),
+                None => cached.insert_colors(
+                    colors_key(theme.label(), language, &code),
+                    view.colors.clone(),
+                ),
+            },
+            BlockKind::Image { target, .. } => {
+                let mut figure = view.figure.clone().unwrap();
+                figure.caption = None;
+                cached.insert_image(target, figure);
+            }
+            _ => {}
+        }
+    }
+    cached
+}
+
+const EQUIVALENCE_MD: &str = "# Notes\n\nSome *text* with `code`, emoji 😀\r\nand CRLF.\n\n- one\n- [x] two\n\n> quoted\n\n```rust\nfn main() { let x = 1; }\n```\n\n```mermaid\ngraph TD\nA-->B\n```\n\n![The plan](img/plan.png)\n\n![Gone](img/gone.png)\n\n| a | b |\n|:--|--:|\n| 1 | 2 |\n";
+const EQUIVALENCE_ADOC: &str = "= Notes\n\nSome text.\n\nNOTE: An admonition.\n\n.The plan\nimage::img/plan.png[Plan]\n\n.Numbers\n|===\n| a | b\n| 1 | 2\n|===\n\n[source,python]\n----\nprint(\"hi\")\n----\n\n.Again\nimage::img/gone.png[Gone]\n";
+
+/// A workspace with one image for the equivalence tests.
+fn equivalence_root(name: &str) -> PathBuf {
+    let root = temp_dir(name).join("notes");
     fs::create_dir_all(root.join("img")).unwrap();
     fs::write(root.join("img/plan.png"), b"\x89PNG").unwrap();
-    let markdown = "# Notes\n\nSome *text* with `code`, emoji 😀\r\nand CRLF.\n\n- one\n- [x] two\n\n> quoted\n\n```rust\nfn main() { let x = 1; }\n```\n\n```mermaid\ngraph TD\nA-->B\n```\n\n![The plan](img/plan.png)\n\n![Gone](img/gone.png)\n\n| a | b |\n|:--|--:|\n| 1 | 2 |\n";
-    let asciidoc = "= Notes\n\nNOTE: An admonition.\n\n.The plan\nimage::img/plan.png[Plan]\n\n.Numbers\n|===\n| a | b\n| 1 | 2\n|===\n\n[source,python]\n----\nprint(\"hi\")\n----\n\n.Again\nimage::img/gone.png[Gone]\n";
-    for (text, format) in [
-        (markdown, NoteFormat::Markdown),
-        (asciidoc, NoteFormat::AsciiDoc),
+    root
+}
+
+/// ADR-025, M-09.4, M-09.6, M-09.7, TC-004-02: the webview's views
+/// (`CachedViews`), given what the backend made of the colours and figures,
+/// are the backend's views, in Markdown and in AsciiDoc, on a light and on a
+/// dark theme: the kinds, runs, offsets, prefixes and the numbers of the
+/// captions are made by the same code (`docs/migration/variante-b.md`,
+/// step B3b). Colours sent for another theme are not shown.
+#[test]
+fn adr025_cached_views_with_the_backends_figures_equal_the_backends_views() {
+    use underline_core::Theme;
+    use underline_editor_core::facade::MakeViews;
+
+    let root = equivalence_root("equivalence");
+    for (text, format, looks) in [
+        (EQUIVALENCE_MD, NoteFormat::Markdown, (Theme::Light, false)),
+        (
+            EQUIVALENCE_ADOC,
+            NoteFormat::AsciiDoc,
+            (Theme::Light, false),
+        ),
+        (
+            EQUIVALENCE_MD,
+            NoteFormat::Markdown,
+            (Theme::GitHubDark, true),
+        ),
+        (
+            EQUIVALENCE_ADOC,
+            NoteFormat::AsciiDoc,
+            (Theme::GitHubDark, true),
+        ),
     ] {
-        let (blocks, backend) = backend_views(&root, text, format);
-        let mut cached = CachedViews::new(underline_core::Theme::Light.label(), false);
-        for (block, view) in blocks.iter().zip(&backend) {
-            let code: String = view.runs.iter().map(|r| r.text.as_str()).collect();
-            match &block.kind {
-                BlockKind::Code { language } => match diagram_language(&block.kind) {
-                    Some(diagram) => cached.insert_diagram(
-                        diagram_key(diagram, &code, false),
-                        view.figure.clone().unwrap(),
-                    ),
-                    None => cached.insert_colors(
-                        colors_key(underline_core::Theme::Light.label(), language, &code),
-                        view.colors.clone(),
-                    ),
-                },
-                BlockKind::Image { target, .. } => {
-                    let mut figure = view.figure.clone().unwrap();
-                    figure.caption = None;
-                    cached.insert_image(target, figure);
-                }
-                _ => {}
-            }
-        }
+        let case = format!("{format:?} {:?}", looks.0);
+        let rope = ropey::Rope::from_str(text);
+        let (blocks, backend) = backend_views(&root, text, format, looks);
+        let mut cached = cache_of(&blocks, &backend, looks, looks.0.label());
 
-        let made = cached.all(&blocks, text, &ropey::Rope::from_str(text));
-
-        assert_eq!(made, backend, "{format:?}");
+        assert_eq!(cached.all(&blocks, text, &rope), backend, "{case}");
         assert!(
             backend.iter().any(|v| v.colors.is_some()),
-            "{format:?}: code is coloured"
+            "{case}: code is coloured"
         );
         // Markdown has no captions; AsciiDoc numbers figures and tables.
         let captioned = backend.iter().any(|v| {
             v.figure.as_ref().is_some_and(|f| f.caption.is_some())
                 || matches!(&v.kind, BlockKindView::Table { table } if table.caption.is_some())
         });
-        assert_eq!(captioned, format == NoteFormat::AsciiDoc, "{format:?}");
+        assert_eq!(captioned, format == NoteFormat::AsciiDoc, "{case}");
+
+        // The colours of the theme sent are not those of another theme.
+        let mut other = cache_of(&blocks, &backend, looks, Theme::Nord.label());
+        let uncoloured: Vec<BlockView> = backend
+            .iter()
+            .cloned()
+            .map(|mut view| {
+                view.colors = None;
+                view
+            })
+            .collect();
+        assert_eq!(other.all(&blocks, text, &rope), uncoloured, "{case}");
+    }
+}
+
+/// ADR-025, M-09.10: after an edit, the views the editor's tab made anew in
+/// the webview (only the blocks around it, `MakeViews::some`) are the views
+/// of the whole edited note, as the backend makes them.
+#[test]
+fn adr025_cached_views_after_an_edit_equal_the_backends_views_of_the_new_text() {
+    use underline_core::Theme;
+    use underline_editor_core::facade::{parse_all, MakeViews};
+    use underline_editor_view::{EditorTab, FacadeCall};
+
+    use crate::editor_view::revision;
+    use crate::facade_view::FacadeAt;
+
+    let root = equivalence_root("equivalence-edit");
+    let looks = (Theme::Light, false);
+    for (text, format) in [
+        (EQUIVALENCE_MD, NoteFormat::Markdown),
+        (EQUIVALENCE_ADOC, NoteFormat::AsciiDoc),
+    ] {
+        let (blocks, backend) = backend_views(&root, text, format, looks);
+        let mut cached = cache_of(&blocks, &backend, looks, looks.0.label());
+        let mut tab = EditorTab::new(text, format);
+        let (parsed, refs) = parse_all(text, format);
+        tab.facade.views = cached.all(&parsed, text, &ropey::Rope::from_str(text));
+        tab.facade.blocks = std::sync::Arc::new(parsed);
+        tab.facade.refs = refs;
+        tab.facade.parsed = Some(tab.editor.revision());
+        // Before "Some", which only ASCII precedes.
+        let at = u32::try_from(text.find("Some").unwrap()).unwrap();
+        let call = FacadeCall {
+            note: "Home",
+            at: FacadeAt {
+                rev: revision(tab.editor.revision()),
+                anchor: at,
+                head: at,
+            },
+            mac: false,
+            earlier: Vec::new(),
+            views: &mut cached,
+        };
+
+        let handled = tab.facade_input(
+            call,
+            crate::FacadeInput::Text { text: "x".into() },
+            None,
+            None,
+        );
+
+        let edited = tab.editor.text();
+        assert!(edited.contains("xSome"), "{format:?}: {edited}");
+        assert_eq!(handled.patch.blocks.len(), 1, "{format:?}: one change");
+        let (_, expected) = backend_views(&root, &edited, format, looks);
+        assert_eq!(tab.facade.views, expected, "{format:?}");
     }
 }
