@@ -16,7 +16,7 @@ mod server;
 
 pub use apply::{apply_remote, shifted};
 pub use changeset::{Change, ChangeSet, OutOfRange};
-pub use client::{Client, Desync, Incoming};
+pub use client::{difference, Client, Desync, Incoming};
 pub use server::{Answer, Batch, Received, Remote, Resynced, Server, Touched, KEPT};
 
 /// The FNV-1a offset basis for 64 bits.

@@ -30,6 +30,8 @@ fn main() {
         "ed_keys_status",
         "ed_sync",
         "ed_resync",
+        "ed_mirror",
+        "app_request_close",
         "clip_read_text",
         "clip_write_text",
         "app_close_anyway",

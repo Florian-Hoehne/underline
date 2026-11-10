@@ -19,7 +19,8 @@ use underline_editor_core::sync::{Batch, ChangeSet};
 use super::editing::millis;
 use super::tab::Tab;
 use super::Session;
-use crate::sync_view::{ChangedView, FlushView, SyncAnswer, SyncBatch};
+use crate::editor_view::units;
+use crate::sync_view::{ChangedView, FlushView, MirrorView, SyncAnswer, SyncBatch};
 use crate::{Event, UiError, UiErrorKind};
 
 fn not_open(note: &NoteId) -> UiError {
@@ -123,6 +124,8 @@ impl Session {
         let tab = self.sync_tab(note)?;
         tab.window_synced = true;
         let received = tab.mirror.receive(&Batch::from(batch));
+        // The window has the backend's text up to here.
+        tab.told_rev = received.answer.rev;
         let answer = SyncAnswer::from(&received.answer);
         if answer.resync {
             return Ok(Synced { answer, copy: None });
@@ -163,6 +166,7 @@ impl Session {
             note.as_str()
         );
         let resynced = tab.mirror.resync(text);
+        tab.told_rev = resynced.answer.rev;
         tab.highlight_touched(&resynced.touched);
         let copy = match resynced.outside {
             Some(outside) => Some(self.keep_outside(note, outside)?),
@@ -245,7 +249,34 @@ impl Session {
     /// every open note (`ed-flush`): before an agent's change of an open
     /// note, before closing (`docs/migration/variante-b.md` section 3.9).
     pub fn request_flush(&mut self, note: Option<&NoteId>) {
-        self.flushes.push(note.cloned());
+        self.flushes.push((note.cloned(), false));
+    }
+
+    /// ADR-025 section 3.9: Underline is to close: the window sends the
+    /// edits of every note and then asks to close (`app_request_close`).
+    pub fn request_close_flush(&mut self) {
+        self.flushes.push((None, true));
+    }
+
+    /// ADR-025: the backend's text of the tab of `note` as the window's
+    /// editor core starts from it, with the tab's cursor.
+    ///
+    /// # Errors
+    ///
+    /// The note has no open tab.
+    pub fn editor_mirror(&mut self, note: &NoteId) -> Result<MirrorView, UiError> {
+        // The window's core counts as holding the text with its first
+        // `ed_sync` (so a core that failed to load blocks nothing).
+        let tab = self.sync_tab(note)?;
+        let (head, anchor) = tab.edit.editor.selection_web();
+        Ok(MirrorView {
+            note: note.as_str().to_owned(),
+            rev: tab.mirror.rev(),
+            text: tab.mirror.text(),
+            format: underline_editor_view::indicator(tab.edit.format).to_owned(),
+            anchor: units(anchor),
+            head: units(head),
+        })
     }
 
     /// ADR-025: `ed-changed` for the notes whose mirror the backend changed,
@@ -259,15 +290,41 @@ impl Session {
                 .and_then(|open| open.tabs.find(&note).map(|i| open.tabs.get(i)))
                 .map(|tab| tab.mirror.rev());
             if let Some(rev) = rev {
+                if let Some(tab) = self
+                    .open
+                    .as_mut()
+                    .and_then(|open| open.tabs.find(&note).map(|i| open.tabs.get_mut(i)))
+                {
+                    tab.told_rev = rev;
+                }
                 events.push(Event::Changed(ChangedView {
                     note: note.as_str().to_owned(),
                     rev,
                 }));
             }
         }
-        for note in std::mem::take(&mut self.flushes) {
+        // ADR-025: the session's own editor (the facade, variant A) changed a
+        // text a window's core holds: the window fetches it.
+        if let Some(open) = &mut self.open {
+            for (note, tab) in open.tabs.iter_mut() {
+                if tab.window_synced && tab.mirror.rev() != tab.told_rev {
+                    tab.told_rev = tab.mirror.rev();
+                    if !events
+                        .iter()
+                        .any(|e| matches!(e, Event::Changed(c) if c.note == note.as_str()))
+                    {
+                        events.push(Event::Changed(ChangedView {
+                            note: note.as_str().to_owned(),
+                            rev: tab.mirror.rev(),
+                        }));
+                    }
+                }
+            }
+        }
+        for (note, closing) in std::mem::take(&mut self.flushes) {
             events.push(Event::Flush(FlushView {
                 note: note.map(|note| note.as_str().to_owned()),
+                closing,
             }));
         }
         events

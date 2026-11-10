@@ -8,6 +8,7 @@
 // for in the repository's `.tools/bin` (installed with the command below),
 // then in `UL_WASM_BINDGEN`, then on the PATH.
 import { execFileSync } from 'node:child_process';
+import os from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -85,8 +86,22 @@ function run(command, args, hint) {
     process.exit(1);
   }
 }
+/** Cargo: `CARGO`, else on the PATH, else where rustup puts it. */
+function cargo() {
+  if (process.env.CARGO) {
+    return process.env.CARGO;
+  }
+  try {
+    execFileSync(`cargo${exe}`, ['--version'], { stdio: 'ignore' });
+    return `cargo${exe}`;
+  } catch {
+    const home = process.env.CARGO_HOME ?? path.join(os.homedir(), '.cargo');
+    return path.join(home, 'bin', `cargo${exe}`);
+  }
+}
+
 run(
-  process.env.CARGO ?? 'cargo',
+  cargo(),
   [
     'build',
     '--locked',

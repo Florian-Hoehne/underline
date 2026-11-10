@@ -19,6 +19,7 @@ use underline_editor_core::facade::{
     MakeViews, Rows, Splice,
 };
 use underline_editor_core::keys::InputMode as KeysInputMode;
+use underline_editor_core::sync::{apply_remote, Incoming, OutOfRange};
 use underline_editor_core::{
     EditorCommand, InputStatus, KeyInput, Keys, KeysMode, Modifiers, Outcome, SourceEditor,
     SourceKeys, Tool,
@@ -310,6 +311,57 @@ impl EditorTab {
     pub fn reload(&mut self, text: &str) {
         self.editor.reload(text);
         self.refold();
+    }
+
+    /// ADR-025: the backend's changes, moved over the window's own edits
+    /// (`Client::acknowledge`), applied as egui applies them: an agent's
+    /// change as an undo step of its own, a reload with a fresh history and
+    /// the cursor at its line and column. The patch for the source view
+    /// (one for all of them), or `None` when nothing came.
+    ///
+    /// # Errors
+    ///
+    /// A change does not fit the text; nothing more is applied, and the
+    /// copies are to be synced whole.
+    pub fn apply_incoming(
+        &mut self,
+        incoming: Vec<Incoming>,
+    ) -> Result<Option<EditorPatch>, OutOfRange> {
+        if incoming.is_empty() {
+            return Ok(None);
+        }
+        let base = self.editor.revision();
+        let mut outcome = Outcome::default();
+        for change in incoming {
+            match change {
+                Incoming::Edits { set, sealed } => {
+                    let applied = apply_remote(&mut self.editor, &set, sealed)?;
+                    self.refold_after(&applied);
+                    outcome.changes.extend(applied.changes);
+                }
+                Incoming::Reload { text } => {
+                    let doc = self.editor.document();
+                    let old = self.editor.web_at_char(doc.len_chars());
+                    // A reload replaces the whole text: it touches every line
+                    // from the first.
+                    let line = 0;
+                    self.reload(&text);
+                    let insert = self.editor.web_text();
+                    outcome.changes.push(underline_editor_core::Applied {
+                        from: 0,
+                        to: old,
+                        insert,
+                        line,
+                        added_lines: 0,
+                        history: true,
+                    });
+                }
+            }
+        }
+        let mut patch = self.patch(base, &outcome);
+        // The view stays where it is (egui `source_view.rs:441`).
+        patch.scroll = false;
+        Ok(Some(patch))
     }
 
     /// The colours, the folds and the patch for the window after `outcome`,

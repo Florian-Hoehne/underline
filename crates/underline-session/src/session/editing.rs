@@ -590,7 +590,7 @@ impl Session {
             let open = self.open.as_ref()?;
             let (_, tab) = open.tabs.active()?;
             let wanted = tab.viewport.clone()?;
-            tab.highlight_told.as_ref() == Some(&(tab.edit.editor.revision(), wanted))
+            tab.highlight_told.as_ref() == Some(&(u64::from(tab.mirror.rev()), wanted))
         };
         // The colours of a new theme reset `highlight_told`.
         let set = self.colors()?;
@@ -599,7 +599,9 @@ impl Session {
         if told && tab.highlight_told.is_some() {
             return None;
         }
-        let rev = tab.edit.editor.revision();
+        // ADR-025: the colours carry the mirror's revision; the window
+        // shows them when its core is in step with it.
+        let rev = u64::from(tab.mirror.rev());
         let lines = tab.mirror.rope().len_lines();
         let wanted = tab.viewport.clone()?;
         let shown = wanted.start.min(lines)..wanted.end.min(lines);

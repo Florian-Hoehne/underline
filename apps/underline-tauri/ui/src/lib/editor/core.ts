@@ -4,7 +4,7 @@
 // speaks with the DTOs of `bindings.ts`, so the views see the same patches
 // the backend's commands give (docs/migration/variante-b.md, section 2).
 
-import init, { initSync, WasmTab } from '../wasm/pkg/underline_editor_wasm';
+import init, { initSync, WasmMirror, WasmTab } from '../wasm/pkg/underline_editor_wasm';
 import type {
   ClipAction,
   Clipped,
@@ -17,7 +17,10 @@ import type {
   FacadeState,
   FormatName,
   KeysStatusView,
+  RemoteApplied,
   RowsView,
+  SyncAnswer,
+  SyncBatch,
   TabViews,
   VimChange,
   VimState,
@@ -25,14 +28,25 @@ import type {
 import type { InputModeName } from './keys';
 
 let loading: Promise<void> | null = null;
+let loadedIn: number | null = null;
 
 /**
  * Loads and compiles the WASM once; the window starts it at its start and
  * the editors wait for it (ADR-023: the file ships with the frontend).
  */
 export function loadEditorCore(): Promise<void> {
-  loading ??= init().then(() => undefined);
+  if (!loading) {
+    const start = performance.now();
+    loading = init().then(() => {
+      loadedIn = performance.now() - start;
+    });
+  }
   return loading;
+}
+
+/** How long loading and compiling the WASM took, in ms (Q-34; for the measuring build). */
+export function editorCoreLoadTime(): number | null {
+  return loadedIn;
 }
 
 /** Loads the WASM from its bytes at once, as the tests in Node do. */
@@ -62,6 +76,14 @@ type Tab = Pick<
   | 'views'
   | 'text'
   | 'hash'
+  | 'startSync'
+  | 'takeOutbox'
+  | 'acknowledge'
+  | 'ring'
+  | 'failed'
+  | 'reset'
+  | 'inStep'
+  | 'idle'
   | 'free'
 >;
 
@@ -263,10 +285,96 @@ export class EditorCore {
     return this.#call((tab) => tab.hash());
   }
 
+  /** ADR-025: the sync starts from the backend's text at `rev` (`ed_mirror`). */
+  startSync(rev: number): void {
+    this.#call((tab) => tab.startSync(rev));
+  }
+
+  /** The edits to send (`ed_sync`), unless a batch is on its way or nothing waits. */
+  takeOutbox(): SyncBatch | null {
+    return this.#json((tab) => tab.takeOutbox());
+  }
+
+  /** Takes the backend's answer in: the patch for the source view, or a desync. */
+  acknowledge(answer: SyncAnswer): RemoteApplied {
+    return this.#json((tab) => tab.acknowledge(JSON.stringify(answer)));
+  }
+
+  /** The backend rang (`ed-changed`, `ed-flush`): the next outbox fetches. */
+  ring(): void {
+    this.#call((tab) => tab.ring());
+  }
+
+  /** The last `ed_sync` failed: its edits go again with the next outbox. */
+  failed(): void {
+    this.#call((tab) => tab.failed());
+  }
+
+  /**
+   * After `ed_resync`: the backend took `sent`, the text sent, at `rev`;
+   * what was typed while it travelled stays to be sent.
+   */
+  reset(sent: string, rev: number): void {
+    this.#call((tab) => tab.reset(sent, rev));
+  }
+
+  /** Whether a result of the backend for `rev` applies as it is. */
+  inStep(rev: number): boolean {
+    return this.#call((tab) => tab.inStep(rev));
+  }
+
+  /** Whether nothing waits to be sent or fetched. */
+  idle(): boolean {
+    return this.#call((tab) => tab.idle());
+  }
+
   /** Lets the tab's memory in the WASM go; later calls throw. */
   free(): void {
     const tab = this.#tab;
     this.#tab = null;
     tab?.free();
+  }
+}
+
+/**
+ * ADR-025: the backend's mirror of a note (`underline_editor_core::sync::Server`)
+ * in the webview, for the mock backend of the dev server: the same
+ * revisions, transforms and reload barrier as the real backend.
+ */
+export class MirrorCore {
+  readonly #mirror: WasmMirror;
+
+  constructor(text: string) {
+    this.#mirror = new WasmMirror(text);
+  }
+
+  get rev(): number {
+    return this.#mirror.rev();
+  }
+
+  text(): string {
+    return this.#mirror.text();
+  }
+
+  /** The answer to `batch`, and the version a late batch took the place of (UC-004 A9). */
+  receive(batch: SyncBatch): { answer: SyncAnswer; reverted: string | null } {
+    return JSON.parse(this.#mirror.receive(JSON.stringify(batch))) as {
+      answer: SyncAnswer;
+      reverted: string | null;
+    };
+  }
+
+  /** A change of the backend's own, in chars; the new revision, if it fits. */
+  backendEdit(at: number, remove: number, insert: string, sealed: boolean): number | undefined {
+    return this.#mirror.backendEdit(at, remove, insert, sealed);
+  }
+
+  /** A change from outside; the new revision. */
+  reload(text: string): number {
+    return this.#mirror.reload(text);
+  }
+
+  resync(text: string): SyncAnswer {
+    return JSON.parse(this.#mirror.resync(text)) as SyncAnswer;
   }
 }

@@ -70,7 +70,8 @@ pub use settings::{
 };
 pub use start::{Platform, StartInfo};
 pub use sync_view::{
-    ChangedView, EnrichView, FlushView, RemoteChange, RemoteOp, SyncAnswer, SyncBatch, SyncEdit,
+    ChangedView, EnrichView, FlushView, MirrorView, RemoteApplied, RemoteChange, RemoteOp,
+    SyncAnswer, SyncBatch, SyncEdit,
 };
 pub use workspace_view::{
     CreateAnswer, EditingViewName, FormatName, NewWorkspaceRequest, OpenAnswer, OpenOffer,

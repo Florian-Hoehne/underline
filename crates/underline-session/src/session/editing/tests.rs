@@ -561,9 +561,13 @@ fn m08_2_adr024_colours_follow_the_viewport_and_every_edit() {
         "unchanged colours are not sent again"
     );
 
-    let patch = session.editor_input(&id("Home"), text("x")).unwrap();
+    session.editor_input(&id("Home"), text("x")).unwrap();
     let again = highlight_soon(&mut session).expect("new colours after the edit");
-    assert_eq!(again.rev, patch.rev);
+    // ADR-025: the colours carry the mirror's revision.
+    let open = session.open.as_ref().unwrap();
+    let tab = open.tabs.get(open.tabs.find(&id("Home")).unwrap());
+    assert_eq!(again.rev, tab.mirror.rev());
+    assert_ne!(again.rev, first.rev);
 }
 
 /// The next colours the tick sends, within five seconds.

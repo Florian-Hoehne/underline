@@ -206,7 +206,7 @@ impl Window {
                 self.stats.resyncs += 1;
                 let text = self.editor.text();
                 let resynced = server.resync(&text);
-                self.client.reset(&text, resynced.answer.rev);
+                self.client.reset(&text, resynced.answer.rev, &text);
             }
         }
     }
@@ -300,6 +300,12 @@ fn random_run(seed: u64) -> Stats {
                     if random.below(6) == 0 {
                         // Lost on the way.
                         window.stats.failed += 1;
+                        window.client.failed();
+                    } else if random.below(6) == 0 {
+                        // Taken in, but its answer was lost: sent again, it
+                        // is taken in once.
+                        window.stats.failed += 1;
+                        let _ = server.receive(&batch);
                         window.client.failed();
                     } else {
                         let received = server.receive(&batch);
@@ -447,11 +453,13 @@ fn adr025_a_batch_that_does_not_fit_asks_for_the_text() {
     let wrong = Batch {
         base: server.rev(),
         changes: vec![change(2, 5, "")],
+        seq: 0,
     };
     assert!(server.receive(&wrong).answer.resync);
     let future = Batch {
         base: server.rev() + 1,
         changes: Vec::new(),
+        seq: 0,
     };
     assert!(server.receive(&future).answer.resync);
     let mut client = Client::new("abc", 1);
@@ -464,7 +472,7 @@ fn adr025_a_batch_that_does_not_fit_asks_for_the_text() {
     assert_eq!(server.text(), "abXc");
     assert_eq!(resynced.touched.len(), 1);
     assert_eq!(resynced.outside, None, "no reload waited");
-    client.reset("abXc", resynced.answer.rev);
+    client.reset("abXc", resynced.answer.rev, "abXc");
     assert!(client.in_step(resynced.answer.rev));
 }
 
@@ -479,6 +487,7 @@ fn adr025_a_batch_on_a_forgotten_revision_asks_for_the_text() {
     let late = Batch {
         base: 1,
         changes: vec![change(0, 0, "y")],
+        seq: 0,
     };
     assert!(server.receive(&late).answer.resync);
 }
@@ -628,8 +637,8 @@ fn uc004_a9_a_resync_over_an_unconfirmed_reload_keeps_a_copy() {
     assert_eq!(server.resync("again\n").outside, None);
 }
 
-/// ADR-025: a batch lost on its way is sent again, on the same revision,
-/// with what was typed since.
+/// ADR-025: a lost batch is sent again as it was; what was typed since
+/// follows in the next one.
 #[test]
 fn adr025_a_lost_batch_is_sent_again() {
     let mut server = Server::new("ab");
@@ -641,10 +650,56 @@ fn adr025_a_lost_batch_is_sent_again() {
     client.failed();
     let again = client.take_outbox().unwrap();
 
-    assert_eq!(again.base, lost.base);
+    assert_eq!(again, lost);
     let received = server.receive(&again);
     assert!(client.acknowledge(&received.answer).is_ok());
+    let next = client.take_outbox().unwrap();
+    let received = server.receive(&next);
+    assert!(client.acknowledge(&received.answer).is_ok());
     assert_eq!(server.text(), "abcd");
+}
+
+/// ADR-025: a batch taken in whose answer was lost is sent again and
+/// answered again, not applied twice.
+#[test]
+fn adr025_a_batch_sent_again_is_taken_in_once() {
+    let mut server = Server::new("ab");
+    let mut client = Client::new("ab", server.rev());
+    client.local(&change(2, 0, "c")).unwrap();
+    let batch = client.take_outbox().unwrap();
+    let first = server.receive(&batch);
+
+    client.failed();
+    let again = client.take_outbox().unwrap();
+    let second = server.receive(&again);
+
+    assert_eq!(second.answer, first.answer);
+    assert!(second.applied.is_identity());
+    assert_eq!(server.text(), "abc");
+    assert!(client.acknowledge(&second.answer).is_ok());
+    assert!(
+        client.take_outbox().is_some(),
+        "the ring of failed() fetches"
+    );
+}
+
+/// ADR-025 section 3.10: after a resync, what was typed while it travelled
+/// is kept and sent.
+#[test]
+fn adr025_typing_during_a_resync_is_kept() {
+    let mut server = Server::new("abc");
+    let mut client = Client::new("abc", server.rev());
+    let sent = "abcd";
+    let resynced = server.resync(sent);
+    // Typed while the resync travelled.
+    let now = "xabcd";
+
+    client.reset(sent, resynced.answer.rev, now);
+    let batch = client.take_outbox().expect("the typing");
+    let received = server.receive(&batch);
+
+    assert!(client.acknowledge(&received.answer).is_ok());
+    assert_eq!(server.text(), now);
 }
 
 /// ADR-025: a batch on the oldest revision the backend keeps is taken.
@@ -658,10 +713,12 @@ fn adr025_a_batch_on_the_floor_is_taken() {
     let on_floor = Batch {
         base: floor,
         changes: vec![change(0, 0, "y")],
+        seq: 0,
     };
     let below = Batch {
         base: floor - 1,
         changes: vec![change(0, 0, "y")],
+        seq: 0,
     };
     assert!(server.clone().receive(&below).answer.resync);
     assert!(!server.receive(&on_floor).answer.resync);

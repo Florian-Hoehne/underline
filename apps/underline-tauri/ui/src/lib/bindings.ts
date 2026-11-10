@@ -183,6 +183,19 @@ export const commands = {
 	 */
 	edResync: (note: string, text: string) => typedError<SyncAnswer, UiError>(__TAURI_INVOKE("ed_resync", { note, text })),
 	/**
+	 *  ADR-025: the backend's text of the tab of `note` as the window's editor
+	 *  core starts from it, with its revision and the tab's cursor.
+	 */
+	edMirror: (note: string) => typedError<MirrorView, UiError>(__TAURI_INVOKE("ed_mirror", { note })),
+	/**
+	 *  ADR-025 section 3.9: the window's answer to `ed-flush` with `closing`:
+	 *  with `sent`, it sent the edits of every note, and Underline closes now
+	 *  after storing everything (or asks why it cannot); without, it could not
+	 *  send them and asks the user itself ("Changes not stored"). Synchronous:
+	 *  it runs on the main thread, which also ends the app.
+	 */
+	appRequestClose: (sent: boolean) => typedError<null, UiError>(__TAURI_INVOKE("app_request_close", { sent })),
+	/**
 	 *  M-11.2, A-01: the registers `"+` and `"*` of the window's Vim keys read
 	 *  the system clipboard (ADR-014) as plain text; `null` without text.
 	 */
@@ -725,6 +738,11 @@ export type FlushEvent = FlushView;
 export type FlushView = {
 	/**  The note, or `None` for all. */
 	note: string | null,
+	/**
+	 *  Underline is to close: after sending, the window calls
+	 *  `app_request_close` (`docs/migration/variante-b.md` section 3.9).
+	 */
+	closing: boolean,
 };
 
 /**  A note format as the Create dialog names it (UC-001 BR-001). */
@@ -905,6 +923,26 @@ export type KeysStatusView = {
 	prompting: boolean,
 };
 
+/**
+ *  ADR-025: the backend's text of an open note as the window's editor core
+ *  starts from it (`ed_mirror`): the text with its line breaks as they are,
+ *  its revision, and the cursor the tab opened with.
+ */
+export type MirrorView = {
+	/**  The note, by its id. */
+	note: string,
+	/**  The revision of the text. */
+	rev: number,
+	/**  The whole text, its line breaks as the file has them. */
+	text: string,
+	/**  "Markdown" or "AsciiDoc". */
+	format: string,
+	/**  The other end of the selection, in web units. */
+	anchor: number,
+	/**  The cursor, in web units. */
+	head: number,
+};
+
 /**  What the user chose in the Create dialog (UC-001 steps 1–4, A3). */
 export type NewWorkspaceRequest = {
 	/**  The directory, as the Options stage named it. */
@@ -1062,6 +1100,21 @@ export type Platform =
 
 /**  M-16.2: the properties of the active tab's note; `null` without one. */
 export type PropertiesEvent = TabPropertiesView | null;
+
+/**
+ *  ADR-025: what the backend's answer did in the window's editor core: the
+ *  patch for the source view (the backend's changes moved over the
+ *  window's own edits), or that the copies went apart and the window sends
+ *  its whole text.
+ */
+export type RemoteApplied = {
+	/**  The patch for the source view; `None` when nothing changed. */
+	patch: EditorPatch | null,
+	/**  The copies went apart: the window sends its whole text (`ed_resync`). */
+	desync: boolean,
+	/**  Why they went apart, for the log. */
+	reason: string | null,
+};
 
 /**  A change of the backend. */
 export type RemoteChange = 
@@ -1310,6 +1363,11 @@ export type SyncBatch = {
 	base: number,
 	/**  The edits, one after the other. */
 	edits: SyncEdit[],
+	/**
+	 *  The batch's number; one sent again after its answer was lost is taken
+	 *  in once.
+	 */
+	seq: number,
 };
 
 /**

@@ -12,6 +12,13 @@
 // (`editor/fakeEditor.ts`): the source view can be typed in, the autosave
 // marks and clears the tab after a second, and notes listed in
 // `MockStart.failingSaves` cannot be stored, to try the failure paths.
+//
+// ADR-025: the source view's text lives in the window's editor core; the
+// mock keeps the backend's mirror of each note with the real one
+// (`MirrorCore`, the Rust `Server` in the WASM), so `ed_sync` answers with
+// the same revisions, transforms and hashes. `window.__ulMock` lets a test
+// change a note as the backend would: `backendEdit` (as an agent) and
+// `outsideChange` (as another program).
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
@@ -40,7 +47,9 @@ import type {
   VimChange,
   VimState,
   WorkspaceSnapshot,
+  SyncBatch,
 } from './bindings';
+import { loadEditorCore, MirrorCore } from './editor/core';
 import { FakeEditor, fakeVimStatus, type FakeMode } from './editor/fakeEditor';
 import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
 import palettes from './palettes.generated.json';
@@ -130,6 +139,12 @@ export type MockHandlers = {
   clip_read_text: () => Ok<typeof commands.clipReadText>;
   clip_write_text: (args: { text: string }) => Ok<typeof commands.clipWriteText>;
   app_close_anyway: () => Ok<typeof commands.appCloseAnyway>;
+  ed_mirror: (args: { note: string }) => Promise<Ok<typeof commands.edMirror>>;
+  ed_sync: (args: { note: string; batch: SyncBatch }) => Promise<Ok<typeof commands.edSync>>;
+  ed_resync: (args: { note: string; text: string }) => Promise<Ok<typeof commands.edResync>>;
+  app_request_close: (args: { sent: boolean }) => Ok<typeof commands.appRequestClose>;
+  /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
+  __hooks?: MockHooks;
 };
 
 /** The user's home directory in the fake file system. */
@@ -319,6 +334,11 @@ function workspaceHandlers(
   | 'clip_read_text'
   | 'clip_write_text'
   | 'app_close_anyway'
+  | 'ed_mirror'
+  | 'ed_sync'
+  | 'ed_resync'
+  | 'app_request_close'
+  | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
     Object.entries(FAKE_FILES).map(([root, notes]) => [root, [...notes]]),
@@ -369,6 +389,8 @@ function workspaceHandlers(
   const unstored = new Set<string>();
   const saveErrors = new Map<string, string>();
   const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** The test that made the mock ended (`dispose`). */
+  let disposed = false;
   let clipboard: string | null = null;
   const docOf = (note: string): FakeEditor => {
     let doc = docs.get(note);
@@ -378,6 +400,22 @@ function workspaceHandlers(
     }
     doc.mode = settings().inputMode as FakeMode;
     return doc;
+  };
+  /** ADR-025: the backend's mirror of each note a window's core holds. */
+  const mirrors = new Map<string, MirrorCore>();
+  /** The mirror's text is the note's now: the fake document follows it. */
+  const followMirror = (note: string, mirror: MirrorCore) => {
+    const doc = new FakeEditor(note, mirror.text());
+    docs.set(note, doc);
+  };
+  /** The fake document changed (the facade): a window's core fetches it. */
+  const mirrorFollows = async (note: string) => {
+    const mirror = mirrors.get(note);
+    const doc = docs.get(note);
+    if (mirror && doc && mirror.text() !== doc.text) {
+      mirror.reload(doc.text);
+      await emit('ed-changed', { note, rev: mirror.rev });
+    }
   };
   /** M-09: the version of the blocks of each note whose facade is shown. */
   const facades = new Map<string, { version: number; count: number; rev: number }>();
@@ -445,6 +483,9 @@ function workspaceHandlers(
   };
   /** M-08.8, M-11.3: the sections and the Nano hits follow each input, as events. */
   const editorEvents = async (note: string) => {
+    if (disposed) {
+      return;
+    }
     const doc = docOf(note);
     try {
       await blockEvents(note);
@@ -502,6 +543,10 @@ function workspaceHandlers(
     saveTimers.set(
       note,
       setTimeout(() => {
+        saveTimers.delete(note);
+        if (disposed) {
+          return;
+        }
         const failure = store(note);
         void setStatus(
           failure
@@ -630,7 +675,7 @@ function workspaceHandlers(
     return { stage: 'options', directory: dir };
   };
 
-  return {
+  const handlers: ReturnType<typeof workspaceHandlers> = {
     ws_start: async () => {
       if (!started) {
         started = true;
@@ -750,6 +795,7 @@ function workspaceHandlers(
       );
       if (patch.changes.length > 0) {
         await changed(note);
+        await mirrorFollows(note);
       }
       setTimeout(() => void editorEvents(note), 0);
       return facadePatch(note, base, marked(patch, note));
@@ -831,7 +877,8 @@ function workspaceHandlers(
       const lines = doc.text.split('\n').slice(from, to);
       await emit('ed-highlight', {
         note,
-        rev: doc.rev,
+        // ADR-025: the colours carry the mirror's revision.
+        rev: mirrors.get(note)?.rev ?? doc.rev,
         from,
         lines: lines.map((line) =>
           line.startsWith('#') ? [[0, line.length, 0] as [number, number, number]] : [],
@@ -859,7 +906,115 @@ function workspaceHandlers(
       return marked(patch, note);
     },
     app_close_anyway: () => null,
+    ed_mirror: async ({ note }) => {
+      if (!tabs.some((tab) => tab.note === note)) {
+        throw notOpen(note);
+      }
+      await loadEditorCore();
+      let mirror = mirrors.get(note);
+      if (!mirror) {
+        mirror = new MirrorCore(docOf(note).text);
+        mirrors.set(note, mirror);
+      }
+      return {
+        note,
+        rev: mirror.rev,
+        text: mirror.text(),
+        format: 'Markdown',
+        anchor: 0,
+        head: 0,
+      };
+    },
+    ed_sync: async ({ note, batch }) => {
+      const mirror = mirrors.get(note);
+      if (!mirror || !tabs.some((tab) => tab.note === note)) {
+        throw notOpen(note);
+      }
+      const before = mirror.text();
+      const { answer, reverted } = mirror.receive(batch);
+      if (mirror.text() !== before) {
+        followMirror(note, mirror);
+        await changed(note);
+      }
+      if (reverted !== null) {
+        // UC-004 A9, as the backend says it (`session/sync.rs`).
+        await setStatus(
+          `${title(note)} was changed outside while you were editing; your text stays, the other version is kept as ${title(note)} (changed outside).md`,
+        );
+      }
+      return answer;
+    },
+    ed_resync: async ({ note, text }) => {
+      const mirror = mirrors.get(note);
+      if (!mirror) {
+        throw notOpen(note);
+      }
+      const answer = mirror.resync(text);
+      followMirror(note, mirror);
+      await changed(note);
+      return answer;
+    },
+    app_request_close: () => null,
   };
+  handlers.__hooks = {
+    backendEdit: async (note, at, remove, insert, sealed = true) => {
+      const mirror = mirrors.get(note);
+      const rev = mirror?.backendEdit(at, remove, insert, sealed);
+      if (mirror && rev !== undefined) {
+        followMirror(note, mirror);
+        await changed(note);
+        await emit('ed-changed', { note, rev });
+      }
+      return rev ?? null;
+    },
+    outsideChange: async (note, text) => {
+      const mirror = mirrors.get(note);
+      if (!mirror) {
+        return null;
+      }
+      const rev = mirror.reload(text);
+      followMirror(note, mirror);
+      await emit('ed-changed', { note, rev });
+      await setStatus(`${title(note)} was changed outside`);
+      return rev;
+    },
+    mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    dispose: () => {
+      for (const timer of saveTimers.values()) {
+        clearTimeout(timer);
+      }
+      saveTimers.clear();
+      disposed = true;
+    },
+  };
+  return handlers;
+}
+
+/** ADR-025: what a test (or Playwright) may do as the backend would. */
+export type MockHooks = {
+  /** As an agent: `remove` chars at char `at` replaced by `insert`. */
+  backendEdit(
+    note: string,
+    at: number,
+    remove: number,
+    insert: string,
+    sealed?: boolean,
+  ): Promise<number | null>;
+  /** As another program: the note's file holds `text` now. */
+  outsideChange(note: string, text: string): Promise<number | null>;
+  /** The backend's text of `note`, if a window's core holds it. */
+  mirrorText(note: string): string | null;
+  /** The test ended: no timer of the mock outlives it. */
+  dispose(): void;
+};
+
+/** The hooks of the mock installed last (`window.__ulMock`). */
+export function mockHooks(): MockHooks {
+  const hooks = (globalThis as unknown as { __ulMock?: MockHooks }).__ulMock;
+  if (!hooks) {
+    throw new Error('No mock backend was made');
+  }
+  return hooks;
 }
 
 function notOpen(note: string): UiError {
@@ -892,6 +1047,7 @@ export function insideTauri(): boolean {
  * caller as `{ status: "error" }`.
  */
 export function installMockBackend(handlers: Partial<MockHandlers> = mockHandlers()): void {
+  (globalThis as unknown as { __ulMock?: MockHooks }).__ulMock = handlers.__hooks;
   mockIPC(
     (cmd, args) => {
       if (cmd in handlers) {

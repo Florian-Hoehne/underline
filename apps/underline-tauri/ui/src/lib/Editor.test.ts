@@ -6,7 +6,7 @@ import App from '../App.svelte';
 import { connectedShell } from '../test/shell';
 import type { TabsView } from './bindings';
 import { activeSourceView } from './editor/active';
-import { mockHandlers, MOCK_SAVE_ERROR, type MockStart } from './mock-backend';
+import { mockHandlers, mockHooks, MOCK_SAVE_ERROR, type MockStart } from './mock-backend';
 
 afterEach(() => {
   cleanup();
@@ -55,25 +55,55 @@ describe('M-08 source view (UC-005)', () => {
     expect(field).toHaveAttribute('spellcheck', 'false');
   });
 
-  it('M-08.4 typed text goes to the backend and its patch shows; the tab is marked', async () => {
+  it('M-08.4 typed text shows and goes to the backend after the frame; the tab is marked', async () => {
     const handlers = mockHandlers(NOTES);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NOTES, { ...handlers, ed_input: input });
+    const sync = vi.fn(handlers.ed_sync);
+    await workbench(NOTES, { ...handlers, ed_sync: sync });
     const field = await textField();
 
     type(field, 'x');
 
+    // ADR-025: the editor core answers without the backend.
     await waitFor(() => expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^x# Home/));
-    expect(input).toHaveBeenCalledWith(
-      expect.objectContaining({ note: 'Home', input: { kind: 'text', text: 'x' } }),
+    await waitFor(() =>
+      expect(sync).toHaveBeenCalledWith({
+        note: 'Home',
+        batch: expect.objectContaining({ base: 1, edits: [{ at: 0, remove: 0, insert: 'x' }] }),
+      }),
     );
+    expect(mockHooks().mirrorText('Home')).toMatch(/^x# Home/);
     await waitFor(() => expect(tab('Home •')).toBeInTheDocument());
   });
 
-  it('M-08.4 the keys of the editor go to the backend and are not left to the webview', async () => {
-    const handlers = mockHandlers(NOTES);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NOTES, { ...handlers, ed_input: input });
+  it('ADR-025 a change of the backend (an agent) comes into the text; the cursor stays', async () => {
+    await workbench(NOTES);
+    const field = await textField();
+    type(field, 'x');
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toMatch(/^x# Home/));
+
+    await mockHooks().backendEdit('Home', 0, 0, '> ');
+
+    await waitFor(() =>
+      expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^> x# Home/),
+    );
+    expect(activeSourceView()?.view.state.selection.main.head).toBe(3);
+    type(field, 'y');
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toMatch(/^> xy# Home/));
+  });
+
+  it('UC-004 A7 a change from outside replaces the text', async () => {
+    await workbench(NOTES);
+    await textField();
+
+    await mockHooks().outsideChange('Home', 'From outside\n');
+
+    await waitFor(() =>
+      expect(activeSourceView()?.view.state.doc.toString()).toBe('From outside\n'),
+    );
+  });
+
+  it('M-08.4 the keys of the editor go to the editor core and are not left to the webview', async () => {
+    await workbench(NOTES);
     const field = await textField();
 
     const tabKey = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
@@ -91,13 +121,13 @@ describe('M-08 source view (UC-005)', () => {
     await waitFor(() =>
       expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^ {4}# Home/),
     );
-    expect(input).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toMatch(/^ {4}# Home/));
   });
 
-  it('M-08.6 copy, cut and paste go through the backend', async () => {
+  it('M-08.6 pasting reads the system clipboard through the backend', async () => {
     const handlers = mockHandlers(NOTES);
-    const clipboard = vi.fn(handlers.ed_clipboard);
-    await workbench(NOTES, { ...handlers, ed_clipboard: clipboard });
+    const read = vi.fn(() => 'pasted ');
+    await workbench(NOTES, { ...handlers, clip_read_text: read });
     const field = await textField();
 
     const paste = new Event('paste', { bubbles: true, cancelable: true });
@@ -105,10 +135,9 @@ describe('M-08 source view (UC-005)', () => {
 
     expect(paste.defaultPrevented).toBe(true);
     await waitFor(() =>
-      expect(clipboard).toHaveBeenCalledWith(
-        expect.objectContaining({ note: 'Home', action: 'paste' }),
-      ),
+      expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^pasted # Home/),
     );
+    expect(read).toHaveBeenCalled();
   });
 
   it('M-08.2 takes the colours the backend sends for the lines shown', async () => {

@@ -645,6 +645,107 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
   - Ein Stapel auf `floor` wird angenommen.
   - Nachträglich gefärbter Code kommt über `ed-enrich` an.
 
+### 7.4 Umsetzung B4c und B5a (2026-11-10): Stand, Abweichungen, Messpunkt
+
+- **Neue Commands:**
+  - `ed_mirror(note) -> MirrorView`: Text samt `\r\n`, Revision, Format und Cursor des Tabs. Es ersetzt `ed_open` für
+    den Kern; `ed_open` bleibt bis B5c für Variante A.
+  - `app_request_close`.
+- **`HighlightView.rev`** ist jetzt die Revision des Spiegels; ein Fenster mit WASM-Kern prüft sie mit `inStep`.
+- **`ed-changed`:** Der Tick klingelt auch, wenn der Session-Editor (Facade, Variante A) einen Text ändert, den ein
+  Fenster-Kern hält (`told_rev`).
+- **`FlushView.closing`:** Beim Schliessen schickt das Fenster alle Edits und ruft dann `app_request_close`.
+- **Schliessen:** `CloseRequested` hält das Fenster offen, startet den Handshake (`Closer::begin_handshake`) und
+  klingelt mit `ed-flush { closing }`. Nach 1 s ohne Antwort schliesst das Backend mit seinen Kopien.
+  `app_request_close` speichert alles und beendet die App oder fragt „Changes not stored“.
+- **WASM:**
+  - Die Hülle hat jetzt `startSync`, `takeOutbox`, `acknowledge` (mit `RemoteApplied`, einem Patch für die
+    Quellansicht), `ring`, `failed`, `reset`, `inStep` und `idle`.
+  - Lokale Edits holt `record` aus dem Journal des Editors, bevor der Client etwas tut.
+  - `EditorTab::apply_incoming` wendet Backend-Änderungen an: wie egui, ohne Scrollen, ein Reload als ein Ersatz des
+    ganzen Textes.
+- **Spiegel im Mock:** Die WASM-Datei enthält auch den Spiegel (`WasmMirror`/`MirrorCore`). Der Mock des Dev-Servers
+  rechnet damit statt mit einem FNV in TypeScript und hat dadurch dieselben Revisionen, Transformationen und Hashes
+  wie das Backend.
+  - Hooks: `window.__ulMock.backendEdit(note, at, remove, insert, sealed)`, `outsideChange(note, text)`,
+    `mirrorText(note)`.
+- **`sync.ts`:**
+  - Je Notiz ein `TabCore` mit einem Stapel unterwegs. Gesendet wird nach dem Frame (rAF + `setTimeout 0`); `ring`
+    kommt von `ed-changed`.
+  - `failed()` mit bis zu drei Wiederholungen; bei Desync `ed_resync`.
+  - `flushed()` um `tab_close`, `tab_store`, `tab_set_view`, `ws_open` und `ws_create`.
+  - `takeFlush` für `ed-flush`. `onDead` öffnet den Kern neu aus dem Text des Backends (Q-40, vorläufig).
+- **Quellansicht (B5a):**
+  - `wasmBackend(mac)` ist das Standard-Backend von `SourceEditor`.
+  - Sektionen und Treffer kommen aus `views()` des Kerns; die Events `ed-sections`, `ed-found` und `ed-replaced`
+    ignoriert die Ansicht dann.
+  - Farben gelten, wenn der Kern mit ihrer Revision im Takt ist.
+  - Die Pfade von Variante A bleiben bis B5c.
+- **Tests:**
+  - Die Frontend-Tests, die Aufrufe von `ed_input`/`ed_apply`/`ed_fold` prüften, prüfen jetzt Text, Spiegeltext und
+    `ed_sync`.
+  - Neu sind `sync.test.ts` und Tests für Agent und Aussenänderung im Editor.
+- **Echter Schliess-Test** (`cargo tauri dev`, Scratch-Workspace): tippen und sofort `close()` speichert den Text über
+  den Handshake, ohne die Rückfall-Frist. Der Treiber und die Capability `core:window:allow-close` waren nur dafür da
+  und sind wieder entfernt.
+
+**Messpunkt B5a (Quellansicht auf dem WASM-Kern):**
+
+- **Methode:** wie F3/F4, Release-Build mit eingebettetem Frontend, WebKitGTK auf Wayland, dieselbe Maschine, eigenes
+  `HOME`, 500 gezählte Tasten je Stelle.
+- **Was „Verarbeitung“ misst:** vom Start der Eingabe bis der Patch in CodeMirror ist. `ed_sync` läuft danach und
+  nicht im Tastenpfad.
+
+| Notiz / Lauf | Verarbeitung p99 (ms) | max | im nächsten Frame |
+|---|---|---|---|
+| Markdown, ohne/mit Farben, Anfang/Mitte/Ende | 2–6 | 3–8 | 98–100 % |
+| Markdown, F4 Normal (Farben, Zeilennummern, Minimap, Falten) | 5 | 6–7 | 98–99 % |
+| Markdown, F4 Vim (INSERT) | 6 | 6–8 | 96–99 % |
+| Markdown, F4 Nano | 5–7 | 7–8 | 99 % |
+| AsciiDoc, ohne/mit Farben | 3–4 | 3–6 | 99–100 % |
+
+- **`ed_sync`:**
+  - Roundtrip median 2–3 ms, p99 12–13 ms, max 30 ms; der Roundtrip läuft asynchron und blockiert nichts.
+  - `acknowledge` und das Anwenden: p99 3 ms.
+  - `views()` (Sektionen, gedrosselt auf 300 ms, und Treffer): p99 5–8 ms, max 10 ms.
+- **Frames:** Abstände median 17 ms, p99 22–25 ms. Je Lauf 2–6 Abstände über 50 ms, beim Öffnen und Schliessen der
+  Ansichten.
+- **WASM:**
+  - laden und kompilieren 18–20 ms;
+  - 1'225 kB roh, 403 kB gzip (mit Spiegel und Sync);
+  - keine CSP-Verletzung (`securitypolicyviolation`) mit der Release-CSP.
+- **Öffnen:** Markdown 45 ms, AsciiDoc 96 ms; beim zweiten Öffnen mit bestehendem Kern 8–9 ms.
+- **Ziel erreicht:** p99 ≤ 16 ms und mindestens 90 % im nächsten Frame. In F3/F4 waren es 85–90 %.
+
+**Nachtrag nach dem Review von B4c/B5a:**
+
+- **Nummer je Stapel (`SyncBatch.seq`):**
+  - Ein Stapel, dessen Antwort ausblieb, geht unverändert noch einmal, mit derselben Nummer (`Client::failed`).
+  - Das Backend erkennt ihn an der Nummer, antwortet mit der gespeicherten Antwort und wendet ihn nicht zweimal an.
+  - Getipptes geht im nächsten Stapel.
+  - Damit entfällt die Doppelanwendung, die zuvor erst der Hash fand.
+- **Resync:** `reset(sent, rev)` setzt den Client auf den gesendeten Text. Was während des Resync getippt wurde, bleibt
+  als Differenz zu senden.
+- **Wiederholen:** Ein fehlgeschlagenes `ed_sync` wird mit wachsender Wartezeit wiederholt (100 ms bis 5 s), solange
+  Edits warten. Nach drei Fehlschlägen nennt die Statuszeile den Grund, einmal je Störung.
+- **Flush:**
+  - `flush()` meldet, ob alles ankam (höchstens 3 s).
+  - `flushed()` führt den Befehl sonst nicht aus und antwortet wie ein fehlgeschlagener Befehl (Statuszeile).
+  - Schliessen eines Tabs oder von Underline fragt dann „Changes not stored“, wie wenn das Speichern scheitert (UC-005
+    A14). „Close anyway“ schliesst ohne Flush.
+- **`app_request_close(sent)`:**
+  - Ohne `sent` endet der Handshake, und das Fenster fragt.
+  - Eine späte Antwort nach dem Rückfall schliesst nicht ein zweites Mal; die Antworten sind nicht an die Nummer des
+    Handshakes gebunden.
+- **Ein Fenster gilt erst mit seinem ersten `ed_sync` als synchronisiert**, nicht schon mit `ed_mirror`. Ein Kern, der
+  nicht laden konnte, hält so keinen Reload auf. Beim Zeigen holt der Kern, was sich geändert hat.
+- **Kerne geschlossener Notizen** werden mit dem `tabs`-Event verworfen. Ein veralteter Kern schickt so nie seinen
+  Text über die Datei.
+- **Ausgefallener Kern:** Die Statuszeile meldet ihn (Q-40, vorläufiger Text). Geschlossene Kerne melden nichts mehr.
+- **Regel:** Jeder neue Befehl, der den Text liest, geht über `flushed()`.
+- **Undo nach einer Agent-Änderung:** Der Cursor steht am Ende des zurückgesetzten Textes. Das ist derselbe
+  Code wie in egui (`Document::undo` → `after_history`), also gleiches Verhalten.
+
 ## 8. Risiken und offene Fragen (für `offene-fragen.md`)
 
 1. **Agent und ungesendete Tasten (UC-019 BR-004):**

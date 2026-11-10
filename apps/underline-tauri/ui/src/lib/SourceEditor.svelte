@@ -1,9 +1,10 @@
 <!--
-  M-08 (UC-005): the source view of one note. It asks the backend for the
-  text and shows it in CodeMirror (editor/sourceView.ts). The backend's
-  colours (`ed-highlight`), sections (`ed-sections`), Nano hits (`ed-found`)
-  and replaced texts (`ed-replaced`) reach it through the shell, which
-  listens for the whole window. While the text loads the area stays empty;
+  M-08 (UC-005): the source view of one note. Its text lives in the
+  window's editor core (ADR-025, editor/wasmBackend.ts), which answers every
+  key and sends the edits to the backend after the frame; CodeMirror shows
+  it (editor/sourceView.ts). The backend's colours (`ed-highlight`) reach it
+  through the shell, which listens for the whole window; the sections and
+  Nano hits come from the core. While the text loads the area stays empty;
   a failure is said in the status bar.
 
   It follows the input mode and the line numbers of the settings (M-11,
@@ -21,7 +22,8 @@
   import type { InputModeName } from './editor/keys';
   import type { LineNumberSide } from './editor/numbers';
   import { sourceMinimap } from './editor/sourceMinimap';
-  import { SourceView, tauriBackend, type EditorBackend } from './editor/sourceView';
+  import { SourceView, type EditorBackend } from './editor/sourceView';
+  import { wasmBackend } from './editor/wasmBackend';
   import { tabId } from './tabs';
 
   type Props = {
@@ -57,7 +59,7 @@
     focus = false,
     onError,
     onCommand,
-    backend = tauriBackend,
+    backend = wasmBackend(mac),
   }: Props = $props();
 
   let host = $state<HTMLElement | null>(null);

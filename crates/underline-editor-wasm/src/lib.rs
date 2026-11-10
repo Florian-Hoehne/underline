@@ -19,10 +19,14 @@ pub mod calls;
 mod golden;
 #[cfg(test)]
 mod hostile;
+pub mod mirror;
+#[cfg(test)]
+mod sync_tests;
 
 use wasm_bindgen::prelude::*;
 
 use crate::calls::Core;
+use crate::mirror::Mirror;
 
 #[wasm_bindgen]
 extern "C" {
@@ -236,5 +240,142 @@ impl WasmTab {
     #[must_use]
     pub fn hash(&self) -> String {
         self.0.hash()
+    }
+
+    /// ADR-025: the sync starts from the backend's text at `rev`.
+    #[wasm_bindgen(js_name = startSync)]
+    pub fn start_sync(&mut self, rev: u32) {
+        self.0.start_sync(rev);
+    }
+
+    /// `SyncBatch | null` to send, as JSON.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    #[wasm_bindgen(js_name = takeOutbox)]
+    pub fn take_outbox(&mut self) -> Result<String, JsError> {
+        Ok(self.0.take_outbox()?)
+    }
+
+    /// `RemoteApplied` of the backend's `answer` (`SyncAnswer` JSON), as
+    /// JSON.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started, or `answer` is not a `SyncAnswer`.
+    pub fn acknowledge(&mut self, answer: &str) -> Result<String, JsError> {
+        Ok(self.0.acknowledge(answer)?)
+    }
+
+    /// The backend rang: the next outbox fetches.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn ring(&mut self) -> Result<(), JsError> {
+        Ok(self.0.ring()?)
+    }
+
+    /// The last `ed_sync` failed: its edits go again.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn failed(&mut self) -> Result<(), JsError> {
+        Ok(self.0.failed()?)
+    }
+
+    /// After `ed_resync`: the backend took `sent`, the text sent, at `rev`;
+    /// what was typed meanwhile stays to be sent.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn reset(&mut self, sent: &str, rev: u32) -> Result<(), JsError> {
+        Ok(self.0.reset(sent, rev)?)
+    }
+
+    /// Whether a result of the backend for `rev` applies as it is.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    #[wasm_bindgen(js_name = inStep)]
+    pub fn in_step(&mut self, rev: u32) -> Result<bool, JsError> {
+        Ok(self.0.in_step(rev)?)
+    }
+
+    /// Whether nothing waits to be sent or fetched.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn idle(&mut self) -> Result<bool, JsError> {
+        Ok(self.0.idle()?)
+    }
+}
+
+/// ADR-025: the backend's mirror of one note, for the mock backend of the
+/// dev server; see [`Mirror`].
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct WasmMirror(Mirror);
+
+#[wasm_bindgen]
+impl WasmMirror {
+    /// The mirror of `text` at revision 1.
+    #[wasm_bindgen(constructor)]
+    pub fn new(text: &str) -> WasmMirror {
+        WasmMirror(Mirror::new(text))
+    }
+
+    /// The revision.
+    pub fn rev(&self) -> u32 {
+        self.0.rev()
+    }
+
+    /// The text.
+    pub fn text(&self) -> String {
+        self.0.text()
+    }
+
+    /// `{ answer: SyncAnswer, reverted: string | null }` JSON to `batch`
+    /// (`SyncBatch` JSON); `reverted` is the version a late batch took the
+    /// place of (UC-004 A9).
+    ///
+    /// # Errors
+    ///
+    /// `batch` is not a `SyncBatch`.
+    pub fn receive(&mut self, batch: &str) -> Result<String, JsError> {
+        Ok(self.0.receive(batch)?)
+    }
+
+    /// A change of the backend's own, in chars; the new revision, or
+    /// `undefined` when it does not fit.
+    #[wasm_bindgen(js_name = backendEdit)]
+    pub fn backend_edit(
+        &mut self,
+        at: u32,
+        remove: u32,
+        insert: &str,
+        sealed: bool,
+    ) -> Option<u32> {
+        self.0
+            .backend_edit(at as usize, remove as usize, insert, sealed)
+    }
+
+    /// A change from outside; the new revision.
+    pub fn reload(&mut self, text: &str) -> u32 {
+        self.0.reload(text)
+    }
+
+    /// `SyncAnswer` JSON after the window's `text` was taken.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn resync(&mut self, text: &str) -> Result<String, JsError> {
+        Ok(self.0.resync(text)?)
     }
 }

@@ -33,6 +33,8 @@
     "allow-ed-keys-status",
     "allow-ed-sync",
     "allow-ed-resync",
+    "allow-ed-mirror",
+    "allow-app-request-close",
     "allow-clip-read-text",
     "allow-clip-write-text",
     "allow-app-close-anyway"

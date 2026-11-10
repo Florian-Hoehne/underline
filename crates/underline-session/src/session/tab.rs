@@ -36,6 +36,9 @@ pub(super) struct Tab {
     /// A window synced its edits with `ed_sync`; a reload then waits for it
     /// to confirm (`docs/migration/variante-b.md` section 3.6).
     pub(super) window_synced: bool,
+    /// The mirror's revision the window was last told of or answered with;
+    /// a later one rings it (`ed-changed`).
+    pub(super) told_rev: u32,
     /// When the text is stored next (UC-005 BR-001).
     pub(super) autosave: Autosave,
     /// A background save of this tab is running.
@@ -98,6 +101,7 @@ impl Tab {
             },
             mirror: Server::new(&body),
             window_synced: false,
+            told_rev: 1,
             autosave: Autosave::default(),
             saving: false,
             saving_text: None,

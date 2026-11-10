@@ -12,7 +12,7 @@ use std::path::Path;
 use specta_typescript::Typescript;
 use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
-use underline_session::{Clipped, EditorPatch, FacadePatch, PaletteView, TabViews};
+use underline_session::{Clipped, EditorPatch, FacadePatch, PaletteView, RemoteApplied, TabViews};
 
 use crate::commands;
 use crate::events::{
@@ -67,6 +67,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ed_keys_status,
             commands::ed_sync,
             commands::ed_resync,
+            commands::ed_mirror,
+            commands::app_request_close,
             commands::clip_read_text,
             commands::clip_write_text,
             commands::app_close_anyway
@@ -93,6 +95,7 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .typ::<Clipped<EditorPatch>>()
         .typ::<Clipped<FacadePatch>>()
         .typ::<TabViews>()
+        .typ::<RemoteApplied>()
         .disable_serde_phases()
 }
 

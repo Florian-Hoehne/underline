@@ -61,6 +61,7 @@ import { folding, sectionsField, setSections } from './folding';
 import { foundField, foundRanges, setFound } from './found';
 import { colorField, setColors } from './highlight';
 import { routeKey, type InputModeName } from './keys';
+import type { CoreListener } from './sync';
 import { lineNumbersOn, type LineNumberSide } from './numbers';
 
 /**
@@ -102,6 +103,16 @@ export interface EditorBackend {
   /** ADR-014: the system clipboard as plain text, for Vim's `"+` and `"*`. */
   readClipboard(): Promise<string | null>;
   writeClipboard(text: string): Promise<void>;
+  /**
+   * ADR-025: the text lives in the window's editor core (`wasmBackend.ts`).
+   * Its changes, sections and hits come from `attach`, not from the
+   * backend's events; the backend's colours apply when the core is in step
+   * with their revision (`inStep`).
+   */
+  attach?(note: string, listener: CoreListener): () => void;
+  inStep?(note: string, rev: number): boolean;
+  /** M-11: the input mode of the settings, for the core's keys. */
+  setMode?(note: string, mode: InputModeName): void;
 }
 
 type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };
@@ -328,6 +339,8 @@ export class SourceView {
   #lastVim = '';
   #keysAsked = 0;
   #listeners = new Set<(change: ViewChange) => void>();
+  /** ADR-025: lets the core's listener go. */
+  #detach: (() => void) | null = null;
   /** Measuring (`bench.ts`): when an input's handling began and its patch was in. */
   probe: ((start: number, patched: number) => void) | null = null;
 
@@ -351,6 +364,7 @@ export class SourceView {
       scrollTo: scrolled.get(state.note),
     });
     this.view.scrollDOM.addEventListener('scroll', this.#scrolled, { passive: true });
+    this.#attach();
     this.#modeStarted();
     this.#options.onPlace?.(state.place);
     if (this.#mode === 'Nano') {
@@ -449,20 +463,58 @@ export class SourceView {
     this.focus();
   }
 
+  /** ADR-025: the core's changes, sections and hits reach the view here. */
+  #attach(): void {
+    this.#detach?.();
+    this.#detach =
+      this.#backend.attach?.(this.note, {
+        patch: (patch) => this.#enqueue(async () => patch),
+        views: (views) => {
+          if (views.sections) {
+            this.#ownSections(views.sections);
+          }
+          if (views.found) {
+            this.#ownFound(views.found);
+          }
+        },
+        synced: () => this.#takePending(),
+        reopened: () => this.#enqueue(() => this.#reload()),
+      }) ?? null;
+  }
+
   /** M-08.2: colours from the backend; kept for a later revision. */
   takeColors(colors: HighlightView): void {
     if (colors.note !== this.note) {
       return;
     }
-    if (this.#inStep(colors.rev)) {
+    if (this.#colorsInStep(colors.rev)) {
       this.view.dispatch({ effects: setColors.of(colors) });
     } else {
       this.#pending = colors;
     }
   }
 
+  /**
+   * Whether colours of the backend's revision `rev` fit the text shown: in
+   * the window's core (ADR-025) when it is in step with `rev`, else when the
+   * view shows that revision.
+   */
+  #colorsInStep(rev: number): boolean {
+    if (this.#backend.inStep) {
+      return this.#local.length === 0 && this.#backend.inStep(this.note, rev);
+    }
+    return this.#inStep(rev);
+  }
+
   /** M-08.8: the sections from the backend; kept for a later revision. */
   takeSections(sections: SectionsView): void {
+    // ADR-025: with the text in the window, its core finds them.
+    if (!this.#backend.attach) {
+      this.#ownSections(sections);
+    }
+  }
+
+  #ownSections(sections: SectionsView): void {
     if (sections.note !== this.note) {
       return;
     }
@@ -475,6 +527,12 @@ export class SourceView {
 
   /** M-11.3: the marked hits of the Nano search; kept for a later revision. */
   takeFound(found: FoundView): void {
+    if (!this.#backend.attach) {
+      this.#ownFound(found);
+    }
+  }
+
+  #ownFound(found: FoundView): void {
     if (found.note !== this.note) {
       return;
     }
@@ -487,13 +545,15 @@ export class SourceView {
 
   /** UC-004 A7: the backend replaced the text; shown again unless it is this one. */
   replaced(rev: number): void {
-    if (rev !== this.#rev) {
+    // ADR-025: with the text in the window, its core brings the change.
+    if (!this.#backend.attach && rev !== this.#rev) {
       this.#enqueue(() => this.#reload());
     }
   }
 
   destroy(): void {
     this.#destroyed = true;
+    this.#detach?.();
     if (this.#viewportTimer !== null) {
       clearTimeout(this.#viewportTimer);
     }
@@ -517,6 +577,7 @@ export class SourceView {
 
   /** The view now follows `#mode`: the Vim keys are tied, the status line told. */
   #modeStarted(): void {
+    this.#backend.setMode?.(this.note, this.#mode);
     if (this.#mode === 'Vim' && vimModule) {
       const { onVimChange, vimKeys } = vimModule;
       this.#stepStart = true;
@@ -928,7 +989,7 @@ export class SourceView {
   /** Colours, sections and hits that waited for the revision shown now. */
   #takePending(): void {
     const colors = this.#pending;
-    if (colors && this.#inStep(colors.rev)) {
+    if (colors && this.#colorsInStep(colors.rev)) {
       this.#pending = null;
       this.view.dispatch({ effects: setColors.of(colors) });
     }
@@ -962,6 +1023,7 @@ export class SourceView {
     this.#pendingSections = null;
     this.#pendingFound = null;
     this.#viewport = null;
+    this.#attach();
     this.#modeStarted();
     this.#options.onPlace?.(state.place);
     this.#reportViewport(true);

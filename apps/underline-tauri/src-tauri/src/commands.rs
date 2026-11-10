@@ -13,19 +13,21 @@
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
-use tauri::State;
+use tauri::{AppHandle, Manager, Runtime, State};
+use tauri_specta::Event as _;
 use underline_core::NoteId;
 use underline_session::{
     ClipAction, CloseQuestion, CreateAnswer, EditingViewName, EditorInput, EditorPatch,
-    EditorState, FacadeAt, FacadeInput, FacadePatch, FacadeState, KeysStatusView,
+    EditorState, FacadeAt, FacadeInput, FacadePatch, FacadeState, KeysStatusView, MirrorView,
     NewWorkspaceRequest, OpenAnswer, RowsView, Session, SettingName, StartInfo, StartOpened,
     SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind, VimChange, VimState,
 };
 
 use crate::clipboard::SystemClipboard;
+use crate::events::CloseQuestionEvent;
 use crate::ticker::Waker;
 
 /// The session as the app manages it: shared, so a command can hand it to
@@ -640,6 +642,15 @@ pub fn app_close_anyway(closer: State<'_, Closer>) -> Result<(), UiError> {
 pub struct Closer {
     exit: Box<dyn Fn() + Send + Sync>,
     anyway: AtomicBool,
+    /// Everything was stored; the end the app asks for next goes through.
+    confirmed: AtomicBool,
+    /// ADR-025 section 3.9: the close handshake waiting for the window, by
+    /// its number (0: none).
+    handshake: AtomicU64,
+    next: AtomicU64,
+    /// What closing does after the window sent its edits
+    /// ([`close_after_flush`] with the app's handle).
+    after_flush: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Closer {
@@ -648,6 +659,28 @@ impl Closer {
         Self {
             exit: Box::new(exit),
             anyway: AtomicBool::new(false),
+            confirmed: AtomicBool::new(false),
+            handshake: AtomicU64::new(0),
+            next: AtomicU64::new(0),
+            after_flush: OnceLock::new(),
+        }
+    }
+
+    /// Sets what closing does after the window sent its edits.
+    pub fn set_after_flush(&self, after: impl Fn() + Send + Sync + 'static) {
+        let _ = self.after_flush.set(Box::new(after));
+    }
+
+    /// The window answered the close handshake: with `sent`, closing goes
+    /// on; without, the window asks the user ("Changes not stored") and the
+    /// handshake ends. An answer is not tied to the handshake's number: one
+    /// that comes after the fallback went on (or without a handshake)
+    /// changes nothing, so a close never runs twice.
+    pub fn flushed(&self, sent: bool) {
+        if self.end_handshake(None) && sent {
+            if let Some(after) = self.after_flush.get() {
+                after();
+            }
         }
     }
 
@@ -657,10 +690,78 @@ impl Closer {
         (self.exit)();
     }
 
+    /// Everything was stored: ends the app without asking again.
+    pub fn close_now(&self) {
+        self.confirmed.store(true, Ordering::SeqCst);
+        (self.exit)();
+    }
+
     /// Whether the user chose "Close anyway".
     pub fn closing_anyway(&self) -> bool {
         self.anyway.load(Ordering::SeqCst)
     }
+
+    /// Whether the app ends without asking (again).
+    pub fn closing(&self) -> bool {
+        self.closing_anyway() || self.confirmed.load(Ordering::SeqCst)
+    }
+
+    /// ADR-025: a close waits for the window to send its edits; the number
+    /// of this wait.
+    pub fn begin_handshake(&self) -> u64 {
+        let number = self.next.fetch_add(1, Ordering::SeqCst) + 1;
+        self.handshake.store(number, Ordering::SeqCst);
+        number
+    }
+
+    /// Ends the wait `number` (or any with `None`); whether it was still
+    /// waiting, so only one of the window and the fallback goes on.
+    pub fn end_handshake(&self, number: Option<u64>) -> bool {
+        match number {
+            Some(number) => self
+                .handshake
+                .compare_exchange(number, 0, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok(),
+            None => self.handshake.swap(0, Ordering::SeqCst) != 0,
+        }
+    }
+}
+
+/// M-21.4, UC-005 BR-001, ADR-025 section 3.9: after the window sent its
+/// edits (or did not answer in time), every change is stored; when that
+/// fails, the window asks "Changes not stored" (A14 step 3), else the app
+/// ends.
+pub fn close_after_flush<R: Runtime>(app: &AppHandle<R>) {
+    let question = app.state::<SharedSession>().lock().request_close();
+    app.state::<Waker>().wake();
+    match question {
+        None => app.state::<Closer>().close_now(),
+        Some(question) => {
+            if let Err(error) = CloseQuestionEvent(question).emit(app) {
+                eprintln!("The question before closing could not be sent: {error}");
+            }
+        }
+    }
+}
+
+/// ADR-025 section 3.9: the window's answer to `ed-flush` with `closing`:
+/// with `sent`, it sent the edits of every note, and Underline closes now
+/// after storing everything (or asks why it cannot); without, it could not
+/// send them and asks the user itself ("Changes not stored"). Synchronous:
+/// it runs on the main thread, which also ends the app.
+#[tauri::command]
+#[specta::specta]
+pub fn app_request_close(closer: State<'_, Closer>, sent: bool) -> Result<(), UiError> {
+    closer.flushed(sent);
+    Ok(())
+}
+
+/// ADR-025: the backend's text of the tab of `note` as the window's editor
+/// core starts from it, with its revision and the tab's cursor.
+#[tauri::command]
+#[specta::specta]
+pub fn ed_mirror(session: State<'_, SharedSession>, note: String) -> Result<MirrorView, UiError> {
+    session.lock().editor_mirror(&NoteId::from_relative(&note))
 }
 
 /// The system clipboard, shared by the commands (ADR-014).
@@ -731,6 +832,13 @@ mod tests {
         "clip_read_text",
         "clip_write_text",
         "app_close_anyway",
+        "fa_input",
+        "fa_clipboard",
+        "fa_keys_status",
+        "ed_sync",
+        "ed_resync",
+        "ed_mirror",
+        "app_request_close",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user
@@ -1184,5 +1292,65 @@ mod tests {
                 "the bindings lack {command}"
             );
         }
+    }
+
+    /// ADR-025 section 3.9: of the window's answer and the fallback, only
+    /// one goes on with a close; a later close waits anew.
+    #[test]
+    fn adr025_one_end_of_the_close_handshake_goes_on() {
+        let closer = Closer::new(|| {});
+        let first = closer.begin_handshake();
+
+        assert!(closer.end_handshake(None), "the window answered");
+        assert!(
+            !closer.end_handshake(Some(first)),
+            "the fallback stays still"
+        );
+
+        let second = closer.begin_handshake();
+        assert!(
+            !closer.end_handshake(Some(first)),
+            "an old wait ends nothing"
+        );
+        assert!(closer.end_handshake(Some(second)), "the fallback goes on");
+        assert!(!closer.end_handshake(None));
+        assert!(!closer.closing());
+        closer.close_now();
+        assert!(closer.closing());
+    }
+
+    /// ADR-025 section 3.9: a window's answer after the fallback went on
+    /// does not close a second time; without its edits sent, it closes not.
+    #[test]
+    fn adr025_a_late_or_failed_answer_does_not_close() {
+        use std::sync::atomic::Ordering;
+
+        let closes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let closer = Closer::new(|| {});
+        let counted = std::sync::Arc::clone(&closes);
+        closer.set_after_flush(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let number = closer.begin_handshake();
+        assert!(closer.end_handshake(Some(number)), "the fallback goes on");
+        closer.flushed(true);
+        assert_eq!(
+            closes.load(Ordering::SeqCst),
+            0,
+            "the late answer changes nothing"
+        );
+
+        closer.begin_handshake();
+        closer.flushed(false);
+        assert_eq!(
+            closes.load(Ordering::SeqCst),
+            0,
+            "edits not sent: the window asks"
+        );
+
+        closer.begin_handshake();
+        closer.flushed(true);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
     }
 }

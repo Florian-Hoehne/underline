@@ -93,7 +93,7 @@ pub struct Session {
     changed: Vec<NoteId>,
     /// ADR-025: the window is asked to send its edits now (`ed-flush`), for
     /// one note or for all.
-    flushes: Vec<Option<NoteId>>,
+    flushes: Vec<(Option<NoteId>, bool)>,
     /// Wakes the tick when a background service has news.
     wake: Wake,
     /// The open workspace (UC-002).

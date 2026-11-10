@@ -28,7 +28,35 @@ import Minimap from '../Minimap.svelte';
 import type { Shell } from '../shell.svelte';
 import type { InputModeName } from './keys';
 import { sourceMinimap } from './sourceMinimap';
-import { SourceView, tauriBackend } from './sourceView';
+import { editorCoreLoadTime } from './core';
+import { SourceView } from './sourceView';
+import { flushCores, flushed, setSyncProbe } from './sync';
+import { wasmBackend } from './wasmBackend';
+
+/** ADR-025 (step B5a): the source view on the window's editor core. */
+const backend = wasmBackend(false);
+
+/** What the sync steps took while typing, and the frames' gaps. */
+const timings: Record<'roundtrip' | 'acknowledge' | 'views', number[]> = {
+  roundtrip: [],
+  acknowledge: [],
+  views: [],
+};
+const frameGaps: number[] = [];
+const violations: string[] = [];
+
+/** Records the gaps between frames while `running` holds. */
+function watchFrames(running: () => boolean): void {
+  let last = performance.now();
+  const step = (now: number) => {
+    frameGaps.push(now - last);
+    last = now;
+    if (running()) {
+      requestAnimationFrame(step);
+    }
+  };
+  requestAnimationFrame(step);
+}
 
 const TEXT = 'the quick brown fox *jumps* over the lazy_dog, ';
 const WARM = 30;
@@ -150,8 +178,8 @@ export async function runBench(shell: Shell): Promise<void> {
     const note = shell.tabs.active;
     if (note !== null) {
       const text = `UL-BENCH-ERROR ${String(error)} ${(error as Error)?.stack ?? ''}\n`;
-      await tauriBackend.input(note, { kind: 'text', text });
-      await commands.tabStore(note);
+      await backend.input(note, { kind: 'text', text });
+      await flushed(() => commands.tabStore(note));
     }
     throw error;
   }
@@ -159,6 +187,12 @@ export async function runBench(shell: Shell): Promise<void> {
 
 async function measure(shell: Shell): Promise<void> {
   const keys = Number(import.meta.env.VITE_UL_BENCH_KEYS ?? 500);
+  document.addEventListener('securitypolicyviolation', (event) =>
+    violations.push(`${event.violatedDirective} ${event.blockedURI}`),
+  );
+  setSyncProbe((step, ms) => timings[step].push(ms));
+  let typing = true;
+  watchFrames(() => typing);
   // The window's editor is not mounted in a measuring build; wait for the tab.
   for (let i = 0; i < 200 && shell.tabs.active === null; i++) {
     await sleep(100);
@@ -189,7 +223,7 @@ async function measure(shell: Shell): Promise<void> {
   }
   for (const colors of import.meta.env.VITE_UL_BENCH_F4 === '1' || f5 ? [] : [false, true]) {
     const start = performance.now();
-    const view = await SourceView.open(host, note, tauriBackend, {
+    const view = await SourceView.open(host, note, backend, {
       mac: false,
       label: note,
       onError: (message) => console.error(message),
@@ -219,7 +253,10 @@ async function measure(shell: Shell): Promise<void> {
     view.destroy();
   }
   host.remove();
+  typing = false;
+  setSyncProbe(null);
   await commands.settingsQuick('input_mode', 'Normal');
+  await flushCores();
   const results = {
     started: new Date().toISOString(),
     userAgent: navigator.userAgent,
@@ -228,9 +265,24 @@ async function measure(shell: Shell): Promise<void> {
     openMs: opened,
     rows,
     facade,
+    // ADR-025 (B5a): the WASM, the sync after the frame, and the frames.
+    wasmInitMs: editorCoreLoadTime(),
+    cspViolations: violations,
+    sync: {
+      roundtrip: stats(timings.roundtrip),
+      acknowledge: stats(timings.acknowledge),
+      views: stats(timings.views),
+    },
+    frames: {
+      gaps: stats(frameGaps),
+      over20ms: frameGaps.filter((gap) => gap > 20).length,
+      over50ms: frameGaps.filter((gap) => gap > 50).length,
+    },
   };
-  // The results replace the note's text and are stored at once.
-  await tauriBackend.input(note, {
+  // The results replace the note's text and are stored at once; Ctrl+A
+  // selects all in the Normal mode.
+  backend.setMode?.(note, 'Normal');
+  await backend.input(note, {
     kind: 'key',
     key: 'A',
     ctrl: true,
@@ -239,8 +291,8 @@ async function measure(shell: Shell): Promise<void> {
     meta: false,
     page: 1,
   });
-  await tauriBackend.input(note, { kind: 'text', text: `UL-BENCH ${JSON.stringify(results)}\n` });
-  await commands.tabStore(note);
+  await backend.input(note, { kind: 'text', text: `UL-BENCH ${JSON.stringify(results)}\n` });
+  await flushed(() => commands.tabStore(note));
   console.info('The measurement is done', results);
 }
 
@@ -281,7 +333,7 @@ async function measureF4(
     text.style.cssText = 'flex: 1 1 auto; min-width: 0; height: 100%';
     host.append(text);
     const start = performance.now();
-    const view = await SourceView.open(text, note, tauriBackend, {
+    const view = await SourceView.open(text, note, backend, {
       mac: false,
       label: note,
       onError: (message) => console.error(message),
@@ -312,7 +364,7 @@ async function measureF4(
       heading += 1;
     }
     if (has('fold')) {
-      await tauriBackend.fold(note, heading - 1);
+      await backend.fold(note, heading - 1);
     }
     await sleep(500);
     const positions: [string, number][] = diag
@@ -336,7 +388,7 @@ async function measureF4(
       });
     }
     if (has('fold')) {
-      await tauriBackend.fold(note, heading - 1);
+      await backend.fold(note, heading - 1);
     }
     unlisten.forEach((stop) => stop());
     if (minimap) {

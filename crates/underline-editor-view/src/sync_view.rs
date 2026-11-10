@@ -53,6 +53,9 @@ pub struct SyncBatch {
     pub base: u32,
     /// The edits, one after the other.
     pub edits: Vec<SyncEdit>,
+    /// The batch's number; one sent again after its answer was lost is taken
+    /// in once.
+    pub seq: u32,
 }
 
 impl From<&SyncBatch> for Batch {
@@ -60,6 +63,7 @@ impl From<&SyncBatch> for Batch {
         Self {
             base: batch.base,
             changes: batch.edits.iter().map(Change::from).collect(),
+            seq: batch.seq,
         }
     }
 }
@@ -69,6 +73,7 @@ impl From<&Batch> for SyncBatch {
         Self {
             base: batch.base,
             edits: batch.changes.iter().map(SyncEdit::from).collect(),
+            seq: batch.seq,
         }
     }
 }
@@ -189,6 +194,46 @@ pub struct ChangedView {
 pub struct FlushView {
     /// The note, or `None` for all.
     pub note: Option<String>,
+    /// Underline is to close: after sending, the window calls
+    /// `app_request_close` (`docs/migration/variante-b.md` section 3.9).
+    pub closing: bool,
+}
+
+/// ADR-025: the backend's text of an open note as the window's editor core
+/// starts from it (`ed_mirror`): the text with its line breaks as they are,
+/// its revision, and the cursor the tab opened with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorView {
+    /// The note, by its id.
+    pub note: String,
+    /// The revision of the text.
+    pub rev: u32,
+    /// The whole text, its line breaks as the file has them.
+    pub text: String,
+    /// "Markdown" or "AsciiDoc".
+    pub format: String,
+    /// The other end of the selection, in web units.
+    pub anchor: u32,
+    /// The cursor, in web units.
+    pub head: u32,
+}
+
+/// ADR-025: what the backend's answer did in the window's editor core: the
+/// patch for the source view (the backend's changes moved over the
+/// window's own edits), or that the copies went apart and the window sends
+/// its whole text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteApplied {
+    /// The patch for the source view; `None` when nothing changed.
+    pub patch: Option<crate::editor_view::EditorPatch>,
+    /// The copies went apart: the window sends its whole text (`ed_resync`).
+    pub desync: bool,
+    /// Why they went apart, for the log.
+    pub reason: Option<String>,
 }
 
 /// `ed-enrich`: what the backend made of the facade's blocks of `note`, by

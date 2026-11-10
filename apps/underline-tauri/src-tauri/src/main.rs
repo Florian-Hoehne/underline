@@ -25,7 +25,8 @@ use underline_core::Workspace;
 use underline_session::Session;
 
 use crate::clipboard::SystemClipboard;
-use crate::commands::{Closer, SharedClipboard, SharedSession};
+use crate::commands::{close_after_flush, Closer, SharedClipboard, SharedSession};
+use crate::events::emit_all;
 use crate::events::CloseQuestionEvent;
 use crate::ticker::Waker;
 
@@ -33,6 +34,9 @@ use crate::ticker::Waker;
 /// render, in the colours of the theme (plan section 14). Should the
 /// frontend fail to load, the window is shown after this time anyway.
 const SHOW_WINDOW_AT_THE_LATEST: Duration = Duration::from_secs(3);
+
+/// How long closing waits for the window to send its edits (ADR-025).
+const FLUSH_AT_THE_LATEST: Duration = Duration::from_secs(1);
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
@@ -116,8 +120,10 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
         .register_asynchronous_uri_scheme_protocol(assets::SCHEME, assets::handle)
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if ask_before_closing(window.app_handle()) {
+                let app = window.app_handle();
+                if !app.state::<Closer>().closing() {
                     api.prevent_close();
+                    ask_window_to_flush(app);
                 }
             }
         })
@@ -125,6 +131,11 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
             bindings.mount_events(app);
             let handle = app.handle().clone();
             app.manage(Closer::new(move || handle.exit(0)));
+            // ADR-025 section 3.9: when the window answered the close
+            // handshake (`app_request_close`), closing goes on here.
+            let handle = app.handle().clone();
+            app.state::<Closer>()
+                .set_after_flush(move || close_after_flush(&handle));
             ticker::spawn(app.handle().clone(), wakes)?;
             show_window_at_the_latest(app.handle().clone());
             Ok(())
@@ -133,7 +144,7 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
     app.run(|app, event| match event {
         // M-21.4: an end the window did not ask for, such as the last window
         // going, stores everything first like closing the window does.
-        RunEvent::ExitRequested { api, .. } if !app.state::<Closer>().closing_anyway() => {
+        RunEvent::ExitRequested { api, .. } if !app.state::<Closer>().closing() => {
             if ask_before_closing(app) {
                 api.prevent_exit();
             }
@@ -166,6 +177,31 @@ fn ask_before_closing(app: &tauri::AppHandle) -> bool {
         eprintln!("The question before closing could not be sent: {error}");
     }
     true
+}
+
+/// ADR-025 section 3.9: closing the window first asks it to send the edits
+/// of every note (`ed-flush` with `closing`); it then calls
+/// `app_request_close`. Should it not do so within [`FLUSH_AT_THE_LATEST`],
+/// Underline closes with the backend's copies of the texts.
+fn ask_window_to_flush(app: &tauri::AppHandle) {
+    let number = app.state::<Closer>().begin_handshake();
+    let shared = app.state::<SharedSession>();
+    let events = {
+        let mut session = shared.lock();
+        session.request_close_flush();
+        session.take_events()
+    };
+    emit_all(app, events);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(FLUSH_AT_THE_LATEST);
+        if app.state::<Closer>().end_handshake(Some(number)) {
+            eprintln!(
+                "The window did not send its edits in time; closing with the backend's texts"
+            );
+            close_after_flush(&app);
+        }
+    });
 }
 
 /// Shows the main window after [`SHOW_WINDOW_AT_THE_LATEST`] if the

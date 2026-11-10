@@ -34,3 +34,18 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     fs.readFileSync(`${process.cwd()}/src/lib/wasm/pkg/underline_editor_wasm_bg.wasm`),
   );
 }
+
+// ADR-025: the editor cores of one test's notes are not another test's.
+{
+  const { afterEach } = await import('vitest');
+  const { dropAllCores } = await import('./lib/editor/sync');
+  afterEach(() => dropAllCores());
+}
+
+// The mock's timers (its autosave) end with the test that made them.
+{
+  const { afterEach } = await import('vitest');
+  afterEach(() => {
+    (globalThis as unknown as { __ulMock?: { dispose(): void } }).__ulMock?.dispose();
+  });
+}

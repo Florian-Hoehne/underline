@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from '../App.svelte';
 import { connectedShell } from '../test/shell';
 import { activeSourceView } from './editor/active';
-import { mockHandlers, type MockHandlers, type MockStart } from './mock-backend';
+import { mockHandlers, mockHooks, type MockHandlers, type MockStart } from './mock-backend';
 
 afterEach(() => {
   cleanup();
@@ -50,6 +50,9 @@ function type(field: HTMLElement, text: string) {
   );
 }
 
+/** ADR-025: the backend's text of Home, once the core sent its edits. */
+const backendText = () => mockHooks().mirrorText('Home') ?? '';
+
 const statusLine = () => screen.getByRole('group', { name: 'Editor status' });
 
 describe('M-10.2 the formatting toolbar', () => {
@@ -74,36 +77,24 @@ describe('M-10.2 the formatting toolbar', () => {
     expect(buttons[0]).toHaveAccessibleName('Heading (Ctrl+Shift+H)');
   });
 
-  it('a button applies its function in the backend and puts the keyboard back', async () => {
-    const handlers = mockHandlers(NOTES);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NOTES, { ...handlers, ed_input: input });
+  it('a button applies its function in the editor core and puts the keyboard back', async () => {
+    await workbench(NOTES);
     const field = await textField();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Bold (Ctrl+B)' }));
 
-    await waitFor(() =>
-      expect(input).toHaveBeenCalledWith(
-        expect.objectContaining({ input: { kind: 'tool', tool: 'bold' } }),
-      ),
-    );
     await waitFor(() => expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^\*\*\*\*/));
     expect(document.activeElement).toBe(field);
+    await waitFor(() => expect(backendText()).toMatch(/^\*\*\*\*/));
   });
 
   it('Ctrl+B is the same function', async () => {
-    const handlers = mockHandlers(NOTES);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NOTES, { ...handlers, ed_input: input });
+    await workbench(NOTES);
     const field = await textField();
 
     expect(press(field, 'b', { ctrlKey: true }).defaultPrevented).toBe(true);
 
-    await waitFor(() =>
-      expect(input).toHaveBeenCalledWith(
-        expect.objectContaining({ input: expect.objectContaining({ key: 'B', ctrl: true }) }),
-      ),
-    );
+    await waitFor(() => expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^\*\*\*\*/));
   });
 });
 
@@ -164,10 +155,8 @@ describe('M-11.3 the Nano keys', () => {
     expect(within(statusLine()).getByText('Cut line')).toBeInTheDocument();
   });
 
-  it('Ctrl+K cuts the line in the backend; Escape stays in the text', async () => {
-    const handlers = mockHandlers(NANO);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NANO, { ...handlers, ed_input: input });
+  it('Ctrl+K cuts the line in the editor core; Escape stays in the text', async () => {
+    await workbench(NANO);
     const field = await textField();
 
     press(field, 'k', { ctrlKey: true });
@@ -178,9 +167,7 @@ describe('M-11.3 the Nano keys', () => {
     );
     expect(escape.defaultPrevented).toBe(true);
     expect(screen.getByRole('tab', { name: /Home/ })).not.toHaveFocus();
-    expect(input).toHaveBeenCalledWith(
-      expect.objectContaining({ input: expect.objectContaining({ key: 'Escape' }) }),
-    );
+    await waitFor(() => expect(backendText()).not.toMatch(/^# Home/));
   });
 
   it('Ctrl+W opens the search prompt in the status line; Enter finds and marks', async () => {
@@ -225,40 +212,34 @@ describe('M-11.2 the Vim keys of the source view (A-01)', () => {
     expect(within(statusLine()).getByText('normal mode')).toBeInTheDocument();
   });
 
-  it('sends what it changes to the backend for the revision it was made on', async () => {
+  it('sends what it changes to the backend after the frame (ADR-025)', async () => {
     const handlers = mockHandlers(VIM);
-    const apply = vi.fn(handlers.ed_apply);
-    await workbench(VIM, { ...handlers, ed_apply: apply });
+    const sync = vi.fn(handlers.ed_sync);
+    await workbench(VIM, { ...handlers, ed_sync: sync });
     const field = await textField();
 
     press(field, 'x');
 
     await waitFor(() =>
-      expect(apply).toHaveBeenCalledWith(
+      expect(sync).toHaveBeenCalledWith(
         expect.objectContaining({
-          base: 0,
-          changes: [{ from: 0, to: 1, insert: '', newStep: true }],
+          batch: expect.objectContaining({ base: 1, edits: [{ at: 0, remove: 1, insert: '' }] }),
         }),
       ),
     );
     expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^ Home/);
+    expect(backendText()).toMatch(/^ Home/);
   });
 
-  it('u undoes in the backend, as one history with the other modes', async () => {
-    const handlers = mockHandlers(VIM);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(VIM, { ...handlers, ed_input: input });
+  it('u undoes in the editor core, as one history with the other modes', async () => {
+    await workbench(VIM);
     const field = await textField();
 
     press(field, 'x');
     press(field, 'u');
 
-    await waitFor(() =>
-      expect(input).toHaveBeenCalledWith(
-        expect.objectContaining({ input: expect.objectContaining({ key: 'Z', ctrl: true }) }),
-      ),
-    );
     await waitFor(() => expect(activeSourceView()?.view.state.doc.toString()).toMatch(/^# Home/));
+    await waitFor(() => expect(backendText()).toMatch(/^# Home/));
   });
 
   it('M-10.9 :w stores the note', async () => {
@@ -296,25 +277,17 @@ describe('M-11.2 the Vim keys of the source view (A-01)', () => {
 describe('M-10.1, A-01 undo steps of the Vim keys', () => {
   const VIM = { ...NOTES, settings: { inputMode: 'Vim' } };
 
-  it('marks the start of an insert session; each command is a step of its own', async () => {
-    const handlers = mockHandlers(VIM);
-    const apply = vi.fn(handlers.ed_apply);
-    await workbench(VIM, { ...handlers, ed_apply: apply });
+  it('each command is a step of its own', async () => {
+    await workbench(VIM);
     const field = await textField();
+    const text = () => activeSourceView()?.view.state.doc.toString();
 
-    press(field, 'i');
-    await waitFor(() =>
-      expect(apply).toHaveBeenCalledWith(expect.objectContaining({ changes: [], newStep: true })),
-    );
-    press(field, 'Escape');
     press(field, 'x');
     press(field, 'x');
+    await waitFor(() => expect(text()).toMatch(/^Home/));
+    press(field, 'u');
 
-    await waitFor(() => {
-      const sent = apply.mock.calls.flatMap(([args]) => args.changes);
-      expect(sent.filter((c) => c.insert === '')).toHaveLength(2);
-      expect(sent.every((c) => c.newStep)).toBe(true);
-    });
+    await waitFor(() => expect(text()).toMatch(/^ Home/));
   });
 
   it('shows the register "+ as typed but not done', async () => {
@@ -365,40 +338,31 @@ describe('Q-14, NFR-011 Link and Image wait for F6; F6 goes from region to regio
 });
 
 describe('M-08.8 folding', () => {
-  it('a folded section ends on "…"; the arrow asks the backend to fold or expand', async () => {
-    const handlers = mockHandlers(NOTES);
-    const fold = vi.fn(handlers.ed_fold);
-    await workbench(NOTES, { ...handlers, ed_fold: fold });
+  it('the arrow folds the section, which then ends on "…"; again expands it', async () => {
+    await workbench(NOTES);
     await textField();
-    const rev = activeSourceView()!.rev;
 
-    await emit('ed-sections', {
-      note: 'Home',
-      rev,
-      sections: [{ line: 0, last: 3, folded: true }],
-    });
+    // ADR-025: the editor core finds the sections; the last arrow is the
+    // heading's (the first one only keeps the gutter's width).
+    const arrows = () => [...document.querySelectorAll<HTMLElement>('.cm-ul-arrow')];
+    await waitFor(() => expect(arrows().length).toBeGreaterThan(1));
+    await fireEvent.mouseDown(arrows().at(-1)!, { button: 0 });
 
     await waitFor(() => expect(document.querySelector('.cm-ul-folded')).toHaveTextContent('…'));
     const arrow = document.querySelector<HTMLElement>('.cm-ul-arrow[data-folded="true"]')!;
     expect(arrow.style.visibility).toBe('visible');
     await fireEvent.mouseDown(arrow, { button: 0 });
-
-    await waitFor(() => expect(fold).toHaveBeenCalledWith({ note: 'Home', line: 0 }));
+    await waitFor(() => expect(document.querySelector('.cm-ul-folded')).toBeNull());
   });
 
-  it('Ctrl+Shift+[ goes to the backend', async () => {
-    const handlers = mockHandlers(NOTES);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NOTES, { ...handlers, ed_input: input });
+  it('Ctrl+Shift+[ folds the section at the cursor', async () => {
+    await workbench(NOTES);
     const field = await textField();
+    await waitFor(() => expect(document.querySelector('.cm-ul-arrow')).not.toBeNull());
 
     press(field, '{', { ctrlKey: true, shiftKey: true, code: 'BracketLeft' });
 
-    await waitFor(() =>
-      expect(input).toHaveBeenCalledWith(
-        expect.objectContaining({ input: expect.objectContaining({ key: 'BracketLeft' }) }),
-      ),
-    );
+    await waitFor(() => expect(document.querySelector('.cm-ul-folded')).toHaveTextContent('…'));
   });
 });
 

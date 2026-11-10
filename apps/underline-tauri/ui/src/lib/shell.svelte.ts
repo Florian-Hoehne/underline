@@ -31,6 +31,16 @@ import {
   type WorkspaceView,
 } from './bindings';
 import { activeSourceView } from './editor/active';
+import {
+  dropAllCores,
+  dropCore,
+  flushCores,
+  flushed,
+  keepCoresOf,
+  ringCore,
+  setSyncReporter,
+  takeFlush,
+} from './editor/sync';
 import { activeFacade } from './facade/active';
 import { applyPalette } from './theme';
 
@@ -165,6 +175,16 @@ export class Shell {
    * with. Listening first means no change is missed in between.
    */
   async connect(): Promise<void> {
+    // ADR-025: what the sync of the editor cores has to say.
+    setSyncReporter({
+      status: (note, text) => {
+        const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+        this.status = `${title}: ${text}`;
+      },
+      closeQuestion: (question) => {
+        this.closeQuestion = question;
+      },
+    });
     this.#unlisten = await Promise.all([
       events.status.listen((event) => {
         this.status = event.payload.text;
@@ -183,6 +203,8 @@ export class Shell {
       events.tabs.listen((event) => {
         this.#sentDuringStart?.add('tabs');
         this.tabs = event.payload;
+        // ADR-025: a note the backend closed keeps no editor core.
+        keepCoresOf(event.payload.tabs.map((tab) => tab.note));
       }),
       events.properties.listen((event) => {
         this.properties = event.payload;
@@ -205,6 +227,16 @@ export class Shell {
       }),
       events.edFound.listen((event) => {
         activeSourceView()?.takeFound(event.payload);
+      }),
+      // ADR-025: the backend changed a text a window's core holds, or asks
+      // for the window's edits (before an agent's change, before closing).
+      events.edChanged.listen((event) => {
+        ringCore(event.payload.note);
+      }),
+      events.edFlush.listen((event) => {
+        void takeFlush(event.payload).catch((error: unknown) =>
+          this.#fail('ed_sync', { kind: 'internal', message: String(error) }),
+        );
       }),
       events.edReplaced.listen((event) => {
         const view = activeSourceView();
@@ -307,7 +339,11 @@ export class Shell {
    * when it lies inside a workspace (A5 step 2, A6).
    */
   async openWorkspace(path: string, anyway = false): Promise<void> {
-    const answer = await this.#ask('ws_open', () => commands.wsOpen(path, anyway));
+    const answer = await this.#ask('ws_open', () => flushed(() => commands.wsOpen(path, anyway)));
+    if (answer?.kind === 'done') {
+      // ADR-025: the cores of the notes of the workspace left go.
+      dropAllCores();
+    }
     if (answer) {
       this.#takeOpenAnswer(answer);
     }
@@ -343,8 +379,11 @@ export class Shell {
     remote = '',
   ): Promise<void> {
     const answer = await this.#ask('ws_create', () =>
-      commands.wsCreate({ directory, format, git, remote }),
+      flushed(() => commands.wsCreate({ directory, format, git, remote })),
     );
+    if (answer?.stage === 'done') {
+      dropAllCores();
+    }
     if (answer) {
       this.#takeCreateAnswer(answer, directory, format);
     }
@@ -379,12 +418,29 @@ export class Shell {
    * the tab closed.
    */
   async closeTab(note: string, force = false): Promise<boolean> {
+    if (!force) {
+      // ADR-025: the tab's edits reach the backend first; when they cannot,
+      // "Changes not stored" asks, as when storing fails (UC-005 A14).
+      const failure = await flushCores(note);
+      if (failure !== null) {
+        const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+        this.closeQuestion = {
+          tab: note,
+          what: `the tab ${title}`,
+          error: `The edits could not be sent: ${failure}`,
+        };
+        return false;
+      }
+    }
     const result = await this.#serial(() => commands.tabClose(note, force));
     if (result.status === 'error') {
       this.#fail('tab_close', result.error);
       return false;
     }
     this.closeQuestion = result.data;
+    if (result.data === null) {
+      dropCore(note);
+    }
     return result.data === null;
   }
 
@@ -398,7 +454,8 @@ export class Shell {
       ...this.tabs,
       tabs: this.tabs.tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab)),
     };
-    const result = await this.#serial(() => commands.tabSetView(note, view));
+    // ADR-025: the other view starts from what the backend has.
+    const result = await this.#serial(() => flushed(() => commands.tabSetView(note, view)));
     if (result.status === 'error') {
       this.#fail('tab_set_view', result.error);
     }
@@ -406,7 +463,7 @@ export class Shell {
 
   /** M-10.9: `Store` stores the note of the tab at once. */
   async storeTab(note: string): Promise<void> {
-    const result = await this.#serial(() => commands.tabStore(note));
+    const result = await this.#serial(() => flushed(() => commands.tabStore(note)));
     if (result.status === 'error') {
       this.#fail('tab_store', result.error);
     }

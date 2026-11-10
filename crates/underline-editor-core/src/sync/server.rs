@@ -41,6 +41,10 @@ pub struct Batch {
     pub base: u32,
     /// The edits, one after the other.
     pub changes: Vec<Change>,
+    /// The batch's number from the webview; a batch sent again with the
+    /// number of the last one taken in gets that answer again and changes
+    /// nothing (its answer was lost). 0: not numbered.
+    pub seq: u32,
 }
 
 /// The backend's answer to a [`Batch`].
@@ -152,6 +156,8 @@ pub struct Server {
     floor: u32,
     /// A reload the webview has not confirmed yet.
     unconfirmed: Option<u32>,
+    /// The number of the last batch taken in, with its answer.
+    last: Option<(u32, Answer)>,
 }
 
 impl Server {
@@ -164,6 +170,7 @@ impl Server {
             log: VecDeque::new(),
             floor: 1,
             unconfirmed: None,
+            last: None,
         }
     }
 
@@ -286,6 +293,19 @@ impl Server {
     /// A batch that does not fit (a revision not kept, an edit past the end)
     /// changes nothing and asks for the whole text.
     pub fn receive(&mut self, batch: &Batch) -> Received {
+        if let Some((_, answer)) = self
+            .last
+            .as_ref()
+            .filter(|(seq, _)| batch.seq != 0 && *seq == batch.seq)
+        {
+            // Sent again after its answer was lost: taken in already.
+            return Received {
+                answer: answer.clone(),
+                applied: ChangeSet::identity(self.rope.len_chars()),
+                touched: Vec::new(),
+                reverted: None,
+            };
+        }
         let Some(plan) = self.plan(batch) else {
             return self.refused();
         };
@@ -313,13 +333,17 @@ impl Server {
                 self.floor = self.floor.max(old.rev);
             }
         }
+        let answer = Answer {
+            rev: self.rev,
+            hash: self.hash(),
+            remote: plan.remote,
+            resync: false,
+        };
+        if batch.seq != 0 {
+            self.last = Some((batch.seq, answer.clone()));
+        }
         Received {
-            answer: Answer {
-                rev: self.rev,
-                hash: self.hash(),
-                remote: plan.remote,
-                resync: false,
-            },
+            answer,
             applied: plan.set,
             touched,
             reverted,
@@ -405,31 +429,8 @@ impl Server {
     pub fn resync(&mut self, text: &str) -> Resynced {
         let old = self.rope.to_string();
         let outside = (self.unconfirmed.is_some() && old != text).then(|| old.clone());
-        let prefix = old
-            .chars()
-            .zip(text.chars())
-            .take_while(|(a, b)| a == b)
-            .count();
         let old_len = old.chars().count();
-        let new_len = text.chars().count();
-        let suffix = old
-            .chars()
-            .rev()
-            .zip(text.chars().rev())
-            .take_while(|(a, b)| a == b)
-            .count()
-            .min(old_len - prefix)
-            .min(new_len - prefix);
-        let middle: String = text
-            .chars()
-            .skip(prefix)
-            .take(new_len - prefix - suffix)
-            .collect();
-        let change = Change {
-            at: prefix,
-            remove: old_len - prefix - suffix,
-            insert: middle,
-        };
+        let change = super::client::difference(&old, text);
         let touched = ChangeSet::of(old_len, &change)
             .map(|set| apply_touching(&mut self.rope, &set))
             .unwrap_or_default();
@@ -437,6 +438,7 @@ impl Server {
         self.log.clear();
         self.floor = rev;
         self.unconfirmed = None;
+        self.last = None;
         Resynced {
             answer: Answer {
                 rev,

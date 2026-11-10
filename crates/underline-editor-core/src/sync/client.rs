@@ -51,6 +51,11 @@ pub struct Client {
     buffer: ChangeSet,
     /// The next outbox is sent even without edits, to fetch or confirm.
     pull: bool,
+    /// The number of the last batch made ([`Batch::seq`]).
+    seq: u32,
+    /// The batch on its way is sent again as it was (its answer did not
+    /// come).
+    resend: bool,
 }
 
 impl Client {
@@ -65,6 +70,8 @@ impl Client {
             inflight: None,
             buffer: ChangeSet::identity(len),
             pull: false,
+            seq: 0,
+            resend: false,
         }
     }
 
@@ -80,6 +87,13 @@ impl Client {
     #[must_use]
     pub fn in_step(&self, rev: u32) -> bool {
         rev == self.synced && self.inflight.is_none() && self.buffer.is_identity()
+    }
+
+    /// Whether nothing waits: no batch on its way, no edits to send, no
+    /// fetch asked for.
+    #[must_use]
+    pub fn idle(&self) -> bool {
+        self.inflight.is_none() && self.buffer.is_identity() && !self.pull
     }
 
     /// The window made `change` on its text.
@@ -101,15 +115,26 @@ impl Client {
     /// The edits to send, unless a batch is on its way or there is nothing
     /// to send.
     pub fn take_outbox(&mut self) -> Option<Batch> {
-        if self.inflight.is_some() || (self.buffer.is_identity() && !self.pull) {
+        if let Some(sent) = &self.inflight {
+            // A batch whose answer did not come goes again as it was, with
+            // its number, so the backend takes it in once.
+            return std::mem::take(&mut self.resend).then(|| Batch {
+                base: self.synced,
+                changes: sent.changes(),
+                seq: self.seq,
+            });
+        }
+        if self.buffer.is_identity() && !self.pull {
             return None;
         }
         self.pull = false;
         let len = self.buffer.target_len();
         let sent = std::mem::replace(&mut self.buffer, ChangeSet::identity(len));
+        self.seq = self.seq.wrapping_add(1).max(1);
         let batch = Batch {
             base: self.synced,
             changes: sent.changes(),
+            seq: self.seq,
         };
         self.inflight = Some(sent);
         Some(batch)
@@ -126,6 +151,7 @@ impl Client {
             return Err(Desync::Asked);
         }
         let len = self.shadow.len_chars();
+        self.resend = false;
         let mut inflight = self
             .inflight
             .take()
@@ -182,12 +208,11 @@ impl Client {
 
     /// The last batch did not reach the backend, or its answer did not come
     /// (an IPC error of `ed_sync`; the window calls this on any error of
-    /// it): its edits are sent again with the next outbox, on the same
-    /// revision.
+    /// it): the next outbox sends it again as it was, with its number; the
+    /// backend takes it in once ([`Batch::seq`]). What was typed since
+    /// follows in the batch after.
     pub fn failed(&mut self) {
-        if let Some(sent) = self.inflight.take() {
-            self.buffer = sent.compose(&self.buffer);
-        }
+        self.resend = self.inflight.is_some();
         self.pull = true;
     }
 
@@ -203,9 +228,45 @@ impl Client {
         rope.to_string()
     }
 
-    /// After a resync: the backend's text is `text` at `rev`, the window's
-    /// own, with nothing to send.
-    pub fn reset(&mut self, text: &str, rev: u32) {
-        *self = Self::new(text, rev);
+    /// After a resync: the backend took `sent`, the window's text when it
+    /// was sent, at `rev`. What the window typed while the resync travelled
+    /// (its text is `now`) is kept as edits still to send.
+    pub fn reset(&mut self, sent: &str, rev: u32, now: &str) {
+        *self = Self::new(sent, rev);
+        if sent != now {
+            let change = difference(sent, now);
+            // `difference` fits `sent` by its making.
+            let _ = self.local(&change);
+        }
+    }
+}
+
+/// The one edit that makes `after` of `before`: the middle between their
+/// common start and end, in chars.
+#[must_use]
+pub fn difference(before: &str, after: &str) -> Change {
+    let prefix = before
+        .chars()
+        .zip(after.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let before_len = before.chars().count();
+    let after_len = after.chars().count();
+    let suffix = before
+        .chars()
+        .rev()
+        .zip(after.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(before_len - prefix)
+        .min(after_len - prefix);
+    Change {
+        at: prefix,
+        remove: before_len - prefix - suffix,
+        insert: after
+            .chars()
+            .skip(prefix)
+            .take(after_len - prefix - suffix)
+            .collect(),
     }
 }

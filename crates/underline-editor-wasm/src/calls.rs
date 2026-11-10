@@ -22,10 +22,12 @@
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use underline_editor_core::keys::InputMode as KeysInputMode;
+use underline_editor_core::sync::{Answer, Change, Client};
 use underline_editor_view::editor_view::{
     ClipAction, Clipped, EditorInput, TabViews, VimChange, VimState,
 };
 use underline_editor_view::facade_view::{FacadeAt, FacadeInput, RowsView};
+use underline_editor_view::sync_view::{RemoteApplied, SyncAnswer, SyncBatch};
 use underline_editor_view::{CachedViews, EditorTab, FacadeCall};
 use underline_markup::NoteFormat;
 
@@ -49,6 +51,9 @@ pub enum CallError {
     /// The answer could not be written as JSON.
     #[error("The answer could not be written: {0}")]
     Answer(serde_json::Error),
+    /// A call of the sync before it was started (`startSync`).
+    #[error("The sync of this tab was not started")]
+    NotSyncing,
 }
 
 /// `value` as JSON.
@@ -89,6 +94,8 @@ pub struct Core {
     mac: bool,
     tab: EditorTab,
     views: CachedViews,
+    /// ADR-025: the window's side of the sync, once started.
+    client: Option<Client>,
     /// The input mode of the settings.
     setting: KeysInputMode,
     /// The facade is shown, not the source view.
@@ -108,6 +115,7 @@ impl Core {
             mac,
             tab: EditorTab::new(text, format_of(format)?),
             views: CachedViews::default(),
+            client: None,
             setting: KeysInputMode::Normal,
             facade: false,
         })
@@ -132,6 +140,126 @@ impl Core {
     /// theme is let go.
     pub fn set_looks(&mut self, theme: &str, dark: bool) {
         self.views = CachedViews::new(theme, dark);
+    }
+
+    /// ADR-025: the sync starts: the text is the backend's at revision
+    /// `rev` (`ed_mirror`), and the edits from now on are sent.
+    pub fn start_sync(&mut self, rev: u32) {
+        self.tab.editor.record_edits();
+        self.tab.editor.take_edits();
+        self.client = Some(Client::new(&self.tab.editor.text(), rev));
+    }
+
+    /// The editor's edits since the last call go to the client.
+    fn record(&mut self) {
+        let edits = self.tab.editor.take_edits();
+        if let Some(client) = &mut self.client {
+            for edit in &edits {
+                if client.local(&Change::from(edit)).is_err() {
+                    // Never expected: the client follows the editor. The
+                    // next answer finds the copies apart.
+                    break;
+                }
+            }
+        }
+    }
+
+    fn client(&mut self) -> Result<&mut Client, CallError> {
+        self.record();
+        self.client.as_mut().ok_or(CallError::NotSyncing)
+    }
+
+    /// `SyncBatch | null`: the edits to send (`ed_sync`), unless a batch is
+    /// on its way or there is nothing to send.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started, or the answer could not be written.
+    pub fn take_outbox(&mut self) -> Result<String, CallError> {
+        let batch = self.client()?.take_outbox();
+        json(&batch.as_ref().map(SyncBatch::from))
+    }
+
+    /// `RemoteApplied`: takes in the backend's answer (`SyncAnswer`) to the
+    /// last batch; the patch for the source view, or that the window sends
+    /// its whole text (`ed_resync`).
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started, or `answer` is not a `SyncAnswer`.
+    pub fn acknowledge(&mut self, answer: &str) -> Result<String, CallError> {
+        let answer: SyncAnswer = parse(answer, "The answer")?;
+        let acknowledged = self.client()?.acknowledge(&Answer::from(&answer));
+        let desync = |reason: String| RemoteApplied {
+            patch: None,
+            desync: true,
+            reason: Some(reason),
+        };
+        let applied = match acknowledged {
+            Ok(incoming) => match self.tab.apply_incoming(incoming) {
+                Ok(patch) => RemoteApplied {
+                    patch,
+                    desync: false,
+                    reason: None,
+                },
+                Err(error) => desync(format!("a change of the backend does not fit: {error}")),
+            },
+            Err(error) => desync(format!("{error:?}")),
+        };
+        // The backend has what it sent.
+        self.tab.editor.take_edits();
+        json(&applied)
+    }
+
+    /// The backend rang (`ed-changed`, `ed-flush`): the next outbox fetches.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn ring(&mut self) -> Result<(), CallError> {
+        self.client()?.ring();
+        Ok(())
+    }
+
+    /// The last `ed_sync` failed: its edits go again with the next outbox.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn failed(&mut self) -> Result<(), CallError> {
+        self.client()?.failed();
+        Ok(())
+    }
+
+    /// After `ed_resync`: the backend took `sent`, the text sent, at `rev`.
+    /// What was typed while it travelled stays to be sent.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn reset(&mut self, sent: &str, rev: u32) -> Result<(), CallError> {
+        let now = self.tab.editor.text();
+        self.client()?.reset(sent, rev, &now);
+        Ok(())
+    }
+
+    /// Whether the window shows the backend's text of revision `rev` and
+    /// nothing of its own (a result of the backend for `rev` applies).
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn in_step(&mut self, rev: u32) -> Result<bool, CallError> {
+        Ok(self.client()?.in_step(rev))
+    }
+
+    /// Whether nothing waits to be sent or fetched.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn idle(&mut self) -> Result<bool, CallError> {
+        Ok(self.client()?.idle())
     }
 
     /// The window's clock, `performance.now()` in milliseconds

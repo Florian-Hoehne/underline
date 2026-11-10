@@ -316,6 +316,7 @@ fn adr025_a_resync_takes_the_windows_text() {
     let dir = temp_dir("resync");
     let (mut session, _) = session_with(&dir, "abc\n");
     let wrong = SyncBatch {
+        seq: 0,
         base: 1,
         edits: vec![(&edit(2, 9, "")).into()],
     };
@@ -509,5 +510,107 @@ fn adr025_m09_4_colours_made_later_reach_the_window() {
     assert_eq!(
         texts(&session),
         "# A\n\n```rust\nlet x = 1; fn main() {}\n```\n"
+    );
+}
+
+/// ADR-025: the window's core starts from the backend's text as the file
+/// has it (line breaks kept), with its revision; once it synced (its first
+/// `ed_sync`), a change of the session's own editor (the facade, variant A)
+/// rings it.
+#[test]
+fn adr025_the_window_starts_from_the_mirror_and_hears_of_changes() {
+    let dir = temp_dir("mirror");
+    let (mut session, _) = session_with(&dir, "one\r\ntwo\n");
+
+    let mirror = session.editor_mirror(&a()).unwrap();
+
+    assert_eq!(mirror.text, "one\r\ntwo\n");
+    assert_eq!(mirror.format, "Markdown");
+    let mut client = window(&session);
+    client.ring();
+    sync(&mut session, &mut client);
+    session.take_events();
+    session.editor_state(&a()).unwrap();
+    session
+        .editor_input(&a(), EditorInput::Text { text: "x".into() })
+        .unwrap();
+    let rang: Vec<u32> = session
+        .take_events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Changed(view) => Some(view.rev),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rang, [mirror.rev + 1]);
+    assert!(
+        !session
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Changed(_))),
+        "told once"
+    );
+}
+
+/// ADR-025 section 3.9: before closing, the window is asked for its edits
+/// of every note, with `closing`.
+#[test]
+fn adr025_closing_asks_the_window_for_its_edits() {
+    let dir = temp_dir("closing");
+    let (mut session, _) = session_with(&dir, "a\n");
+    session.request_close_flush();
+
+    let flushes: Vec<(Option<String>, bool)> = session
+        .take_events()
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Flush(view) => Some((view.note, view.closing)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(flushes, [(None, true)]);
+}
+
+/// ADR-025: a batch whose answer was lost, sent again, is answered again
+/// and not applied twice.
+#[test]
+fn adr025_a_batch_sent_again_is_applied_once() {
+    let dir = temp_dir("again");
+    let (mut session, _) = session_with(&dir, "ab\n");
+    let mut client = window(&session);
+    client.local(&edit(2, 0, "c")).unwrap();
+    let batch = SyncBatch::from(&client.take_outbox().unwrap());
+
+    let first = session.editor_sync(&a(), &batch).unwrap().answer;
+    let again = session.editor_sync(&a(), &batch).unwrap().answer;
+
+    assert_eq!(first, again);
+    assert_eq!(texts(&session), "abc\n");
+}
+
+/// ADR-025: the session's own editor (the facade, variant A) changes a text
+/// whose window core holds edits not sent yet: the late batch moves over
+/// the change, and both texts end alike.
+#[test]
+fn adr025_a_session_edit_meets_unsent_window_edits() {
+    let dir = temp_dir("meet");
+    let (mut session, _) = session_with(&dir, "one\ntwo\n");
+    let mut client = window(&session);
+    client.ring();
+    sync(&mut session, &mut client);
+    client.local(&edit(8, 0, "!")).unwrap();
+    session.editor_state(&a()).unwrap();
+    session
+        .editor_input(&a(), EditorInput::Text { text: "> ".into() })
+        .unwrap();
+
+    let answer = sync(&mut session, &mut client);
+
+    assert_eq!(answer.remote.len(), 1, "the session's edit");
+    assert_eq!(texts(&session), "> one\ntwo\n!");
+    assert_eq!(
+        answer.hash,
+        underline_editor_core::sync::hash("> one\ntwo\n!")
     );
 }
