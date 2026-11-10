@@ -8391,6 +8391,7 @@ dependencies = [
 name = "underline-session"
 version = "0.1.0"
 dependencies = [
+ "ropey",
  "serde",
  "serde_json",
  "specta",

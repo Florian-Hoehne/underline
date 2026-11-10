@@ -733,7 +733,7 @@ impl Session {
     /// The colours of the theme in effect, once made; `None` while they are
     /// being made (the lines stay plain meanwhile). After the theme changed
     /// they are made anew and every tab's colours start anew.
-    fn colors(&mut self) -> Option<Arc<HighlightSet>> {
+    pub(super) fn colors(&mut self) -> Option<Arc<HighlightSet>> {
         let theme = self.settings.effective().theme;
         if let Some((_, coming)) = &self.colors_coming {
             if let Ok(made) = coming.try_recv() {
@@ -848,8 +848,12 @@ impl Session {
         let Some((note, tab)) = open.tabs.active_mut() else {
             return Vec::new();
         };
-        if tab.viewport.is_none() {
-            // No source view shows the note.
+        let facade_shown = tab
+            .facade
+            .as_ref()
+            .is_some_and(super::facade::Facade::shown);
+        if tab.viewport.is_none() && !facade_shown {
+            // Neither the source view nor the facade shows the note.
             return Vec::new();
         }
         tab.keys.mode = mode;

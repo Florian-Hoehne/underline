@@ -38,6 +38,7 @@ import type {
   WorkspaceSnapshot,
 } from './bindings';
 import { FakeEditor, fakeVimStatus, type FakeMode } from './editor/fakeEditor';
+import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
 import palettes from './palettes.generated.json';
 
 /** The success value of a command in the generated bindings. */
@@ -70,6 +71,11 @@ export type MockHandlers = {
   tab_activate: (args: { note: string }) => Promise<Ok<typeof commands.tabActivate>>;
   tab_close: (args: { note: string; force: boolean }) => Promise<Ok<typeof commands.tabClose>>;
   tab_store: (args: { note: string }) => Promise<Ok<typeof commands.tabStore>>;
+  tab_set_view: (args: {
+    note: string;
+    view: EditingViewName;
+  }) => Promise<Ok<typeof commands.tabSetView>>;
+  fa_open: (args: { note: string }) => Ok<typeof commands.faOpen>;
   ed_open: (args: { note: string }) => Ok<typeof commands.edOpen>;
   ed_input: (args: {
     note: string;
@@ -124,7 +130,7 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
     'guide/Home',
     'Journal/2026-11-09',
   ],
-  '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap'],
+  '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE],
   '/home/user/Letters': ['Draft'],
 };
 
@@ -165,6 +171,8 @@ export type MockStart = Partial<Omit<StartInfo, 'settings'>> & {
   recent?: string[];
   /** Notes (ids) whose saves fail, to try M-10.8 and the close question. */
   failingSaves?: string[];
+  /** M-07.2: the view a newly opened tab shows; the backend's is the facade. */
+  view?: EditingViewName;
 };
 
 /** M-10.2: the toolbar's buttons, as the backend gives them (`Tool::label`, `Tool::hint`). */
@@ -185,6 +193,9 @@ export const MOCK_SAVE_ERROR = 'Permission denied (os error 13)';
 
 /** The text of a fake note. */
 export function fakeNoteText(note: string): string {
+  if (note === TOUR_NOTE) {
+    return TOUR_TEXT;
+  }
   const title = (note.split('/').at(-1) ?? note).replace(/-/g, ' ');
   return `# ${title}\n\nThis note lives in the mock backend.\nType here to try the source view.\n`;
 }
@@ -274,6 +285,8 @@ function workspaceHandlers(
   | 'tab_activate'
   | 'tab_close'
   | 'tab_store'
+  | 'tab_set_view'
+  | 'fa_open'
   | 'ed_open'
   | 'ed_input'
   | 'ed_select'
@@ -345,10 +358,35 @@ function workspaceHandlers(
     doc.mode = settings().inputMode as FakeMode;
     return doc;
   };
+  /** M-09: the version of the blocks of each note whose facade is shown. */
+  const facades = new Map<string, { version: number; count: number; rev: number }>();
+  /** ADR-024: the facade's blocks follow a change of the text, all at once in the mock. */
+  const blockEvents = async (note: string) => {
+    const shown = facades.get(note);
+    const doc = docOf(note);
+    if (!shown || shown.rev === doc.rev) {
+      return;
+    }
+    const blocks = fakeBlocks(doc.text);
+    const base = shown.version;
+    facades.set(note, { version: base + 1, count: blocks.length, rev: doc.rev });
+    await emit('ed-blocks', {
+      note,
+      rev: doc.rev,
+      base,
+      version: base + 1,
+      from: 0,
+      removed: shown.count,
+      blocks,
+      shift: 0,
+      lineShift: 0,
+    });
+  };
   /** M-08.8, M-11.3: the sections and the Nano hits follow each input, as events. */
   const editorEvents = async (note: string) => {
     const doc = docOf(note);
     try {
+      await blockEvents(note);
       await emit('ed-sections', { note, rev: doc.rev, sections: doc.sections() });
       const ranges = doc.found();
       await emit('ed-found', { note, rev: doc.rev, ranges, count: ranges.length });
@@ -444,7 +482,7 @@ function workspaceHandlers(
   const openTab = (note: string) => {
     if (!tabs.some((tab) => tab.note === note)) {
       const at = active === null ? tabs.length : tabs.findIndex((t) => t.note === active) + 1;
-      tabs.splice(at, 0, { note, view: 'facade' });
+      tabs.splice(at, 0, { note, view: start.view ?? 'facade' });
     }
     active = note;
     viewed(note);
@@ -610,10 +648,41 @@ function workspaceHandlers(
       await sendAll();
       return null;
     },
+    tab_set_view: async ({ note, view }) => {
+      tabs = tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab));
+      if (view === 'source') {
+        facades.delete(note);
+      }
+      remember();
+      await emit('tabs', tabsView());
+      return null;
+    },
+    fa_open: ({ note }) => {
+      if (!tabs.some((tab) => tab.note === note)) {
+        throw notOpen(note);
+      }
+      const doc = docOf(note);
+      const state = doc.state();
+      const blocks = fakeBlocks(doc.text);
+      const version = (facades.get(note)?.version ?? 0) + 1;
+      facades.set(note, { version, count: blocks.length, rev: doc.rev });
+      setTimeout(() => void editorEvents(note), 0);
+      return {
+        note,
+        rev: doc.rev,
+        version,
+        format: 'Markdown',
+        blocks,
+        anchor: state.anchor,
+        head: state.head,
+        place: state.place,
+      };
+    },
     ed_open: ({ note }) => {
       if (!tabs.some((tab) => tab.note === note)) {
         throw notOpen(note);
       }
+      facades.delete(note);
       return docOf(note).state();
     },
     ed_input: async ({ note, input }) => {

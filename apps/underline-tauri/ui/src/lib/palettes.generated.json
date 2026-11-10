@@ -34,7 +34,8 @@
       "#ffffff",
       "#ffffff",
       "#ffffff"
-    ]
+    ],
+    "strong": "#000000"
   },
   {
     "theme": "Dark",
@@ -71,7 +72,8 @@
       "#1e1e1e",
       "#1e1e1e",
       "#1e1e1e"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "GitHub Light",
@@ -108,7 +110,8 @@
       "#ffffff",
       "#ffffff",
       "#ffffff"
-    ]
+    ],
+    "strong": "#000000"
   },
   {
     "theme": "GitHub Dark",
@@ -145,7 +148,8 @@
       "#0d1117",
       "#0d1117",
       "#0d1117"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "Solarized Light",
@@ -182,7 +186,8 @@
       "#000000",
       "#191917",
       "#191917"
-    ]
+    ],
+    "strong": "#000000"
   },
   {
     "theme": "Solarized Dark",
@@ -219,7 +224,8 @@
       "#002b36",
       "#002b36",
       "#001116"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "Night Owl",
@@ -256,7 +262,8 @@
       "#011627",
       "#011627",
       "#011627"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "Ubuntu",
@@ -293,7 +300,8 @@
       "#300a24",
       "#300a24",
       "#300a24"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "Nord",
@@ -330,7 +338,8 @@
       "#2e3440",
       "#2c313d",
       "#2e3440"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "Dracula",
@@ -367,7 +376,8 @@
       "#282a36",
       "#282a36",
       "#282a36"
-    ]
+    ],
+    "strong": "#ffffff"
   },
   {
     "theme": "Gruvbox",
@@ -404,6 +414,7 @@
       "#282828",
       "#242424",
       "#282828"
-    ]
+    ],
+    "strong": "#ffffff"
   }
 ]

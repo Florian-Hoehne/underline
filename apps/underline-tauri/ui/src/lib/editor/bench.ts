@@ -13,6 +13,8 @@
 // it replaces the note's text by the results as JSON and stores it, so the
 // script that started the app can read them from the note's file.
 //
+// Feature F5a (`VITE_UL_BENCH_F5=1`): the facade, see `facade/bench.ts`.
+//
 // Feature F4 (`VITE_UL_BENCH_F4=1`): with colours, line numbers on the left,
 // the minimap beside the view and a folded section near the start, once in
 // each input mode (Normal, Vim in insert mode, Nano). The input mode is set
@@ -25,6 +27,7 @@ import { commands, events } from '../bindings';
 import Minimap from '../Minimap.svelte';
 import type { Shell } from '../shell.svelte';
 import type { InputModeName } from './keys';
+import { sourceMinimap } from './sourceMinimap';
 import { SourceView, tauriBackend } from './sourceView';
 
 const TEXT = 'the quick brown fox *jumps* over the lazy_dog, ';
@@ -171,10 +174,16 @@ async function measure(shell: Shell): Promise<void> {
   document.body.append(host);
   const rows: Row[] = [];
   const opened: Record<string, number> = {};
-  if (import.meta.env.VITE_UL_BENCH_F4 === '1') {
+  const f5 = import.meta.env.VITE_UL_BENCH_F5 === '1';
+  let facade: unknown = null;
+  if (f5) {
+    // Feature F5a: the facade (`facade/bench.ts`); no typing yet.
+    const { measureF5 } = await import('../facade/bench');
+    facade = await measureF5(host, note);
+  } else if (import.meta.env.VITE_UL_BENCH_F4 === '1') {
     await measureF4(host, note, keys, rows, opened);
   }
-  for (const colors of import.meta.env.VITE_UL_BENCH_F4 === '1' ? [] : [false, true]) {
+  for (const colors of import.meta.env.VITE_UL_BENCH_F4 === '1' || f5 ? [] : [false, true]) {
     const start = performance.now();
     const view = await SourceView.open(host, note, tauriBackend, {
       mac: false,
@@ -214,6 +223,7 @@ async function measure(shell: Shell): Promise<void> {
     timerResolutionMs: timerResolution(),
     openMs: opened,
     rows,
+    facade,
   };
   // The results replace the note's text and are stored at once.
   await tauriBackend.input(note, {
@@ -279,7 +289,10 @@ async function measureF4(
     strip.style.cssText = 'flex: 0 0 80px; height: 100%; margin-left: 4px';
     host.append(strip);
     const minimap = has('minimap')
-      ? mount(Minimap, { target: strip, props: { view, palette: null, blink: true } })
+      ? mount(Minimap, {
+          target: strip,
+          props: { view: sourceMinimap(view), palette: null, blink: true },
+        })
       : null;
     const unlisten = await Promise.all([
       events.edHighlight.listen((event) => view.takeColors(event.payload)),

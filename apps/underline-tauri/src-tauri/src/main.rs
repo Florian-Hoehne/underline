@@ -7,6 +7,7 @@
 //! the path of the running binary into the agent tools' configuration, so this
 //! binary must understand `mcp` just like the egui app.
 
+mod assets;
 mod bindings;
 mod clipboard;
 mod commands;
@@ -110,6 +111,9 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
         .manage(SharedClipboard::new(Mutex::new(SystemClipboard::new())))
         .manage(waker)
         .invoke_handler(bindings.invoke_handler())
+        // ADR-023: workspace images and diagrams reach the window only
+        // through the app's own protocol.
+        .register_asynchronous_uri_scheme_protocol(assets::SCHEME, assets::handle)
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if ask_before_closing(window.app_handle()) {

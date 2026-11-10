@@ -18,6 +18,8 @@
     "allow-tab-activate",
     "allow-tab-close",
     "allow-tab-store",
+    "allow-tab-set-view",
+    "allow-fa-open",
     "allow-ed-open",
     "allow-ed-input",
     "allow-ed-select",

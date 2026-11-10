@@ -75,6 +75,21 @@ export const commands = {
 	 */
 	tabStore: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_store", { note })),
 	/**
+	 *  M-07.2, UC-004 BR-003: the tab of `note` shows `view` from now on; the
+	 *  tabs are remembered with it (M-22.2).
+	 */
+	tabSetView: (note: string, view: EditingViewName) => typedError<null, UiError>(__TAURI_INVOKE("tab_set_view", { note, view })),
+	/**
+	 *  M-09, ADR-024: the facade of the tab of `note`, with its cursor, when the
+	 *  facade starts showing it or after its blocks got out of step. The blocks
+	 *  that change afterwards come as the event `ed-blocks`.
+	 * 
+	 *  Parsing a long note takes a while, so it runs on the blocking pool and
+	 *  without the session (ADR-024): the session is held only to take a
+	 *  snapshot of the text and to take the result in.
+	 */
+	faOpen: (note: string) => typedError<FacadeState, UiError>(__TAURI_INVOKE("fa_open", { note })),
+	/**
 	 *  ADR-024: the text of the tab of `note` with its cursor, when the source
 	 *  view starts showing it or after its text was replaced.
 	 * 
@@ -148,6 +163,7 @@ export const commands = {
 /** Events */
 export const events = {
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
+	edBlocks: makeEvent<BlocksEvent, BlocksEvent>("ed-blocks"),
 	edFound: makeEvent<FoundEvent, FoundEvent>("ed-found"),
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
 	edReplaced: makeEvent<TextReplacedEvent, TextReplacedEvent>("ed-replaced"),
@@ -161,6 +177,122 @@ export const events = {
 };
 
 /* Types */
+/**  What a block is (M-09.1). */
+export type BlockKindView = 
+/**  A heading of level 1 to 6. */
+{ type: "heading"; 
+/**  The level. */
+level: number } | 
+/**  A paragraph. */
+{ type: "paragraph" } | 
+/**  A paragraph of a list item; its marker is the block's prefix. */
+{ type: "listItem"; 
+/**  The nesting depth, 0 for the outer list. */
+depth: number } | 
+/**  A paragraph in quotes: one bar per depth. */
+{ type: "quote"; 
+/**  How deep the quotes are, at least 1. */
+depth: number } | 
+/**  A code block; its one run is the code. */
+{ type: "code"; 
+/**  The language the block names, such as `rust` or `mermaid`. */
+language: string } | 
+/**  A thematic break, drawn as a line. */
+{ type: "thematicBreak" } | 
+/**
+ *  A paragraph set apart with a bar in the link colour; its label is in
+ *  the block's prefix.
+ */
+{ type: "admonition"; 
+/**  `NOTE`, `TIP`, `IMPORTANT`, `WARNING` or `CAUTION`. */
+label: string } | 
+/**  A block shown as its markup. */
+{ type: "markup" } | 
+/**
+ *  A table; its runs are its markup, shown below it while the cursor is
+ *  in it (M-09.8).
+ */
+{ type: "table"; 
+/**  The formatted table. */
+table: TableView } | 
+/**  An image on its own; its runs are its markup. */
+{ type: "image"; 
+/**  Where the image is, as the markup says. */
+target: string; 
+/**  Its alternative text. */
+alt: string };
+
+/**  One block of the facade. */
+export type BlockView = {
+	/**  What the block is. */
+	kind: BlockKindView,
+	/**  Where the block's markup starts, in web units. */
+	start: number,
+	/**  The line it starts on, counted from 0, for folding (M-08.8). */
+	line: number,
+	/**  The length of the block's markup with its line endings, in web units. */
+	length: number,
+	/**
+	 *  How many lines of markup the block has, a hint for its height before
+	 *  it is drawn.
+	 */
+	lines: number,
+	/**
+	 *  What stands before the text in the weak colour, as egui lays it out:
+	 *  the indentation and marker of a list item ("•  ", "3.  ", "☐ "), the
+	 *  indentation of a quote, the label of an admonition.
+	 */
+	prefix: string,
+	/**  The text, run by run. */
+	runs: RunView[],
+	/**  The colours of a code block, once the theme's colours are ready. */
+	colors: CodeColors | null,
+	/**  The picture of an image or diagram block. */
+	figure: FigureView | null,
+};
+
+/**  M-09, ADR-024: blocks of the active tab's facade changed. */
+export type BlocksEvent = BlocksView;
+
+/**
+ *  ADR-024: the blocks changed after an input, a change from outside, a
+ *  picture that became ready or another theme: `removed` blocks from `from`
+ *  on make way for `blocks`, and every block after them moves by `shift`
+ *  web units and `line_shift` lines.
+ */
+export type BlocksView = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the text the blocks are of now. */
+	rev: number,
+	/**
+	 *  The version of the blocks this change applies to; a window that has
+	 *  another asks for the whole facade again (`fa_open`).
+	 */
+	base: number,
+	/**  The version after the change. */
+	version: number,
+	/**  The first block replaced. */
+	from: number,
+	/**  How many blocks are replaced. */
+	removed: number,
+	/**  The new blocks. */
+	blocks: BlockView[],
+	/**  How far the blocks after them move, in web units. */
+	shift: number,
+	/**  How many lines the blocks after them move. */
+	lineShift: number,
+};
+
+/**  How the text of a table column is aligned (M-09.5). */
+export type CellAlignName = 
+/**  Left. */
+"left" | 
+/**  Centred. */
+"center" | 
+/**  Right. */
+"right";
+
 /**  The clipboard keys of the source view (M-08.6, ADR-014). */
 export type ClipAction = 
 /**  The selected markup goes to the clipboard as plain text. */
@@ -191,6 +323,17 @@ export type CloseQuestion = {
  *  the window asks "Changes not stored".
  */
 export type CloseQuestionEvent = CloseQuestion;
+
+/**  The colours of a code block in its language (M-09.4, ADR-010). */
+export type CodeColors = {
+	/**
+	 *  `[start, end, style]`: UTF-16 offsets in the block's text and an
+	 *  index into `styles`. Text in the theme's plain colour has no span.
+	 */
+	spans: ([number, number, number])[],
+	/**  The looks the spans refer to. */
+	styles: SpanStyle[],
+};
 
 /**  The stage the Create dialog goes to (M-21.2, UC-001). */
 export type CreateAnswer = 
@@ -327,6 +470,60 @@ export type EditorState = {
 	place: string,
 	/**  FR-026: the status of the Nano keys; `None` in the other modes. */
 	keys: KeysStatusView | null,
+};
+
+/**
+ *  M-09, ADR-024: the facade of an open note as the window starts showing
+ *  it.
+ */
+export type FacadeState = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the text the blocks are of. */
+	rev: number,
+	/**
+	 *  Counts the changes of the blocks; each `ed-blocks` event names the
+	 *  version it applies to.
+	 */
+	version: number,
+	/**  M-09.3: "Markdown" or "AsciiDoc", shown at the top right. */
+	format: string,
+	/**  The blocks. */
+	blocks: BlockView[],
+	/**  The other end of the selection, in web units. */
+	anchor: number,
+	/**  The cursor, in web units. */
+	head: number,
+	/**  UC-005: the place of the cursor for the status line. */
+	place: string,
+};
+
+/**  The picture of an image or a diagram block (M-09.6, M-09.7). */
+export type FigureView = {
+	/**
+	 *  The picture, as a path of the app's own protocol `ul-asset`
+	 *  (ADR-023), such as `diagram/0f…a1.svg`. While a changed diagram
+	 *  renders it is the last picture.
+	 */
+	picture: string | null,
+	/**
+	 *  What stands instead of the picture: "Rendering the Mermaid
+	 *  diagram…", or why it cannot be shown.
+	 */
+	message: string | null,
+	/**  The message says why the picture cannot be shown. */
+	failed: boolean,
+	/**
+	 *  The markup is shown below the figure wherever the cursor is: a
+	 *  diagram that cannot be rendered shows its source (UC-004 A11).
+	 */
+	sourceShown: boolean,
+	/**  "Loading {target}…", shown while the window loads an image file. */
+	loading: string | null,
+	/**  What the window says when it cannot read the image file. */
+	unreadable: string | null,
+	/**  "Figure n. {caption}" below the picture. */
+	caption: string | null,
 };
 
 /**  A note format as the Create dialog names it (UC-001 BR-001). */
@@ -623,6 +820,12 @@ export type PaletteView = {
 	modeColors: string[],
 	/**  The text on each of [`PaletteView::mode_colors`] (`Palette::text_on`). */
 	modeText: string[],
+	/**
+	 *  M-09.2: bold text and headings in the facade, egui's
+	 *  `strong_text_color()` of the theme's base look: white on a dark
+	 *  theme, black on a light one.
+	 */
+	strong: string,
 };
 
 /**
@@ -641,6 +844,34 @@ export type Platform =
 
 /**  M-16.2: the properties of the active tab's note; `null` without one. */
 export type PropertiesEvent = TabPropertiesView | null;
+
+/**  A run of text in one style (M-09.2). */
+export type RunView = {
+	/**  The text shown, with its line breaks normalised. */
+	text: string,
+	/**  Bold, in the colour "strong". */
+	bold: boolean,
+	/**  Italic. */
+	italic: boolean,
+	/**  Struck through. */
+	strike: boolean,
+	/**  Inline code, on the code background. */
+	code: boolean,
+	/**  The address of the link the text belongs to (M-07.4). */
+	link: string | null,
+	/**
+	 *  Where the characters stand in the markup: pairs of a UTF-16 offset in
+	 *  `text` and the web offset, relative to the start of the block, of the
+	 *  markup character it shows. The characters between two pairs follow one
+	 *  another in the markup; the first pair is at 0 unless `text` is empty.
+	 */
+	offsets: ([number, number])[],
+	/**
+	 *  The web offset right after the run, relative to the start of the
+	 *  block.
+	 */
+	end: number,
+};
 
 /**
  *  M-08.8, UC-004 BR-012: one section of the note, as the source view folds
@@ -826,6 +1057,21 @@ export type TabView = {
 	 *  "Not stored: {err}. Underline keeps trying."; `None` when it did not.
 	 */
 	saveError: string | null,
+};
+
+/**  A table (M-09.5): its rows of cells, each cell its styled runs. */
+export type TableView = {
+	/**  The first row is the header: bold and shaded. */
+	header: boolean,
+	/**  The alignment of each column. */
+	align: CellAlignName[],
+	/**  The rows, each a list of cells, each a list of runs. */
+	rows: RunView[][][],
+	/**
+	 *  "Table n. {title}" above the table, for an AsciiDoc table with a
+	 *  title.
+	 */
+	caption: string | null,
 };
 
 /**  M-06: the tab bar changed. */

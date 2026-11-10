@@ -10,7 +10,9 @@
 // column with a glow; the hits blink 0.6 s on and 0.4 s off unless the
 // setting turns blinking off.
 //
-// This module works out what to draw; `Minimap.svelte` paints it.
+// This module works out what to draw; `Minimap.svelte` paints it. The strip
+// shows a `MinimapSource`: the source view (`sourceMinimap`) or the facade
+// (feature F5, one bar per layout row and figures as areas).
 
 import type { EditorView } from '@codemirror/view';
 
@@ -38,6 +40,9 @@ export type Hit = { top: number; height: number; left: number; width: number };
 
 /** One shown line of the view, in its content's pixels. */
 export type LineBox = { top: number; height: number; chars: number; heading: boolean };
+
+/** M-12.2: a figure of the facade, shown as an area in the link colour. */
+export type Area = { top: number; height: number };
 
 /** One rectangle to paint, in the strip's pixels. */
 export type Rect = { x: number; y: number; width: number; height: number };
@@ -162,10 +167,12 @@ export function scrollFor(
   return Math.min(Math.max(at - height / 2, 0), Math.max(content - height, 0));
 }
 
-/** What the minimap shows of a source view, in its content's pixels. */
+/** What the minimap shows of a view, in its content's pixels. */
 export type Geometry = {
   /** The bars of the shown lines. */
   marks: Mark[];
+  /** The figures of the facade; none in the source view. */
+  areas?: Area[];
   /** The height of the whole content. */
   content: number;
   /** The part in view, `[from, to]`. */
@@ -231,6 +238,36 @@ export function geometryOf(
     line.height *= fit;
   }
   return { marks: marksOf(lines, columns), content, visible: visibleOf(view) };
+}
+
+/** What changed for the strip: the content (rebuild the bars) or only the scrolling. */
+export type MinimapChange = 'content' | 'scroll';
+
+/** M-12: what the strip needs of the view it shows: the source view or the facade. */
+export interface MinimapSource {
+  /** The bars (and figures) of the whole content. */
+  geometry(): Geometry;
+  /** M-12.4: the marked hits. */
+  hits(): Hit[];
+  /** The part of the content in view, `[from, to]`. */
+  visible(): [number, number];
+  /** The height of the whole content. */
+  contentHeight(): number;
+  /** M-12.3: scrolls the content to `offset`. */
+  scrollTo(offset: number): void;
+  /** Calls `listener` when the content changed or the view scrolled. */
+  subscribe(listener: (change: MinimapChange) => void): () => void;
+}
+
+/** M-12.3: the rectangle of a figure, 80 % of the inner width, in the strip's pixels. */
+export function areaRect(area: Area, scale: number, stripWidth: number): Rect {
+  const inner = stripWidth - 2 * INSET;
+  return {
+    x: INSET,
+    y: area.top * scale,
+    width: inner * 0.8,
+    height: Math.max(area.height * scale, 1),
+  };
 }
 
 /** M-12.4: the hits `ranges` of `view`, each at its word. */

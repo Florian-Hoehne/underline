@@ -20,6 +20,7 @@
   import type { EditorInfo } from './editor/info.svelte';
   import type { InputModeName } from './editor/keys';
   import type { LineNumberSide } from './editor/numbers';
+  import { sourceMinimap } from './editor/sourceMinimap';
   import { SourceView, tauriBackend, type EditorBackend } from './editor/sourceView';
   import { tabId } from './tabs';
 
@@ -105,7 +106,10 @@
         opened = made;
         view = made;
         setActiveSourceView(made);
-        if (info) info.view = made;
+        if (info) {
+          info.view = made;
+          info.minimap = sourceMinimap(made);
+        }
         loading = false;
         if (focus) {
           made.focus();
@@ -125,6 +129,7 @@
         setActiveSourceView(null);
         if (info?.view === opened) {
           info.view = null;
+          info.minimap = null;
           info.keys = null;
           info.place = '';
         }

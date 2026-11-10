@@ -25,7 +25,8 @@ async function workbench(start: MockStart = {}, handlers: MockHandlers = mockHan
   return shell;
 }
 
-const NOTES = { givenDir: '/home/user/Notes' };
+// These tests try the source view; a new tab shows the facade (M-07.2).
+const NOTES = { givenDir: '/home/user/Notes', view: 'source' as const };
 
 async function textField(): Promise<HTMLElement> {
   await waitFor(() => expect(activeSourceView()).not.toBeNull());
@@ -357,7 +358,7 @@ describe('Q-14, NFR-011 Link and Image wait for F6; F6 goes from region to regio
     f6();
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: /Home/ }));
     f6();
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Source' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Facade' }));
     f6(true);
     expect(document.activeElement).toBe(screen.getByRole('tab', { name: /Home/ }));
   });

@@ -8,20 +8,21 @@
   - M-10.8: when its last save failed, "Not stored: {err}. Underline keeps
     trying." (Q-10: in the text colour, half bold, with a rule, as egui's
     red is in no palette);
-  - M-07.2: the switch "Facade" / "Source". The facade comes with feature
-    F5; until then the note shows in the source view and "Facade" is
-    disabled. Choosing "Source" puts the keyboard into the text.
+  - M-07.2: the switch "Facade" / "Source". The choice is the tab's and is
+    remembered with the tabs; the cursor and the selection are the note's,
+    so they stay. Choosing a view puts the keyboard into it.
 
   Feature F4 adds, as in egui:
   - M-10.2: the formatting toolbar after the switch, one button per
     function with its hint; a button puts the keyboard back into the text.
     Link and Image ask first; their dialogs come with feature F6.
-  - M-12: the minimap beside the source view, unless switched off or the
-    editor is narrower than 240 px.
+  - M-12: the minimap beside the source view or the facade (F5a), unless
+    switched off or the editor is narrower than 240 px.
   - M-11.4: the status line under the editor.
 -->
 <script lang="ts">
-  import type { EditorCommandName, ToolName } from './bindings';
+  import type { EditingViewName, EditorCommandName, ToolName } from './bindings';
+  import FacadeView from './facade/FacadeView.svelte';
   import EditorStatus from './EditorStatus.svelte';
   import { activeSourceView } from './editor/active';
   import { nextRegion } from './focus';
@@ -60,6 +61,38 @@
 
   let area = $state<HTMLElement | null>(null);
 
+  /** The view the user just chose (`note:view`); it takes the keyboard once shown. */
+  let focusFor = $state<string | null>(null);
+
+  /** M-07.2: the switch "Facade"/"Source"; the view shown takes the keyboard. */
+  async function chooseView(view: EditingViewName) {
+    const tab = activeTab;
+    if (!tab) {
+      return;
+    }
+    if (tab.view === view) {
+      if (view === 'facade') {
+        info.facade?.focus();
+      } else {
+        activeSourceView()?.focus();
+      }
+      return;
+    }
+    // The source view's inputs and selection reach the backend first.
+    await activeSourceView()?.settled();
+    focusFor = `${tab.note}:${view}`;
+    await shell.setView(tab.note, view);
+  }
+
+  /** M-10.2: a toolbar button acts in the view shown. */
+  function useTool(tool: ToolName) {
+    if (activeTab?.view === 'facade') {
+      info.facade?.tool(tool);
+    } else {
+      activeSourceView()?.tool(tool);
+    }
+  }
+
   /**
    * NFR-011, A-33: F6 and Shift+F6 go from region to region: the tab bar,
    * the switch and toolbar, the text, the status line.
@@ -81,7 +114,10 @@
         area.querySelector<HTMLElement>('.views'),
         area.querySelector<HTMLElement>('.views button:not(:disabled)'),
       ],
-      [area.querySelector<HTMLElement>('.editor'), area.querySelector<HTMLElement>('.cm-content')],
+      [
+        area.querySelector<HTMLElement>('.editor'),
+        area.querySelector<HTMLElement>('.cm-content, .facade-text'),
+      ],
       [
         area.querySelector<HTMLElement>('.editor-status'),
         area.querySelector<HTMLElement>('.editor-status button'),
@@ -117,7 +153,7 @@
         role="tabpanel"
         id={NOTE_PANEL_ID}
         aria-labelledby={tabId(activeTab.note)}
-        data-view="source"
+        data-view={activeTab.view}
       >
         {#if activeTab.saveError !== null}
           <p class="save-error" role="alert">
@@ -125,12 +161,17 @@
           </p>
         {/if}
         <div class="views" role="group" aria-label="Editing view">
-          <button type="button" class="view" aria-pressed="false" disabled>Facade</button>
           <button
             type="button"
             class="view"
-            aria-pressed="true"
-            onclick={() => activeSourceView()?.focus()}>Source</button
+            aria-pressed={activeTab.view === 'facade'}
+            onclick={() => chooseView('facade')}>Facade</button
+          >
+          <button
+            type="button"
+            class="view"
+            aria-pressed={activeTab.view === 'source'}
+            onclick={() => chooseView('source')}>Source</button
           >
           {#if tools.length > 0}
             <span class="separator" aria-hidden="true"></span>
@@ -143,7 +184,7 @@
                   title={tool.hint}
                   aria-label={tool.hint}
                   disabled={ASKS_FIRST.has(tool.tool)}
-                  onclick={() => activeSourceView()?.tool(tool.tool)}>{tool.label}</button
+                  onclick={() => useTool(tool.tool)}>{tool.label}</button
                 >
               {/each}
             </div>
@@ -152,8 +193,19 @@
         <div class="editor" bind:clientWidth={editorWidth} style:gap="{GAP}px">
           <!-- A measuring build (editor/bench.ts) shows its own source view. -->
           <div class="text">
-            {#key activeTab.note}
-              {#if !MEASURING}
+            {#key `${activeTab.note}:${activeTab.view}`}
+              {#if MEASURING}
+                <!-- The measuring build shows its own source view. -->
+              {:else if activeTab.view === 'facade'}
+                <FacadeView
+                  note={activeTab.note}
+                  label={activeTab.title}
+                  platform={shell.platform}
+                  focus={focusFor === `${activeTab.note}:facade`}
+                  {info}
+                  onError={(message) => shell.editorFailed(message)}
+                />
+              {:else}
                 <SourceEditor
                   note={activeTab.note}
                   label={activeTab.title}
@@ -162,6 +214,7 @@
                   lineNumbers={settings?.showLineNumbers ?? false}
                   lineNumberSide={(settings?.lineNumberSide ?? 'Left') as LineNumberSide}
                   {info}
+                  focus={focusFor === `${activeTab.note}:source`}
                   onError={(message) => shell.editorFailed(message)}
                   onCommand={(name) => command(activeTab.note, name)}
                 />
@@ -170,7 +223,7 @@
           </div>
           {#if withMinimap}
             <Minimap
-              view={info.view}
+              view={info.minimap}
               palette={settings?.palette ?? null}
               blink={settings?.blinkFoundInMinimap ?? true}
             />
@@ -228,9 +281,16 @@
 
   .views {
     display: flex;
-    flex-wrap: wrap;
+    flex: 0 0 auto;
     gap: var(--space-1);
     padding: var(--space-1) var(--space-2);
+    /* One row however narrow the editor: it scrolls instead of wrapping (A-46). */
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .views > * {
+    flex: 0 0 auto;
   }
 
   .view {
@@ -278,7 +338,6 @@
 
   .tools {
     display: flex;
-    flex-wrap: wrap;
     gap: var(--space-1);
   }
 

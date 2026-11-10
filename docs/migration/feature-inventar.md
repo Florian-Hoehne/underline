@@ -124,7 +124,7 @@ Reihenfolge von links nach rechts:
 ## M-07 Notiz lesen (UC-004)
 
 - [ ] **M-07.1** Ohne Tab steht „Select or create a note.“.
-- [ ] **M-07.2** Die Werkzeugleiste über dem Editor hat den Umschalter „Facade“/„Source“ (FR-010). Der Umschalter
+- [x] **M-07.2** Die Werkzeugleiste über dem Editor hat den Umschalter „Facade“/„Source“ (FR-010). Der Umschalter
   speichert die Tabs und fokussiert den Editor. Cursor und Auswahl bleiben beim Wechsel erhalten (UC-005 A1).
 - [ ] **M-07.3** Links folgen (FR-040, `app:2463-2523`) mit Ctrl/Cmd+Klick, in beiden Ansichten. Ziel:
   - Überschrift → Sprung, sonst „The heading X was not found“.
@@ -134,7 +134,7 @@ Reihenfolge von links nach rechts:
     „Open“/„Cancel“), dann im Systembrowser öffnen.
   - Datei → öffnen, falls vorhanden, sonst „X does not exist“.
   - Ausserhalb → „{link} leads outside the workspace and is not followed“.
-- [ ] **M-07.4** In der Facade zeigt Hover über einem Link die Adresse und „Ctrl+click to follow“.
+- [x] **M-07.4** In der Facade zeigt Hover über einem Link die Adresse und „Ctrl+click to follow“.
 - [x] **M-07.5** Änderungen von aussen (ADR-011):
   - Ist der Inhalt gleich der Fassung auf Platte oder dem gerade Gespeicherten → ignorieren.
   - Tab ungespeichert oder Speichern läuft → die fremde Fassung als Kopie ablegen (einmal je Inhalt):
@@ -163,7 +163,7 @@ Reihenfolge von links nach rechts:
   Zwischenablage wird als PNG neben der Notiz gespeichert und als Bild eingefügt (M-10.6).
 - [x] **M-08.7** Zeilennummern (FR-028/029): ein/aus, links oder rechts. Die Breite folgt der Stellenzahl, die Farbe
   ist 45 % der Textfarbe. Nur in der Quellansicht.
-- [ ] **M-08.8** Falten (FR-027):
+- [x] **M-08.8** Falten (FR-027):
   - Der Pfeil im Gutter erscheint bei Hover oder wenn gefaltet. Eine gefaltete Überschrift endet auf „…“.
   - Ctrl/Cmd+Shift+[ faltet, Ctrl/Cmd+Shift+] klappt auf.
   - Steht der Cursor beim Falten in der Sektion, springt er zur Überschrift. Landet der Cursor in einem gefalteten
@@ -175,17 +175,17 @@ Reihenfolge von links nach rechts:
 
 ## M-09 Facade (FR-009, FR-011, FR-012, NFR-007)
 
-- [ ] **M-09.1** Blockmodell aus `underline-facade` (comrak bzw. eigener AsciiDoc-Parser). Blockarten: Überschrift,
+- [x] **M-09.1** Blockmodell aus `underline-facade` (comrak bzw. eigener AsciiDoc-Parser). Blockarten: Überschrift,
   Absatz, Listenpunkt (Tiefe, Marker, Checkbox), Zitat (Tiefe), Code, Trennlinie, Admonition, Markup, Tabelle, Bild.
-- [ ] **M-09.2** Darstellung:
+- [x] **M-09.2** Darstellung:
   - Schrift: DejaVu Sans 15 pt. Überschriften 26/22/19/17/16 pt fett.
   - Code, Markup und Tabellen-Markup in Monospace 14 pt auf Code-Hintergrund. Inline-Code hat einen Hintergrund.
   - Links unterstrichen, Durchstreichen, fett in der Farbe „strong“.
   - Listenmarker „•“, „n.“, „☑/☐“, eingerückt je Tiefe.
   - Zitat: ein Balken je Tiefe. Admonition: Balken in Linkfarbe mit Label. Trennlinie als Linie.
-- [ ] **M-09.3** Format-Anzeige „Markdown“/„AsciiDoc“ oben rechts (FR-011).
-- [ ] **M-09.4** Code-Blöcke werden in ihrer Sprache und in Theme-Farben hervorgehoben (FR-035, FR-038).
-- [ ] **M-09.5** Tabellen:
+- [x] **M-09.3** Format-Anzeige „Markdown“/„AsciiDoc“ oben rechts (FR-011).
+- [x] **M-09.4** Code-Blöcke werden in ihrer Sprache und in Theme-Farben hervorgehoben (FR-035, FR-038).
+- [x] **M-09.5** Tabellen:
   - Spaltenbreiten nach Inhalt, proportional geschrumpft, wenn zu breit.
   - Ausrichtung je Spalte, Kopfzeile fett und schattiert.
   - Beschriftung „Table n.“
@@ -198,9 +198,9 @@ Reihenfolge von links nach rechts:
   - Während eine geänderte Quelle rendert, bleibt das letzte Bild stehen.
   - Bei einem Fehler wird die Quelle mit der Meldung gezeigt.
   - Farben: heute nur hell/dunkel, nicht die Theme-Palette (Defekt D-10).
-- [ ] **M-09.8** Abbildungen (Diagramm, Bild, Tabelle): Steht der Cursor im Block, erscheint unter der Abbildung ein
+- [x] **M-09.8** Abbildungen (Diagramm, Bild, Tabelle): Steht der Cursor im Block, erscheint unter der Abbildung ein
   Rahmen mit dem Markup. Dort wird bearbeitet.
-- [ ] **M-09.9** Vergrössern (FR-039):
+- [x] **M-09.9** Vergrössern (FR-039):
   - Öffnen per Doppelklick auf das Bild oder per Lupen-Button bei Hover.
   - Zoomen mit Rad, Pinch, `+`, `=` und `-` um den Zeiger. Ziehen verschiebt, `0` passt ein.
   - Schliessen mit Escape, Klick daneben oder „×“.
@@ -227,7 +227,7 @@ Reihenfolge von links nach rechts:
   - Underlines eigene Kopien kommen als Markup zurück.
   - Mehrzeiliges Markup bekommt Leerzeilen davor und danach.
   - Kopieren legt Markup als Text plus HTML ab.
-- [ ] **M-09.15** Web-Bilder sind der einzige Netzzugriff des Editors (ADR-013), mit Zustimmung. Die Webview darf
+- [x] **M-09.15** Web-Bilder sind der einzige Netzzugriff des Editors (ADR-013), mit Zustimmung. Die Webview darf
   keine Fremd-URLs selbst laden.
 - [ ] **M-09.16** `reveal(offset)` scrollt einen Block nach oben, ohne den Cursor zu bewegen (Sprünge aus dem
   Werkzeugpanel).
@@ -318,7 +318,7 @@ Reihenfolge von links nach rechts:
 ## M-12 Minimap (FR-030)
 
 - [x] **M-12.1** Streifen von 80 px mit 4 px Abstand, unter 240 px Breite ausgeblendet. Massstab höchstens 0,2.
-- [ ] **M-12.2** In der Quellansicht ein Balken je Zeile, Überschriften kräftiger. In der Facade ein Balken je
+- [x] **M-12.2** In der Quellansicht ein Balken je Zeile, Überschriften kräftiger. In der Facade ein Balken je
   Layoutzeile, Abbildungen als Fläche. Neuaufbau höchstens alle 150 ms.
 - [x] **M-12.3** Der sichtbare Bereich ist getönt. Klick oder Ziehen zentriert die Ansicht auf diese Stelle.
 - [ ] **M-12.4** Sieb (UC-008): Gibt es Treffer, wird der Streifen abgedunkelt (schwarz, Alpha 150). Jeder Treffer

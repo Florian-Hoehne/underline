@@ -15,6 +15,8 @@ fn main() {
         "tab_activate",
         "tab_close",
         "tab_store",
+        "tab_set_view",
+        "fa_open",
         "ed_open",
         "ed_input",
         "ed_select",

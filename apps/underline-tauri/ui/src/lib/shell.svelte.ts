@@ -1,7 +1,8 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
 // `tabs`, `properties` and `close-question` events (ADR-022); the editor's
-// `ed-highlight`, `ed-sections`, `ed-found` and `ed-replaced` go to the source view shown now, plus the UI
+// `ed-highlight`, `ed-sections`, `ed-found` and `ed-replaced` go to the source view shown now and
+// `ed-blocks`, `ed-sections` and `ed-replaced` to the facade shown now (feature F5), plus the UI
 // state that is not stored (M-22.4): the Open and Create dialogs, the
 // question before closing, the loading state and the panels' widths while
 // they are dragged. The text of the notes is not here: the source view asks
@@ -14,6 +15,7 @@ import {
   events,
   type CloseQuestion,
   type CreateAnswer,
+  type EditingViewName,
   type FormatName,
   type OpenAnswer,
   type OpenOffer,
@@ -29,6 +31,7 @@ import {
   type WorkspaceView,
 } from './bindings';
 import { activeSourceView } from './editor/active';
+import { activeFacade } from './facade/active';
 import { applyPalette } from './theme';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
@@ -195,6 +198,10 @@ export class Shell {
       }),
       events.edSections.listen((event) => {
         activeSourceView()?.takeSections(event.payload);
+        activeFacade()?.takeSections(event.payload);
+      }),
+      events.edBlocks.listen((event) => {
+        activeFacade()?.takeBlocks(event.payload);
       }),
       events.edFound.listen((event) => {
         activeSourceView()?.takeFound(event.payload);
@@ -203,6 +210,10 @@ export class Shell {
         const view = activeSourceView();
         if (view?.note === event.payload.note) {
           view.replaced(event.payload.rev);
+        }
+        const facade = activeFacade();
+        if (facade?.note === event.payload.note) {
+          facade.replaced(event.payload.rev);
         }
       }),
     ]);
@@ -375,6 +386,22 @@ export class Shell {
     }
     this.closeQuestion = result.data;
     return result.data === null;
+  }
+
+  /**
+   * M-07.2: the switch "Facade"/"Source": the tab of `note` shows `view`
+   * from now on, remembered with the tabs. The tab bar shows it at once;
+   * the backend's `tabs` event confirms it.
+   */
+  async setView(note: string, view: EditingViewName): Promise<void> {
+    this.tabs = {
+      ...this.tabs,
+      tabs: this.tabs.tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab)),
+    };
+    const result = await this.#serial(() => commands.tabSetView(note, view));
+    if (result.status === 'error') {
+      this.#fail('tab_set_view', result.error);
+    }
   }
 
   /** M-10.9: `Store` stores the note of the tab at once. */

@@ -2,11 +2,15 @@
 //! state, the settings, the open workspace with its overview and tabs, and
 //! the status message, driven by [`Session::tick`] (ADR-022).
 
+mod diagrams;
+pub(crate) use diagrams::SvgDiagrams;
 mod editing;
+mod facade;
 mod folding;
 mod tab;
 mod workspace;
 
+pub use self::facade::{FacadeBuilt, FacadePrep};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
 use std::path::{Path, PathBuf};
@@ -87,6 +91,12 @@ pub struct Session {
     wake: Wake,
     /// The open workspace (UC-002).
     open: Option<OpenWorkspace>,
+    /// M-09.7: the diagrams of the facade as SVG (ADR-009), started with
+    /// the first facade.
+    diagrams: Option<Arc<diagrams::SvgDiagrams>>,
+    /// M-09: what the facades share: the colours of code blocks, what was
+    /// found of image files, and the results of the tick's jobs.
+    facade: facade::Shared,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -167,6 +177,8 @@ impl Session {
             replaced: Vec::new(),
             wake: Wake::default(),
             open: None,
+            diagrams: None,
+            facade: facade::Shared::default(),
             views_dirty: false,
             told,
         };
@@ -252,8 +264,8 @@ impl Session {
     /// stored in the background (M-10.8), the app state is written once a
     /// change is due (M-22.1), and the colours of the lines the source view
     /// shows are worked out (M-08.2), then its sections and the marked hits
-    /// of the Nano search (M-08.8, M-11.3). Returns what changed for the
-    /// window.
+    /// of the Nano search (M-08.8, M-11.3), and the blocks of the facade
+    /// that changed (M-09). Returns what changed for the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
         self.settings.poll(now);
@@ -266,6 +278,7 @@ impl Session {
         let mut events = self.take_events();
         events.extend(self.highlight_event(now));
         events.extend(self.editor_events(now));
+        events.extend(self.facade_events());
         events
     }
 

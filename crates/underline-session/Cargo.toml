@@ -17,6 +17,7 @@ underline-core.workspace = true
 underline-facade.workspace = true
 underline-editor-core.workspace = true
 underline-wiki.workspace = true
+ropey.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 specta = { workspace = true, optional = true }

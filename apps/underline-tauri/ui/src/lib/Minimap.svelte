@@ -1,6 +1,7 @@
 <!--
-  M-12 (FR-030, UC-004 BR-013): the minimap beside the source view, painted
-  on a canvas from what `editor/minimap.ts` works out. The bars are built
+  M-12 (FR-030, UC-004 BR-013): the minimap beside the source view or the
+  facade, painted on a canvas from what `editor/minimap.ts` works out. The
+  facade's figures are areas in the link colour (M-12.2). The bars are built
   anew at most every 150 ms while the text changes; scrolling only moves the
   tinted part. A click or a drag puts the place under the pointer in the
   middle of the view. With search hits it is a sieve that blinks (M-12.4).
@@ -10,31 +11,28 @@
 -->
 <script lang="ts">
   import type { PaletteView } from './bindings';
-  import { foldedLines, headingLines } from './editor/folding';
   import {
     REBUILD_EVERY,
     VEIL,
     WIDTH,
+    areaRect,
     barRect,
     barsOf,
-    geometryOf,
     hitRects,
-    hitsOf,
     hitsShown,
     scaleOf,
     scrollFor,
-    visibleOf,
     visibleRect,
     FOUND_OFF,
     FOUND_ON,
     type Geometry,
     type Hit,
+    type MinimapSource,
   } from './editor/minimap';
-  import type { SourceView } from './editor/sourceView';
 
   type Props = {
-    /** The source view the strip shows. */
-    view: SourceView | null;
+    /** The view the strip shows: the source view or the facade. */
+    view: MinimapSource | null;
     /** The theme's colours; a new palette paints the strip anew. */
     palette: PaletteView | null;
     /** UC-008 BR-008: the hits blink (setting "Search hits in the minimap"). */
@@ -71,8 +69,8 @@
       return;
     }
     builtAt = performance.now();
-    geometry = geometryOf(view.view, headingLines(view.view), foldedLines(view.view));
-    hits = hitsOf(view.view, view.hits());
+    geometry = view.geometry();
+    hits = view.hits();
     paint();
   }
 
@@ -108,7 +106,8 @@
     const foreground = cssColor('--palette-foreground', '#000');
     const selection = cssColor('--palette-selection', '#88f');
     const found = cssColor('--palette-found', '#fc0');
-    const visible = visibleOf(view.view);
+    const link = cssColor('--palette-link', '#36c');
+    const visible = view.visible();
     const scale = scaleOf(rows, geometry.content);
 
     // The bars: the text at 40 %, headings in the full text colour.
@@ -119,6 +118,13 @@
       const rect = barRect(row, bar, WIDTH);
       context.globalAlpha = bar.strong ? 1 : 0.4;
       context.fillStyle = foreground;
+      context.fillRect(rect.x, rect.y, rect.width, rect.height);
+    }
+    // M-12.2: the facade's figures, in the link colour at 45 %.
+    context.fillStyle = link;
+    context.globalAlpha = 0.45;
+    for (const area of geometry.areas ?? []) {
+      const rect = areaRect(area, scale, WIDTH);
       context.fillRect(rect.x, rect.y, rect.width, rect.height);
     }
     context.globalAlpha = 1;
@@ -198,13 +204,8 @@
     }
     const top = canvas.getBoundingClientRect().top;
     const scale = scaleOf(Math.max(1, Math.ceil(height)), geometry.content);
-    const offset = scrollFor(
-      event.clientY - top,
-      scale,
-      visibleOf(view.view),
-      view.view.scrollDOM.scrollHeight,
-    );
-    view.view.scrollDOM.scrollTop = offset;
+    const offset = scrollFor(event.clientY - top, scale, view.visible(), view.contentHeight());
+    view.scrollTo(offset);
   }
 
   function onPointerDown(event: PointerEvent) {

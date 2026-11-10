@@ -5,8 +5,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    CloseQuestion, Event, FoundView, HighlightView, OverviewItem, SectionsView, SettingsView,
-    StatusView, TabPropertiesView, TabsView, TextReplaced, WorkspaceView,
+    BlocksView, CloseQuestion, Event, FoundView, HighlightView, OverviewItem, SectionsView,
+    SettingsView, StatusView, TabPropertiesView, TabsView, TextReplaced, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -58,6 +58,11 @@ pub struct SectionsEvent(pub SectionsView);
 #[tauri_specta(event_name = "ed-found")]
 pub struct FoundEvent(pub FoundView);
 
+/// M-09, ADR-024: blocks of the active tab's facade changed.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "ed-blocks")]
+pub struct BlocksEvent(pub BlocksView);
+
 /// M-16.2: the properties of the active tab's note; `null` without one.
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
 #[tauri_specta(event_name = "properties")]
@@ -84,6 +89,7 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Sections(sections) => SectionsEvent(sections).emit(app),
             Event::Found(found) => FoundEvent(found).emit(app),
             Event::Properties(properties) => PropertiesEvent(properties).emit(app),
+            Event::Blocks(blocks) => BlocksEvent(blocks).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

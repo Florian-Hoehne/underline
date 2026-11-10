@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::editor_view::{FoundView, HighlightView, SectionsView, TabPropertiesView};
+use crate::facade_view::BlocksView;
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
 
@@ -55,4 +56,6 @@ pub enum Event {
     /// The properties section of the tool panel changed (M-16.2); `None`
     /// without an active note tab.
     Properties(Option<TabPropertiesView>),
+    /// Blocks of the active tab's facade changed (M-09, ADR-024).
+    Blocks(BlocksView),
 }

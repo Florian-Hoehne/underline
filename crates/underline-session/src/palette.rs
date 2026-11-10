@@ -65,6 +65,10 @@ pub struct PaletteView {
     pub mode_colors: Vec<String>,
     /// The text on each of [`PaletteView::mode_colors`] (`Palette::text_on`).
     pub mode_text: Vec<String>,
+    /// M-09.2: bold text and headings in the facade, egui's
+    /// `strong_text_color()` of the theme's base look: white on a dark
+    /// theme, black on a light one.
+    pub strong: String,
 }
 
 impl PaletteView {
@@ -98,6 +102,11 @@ impl PaletteView {
             inset: hex(palette.inset()),
             mode_colors: modes.iter().map(|&c| hex(c)).collect(),
             mode_text: modes.iter().map(|&c| hex(palette.text_on(c))).collect(),
+            strong: hex(if palette.dark {
+                [0xff, 0xff, 0xff]
+            } else {
+                [0, 0, 0]
+            }),
         }
     }
 
@@ -145,6 +154,8 @@ mod tests {
         assert_eq!(view.button, hex(p.button()));
         assert_eq!(view.mode_colors.len(), 4);
         assert_eq!(view.mode_text[0], hex(p.text_on(p.mode_colors()[0])));
+        assert_eq!(view.strong, "#000000");
+        assert_eq!(PaletteView::of(palette(Theme::Dark)).strong, "#ffffff");
     }
 
     #[test]

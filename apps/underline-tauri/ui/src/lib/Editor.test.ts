@@ -21,7 +21,8 @@ async function workbench(start: MockStart = {}, handlers = mockHandlers(start)) 
   return shell;
 }
 
-const NOTES = { givenDir: '/home/user/Notes' };
+// These tests try the source view; a new tab shows the facade (M-07.2).
+const NOTES = { givenDir: '/home/user/Notes', view: 'source' as const };
 const tabBar = () => screen.getByRole('tablist', { name: 'Open notes' });
 const tab = (name: string | RegExp) => within(tabBar()).getByRole('tab', { name });
 const tools = () => screen.getByRole('complementary', { name: 'Tools' });
@@ -123,16 +124,34 @@ describe('M-08 source view (UC-005)', () => {
 });
 
 describe('M-07.2 the switch of the editing view', () => {
-  it('shows the source view; the facade comes with feature F5', async () => {
-    await workbench(NOTES);
+  it('a new tab shows the facade; the switch changes the view of the tab', async () => {
+    const start = { givenDir: '/home/user/Notes' };
+    const handlers = mockHandlers(start);
+    const setView = vi.fn(handlers.tab_set_view);
+    await workbench(start, { ...handlers, tab_set_view: setView });
     const views = screen.getByRole('group', { name: 'Editing view' });
+    const facade = within(views).getByRole('button', { name: 'Facade' });
+    const source = within(views).getByRole('button', { name: 'Source' });
+    const panel = () => screen.getByRole('tabpanel', { name: 'Home' });
 
-    expect(within(views).getByRole('button', { name: 'Facade' })).toBeDisabled();
-    expect(within(views).getByRole('button', { name: 'Source' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
+    expect(facade).toHaveAttribute('aria-pressed', 'true');
+    expect(panel()).toHaveAttribute('data-view', 'facade');
+    await waitFor(() => expect(document.querySelector('.facade-text')).not.toBeNull());
+
+    await fireEvent.click(source);
+
+    await waitFor(() => expect(panel()).toHaveAttribute('data-view', 'source'));
+    expect(setView).toHaveBeenCalledWith({ note: 'Home', view: 'source' });
+    expect(source).toHaveAttribute('aria-pressed', 'true');
+    await textField();
+    await waitFor(() => expect(document.activeElement).toBe(document.querySelector('.cm-content')));
+
+    await fireEvent.click(facade);
+
+    await waitFor(() => expect(panel()).toHaveAttribute('data-view', 'facade'));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(document.querySelector('.facade-text')),
     );
-    expect(screen.getByRole('tabpanel', { name: 'Home' })).toHaveAttribute('data-view', 'source');
   });
 });
 

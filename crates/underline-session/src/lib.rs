@@ -28,13 +28,18 @@
 //! F4 adds the Nano keys (M-11.3), the status of the input modes for the
 //! status line (M-11.4), the formatting toolbar (M-10.2) and folding
 //! (M-08.8); the window's Vim keys send their edits as changes (A-01).
+//! Feature F5a adds the facade's blocks for the window (M-09, `ed-blocks`),
+//! its diagrams as SVG (ADR-009) and what the app's own protocol `ul-asset`
+//! serves (ADR-023, [`assets`]).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
 
+pub mod assets;
 mod editor_view;
 mod error;
 mod event;
+mod facade_view;
 mod palette;
 mod session;
 mod settings;
@@ -49,8 +54,14 @@ pub use editor_view::{
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView, TextReplaced};
+pub use facade_view::{
+    BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeState, FigureView,
+    RunView, TableView,
+};
 pub use palette::PaletteView;
-pub use session::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen, Session};
+pub use session::{
+    CreatePlan, FacadeBuilt, FacadePrep, OpenPlan, PreparedCreate, PreparedOpen, Session,
+};
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,
     USER_SETTINGS_POLL,

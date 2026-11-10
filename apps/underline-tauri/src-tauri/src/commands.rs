@@ -19,9 +19,9 @@ use std::sync::Arc;
 use tauri::State;
 use underline_core::NoteId;
 use underline_session::{
-    ClipAction, CloseQuestion, CreateAnswer, EditorInput, EditorPatch, EditorState, KeysStatusView,
-    NewWorkspaceRequest, OpenAnswer, Session, SettingName, StartInfo, StartOpened, UiError,
-    UiErrorKind, VimChange, VimState,
+    ClipAction, CloseQuestion, CreateAnswer, EditingViewName, EditorInput, EditorPatch,
+    EditorState, FacadeState, KeysStatusView, NewWorkspaceRequest, OpenAnswer, Session,
+    SettingName, StartInfo, StartOpened, UiError, UiErrorKind, VimChange, VimState,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -254,6 +254,49 @@ pub async fn tab_store(
         session.store_tab(&NoteId::from_relative(&note));
     })
     .await
+}
+
+/// M-07.2, UC-004 BR-003: the tab of `note` shows `view` from now on; the
+/// tabs are remembered with it (M-22.2).
+#[tauri::command]
+#[specta::specta]
+pub async fn tab_set_view(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    view: EditingViewName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.set_editing_view(&NoteId::from_relative(&note), view);
+    })
+    .await
+}
+
+/// M-09, ADR-024: the facade of the tab of `note`, with its cursor, when the
+/// facade starts showing it or after its blocks got out of step. The blocks
+/// that change afterwards come as the event `ed-blocks`.
+///
+/// Parsing a long note takes a while, so it runs on the blocking pool and
+/// without the session (ADR-024): the session is held only to take a
+/// snapshot of the text and to take the result in.
+#[tauri::command]
+#[specta::specta]
+pub async fn fa_open(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+) -> Result<FacadeState, UiError> {
+    let note = NoteId::from_relative(&note);
+    let shared = Arc::clone(&session);
+    let waker = waker.inner().clone();
+    blocking(move || {
+        let prep = shared.lock().facade_prepare(&note)?;
+        let built = prep.build();
+        let state = shared.lock().facade_finish(built);
+        waker.wake();
+        state
+    })
+    .await?
 }
 
 /// ADR-024: the text of the tab of `note` with its cursor, when the source
@@ -545,6 +588,8 @@ mod tests {
         "tab_activate",
         "tab_close",
         "tab_store",
+        "tab_set_view",
+        "fa_open",
         "ed_open",
         "ed_input",
         "ed_select",
@@ -941,6 +986,35 @@ mod tests {
             mock.invoke("clip_read_text", json!({})).unwrap(),
             json!("yanked")
         );
+    }
+
+    #[test]
+    fn m07_2_m09_fa_open_gives_the_facade_and_tab_set_view_switches() {
+        let dir = temp_dir("facade");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        std::fs::write(root.join("Home.md"), "# Home 🙂\r\n\r\n- item\r\n").unwrap();
+        let mock = Mock::new(Some(root), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let facade = mock.invoke("fa_open", json!({ "note": "Home" })).unwrap();
+
+        assert_eq!(facade["format"], json!("Markdown"));
+        let blocks = facade["blocks"].as_array().unwrap();
+        assert_eq!(blocks[0]["kind"], json!({ "type": "heading", "level": 1 }));
+        assert_eq!(blocks[0]["runs"][0]["text"], json!("Home 🙂"));
+        assert_eq!(blocks[0]["runs"][0]["offsets"], json!([[0, 2]]));
+        // The `\r\n` pairs count one unit each.
+        assert_eq!(blocks[1]["start"], json!(11));
+        assert_eq!(blocks[1]["prefix"], json!("•  "));
+
+        mock.invoke("tab_set_view", json!({ "note": "Home", "view": "source" }))
+            .unwrap();
+        let snapshot = mock.app.state::<SharedSession>().lock().snapshot();
+        assert_eq!(
+            snapshot.tabs.tabs[0].view,
+            underline_session::EditingViewName::Source
+        );
+        assert!(mock.invoke("fa_open", json!({ "note": "Gone" })).is_err());
     }
 
     #[test]

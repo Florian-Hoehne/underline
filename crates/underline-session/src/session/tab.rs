@@ -13,6 +13,7 @@ use underline_core::{Autosave, EditingView, NoteFormat, NoteProperties, NoteSave
 use underline_editor_core::{Keys, SourceEditor};
 use underline_facade::highlight::DocumentHighlight;
 
+use super::facade::Facade;
 use super::folding::Folds;
 use crate::editor_view::{NotePropertiesView, TabPropertiesView};
 
@@ -60,6 +61,8 @@ pub(super) struct Tab {
     pub(super) found_told: Option<(u64, Option<String>)>,
     /// When the marked hits were found last.
     pub(super) found_at: Option<Instant>,
+    /// M-09: the facade's blocks, while the facade shows the note.
+    pub(super) facade: Option<Facade>,
 }
 
 impl std::fmt::Debug for Tab {
@@ -104,6 +107,7 @@ impl Tab {
             folds: Folds::default(),
             found_told: None,
             found_at: None,
+            facade: None,
         }
     }
 

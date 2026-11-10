@@ -175,7 +175,8 @@ describe('M-06 tabs', () => {
   it('the active tab shows the area of its note', async () => {
     await workbench({ givenDir: '/home/user/Notes' });
 
-    expect(screen.getByRole('tabpanel', { name: 'Home' })).toHaveAttribute('data-view', 'source');
+    // M-07.2: a newly opened tab shows the facade, as in egui.
+    expect(screen.getByRole('tabpanel', { name: 'Home' })).toHaveAttribute('data-view', 'facade');
     expect(screen.queryByText('Select or create a note.')).not.toBeInTheDocument();
   });
 
