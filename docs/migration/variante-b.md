@@ -1,0 +1,491 @@
+# Variante B: Entwurf für die Schritte B3 bis B5
+
+Bezug: [ADR-025](../architecture/decisions/ADR-025-the-webview-owns-the-note-text-with-a-wasm-editor-core.md),
+`plan.md` Abschnitt 17. Stand 2026-11-10, nach B1 (`underline-markup`) und B2 (`underline-editor-core::facade`,
+Commit 9a97580). Nur Entwurf; die Fragen am Schluss gehören nach `offene-fragen.md`.
+
+## 0. Wo der Text des offenen Tabs heute berührt wird
+
+| Stelle heute (Tauri) | Was | In Variante B |
+|---|---|---|
+| `ed_input`, `ed_apply`, `ed_select`, `ed_fold`, `ed_keys_status`, `ed_clipboard` (`commands.rs:387–576`, `session/editing.rs`) | Taste, Vim-Änderung, Auswahl, Falten, Statuszeile, Zwischenablage | im WASM; Commands entfallen in B5 |
+| `fa_open`, `fa_input`, `fa_clipboard`, `fa_keys_status` (`commands.rs:285–384`, `session/facade/input.rs`) | Facade-Views, Eingaben | im WASM; `fa_open` geht in `ed_open` auf |
+| Tick: `autosave` (`session/editing.rs:619`), `Tab::flush` (`session/tab.rs:155`), `flush_all` | Speichern | auf dem Spiegel |
+| Tick: `handle_outside_changes` → `outside_change` (`session/workspace.rs:854`, `tab.reload` :894) | Aussenänderung, A9 | Backend-Änderung `Reload` mit Sperre (3.6) |
+| Tick: `editor_events` (Sektionen, Nano-Treffer), `highlight_event`, `facade_events` | Ergebnisse | Highlighting bleibt; Sektionen/Treffer/Views ins WASM (4) |
+| noch nicht portiert: Agent (ADR-018, F14), Umbenennen (F8), Konflikt/Verwerfen/Branch (F12/F13) | Backend ändert den Tab | Backend-Änderung über den Spiegel (3.6) |
+
+Referenz egui: Agent `app.rs:3445–3515` und `source_view.rs:285–292`; Aussenänderung `app.rs:1776–1816` und
+`source_view.rs:401–416`; Umbenennen `app.rs:553–566`, `app.rs:5056`; Konfliktwahl `app.rs:3019`;
+Verwerfen/Branch `app.rs:5589`, `app.rs:4082`; Cursorregel `source_view.rs:422–444`.
+
+## 1. Crates und DTOs
+
+**Entscheid: neue Crate `crates/underline-editor-view`** (wasm32-fähig), dazu `crates/underline-editor-wasm`.
+
+```
+underline-markup  <-  underline-editor-core (+ sync)  <-  underline-editor-view (DTOs, EditorTab)
+                                                            ^                 ^
+                                        underline-editor-wasm (cdylib)   underline-session (Spiegel)
+```
+
+- **`underline-editor-core`** erhält das Modul `sync`: Edit-Typ in Zeichen, Changeset, `transform`, `hash`,
+  `Server` (Spiegel mit Log) und `Client` (Schatten, unterwegs, Puffer). Ohne serde, ohne Uhr.
+- **`underline-editor-view`** (Abhängigkeiten: editor-core, markup, serde; `specta` optional als Feature wie heute in
+  der Session):
+  - `editor_view.rs` und `facade_view.rs` ziehen aus `underline-session` hierher. Die Session behält nur
+    `NotePropertiesView`, `TabPropertiesView` und `CloseQuestion`.
+  - Neu: `sync_view.rs` (Sync-DTOs, 3.4) und `enrich_view.rs` (Anreicherung, 2.3).
+  - **`EditorTab`**: der Tab, wie das Fenster ihn hält. Er umfasst `SourceEditor`, `Keys`, die Falten (aus
+    `session/folding.rs`, mit `now_ms: f64` statt `Instant`), den Facade-Zustand, den `Client` und den View-Macher
+    `CachedViews`.
+    - Er antwortet mit den heutigen DTOs (`EditorPatch`, `FacadePatch`, `BlocksView`, `SectionsView`, `FoundView`).
+    - Dazu zieht der reine Teil der Adapter hierher: `after_input`/`patch` aus `session/editing.rs`, der Teil von
+      `session/facade/input.rs` ohne Highlighting, aus `facade/build.rs` `WebWalker`, `run_view`, `prefix_text`,
+      die Art-Abbildung in `view()` und die Nummerierung der Captions.
+- **`underline-session`** re-exportiert `underline_editor_view::{editor_view, facade_view}` unter den bisherigen
+  Pfaden. Commands und `bindings.rs` ändern ihre Importe nicht.
+- **TypeScript:** Es bleibt ein Generator, nämlich tauri-specta.
+  - DTOs, die nur über die WASM-Grenze gehen (z. B. `RemoteApplied`, `TabViews`), werden in `bindings.rs` mit
+    `Builder::typ::<T>()` exportiert (vorhanden in tauri-specta 2.0.0-rc.26, `builder.rs:275`).
+  - Damit stehen alle Typen in `bindings.ts`, und der bestehende Test `checked_in_bindings_are_current` deckt sie mit.
+- **WASM-Signaturen:** Das WASM tauscht JSON-Strings aus (`&str` → `String`), wie im Spike gemessen (≤ 3 ms in der
+  Facade, RESULTS.md Tabelle „Owner“).
+  - Ein handgeschriebener Wrapper `ui/src/lib/editor/core.ts` ist die einzige Stelle, die `pkg/` importiert. Er
+    typisiert mit `bindings.ts`.
+  - Verworfen: `tsify`/`serde-wasm-bindgen`. Das wäre ein zweiter Typgenerator, und der Zeitgewinn ist nicht
+    gemessen.
+
+## 2. WASM-API (`underline-editor-wasm`)
+
+`wasm-bindgen = "=0.2.130"` steht exakt gepinnt in `[workspace.dependencies]`; Cargo.lock hat schon 0.2.130. Die CLI
+hat dieselbe Version (5). Die Crate ist `crate-type = ["cdylib", "rlib"]`, damit clippy und Tests nativ laufen.
+
+### 2.1 Handle je Tab
+
+`WasmTab` hält ein `EditorTab`.
+
+- Ein Registry-Modul `ui/src/lib/editor/tabs.ts` legt es beim ersten Zeigen eines Tabs an. Es lebt über
+  Ansichtswechsel und Tabwechsel hinweg.
+- Erst nach erfolgreichem `tab_close` wird es mit `free()` freigegeben.
+- Vor dem ersten Zeigen hält nur das Backend den Text. Es gibt dann keine offenen Edits.
+
+### 2.2 Funktionen (spiegeln die heutigen Commands, damit `EditorBackend`/`FacadeBackend` gleich bleiben)
+
+| WASM (`camelCase`) | ersetzt | Antwort |
+|---|---|---|
+| `WasmTab.open(TabOpenView)` | `ed_open` + `fa_open` | Handle |
+| `state()` / `facadeState()` | `ed_open` / `fa_open` | `EditorState` / `FacadeState` |
+| `input(EditorInput)` | `ed_input` | `EditorPatch` |
+| `apply(base, VimChange[], anchor, head, newStep)` | `ed_apply` | `EditorPatch \| null` |
+| `select(rev, anchor, head)` | `ed_select` | Ort (`string`) |
+| `fold(line)` | `ed_fold` | `EditorPatch` |
+| `keysStatus(VimState \| null)` / `facadeKeys()` | `ed_keys_status` / `fa_keys_status` | `KeysStatusView \| null` |
+| `clipboard(action, text \| null)` | `ed_clipboard` ohne System-E/A | `{ copied, patch }` |
+| `facadeInput(at, input, rows, clipboard)` | `fa_input` | `FacadePatch` |
+| `facadeClipboard(at, action, plain, text)` | `fa_clipboard` ohne System-E/A | `{ copied, patch }` |
+| `views(nowMs)` | Events `ed-sections`, `ed-found` | `TabViews { sections?, found? }` (lokale Revision) |
+| `enrich(EnrichView)` | Event `ed-blocks` | `BlocksView[]` (lokale Versionen) |
+| `setView(EditingViewName)`, `setMode(InputModeName)`, `setLooks(theme, dark)` | Zustand der Session | – |
+| `takeOutbox()` | – | `SyncBatch \| null` |
+| `acknowledge(SyncAnswer)` | `text-replaced` + `ed_open` | `RemoteApplied` (3.3) |
+| `syncedRev()`, `inStep(rev)`, `text()`, `hash()` | – | Sync-Zustand |
+
+- **Zwischenablage:** Das Fenster liest die Zwischenablage mit `clip_read_text` und schreibt sie mit
+  `clip_write_text`; ADR-014 bleibt. Danach ruft es das WASM.
+- **`EditorPatch.base/rev`, `FacadePatch.base/rev` und die Block-`version`** sind ab B5 **lokale** Revisionen des
+  WASM-Dokuments. `SourceView.#apply` und `FacadeView` prüfen sie unverändert.
+- **Ergebnisse des Backends** tragen die **Sync-Revision** (3.1). Nur `takeColors` fragt dafür `core.inStep(rev)`
+  statt `#inStep`.
+
+### 2.3 Facade-Views ohne Backend und die Anreicherung
+
+`CachedViews` implementiert `MakeViews` (B2) aus einem Anreicherungs-Cache. Schlüssel sind Inhalte, nicht Revisionen:
+
+| Block | Schlüssel | Ohne Eintrag zeigt das WASM |
+|---|---|---|
+| Code (kein Diagramm) | `fnv(theme, language, code)` | `colors: None`, beim Ersetzen alte Spans über `carry_spans` (wie heute in A, „recolor“) |
+| Diagramm | `fnv(language, code, dark)` | das letzte Bild des Blocks (`last_pictures`, M-09.7, `build.rs:627–671`), sonst `message_figure("Rendering the {name} diagram…", false)` |
+| Bild | `target` (relativ zur Notiz) | `FigureView { loading: "Loading {target}…" }` |
+| Tabelle/Bild mit Caption | – | Nummer lokal („Figure n.“, „Table n.“), wie `build.rs` |
+
+- **Hash:** `fnv` ist FNV-1a 64 aus `editor-core::sync::hash`. Bisher nimmt `colors_key` `DefaultHasher`
+  (`build.rs:597`); dessen Werte sind über Rust-Versionen nicht zugesagt. Ab B3 nehmen beide Seiten FNV.
+- **Links:** `RunView.link` bleibt das rohe Ziel. Aufgelöst wird beim Folgen (`ed_follow_link`, F7).
+- **Asset-Pfade:** Sie kommen fertig aus dem Backend (`file_asset_path` mit `?v=`). `assetUrl()` bleibt.
+- **`EnrichView { note, rev, clear, colors: [key, CodeColors|null][], figures: [key, FigureView][] }`**
+  - Das Backend schickt es als Event `ed-enrich`.
+  - Es parst dazu den Spiegel. Gesendet werden die Schlüssel, die der Tab noch nicht hat, und Bilder und Diagramme,
+    deren Zustand sich geändert hat (Diagramm fertig, Bilddatei nach `IMAGE_FRESH`).
+  - Bei Themewechsel oder Wiederöffnen setzt das Backend `clear`.
+  - `ed_open` liefert die Anreicherung der ganzen Notiz mit. Die erste Facade sieht dann aus wie heute, ohne Flackern.
+- **Mergen:**
+  - `enrich()` legt die Einträge in den Cache. Er ist begrenzt wie heute auf 4096 Code-Einträge (`CODE_COLORS_KEPT`).
+  - Ein Eintrag mit kleinerer `rev` als der gespeicherte zum selben Schlüssel wird verworfen. Das betrifft nur Bilder,
+    deren Datei sich ändert.
+  - Danach macht `enrich()` die Views der betroffenen Blöcke neu und gibt die Splices „an Ort“ zurück
+    (`splices`, Fall `shift == 0`).
+  - Revisionsmarken werden nicht umgerechnet, weil die Schlüssel Inhalte sind.
+- **Diagramm-Priorität:** Die Reihenfolge nach Blockindex (`ahead`) bestimmt das Backend aus seinem eigenen Parse.
+
+## 3. Sync-Protokoll
+
+### 3.1 Revisionen
+
+- Jeder Tab hat im Backend einen eigenen Zähler `sync_rev: u32`. Er beginnt bei `ed_open`/Tab-Öffnen mit 1 und steigt
+  um 1 je angewandtem Stapel des Fensters und je Backend-Änderung. Lücken sind erlaubt (3.6).
+- Er ist getrennt von `Document::revision`, der lokal im WASM weiterzählt.
+- Ein Überlauf führt zu Resync (3.10) und kommt praktisch nicht vor.
+- Das Fenster kennt `synced` (die letzte bestätigte Sync-Revision), `inflight` (gesendet, unbestätigt) und `buffer`
+  (seit dem Senden).
+
+### 3.2 Edit-Format: Zeichen des Ropes
+
+`SyncEdit { at: u32, remove: u32, insert: String }` in **Zeichen (Unicode-Skalarwerte)**. Die Edits eines Stapels sind
+sequenziell: Jeder gilt auf dem Ergebnis des vorigen, wie im Spike (`mirror.rs`). `SyncBatch { base: u32, edits }`.
+
+Begründung gegen UTF-16 bzw. Web-Einheiten:
+
+1. Beide Enden halten ein ropey-Rope, das nach Zeichen indiziert ist. Es braucht keine Umrechnung, und kein Edit kann
+   ein Surrogatpaar teilen.
+2. Web-Einheiten zählen `\r\n` als 1 (`utf16.rs:8–13`). Ein Edit zwischen `\r` und `\n` wäre nicht ausdrückbar, und
+   das Backend hält die Bytes der Datei (NFR-007).
+3. JavaScript rechnet nie damit. Die Edits entstehen im WASM und werden im Backend angewandt; TS reicht nur JSON
+   weiter.
+
+Byte-Bereiche des Backends (Umbenennen, Agent: `apply_edits` nimmt Bytes, `source_view.rs:425–427`) rechnet der
+Spiegel beim Anlegen der Backend-Änderung in Zeichen um.
+
+### 3.3 Ablauf: Pull über einen geordneten Kanal je Tab
+
+Tauri liefert Events per Script-Auswertung und Command-Antworten über das IPC-Protokoll. Ihre Reihenfolge ist nicht
+zugesagt.
+
+**Entscheid:** Edits des Backends kommen **nur in der Antwort von `ed_sync`**. Ein Event ist bloss die Klingel. Je Tab
+ist höchstens ein `ed_sync` unterwegs. Das kostet bei Backend-Änderungen einen Roundtrip (2–5 ms), weit unter
+NFR-008 (1 s).
+
+1. **Eingabe:** Das WASM wendet sie an, legt die Edits in `buffer` und gibt den Patch zurück. TS ruft
+   `sync.schedule()`.
+2. **`schedule`:** Ist nichts geplant, wird nach dem Frame gesendet: `requestAnimationFrame` + `setTimeout(0)`, die
+   Methode des Spikes (RESULTS.md:60–61). Ist ein Aufruf unterwegs, wird nach seiner Antwort gesendet.
+3. **Senden:**
+   - `takeOutbox()` verschiebt `buffer` nach `inflight` und gibt `{ base: synced, edits }` zurück, oder `null`, wenn
+     nichts offen ist und keine Klingel wartet.
+   - Danach folgt `ed_sync(note, batch)`. Ein leerer Stapel ist erlaubt (Abholen).
+4. **Backend:**
+   - Es transformiert `inflight` über die eigenen Änderungen seit `base`, wendet das Ergebnis an und hängt es ans Log.
+   - Es setzt die Autosave-Uhr (`Tab::changed`) und weckt den Tick.
+   - Antwort: `SyncAnswer { rev, hash, remote: RemoteOp[], resync: bool }`. Dabei sind `remote` die Änderungen des
+     Backends seit `base` in Log-Reihenfolge, je mit `rev`.
+5. **Fenster:** `acknowledge(answer)`:
+   - transformiert `remote` über `inflight` und `buffer`, wendet es an und transformiert `buffer` über `remote`;
+   - setzt `synced = rev`, leert `inflight` und prüft den Hash (3.10);
+   - gibt `RemoteApplied { source: EditorPatch?, facade: FacadePatch?, reloaded, desync }` für die gezeigte Ansicht
+     zurück;
+   - die Ansicht wendet den Patch über ihre normale Warteschlange an (`SourceView.#enqueue`, ohne `scroll`).
+6. **Klingeln:**
+   - `ed-changed { note, rev }` ersetzt `text-replaced`. Ist `rev > synced`, sendet das Fenster sofort, auch leer.
+   - `ed-flush { note? }` heisst: sofort senden, auch leer (3.9).
+
+### 3.4 Commands und Events (ab B4/B5)
+
+| Neu | Typ |
+|---|---|
+| `ed_open(note) -> TabOpenView` | `{ note, rev, text, format, view, anchor, head, enrich: EnrichView }`; Cursor des Öffnens (Sprung, `focus_end`) in Web-Einheiten |
+| `ed_sync(note, SyncBatch) -> SyncAnswer` | synchron wie heute `ed_input` (kurz unter dem Lock, geordnet) |
+| `ed_resync(note, text) -> SyncAnswer` | Fenster-Text ersetzt den Spiegel (3.10) |
+| Event `ed-changed`, `ed-flush`, `ed-enrich` | ersetzen `text-replaced`, `ed-blocks` |
+| bleiben | `ed_viewport`, `ed-highlight` (rev = Sync-Revision), `clip_read_text`, `clip_write_text`, `tab_set_view` |
+| entfallen in B5 | `ed_input`, `ed_apply`, `ed_select`, `ed_fold`, `ed_keys_status`, `ed_clipboard`, `fa_open`, `fa_input`, `fa_clipboard`, `fa_keys_status`, Events `ed-sections`, `ed-found`, `ed-blocks`, `text-replaced` |
+
+`RemoteOp { rev, change: Edits { edits: SyncEdit[], sealed: bool } | Reload { text } }`.
+
+### 3.5 Transformation (ein Server, kein TP2 nötig)
+
+Intern wird jeder Stapel zu einem Changeset über seinem Basistext: eine geordnete Folge von Behalten, Löschen und
+Einfügen, wie `ChangeSet` von CodeMirror.
+
+- Ein Edit ist dabei **Löschbereich `[at, at+remove)` plus Einfügen bei `at`**.
+- `transform(a, b, seite)` liefert `a'`, das nach `b` gilt. Die Seite ist **Backend** oder **Fenster**.
+- **Bei Gleichstand gewinnt das Backend links.**
+
+Regeln für die Einfügestelle `p` von `a` gegenüber `b` (mit Δb = |b.insert| − b.remove):
+
+| Lage von `p` | `p'` |
+|---|---|
+| `p < b.at` | `p` |
+| `p > b.at + b.remove` | `p + Δb` |
+| `b.at < p < b.at + b.remove` (im Gelöschten) | `b.at + \|b.insert\|` (hinter den Text von `b`) |
+| `p == b.at` (Gleichstand) | Seite Backend: `p`; Seite Fenster: `b.at + \|b.insert\|` |
+| `p == b.at + b.remove`, `b.remove > 0` | `b.at + \|b.insert\|` |
+
+- **Löschen:**
+  - `a'` löscht die Zeichen von `a` ohne die schon von `b` gelöschten.
+  - Liegt das Einfügen von `b` im Löschbereich von `a`, bleibt es stehen. `a'` zerfällt dann in zwei Teile davor und
+    danach.
+  - Eingefügter Text der anderen Seite geht so nie verloren.
+- **Herleitung:** Fallbeispiele mit Gleichstand, `b` in `a`, `a` in `b` und Rand an Rand konvergieren von Hand
+  gerechnet. Verbindlich ist der Eigenschaftstest (6): `apply(apply(t, a), b') == apply(apply(t, b), a')`.
+- **Cursor:** Die Regel „Backend links“ passt zur egui-Regel, nach der ein Einfügen am Cursor den Cursor dahinter
+  schiebt (`source_view.rs:430–431`, `at >= end`).
+- **Listen:** Liste über Liste ist die übliche Doppelschleife über die Changesets. Bei einem Server reicht TP1.
+
+### 3.6 Änderungen des Backends
+
+| Auslöser (egui) | Änderung | Undo im Fenster |
+|---|---|---|
+| Agent (`app.rs:3498–3515`) | `Edits { sealed: true }` | eigener Schritt: `seal`, anwenden, `seal` (`source_view.rs:288–292`, UC-019 BR-007) |
+| Umbenennen (`app.rs:553–566`, `:5056`), Konfliktwahl (`app.rs:3019`) | `Edits { sealed: false }` | wie `apply_edits`: ohne Siegel (`source_view.rs:422–444`) |
+| Aussenänderung (`app.rs:1813`), Verwerfen (`:5589`), Branch/Sync (`:4082`) | `Reload { text }` | History neu, Cursor gleiche Zeile/Spalte (`SourceEditor::reload`, `source.rs:286–296`; egui `source_view.rs:401–416`) |
+
+- **Session-API:** `Session::backend_edit(note, edits_in_bytes, sealed)` und `Tab::reload(text)` legen die Änderung
+  ins Log und klingeln mit `ed-changed`. F8, F13 und F14 nutzen nur diese API.
+- **Agent:**
+  - Die egui-Regel UC-019 BR-004 prüft gegen den Text mit allen Tasten (`plan_for_tab(base = on_disk, current)`).
+    Darum gilt: Eine Agent-Anfrage auf einem offenen Tab klingelt zuerst mit `ed-flush { note }`.
+  - Der Tick wendet sie erst an, wenn danach ein `ed_sync` dieses Tabs kam, spätestens nach 300 ms.
+  - Danach prüft er gegen den Spiegel, wendet an und speichert sofort wie egui (`save_now`).
+  - Ein Restfenster von einem Roundtrip bleibt (8).
+- **Sperre beim Reload:** Ein Stapel mit `base` vor einem `Reload` lässt sich nicht transformieren. Das Backend macht
+  dann UC-004 A9 nachträglich, so wie egui, wenn die Taste vor dem Watcher-Ereignis kam (`app.rs:1789–1810`):
+  - Es stellt das Dokument vor dem Reload wieder her und wendet den Stapel an.
+  - Es legt die Aussenversion als Kopie ab (`outside_copy_path`).
+  - Es setzt den A9-Status („… was changed outside while you were editing; your text stays, the other version is
+    kept as {name}“).
+  - Die `rev` des Reloads entfällt; es entsteht eine Lücke im Zähler.
+  - Das Fenster wendet ein `Reload` in einer Antwort nur an, wenn sein `buffer` leer ist. Sonst überspringt es das
+    Reload und alles danach, setzt `synced` auf die `rev` davor und sendet den Puffer mit dieser `base`.
+  - Bis das Fenster eine `rev` ≥ Reload bestätigt, antwortet der Tab Agenten mit `Busy`, wie bei `tab.saving`
+    (`app.rs:3493`). So liegt nie eine Agent-Änderung hinter einem Reload, der wieder zurückgenommen wird.
+- **Log:** Das Log wird bis zur jeweils letzten empfangenen `base` gekürzt. Höchstens 1024 Einträge; ältere `base`
+  führt zu Resync (3.10).
+
+### 3.7 Undo
+
+- Das Undo liegt nur im WASM (`Document` mit `seal`/`merges`).
+- Lokale Edits stehen in der Reihenfolge des Tippens in der History. Backend-Änderungen kommen transformiert hinter sie
+  und mit den Siegeln aus 3.6. Die History bleibt dadurch linear zum Fenstertext, ohne dass etwas umgerechnet wird.
+- Ctrl+Z nach einer Agent-Änderung nimmt die Agent-Änderung zurück, wie in egui. Das Ergebnis ist ein normaler lokaler
+  Edit.
+- Der Spiegel führt keine History. Er hält Rope, `sync_rev` und Log, kein `Document`.
+
+### 3.8 Cursor und Auswahl
+
+- **Backend-Änderung:** Cursor und Anker werden mit der egui-Regel verschoben (`source_view.rs:428–437`):
+  - `at ≥ end` → `+Δ`;
+  - `start < at < end` → `start + min(|insert|, at − start)`;
+  - sonst bleibt er.
+  - Es wird nicht gescrollt.
+- **Reload:** gleiche Zeile und Spalte.
+- **Facade:** Sie nutzt dieselbe Auswahl. Die Lücke nach Enter folgt aus `gap_at` am neuen Cursor (egui
+  `facade_view.rs:783`).
+- **Vim:** Noch nicht gesendete Vim-Änderungen der Quellansicht (A-27) verschiebt `SourceView.#apply` wie heute
+  über den Patch.
+
+### 3.9 Flush vor Speichern, Schliessen und lesenden Befehlen
+
+- **`flush(note)` / `flushAll()`** in `ui/src/lib/editor/sync.ts`: senden, bis `buffer` und `inflight` leer sind.
+- **Der Helfer `flushed(fn)`** umschliesst jeden Command, der den Text liest oder den Tab ersetzt:
+  - heute: `tab_close`, `tab_store` (auch `EditorCommandName.Store`/`Close` aus Patches), `ws_open`, `ws_start`,
+    `ws_create`;
+  - später: `note_rename`, `note_delete`, `export_run`, `git_*`, `sync_request`, `conflict_choose`;
+  - neue lesende Commands kommen in diese Liste (Review-Regel).
+- **Fenster schliessen:**
+  - `CloseRequested`/`ExitRequested` (`main.rs:118`, `:159`) verhindert das Schliessen und klingelt mit
+    `ed-flush {}`.
+  - Das Fenster ruft `flushAll()` und dann den neuen Command `app_request_close`, der den heutigen
+    `ask_before_closing` ausführt.
+  - Antwortet das Fenster nicht innerhalb von 1 s, macht das Backend auf dem Spiegel weiter (Log-Eintrag).
+- **`RunEvent::Exit`:** speichert den Spiegel.
+- **Autosave:** Er speichert immer den Spiegel. Spätere Edits machen den Tab wieder „unstored“ (höchstens ein Frame
+  plus Roundtrip später als in A).
+
+### 3.10 Fehler: Desync und Resync
+
+- **Hash-Vergleich:** `hash` ist FNV-1a 64 über die UTF-8-Bytes, als 16 Hex-Zeichen, in `editor-core::sync`.
+  - Das Backend schickt den Hash seines Textes bei `rev`. Das WASM vergleicht ihn mit seinem Schatten, also dem Text
+    bei `synced`, den es nachführt (ropey-Klon).
+  - Kosten etwa 0,5 ms bei 450 K Zeichen nach dem Frame; wird in B5 gemessen.
+- **Desync** liegt vor bei abweichendem Hash, `resync: true`, einem Edit ausserhalb des Textes (Backend lehnt den
+  ganzen Stapel ab) oder einem Überlauf.
+  - Das Fenster ruft dann `ed_resync(note, text)`.
+  - **Der Text des Fensters gewinnt** (ADR-025: das Fenster besitzt den Text). Das Backend ersetzt den Spiegel durch
+    gemeinsames Präfix und Suffix plus Mitte, damit wenig Highlighting verworfen wird.
+  - Das Backend schreibt eine Zeile ins Rust-Log. Eine Meldung an den Benutzer gibt es nicht (offene Frage).
+
+## 4. Was im Backend bleibt, und die Revisionsmarken
+
+| Ergebnis | Ort in B | Marke, Behandlung im Fenster |
+|---|---|---|
+| Syntax-Farben der Quellansicht (syntect, ADR-010) | Backend, Tick, `ed_viewport` | Sync-`rev`; siehe unten |
+| Code-Farben, Diagramme, Bilder der Facade | Backend, `ed-enrich` | Inhaltsschlüssel, keine Umrechnung (2.3) |
+| Link-Auflösung, Assets, Dateieigenschaften | Backend, auf Anfrage | – |
+| Agent-Cursor (F14) | Backend | Sync-`rev`, wie die Farben |
+| Sektionen, Falten (M-08.8) | **WASM** (`views(nowMs)`, 300 ms wie `SECTIONS_EVERY`) | lokale `rev`, wie heute `#inStep` |
+| Nano-Treffer (M-11.3) | **WASM** (`find_all`) | lokale `rev` |
+| Facade-Blöcke, Captions, Lücke, Statuszeile, Ort | **WASM** | lokal |
+| Minimap | Fenster (aus CM-Dokument und Farben, wie heute) | – |
+
+- **Falten wandern ins WASM.** Sie hängen an jeder Taste: Up/Down überspringen gefaltete Zeilen, ein Cursor im
+  Verborgenen faltet auf (`folding.rs:132`, `:206`). Ein Roundtrip wäre zurück im Tastenpfad.
+- **Regel für Sync-markierte Ergebnisse:**
+  - `rev == synced` und nichts offen → anwenden.
+  - `rev > synced` → als neuestes je Art halten, bis `acknowledge` die `rev` erreicht. Das passiert, wenn das Event
+    vor der Antwort kommt.
+  - `rev < synced` → verwerfen; nach jedem Stapel rechnet das Backend neu.
+  - Bis dahin verschiebt CodeMirror die gezeigten Dekorationen mit jeder Transaktion (`highlight.ts`, `colorField`).
+  - Ergebnisse durch die offenen Edits zu verschieben (`changesSince` → `ChangeSet` → `RangeSet.map`) ist in B5 nicht
+    vorgesehen. Es kommt nur, wenn die Messung sichtbaren Farbverzug zeigt (8).
+- **Workspace-Suche (M-13, F9):** Wo ihre Markierung entsteht, entscheidet F9. Der Entwurf empfiehlt das WASM mit der
+  Anfrage als Eingabe.
+
+## 5. Build-Pipeline
+
+- **CLI:** `cargo install wasm-bindgen-cli --version 0.2.130 --locked --root .tools` im Repo-Wurzelverzeichnis.
+  - `/.tools/` kommt in `.gitignore`.
+  - Das Target dazu: `rustup target add wasm32-unknown-unknown`.
+- **Skript `ui/scripts/wasm.js`** (Node, plattformneutral wie `scripts/tauri.js`):
+  1. Es sucht die CLI unter `.tools/bin/wasm-bindgen[.exe]`, sonst in `UL_WASM_BINDGEN`, sonst im `PATH`.
+  2. Es vergleicht `--version` mit der Version von `wasm-bindgen` in `Cargo.lock`. Weicht sie ab, bricht es mit der
+     Installationszeile ab.
+  3. `cargo build -p underline-editor-wasm --release --target wasm32-unknown-unknown`.
+  4. `wasm-bindgen --target web --out-dir ui/src/lib/wasm/pkg target/wasm32-unknown-unknown/release/underline_editor_wasm.wasm`.
+  - Kein `wasm-opt`: etwa 0,7–1 MB, wie in ADR-025 angenommen.
+- **npm-Skripte:**
+  - `"wasm": "node scripts/wasm.js"`;
+  - die Hooks `"predev"`, `"prebuild"`, `"precheck"` und `"pretest"` rufen jeweils `npm run wasm`. Ohne Änderung ist
+    cargo inkrementell nach etwa 1 s fertig.
+  - `lint` und `format:check` brauchen das Paket nicht.
+- **`tauri.conf.json`:**
+  - `beforeDevCommand` und `beforeBuildCommand` bleiben `npm run dev` bzw. `npm run build`; die npm-Hooks bauen das
+    WASM vorher.
+  - Die CSP (`csp` und `devCsp`) erhält `script-src 'self' 'wasm-unsafe-eval'` und `connect-src 'self' …` für den
+    `.wasm`-Fetch, wie im Spike (RESULTS.md:263). Es wird nichts aus dem Netz geladen, ADR-023 bleibt erfüllt. Die
+    CSP-Änderung wird in ADR-023 nachgetragen (8).
+- **Das Paket wird erzeugt, nicht eingecheckt.**
+  - `ui/src/lib/wasm/pkg/` kommt in `.gitignore`, `.prettierignore` und die ESLint-`ignores`.
+  - Grund: Das Binary ändert sich mit jedem Rust-Commit, eingecheckt würde es veralten.
+- **Laden:**
+  - Browser und Tauri: `core.ts` ruft bei App-Start `init()` des Pakets ohne Warten auf. Vite bündelt die `.wasm` über
+    `new URL(…, import.meta.url)`.
+  - `SourceView.open` und `FacadeView` warten auf dieses Promise.
+  - Vitest: `src/test-setup.ts` ruft `initSync({ module: readFileSync(…_bg.wasm) })`.
+  - `svelte-check` braucht nur die `.d.ts` aus `pkg/`.
+- **CI (`ci.yml`, alle drei OS):**
+  - `dtolnay/rust-toolchain` mit `targets: wasm32-unknown-unknown`.
+  - `.tools` per `actions/cache` mit dem Schlüssel `wasm-bindgen-cli-0.2.130-${{ runner.os }}`; sonst `cargo install`
+    wie oben.
+  - Danach der Frontend-Block unverändert, dank der Hooks.
+  - Zusätzlich `cargo check --target wasm32-unknown-unknown -p underline-markup -p underline-editor-core -p underline-editor-view -p underline-editor-wasm`.
+  - `cargo clippy --workspace` baut die WASM-Crate nativ als rlib.
+
+## 6. Tests
+
+**Nativ (Rust), `editor-core::sync`:**
+
+- Tabellentests aller Zeilen von 3.5 mit beiden Seiten, Namen `adr025_…`.
+- **Konvergenz, eigenschaftsbasiert, ohne neue Abhängigkeit:** ein eigener xorshift-PRNG mit festen Seeds. Bei einem
+  Fehler wird der Seed ausgegeben.
+  - Texte mit Emoji, `\r\n`, leer.
+  - Ein Simulator mit Server und Client und zufälliger Verschachtelung von lokalem Edit, Senden, Backend-Edit,
+    Backend-Empfang, Antwort-Empfang (auch verspätet) und Reload.
+  - Am Ende, wenn nichts mehr unterwegs ist: Text und Hash gleich, Undo-History des Clients konsistent (alles
+    rückgängig ergibt einen Text, den der Client hatte).
+  - Mindestens 2000 Seeds × 50 Schritte in `cargo test`.
+- **Reload-Sperre:** später Stapel über einem Reload ergibt A9; Puffer beim Reload ergibt Überspringen; Agent während
+  einer unbestätigten Reload-Sperre ergibt `Busy`.
+- **Cursor-Regel:** gegen die Fälle von `source_view.rs:428–437`.
+
+**Nativ, `underline-editor-view`:**
+
+- Die Editor-, Facade- und Faltentests der Session ziehen mit dem Code um (UC- und M-Namen bleiben).
+- **Äquivalenz:** `CachedViews` mit der vollen Anreicherung des Backends ergibt dieselben `BlockView`s wie der
+  Backend-Macher, auf je einer Markdown- und AsciiDoc-Notiz mit Code, Diagramm, Bild, Tabelle und Captions.
+
+**Nativ, `underline-session`:** `ed_sync` mit
+
+- Agent-Änderung während des Tippens: Backend-Edit, dann später Stapel, Hash gleich, gespeicherter Text = Spiegel;
+- Flush-Handshake des Agenten mit 300-ms-Frist;
+- Schliessen mit unbestätigten Edits: Stapel vor `tab_close` gespeichert, Stapel danach → `NotOpen`;
+- Autosave auf dem Spiegel;
+- Aussenänderung mit spätem Stapel → Kopie und A9-Status;
+- Umbenennen mit Byte-zu-Zeichen-Umrechnung.
+
+**Vitest mit dem echten WASM:**
+
+- `core.test.ts`: Eingabe → Patch, `takeOutbox`, `acknowledge` mit Backend-Edits und Reload, Desync → `ed_resync`.
+- `sync.test.ts` mit Fake-Timern: ein Aufruf unterwegs, Bündeln nach dem Frame, Klingel, `flushed()`.
+- `SourceView`- und `FacadeView`-Tests laufen statt über `fakeEditor.ts`/`fakeFacade.ts` über das WASM mit
+  Fake-Sync. Die Fakes fallen in B5 weg.
+
+**Mock-Backend (Dev-Server, app-tester):**
+
+- `mock-backend.ts` beantwortet `ed_open` (Text + Anreicherung), `ed_sync` und `ed_resync`.
+- Es hält seinen Text mit einem kleinen Zeichen-Apply (`Array.from`) und rechnet den FNV-Hash in TS (TextEncoder).
+  So prüft auch der Browser.
+- Die Bearbeitung macht das echte WASM.
+- Für Playwright gibt es `window.__ulMock.backendEdit(note, { at, remove, insert, sealed })` und
+  `window.__ulMock.outsideChange(note, text)`. Damit lassen sich Rebase und Reload sichtbar testen.
+
+## 7. Schritte
+
+Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings der Reviews behoben.
+
+| Schritt | Inhalt | Abnahme |
+|---|---|---|
+| **B3a** View-Crate | `underline-editor-view` anlegen; DTOs aus der Session hierher, Session re-exportiert; FNV statt `DefaultHasher` für Farbschlüssel | `bindings.ts` byteweise gleich; `cargo check -p underline-editor-view --target wasm32-unknown-unknown`; alle Tests grün |
+| **B3b** `EditorTab` | Adapter, Falten (Uhr als `now_ms`), Nano-Treffer, `CachedViews` nach `EditorTab`; die Session nutzt `EditorTab` für die A-Commands weiter (gleicher Code, den später das WASM fährt) | Session-Tests unverändert grün; Äquivalenztest (6); kein `Instant`/`Mutex` in der Crate |
+| **B3c** WASM und Build | `underline-editor-wasm`, `scripts/wasm.js`, npm-Hooks, `.gitignore`, CSP, CI, `core.ts`, Laden in Vitest | `npm run wasm` auf Linux; Vitest: dieselbe Eingabe ergibt im WASM denselben `EditorPatch`/`FacadePatch` wie ein nativ erzeugtes Golden; App startet unverändert (A) |
+| **B4a** Sync-Kern | `editor-core::sync` (Changeset, `transform`, `hash`, `Server`, `Client`), DTOs in `sync_view.rs` | Tabellen-, Konvergenz- und Reload-Tests (6) |
+| **B4b** Spiegel | `Tab` hält `Server` statt `SourceEditor` für Speichern/Highlighting; `ed_sync`, `ed_resync`, Events `ed-changed`, `ed-flush`, `ed-enrich`; `backend_edit`, `Reload` mit Sperre; Anreicherung im Tick | Session-Tests (6); A-Commands laufen noch und legen ihre Änderung als lokalen Stapel ins Log |
+| **B4c** Sync im Fenster | `sync.ts` (Bündeln, Klingel, `flushed`, Schliessen-Handshake mit `app_request_close`), Mock-Backend | Vitest (6); `cargo tauri dev`: Schliessen mit frischer Eingabe speichert sie |
+| **B5a** Quellansicht | `wasmBackend: EditorBackend`; `takeColors` mit `core.inStep`; Sektionen/Treffer aus `views()` | Vitest und app-tester: M-08, M-10.1, M-11, M-12 wie bisher; Bench (unten) |
+| **B5b** Facade | `wasmFacadeBackend`; `ed-enrich` → `enrich()`; `ed_open` ersetzt `fa_open` | app-tester M-09; Bench |
+| **B5c** Aufräumen, Messpunkt | A-Commands, -Events, Fakes und Session-Eingabecode entfernen; Messung; Reviews; F5b abhaken | Messpunkt erreicht; `paritaet.md` ergänzt; Commit |
+
+**Messpunkt (B5a/B5b/B5c):**
+
+- **Treiber:** `lib/editor/bench.ts` und `lib/facade/bench.ts` laufen mit `VITE_UL_BENCH=1` (`VITE_UL_BENCH_F4`,
+  `VITE_UL_BENCH_F5`) in einem Release-Build auf WebKitGTK.
+  - Statt `tauriBackend`/`tauriFacadeBackend` nehmen sie das WASM-Backend. Sonst ist alles gleich: 30 Aufwärmtasten,
+    500 Tasten an 2/50/98 %, Jitter 0–17 ms, mit und ohne Farben, Normal/Vim/Nano.
+  - In der Facade: Tippen, Enter, Backspace.
+  - Testnotizen: die 10'000-Zeilen-Notiz des Spikes und dazu eine AsciiDoc-Notiz.
+- **Ziel:** p99 ≤ 16 ms und mindestens 90 % der Tasten im nächsten Frame, in beiden Ansichten.
+- **Zusätzlich gemessen:**
+  - Dauer von `ed_sync` (Command und Antwort-Verarbeitung) samt Hash;
+  - lange Tasks über 16 ms nach dem Frame;
+  - Öffnen (Text ins WASM, Spike: 17 ms);
+  - `init()` beim Start (NFR-001).
+- **Am Ende:** Hash des Spiegels = Hash des WASM, 0 Desyncs.
+- **Echte Tasten** über `xdotool` (plan Abschnitt 15), sobald installiert.
+
+## 8. Risiken und offene Fragen (für `offene-fragen.md`)
+
+1. **Agent und ungesendete Tasten (UC-019 BR-004):**
+   - Nach dem Flush-Handshake bleibt ein Fenster von einem Roundtrip.
+   - Trifft in dieser Zeit eine Taste dieselbe Zeile, bleiben beide Texte erhalten (3.5). Die Zeile hätte egui aber
+     abgelehnt (A5).
+   - Frage: Reicht das, oder soll der Spiegel späte Stapel, die eine Agent-Zeile berühren, melden?
+2. **Desync: Der Fenstertext gewinnt.** Das kann eine schon bestätigte Agent-Änderung verwerfen. Sollen Benutzer oder
+   Agent davon erfahren? Heute gibt es nur einen Log-Eintrag.
+3. **Reload-Sperre bei Verwerfen, Branch-Wechsel und Sync:** Eine Taste im selben Roundtrip würde A9 auslösen und das
+   Verworfene als Text behalten. Gewollt, oder soll für diese Auslöser der Backend-Text gewinnen?
+4. **Farbverzug:** Während dauernden Tippens kommen Farben neuer Zeilen erst, wenn das Fenster im Takt ist.
+   Verschieben durch offene Edits nur nach Messung?
+5. **CSP:** `'wasm-unsafe-eval'` und `connect-src 'self'`. In ADR-023 nachtragen oder in einem neuen ADR?
+6. **Schliessen über das System bei hängendem Fenster:** Nach 1 s wird auf dem Spiegel gespeichert. Die Edits des
+   letzten Frames können fehlen.
+7. **Speicher:** ein Rope je offenem Tab im WASM und ein Spiegel im Backend; Kopieren beim Öffnen etwa 17 ms bei
+   450 K. Gilt das Tab-Limit (M-06.6) auch dafür?
+8. **Startzeit:** `init()` und Kompilieren von etwa 1 MB WASM gegen NFR-001. Messen in B3c.
+9. **Umbenennen ohne Siegel** (wie egui) kann mit einem Tipp-Schritt des Benutzers zu einem Undo-Schritt verschmelzen,
+   wenn die Stellen aneinanderstossen (`merges`). Übernehmen wie egui?
+10. **IME/Komposition** in der Quellansicht, während der Text dem WASM gehört (CM-Komposition wird zurückgenommen,
+    Spike nur synthetisch). Echte Tests in F16/Phase 4.
+11. **Versionspflege:** `wasm-bindgen` in `Cargo.lock` und die CLI müssen gleich bleiben. Ein Update von Abhängigkeiten
+    kann sie trennen; das Skript bricht dann ab. Soll Dependabot den Pin ausnehmen?
+12. **Die Markierung der Workspace-Suche** (M-13): im WASM oder im Backend? Entscheidet F9.
+13. **Plattformen:** WebView2 und WKWebView: `instantiateStreaming`, MIME von `.wasm` über `tauri://` bzw.
+    `http://tauri.localhost`. Bisher nur unter WebKitGTK geprüft.
