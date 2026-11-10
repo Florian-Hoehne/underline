@@ -3,8 +3,17 @@
 //! (`ui/src/lib/mock-backend.ts`): the same revisions, transforms and
 //! reload barrier as the real backend, without a Tauri window.
 
+use std::collections::HashMap;
+
+use ropey::Rope;
+use underline_editor_core::facade::{parse_all, MakeViews};
 use underline_editor_core::sync::{Batch, Server};
-use underline_editor_view::sync_view::{SyncAnswer, SyncBatch};
+use underline_editor_view::facade_view::{BlockKindView, FigureView};
+use underline_editor_view::sync_view::{EnrichView, SyncAnswer, SyncBatch};
+use underline_editor_view::views::{diagram_key, diagram_language};
+use underline_editor_view::CachedViews;
+use underline_markup::blocks::BlockKind;
+use underline_markup::NoteFormat;
 
 use crate::calls::CallError;
 
@@ -74,6 +83,69 @@ impl Mirror {
     /// A change from outside: the text is `text` now.
     pub fn reload(&mut self, text: &str) -> u32 {
         self.0.reload(text)
+    }
+
+    /// `EnrichView` of the note `note` in `format` for the mock: the
+    /// figures of its images from `images` (by target), every diagram with
+    /// `diagram`; keyed as the backend keys them.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the JSON it should be.
+    pub fn enrichment(
+        &self,
+        note: &str,
+        markdown: bool,
+        (theme, dark): (&str, bool),
+        images: &str,
+        diagram: &str,
+    ) -> Result<String, CallError> {
+        let images: HashMap<String, FigureView> =
+            serde_json::from_str(images).map_err(|reason| CallError::Invalid {
+                what: "The images",
+                reason,
+            })?;
+        let diagram: FigureView =
+            serde_json::from_str(diagram).map_err(|reason| CallError::Invalid {
+                what: "The diagram",
+                reason,
+            })?;
+        let text = self.0.text();
+        let format = if markdown {
+            NoteFormat::Markdown
+        } else {
+            NoteFormat::AsciiDoc
+        };
+        let (blocks, _) = parse_all(&text, format);
+        let views = CachedViews::new(theme, dark).all(&blocks, &text, &Rope::from_str(&text));
+        let mut sent = EnrichView {
+            note: note.to_owned(),
+            rev: self.0.rev(),
+            theme: theme.to_owned(),
+            dark,
+            clear: false,
+            colors: Vec::new(),
+            diagrams: Vec::new(),
+            images: Vec::new(),
+        };
+        for (block, view) in blocks.iter().zip(&views) {
+            let code: String = view.runs.iter().map(|r| r.text.as_str()).collect();
+            match (&block.kind, &view.kind) {
+                (BlockKind::Code { .. }, _) => {
+                    if let Some(language) = diagram_language(&block.kind) {
+                        sent.diagrams
+                            .push((diagram_key(language, &code, dark), diagram.clone()));
+                    }
+                }
+                (_, BlockKindView::Image { target, .. }) => {
+                    if let Some(figure) = images.get(target) {
+                        sent.images.push((target.clone(), figure.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        json(&sent)
     }
 
     /// `SyncAnswer` after the window's `text` was taken.

@@ -36,6 +36,7 @@ use crate::facade_view::{
     BlockView, BlocksView, FacadeAt, FacadeInput, FacadePatch, FacadeState, GapView, RowsView,
 };
 use crate::folds::Folds;
+use crate::CachedViews;
 
 /// How often the marked hits of the Nano search are found again while the
 /// text changes: 300 ms.
@@ -720,6 +721,65 @@ impl EditorTab {
         self.facade.versioned(changes)
     }
 
+    /// ADR-025: the facade after the text changed without an input of the
+    /// facade (a change of the backend): its blocks made anew where needed,
+    /// with the cursor as it is now; the view does not scroll.
+    pub fn facade_refresh<M: MakeViews<View = BlockView>>(
+        &mut self,
+        note: &str,
+        views: &mut M,
+    ) -> FacadePatch {
+        let base = self.editor.revision();
+        let changes = self.bring_facade_up_to_date(views);
+        let rev = self.editor.revision();
+        let source = self.patch(base, &Outcome::default());
+        FacadePatch {
+            base: revision(base),
+            rev: revision(rev),
+            blocks: blocks_views(note, rev, changes),
+            anchor: source.anchor,
+            head: source.head,
+            gap: gap_at(
+                self.editor.document().rope(),
+                self.editor.cursor(),
+                &self.facade.blocks,
+            )
+            .map(gap_view),
+            scroll: false,
+            unstored: false,
+            place: source.place,
+            keys: keys_status(&self.keys),
+            commands: Vec::new(),
+            request: None,
+            copied: None,
+            wants_clipboard: self.keys.wants_clipboard(),
+        }
+    }
+
+    /// ADR-025: the facade's views take what the backend sent of colours and
+    /// figures (`ed-enrich`); the changes for the window, each block in
+    /// place. None while the blocks are not of the text (they take it when
+    /// they are made).
+    pub fn facade_enriched(&mut self, note: &str, views: &mut CachedViews) -> Vec<BlocksView> {
+        let rev = self.editor.revision();
+        if self.facade.parsed != Some(rev) {
+            return Vec::new();
+        }
+        let changed = views.enrich(&self.facade.blocks, &mut self.facade.views);
+        let splices = changed
+            .into_iter()
+            .map(|index| Splice {
+                from: index,
+                removed: 1,
+                blocks: vec![self.facade.views[index].clone()],
+                shift: 0,
+                line_shift: 0,
+            })
+            .collect();
+        let changes = self.facade.versioned(splices);
+        blocks_views(note, rev, changes)
+    }
+
     /// M-11.4, FR-026: the left part of the status line while the facade
     /// shows the note.
     #[must_use]
@@ -730,6 +790,15 @@ impl EditorTab {
     /// The whole facade of `note` for the window, with the cursor.
     #[must_use]
     pub fn facade_state(&self, note: &str) -> FacadeState {
+        let mut state = self.facade_head(note);
+        state.blocks.clone_from(&self.facade.views);
+        state
+    }
+
+    /// ADR-025: the facade of `note` without its blocks: the window still
+    /// holds the blocks of this `version` and takes them again.
+    #[must_use]
+    pub fn facade_head(&self, note: &str) -> FacadeState {
         let (head, anchor) = self.editor.selection_web();
         let facade = &self.facade;
         FacadeState {
@@ -737,7 +806,7 @@ impl EditorTab {
             rev: revision(facade.parsed.unwrap_or_else(|| self.editor.revision())),
             version: facade.version,
             format: indicator(self.format).to_owned(),
-            blocks: facade.views.clone(),
+            blocks: Vec::new(),
             anchor: units(anchor),
             head: units(head),
             place: self.editor.cursor_place().label(),
@@ -1052,5 +1121,28 @@ mod tests {
         tab.set_now(f64::INFINITY);
 
         assert!((tab.now_ms - 500.0).abs() < f64::EPSILON);
+    }
+
+    /// ADR-025 (review B5b): after a change of the backend the facade takes
+    /// only the blocks that changed, in the chain of versions, without
+    /// scrolling; nothing more when nothing changed again.
+    #[test]
+    fn adr025_the_facade_after_a_change_of_the_backend() {
+        let mut tab = EditorTab::new("# A\n\nOne\n\nTwo\n", NoteFormat::Markdown);
+        let mut views = crate::CachedViews::new("Light", false);
+        tab.bring_facade_up_to_date(&mut views);
+        let before = tab.facade_state("A");
+        let at = "# A\n\nOne".len();
+        let _ = tab.editor.replace(at..at, "!");
+
+        let patch = tab.facade_refresh("A", &mut views);
+
+        assert!(!patch.scroll);
+        assert_eq!(patch.blocks.len(), 1);
+        let change = &patch.blocks[0];
+        assert_eq!(change.base, before.version);
+        assert_eq!((change.from, change.removed), (1, 1));
+        assert_eq!(change.blocks[0].runs[0].text, "One!");
+        assert!(tab.facade_refresh("A", &mut views).blocks.is_empty());
     }
 }

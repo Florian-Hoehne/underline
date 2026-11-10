@@ -574,6 +574,10 @@ export type EnrichView = {
 	note: string,
 	/**  The backend's revision the entries were made at. */
 	rev: number,
+	/**  The theme the colours are for, by its name. */
+	theme: string,
+	/**  Whether the theme is dark, which the diagrams are drawn for. */
+	dark: boolean,
 	/**  What was sent before is dropped first. */
 	clear: boolean,
 	/**  The colours of code by key; `None` when nothing in it is coloured. */

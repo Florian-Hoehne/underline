@@ -14,10 +14,17 @@
 //   the scroll position until it is painted with its blocks.
 
 import { mount, unmount } from 'svelte';
-import { commands } from '../bindings';
-import { SourceView, tauriBackend } from '../editor/sourceView';
-import { tauriFacadeBackend } from './backend';
-import type { BlockView } from '../bindings';
+import { commands, events } from '../bindings';
+import { SourceView } from '../editor/sourceView';
+import { setBenchPhase } from '../editor/bench';
+import { coreOf, dropCore } from '../editor/sync';
+import { wasmBackend } from '../editor/wasmBackend';
+import { wasmFacadeBackend } from './wasmBackend';
+
+/** ADR-025 (step B5b): both views on the window's editor core. */
+const tauriBackend = wasmBackend(false);
+const tauriFacadeBackend = wasmFacadeBackend(false);
+import type { BlockView, EnrichView } from '../bindings';
 import { activeFacade } from './active';
 import { applyBlocks, foldingOf } from './model';
 import FacadeView from './FacadeView.svelte';
@@ -77,15 +84,18 @@ async function showFacade(host: HTMLElement, note: string) {
 export async function measureF5(host: HTMLElement, note: string): Promise<F5Results> {
   await commands.tabSetView(note, 'source');
   await commands.tabSetView(note, 'facade');
+  // ADR-025: opening the facade is the core's: cold with the text fetched
+  // and the blocks made, warm with the core kept.
+  dropCore(note);
   let start = performance.now();
-  const cold = await commands.faOpen(note);
+  const state = await tauriFacadeBackend.open(note);
   const faOpenColdMs = performance.now() - start;
   start = performance.now();
-  await commands.faOpen(note);
+  await tauriFacadeBackend.open(note);
   const faOpenWarmMs = performance.now() - start;
-  const state = cold.status === 'ok' ? cold.data : null;
   const payloadKb = state ? JSON.stringify(state).length / 1024 : NaN;
 
+  setBenchPhase('f5a open, switch');
   const open: number[] = [];
   const toSource: number[] = [];
   const toFacade: number[] = [];
@@ -118,6 +128,7 @@ export async function measureF5(host: HTMLElement, note: string): Promise<F5Resu
   }
 
   // Scrolling through the whole facade, a screen at a time.
+  setBenchPhase('f5a scroll');
   const facade = await showFacade(host, note);
   const scroller = host.querySelector<HTMLElement>('.scroller')!;
   await painted();
@@ -403,24 +414,30 @@ export async function measureF5b(
   host: HTMLElement,
   note: string,
   keys: number,
-): Promise<{ rows: F5bRow[]; apply: Record<string, { apply: Stats99; folding: Stats99 }> }> {
+): Promise<{
+  rows: F5bRow[];
+  apply: Record<string, { apply: Stats99; folding: Stats99 }>;
+  enrich: { colors: Stats99; diagrams: Stats99 } | null;
+}> {
   await commands.tabSetView(note, 'facade');
+  let enrich: { colors: Stats99; diagrams: Stats99 } | null = null;
   const rows: F5bRow[] = [];
   const apply: Record<string, { apply: Stats99; folding: Stats99 }> = {};
   const modes = (import.meta.env.VITE_UL_BENCH_MODES ?? 'Normal,Vim,Nano').split(',');
   for (const mode of modes) {
+    setBenchPhase(`${mode} open`);
     await commands.settingsQuick('input_mode', mode);
-    const state = await commands.faOpen(note);
-    if (state.status !== 'ok') {
-      throw new Error('fa_open failed');
-    }
+    const state = { status: 'ok' as const, data: await tauriFacadeBackend.open(note) };
+    setBenchPhase(`${mode} mount`);
     const m = await mountMeasured(host, note, mode);
     await benchSleep(500);
     for (const [position, block] of positions(state.data)) {
       if (mode === modes[0]) {
         apply[position] = measureApply(state.data.blocks, block);
       }
+      setBenchPhase(`${mode} cursor ${position}`);
       await cursorAtEnd(m, block, state.data.blocks[block].start);
+      setBenchPhase(`${mode} type ${position}`);
       if (mode === 'Vim') {
         // Typing is the insert mode's (`A`: at the end of the block).
         await drive(m, 'insertText', 'A');
@@ -440,6 +457,7 @@ export async function measureF5b(
           if (sample) back.push(sample);
         }
         rows.push(row(mode, 'backspace', position, block, back));
+        setBenchPhase(`${mode} enter ${position}`);
         const enter: Sample[] = [];
         const enterBack: Sample[] = [];
         for (let i = 0; i < 30; i++) {
@@ -458,9 +476,102 @@ export async function measureF5b(
       }
       console.info(`F5b ${mode} ${position} done`);
     }
+    setBenchPhase(`${mode} enrich`);
+    if (mode === 'Normal' && import.meta.env.VITE_UL_BENCH_NO_ENRICH !== '1') {
+      enrich = await measureEnrich(m, note, () => tauriFacadeBackend.open(note));
+    }
+    setBenchPhase(`${mode} unmount`);
     await unmount(m.component);
     host.replaceChildren();
   }
+  setBenchPhase('end');
   await commands.settingsQuick('input_mode', 'Normal');
-  return { rows, apply };
+  return { rows, apply, enrich };
+}
+
+/**
+ * ADR-025: how long after an edit of a code block its colours come from
+ * the backend (`ed-enrich`), and after an edit of a diagram its picture:
+ * from the key until the event is in.
+ */
+async function measureEnrich(
+  m: Measured,
+  note: string,
+  whole: () => Promise<{ blocks: BlockView[] }>,
+): Promise<{ colors: Stats99; diagrams: Stats99 }> {
+  // The long frames of taking all blocks apart from those of waiting.
+  const fresh = async () => {
+    setBenchPhase('enrich fresh');
+    const taken = await whole();
+    // Its frame ends before the waiting starts.
+    await painted();
+    setBenchPhase('enrich wait');
+    return taken;
+  };
+  // The blocks as they are now (the typing before moved them).
+  let state = await fresh();
+  const find = (diagram: boolean) => {
+    let index = Math.round(state.blocks.length * 0.5);
+    while (
+      index < state.blocks.length - 1 &&
+      !(
+        state.blocks[index].kind.type === 'code' &&
+        (state.blocks[index].figure !== null) === diagram
+      )
+    ) {
+      index++;
+    }
+    return index;
+  };
+  const latency = async (
+    index: number,
+    wanted: (sent: EnrichView) => boolean,
+    diagram: boolean,
+  ) => {
+    const samples: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      state = await fresh();
+      const block = state.blocks[index];
+      if (!diagram) {
+        await cursorAtEnd(m, index, block.start);
+      }
+      let arrived = NaN;
+      const start = performance.now();
+      const unlisten = await events.edEnrich.listen((event) => {
+        if (Number.isNaN(arrived) && wanted(event.payload)) {
+          arrived = performance.now();
+        }
+      });
+      if (diagram) {
+        // A diagram shows its picture, not its text: its code is changed
+        // in the core directly, as an input of the source view would.
+        const tab = coreOf(note)!;
+        const at = block.start + (block.runs[0]?.offsets[0]?.[1] ?? 0);
+        tab.core.select(tab.core.state().rev, at, at);
+        tab.core.input({ kind: 'text', text: `%% ${i}\n` });
+        tab.afterInput();
+      } else {
+        await drive(m, 'insertText', String(i % 10));
+      }
+      for (let t = 0; t < 5000 && Number.isNaN(arrived); t += 5) {
+        await benchSleep(5);
+      }
+      unlisten();
+      samples.push(arrived - start);
+      await benchSleep(200);
+    }
+    return stats99(samples);
+  };
+  const colors = await latency(
+    find(false),
+    (sent) => sent.colors.some(([, c]) => c !== null),
+    false,
+  );
+  state = await fresh();
+  const diagrams = await latency(
+    find(true),
+    (sent) => sent.diagrams.some(([, figure]) => figure.picture !== null),
+    true,
+  );
+  return { colors, diagrams };
 }

@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use underline_core::{EditingView, NoteId};
 use underline_editor_core::facade::splices;
 use underline_editor_view::views::{colors_key, diagram_key, diagram_language};
-use underline_editor_view::{blocks_views, FacadeModel, Versioned};
+use underline_editor_view::{blocks_views, FacadeModel, Versioned, CODE_COLORS_KEPT};
 use underline_facade::blocks::BlockKind;
 use underline_facade::highlight::HighlightSet;
 
@@ -187,10 +187,16 @@ impl Facade {
             // The views are not made in this look yet.
             return None;
         }
-        let clear = self.sent.looks != Some(looks);
-        if !clear && self.sent.version == Some(model.version) {
+        let new_looks = self.sent.looks != Some(looks);
+        if !new_looks && self.sent.version == Some(model.version) {
             return None;
         }
+        // The window keeps what was sent since the last `clear`: past the
+        // bound both start anew with the colours and figures of the blocks
+        // now (ADR-025, `CODE_COLORS_KEPT`).
+        let full = self.sent.colors.len() + self.sent.diagrams.len() + self.sent.images.len()
+            >= CODE_COLORS_KEPT;
+        let clear = new_looks || full;
         if clear {
             self.sent = Sent {
                 looks: Some(looks),
@@ -256,6 +262,12 @@ impl Facade {
         any.then_some(out)
     }
 
+    /// ADR-025: the window's facade starts anew (a new core): everything is
+    /// sent again.
+    pub(super) fn forget_sent(&mut self) {
+        self.sent = Sent::default();
+    }
+
     /// Whether the facade is shown.
     pub(super) fn shown(&self) -> bool {
         self.shown
@@ -312,9 +324,16 @@ impl std::fmt::Debug for Shared {
     }
 }
 
-/// The events of `changes` of the facade of `note`, whose blocks are of
-/// revision `rev`.
-fn events(note: &NoteId, rev: u64, changes: Vec<Versioned>) -> Vec<Event> {
+/// The `ed-blocks` events of `changes` of the facade of `note`, whose
+/// blocks are of revision `rev`.
+///
+/// `window` is true when the window's editor core makes the blocks itself
+/// (ADR-025, `Tab::window_facade`): then there are none, since a long
+/// note's first facade would be megabytes the window throws away.
+fn events(note: &NoteId, rev: u64, changes: Vec<Versioned>, window: bool) -> Vec<Event> {
+    if window {
+        return Vec::new();
+    }
     blocks_views(note.as_str(), rev, changes)
         .into_iter()
         .map(Event::Blocks)
@@ -404,6 +423,8 @@ impl Session {
         let root = open.root().to_owned();
         let index = open.tabs.find(note).ok_or_else(|| not_open(note))?;
         let tab = open.tabs.get_mut(index);
+        // The backend makes the window's facade (ADR-024).
+        tab.window_facade = false;
         // The source view is not shown; the sections are sent again.
         tab.viewport = None;
         tab.highlight_told = None;
@@ -471,6 +492,12 @@ impl Session {
         };
         let tab = open.tabs.get_mut(index);
         let view = EditingView::from(view);
+        if view == EditingView::Facade {
+            // ADR-025: the tick makes the blocks' colours and figures for the
+            // window's facade (`ed-enrich`) while it is shown.
+            tab.facade.get_or_insert_with(Facade::default).shown = true;
+            self.wake.wake();
+        }
         if tab.editing_view == view {
             return;
         }
@@ -532,19 +559,19 @@ impl Session {
                 note,
                 parsed,
                 facade.figures(&mut tab.edit.facade, &tools),
+                tab.window_facade,
             ));
             if !facade.recolor.is_empty() {
                 let ctx = context(tab, &root, &tools, &self.facade);
-                out.extend(events(
-                    note,
-                    parsed,
-                    facade.recolored(&mut tab.edit.facade, &ctx),
-                ));
+                let recolored = facade.recolored(&mut tab.edit.facade, &ctx);
+                out.extend(events(note, parsed, recolored, tab.window_facade));
             }
             if let Some(found) = facade.enrich(&tab.edit.facade, tools.looks, tools.dark) {
                 out.push(Event::Enrich(Box::new(EnrichView {
                     note: note.as_str().to_owned(),
                     rev: tab.mirror.rev(),
+                    theme: tools.looks.0.label().to_owned(),
+                    dark: tools.dark,
                     clear: found.clear,
                     colors: found.colors,
                     diagrams: found.diagrams,
@@ -577,7 +604,7 @@ impl Session {
                 continue;
             }
             if let Some(changes) = facade.commit(&mut tab.edit.facade, built) {
-                out.extend(events(&note, rev, changes));
+                out.extend(events(&note, rev, changes, tab.window_facade));
             }
         }
         out

@@ -509,3 +509,47 @@ fn m11_2_vim_dd_deletes_a_block_and_x_a_shown_character() {
     press(&mut note, "x");
     assert_eq!(note.text(), "First block.\n\nhird.\n");
 }
+
+/// M-09.11, M-09.12 (app-tester B5b): Enter at the end of a quote starts an
+/// empty quote item (`> `, no block); Backspace takes it away again and
+/// leaves the block after it alone.
+#[test]
+fn m09_12_backspace_on_an_empty_quote_item_keeps_the_block_after_it() {
+    for after in ["```rust\nfn x()\n```\n\nafter\n", "after\n"] {
+        let text = format!("> A quote\n\n{after}");
+        let mut note = Note::markdown(&text);
+        note.click_after("A quote");
+        note.input(|edit| edit.key(Key::Enter, Modifiers::default()));
+        assert_eq!(note.text(), format!("> A quote\n\n> \n\n{after}"));
+        note.input(|edit| edit.key(Key::Backspace, Modifiers::default()));
+        assert_eq!(note.text(), text);
+        assert_eq!(note.editor.cursor(), "> A quote".len());
+    }
+}
+
+/// M-10.1 (app-tester B5b): with the whole note deleted (no blocks left),
+/// Ctrl+Z brings it back and Ctrl+Shift+Z deletes it again.
+#[test]
+fn m10_1_undo_after_deleting_the_whole_note() {
+    let text = "# Home\n\nSome text.\n";
+    let mut note = Note::markdown(text);
+    let command = Modifiers {
+        command: true,
+        ..Modifiers::default()
+    };
+    note.input(|edit| edit.key(Key::A, command));
+    note.input(|edit| edit.key(Key::Backspace, Modifiers::default()));
+    assert_eq!(note.text(), "");
+    note.input(|edit| edit.key(Key::Z, command));
+    assert_eq!(note.text(), text);
+    note.input(|edit| {
+        edit.key(
+            Key::Z,
+            Modifiers {
+                shift: true,
+                ..command
+            },
+        );
+    });
+    assert_eq!(note.text(), "");
+}

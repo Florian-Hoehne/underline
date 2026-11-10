@@ -538,7 +538,7 @@ pub enum ClipAction {
 }
 
 /// How one kind of highlighted text looks (ADR-010).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct SpanStyle {

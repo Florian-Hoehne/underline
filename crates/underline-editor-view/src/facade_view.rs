@@ -124,7 +124,7 @@ pub enum BlockKindView {
 }
 
 /// The colours of a code block in its language (M-09.4, ADR-010).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct CodeColors {
@@ -136,7 +136,7 @@ pub struct CodeColors {
 }
 
 /// The picture of an image or a diagram block (M-09.6, M-09.7).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct FigureView {

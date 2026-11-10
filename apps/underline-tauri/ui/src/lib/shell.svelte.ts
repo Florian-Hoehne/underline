@@ -32,13 +32,18 @@ import {
 } from './bindings';
 import { activeSourceView } from './editor/active';
 import {
-  dropAllCores,
   dropCore,
+  enrichCore,
   flushCores,
   flushed,
   keepCoresOf,
   ringCore,
   setSyncReporter,
+  EDITOR_FAILED,
+  handOverFailed,
+  markCores,
+  dropCoresBefore,
+  keepCores,
   takeFlush,
 } from './editor/sync';
 import { activeFacade } from './facade/active';
@@ -101,6 +106,8 @@ export class Shell {
   workspace = $state<WorkspaceView | null>(null);
   /** M-05.2: the note overview, recently opened first. */
   overview = $state<OverviewItem[]>([]);
+  /** Q-40: notes whose editor failed and lost the latest edits, until the user acts there again. */
+  editorLost = $state<string[]>([]);
   /** M-06: the tab bar. */
   tabs = $state<TabsView>(NO_TABS);
   /**
@@ -184,6 +191,13 @@ export class Shell {
       closeQuestion: (question) => {
         this.closeQuestion = question;
       },
+      dead: (note) => {
+        const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+        this.status = `${title}: ${EDITOR_FAILED}`;
+        if (!this.editorLost.includes(note)) {
+          this.editorLost = [...this.editorLost, note];
+        }
+      },
     });
     this.#unlisten = await Promise.all([
       events.status.listen((event) => {
@@ -232,6 +246,9 @@ export class Shell {
       // for the window's edits (before an agent's change, before closing).
       events.edChanged.listen((event) => {
         ringCore(event.payload.note);
+      }),
+      events.edEnrich.listen((event) => {
+        enrichCore(event.payload);
       }),
       events.edFlush.listen((event) => {
         void takeFlush(event.payload).catch((error: unknown) =>
@@ -339,10 +356,19 @@ export class Shell {
    * when it lies inside a workspace (A5 step 2, A6).
    */
   async openWorkspace(path: string, anyway = false): Promise<void> {
-    const answer = await this.#ask('ws_open', () => flushed(() => commands.wsOpen(path, anyway)));
+    let mark = 0;
+    const answer = await this.#ask('ws_open', () =>
+      flushed(() => {
+        mark = markCores();
+        return commands.wsOpen(path, anyway);
+      }),
+    );
     if (answer?.kind === 'done') {
-      // ADR-025: the cores of the notes of the workspace left go.
-      dropAllCores();
+      // ADR-025: the cores of the notes of the workspace left go; the new
+      // one's may have opened before this answer came.
+      dropCoresBefore(mark);
+    } else if (mark !== 0) {
+      keepCores();
     }
     if (answer) {
       this.#takeOpenAnswer(answer);
@@ -378,11 +404,17 @@ export class Shell {
     git: boolean,
     remote = '',
   ): Promise<void> {
+    let mark = 0;
     const answer = await this.#ask('ws_create', () =>
-      flushed(() => commands.wsCreate({ directory, format, git, remote })),
+      flushed(() => {
+        mark = markCores();
+        return commands.wsCreate({ directory, format, git, remote });
+      }),
     );
     if (answer?.stage === 'done') {
-      dropAllCores();
+      dropCoresBefore(mark);
+    } else if (mark !== 0) {
+      keepCores();
     }
     if (answer) {
       this.#takeCreateAnswer(answer, directory, format);
@@ -427,7 +459,7 @@ export class Shell {
         this.closeQuestion = {
           tab: note,
           what: `the tab ${title}`,
-          error: `The edits could not be sent: ${failure}`,
+          error: handOverFailed(failure),
         };
         return false;
       }
@@ -510,6 +542,13 @@ export class Shell {
   /** Reports a failure of the editor in the status bar, as other commands do. */
   editorFailed(message: string): void {
     this.status = message;
+  }
+
+  /** Q-40: the user acted in `note` again; the note on its lost edits goes. */
+  editorLostSeen(note: string): void {
+    if (this.editorLost.includes(note)) {
+      this.editorLost = this.editorLost.filter((lost) => lost !== note);
+    }
   }
 
   /** M-05.1: the overview shows; its width comes from the settings. */

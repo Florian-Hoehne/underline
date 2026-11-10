@@ -552,6 +552,10 @@ export class SourceView {
   }
 
   destroy(): void {
+    // The Vim keys' changes not sent yet still go (A-01).
+    if (this.#local.length > 0) {
+      this.#scheduleSync();
+    }
     this.#destroyed = true;
     this.#detach?.();
     if (this.#viewportTimer !== null) {
@@ -908,9 +912,9 @@ export class SourceView {
   /** Runs `work` after every input before it and applies its patch. */
   #enqueue(work: () => Promise<EditorPatch | null | void>): void {
     this.#queue = this.#queue.then(async () => {
-      if (this.#destroyed) {
-        return;
-      }
+      // An input still runs once the view is gone: its key reaches the
+      // text (ADR-025, a switch of the view right after typing); only its
+      // patch is not shown.
       const start = performance.now();
       try {
         const patch = await work();

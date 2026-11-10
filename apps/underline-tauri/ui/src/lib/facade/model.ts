@@ -19,16 +19,29 @@ export function applyBlocks(blocks: Blocks, change: BlocksView): Blocks | null {
   if (change.base !== blocks.version) {
     return null;
   }
-  const next = blocks.blocks.slice(0, change.from);
-  next.push(...change.blocks);
-  for (const block of blocks.blocks.slice(change.from + change.removed)) {
-    next.push(
-      change.shift === 0 && change.lineShift === 0
-        ? block
-        : { ...block, start: block.start + change.shift, line: block.line + change.lineShift },
-    );
-  }
+  const next = blocks.blocks.slice();
+  spliceBlocks(next, change);
   return { rev: change.rev, version: change.version, blocks: next };
+}
+
+/**
+ * Applies `change` to `blocks` in place: its blocks replace the removed
+ * ones, the blocks after them move by its shift.
+ */
+export function spliceBlocks(blocks: BlockView[], change: BlocksView): void {
+  const end = change.from + change.removed;
+  if (change.shift === 0 && change.lineShift === 0) {
+    blocks.splice(change.from, change.removed, ...change.blocks);
+    return;
+  }
+  const moved = blocks.slice(end).map((block) => ({
+    ...block,
+    start: block.start + change.shift,
+    line: block.line + change.lineShift,
+  }));
+  blocks.length = change.from;
+  for (const block of change.blocks) blocks.push(block);
+  for (const block of moved) blocks.push(block);
 }
 
 /** The UTF-16 length of `run`'s text. */

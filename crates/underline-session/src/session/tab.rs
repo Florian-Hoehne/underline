@@ -36,6 +36,10 @@ pub(super) struct Tab {
     /// A window synced its edits with `ed_sync`; a reload then waits for it
     /// to confirm (`docs/migration/variante-b.md` section 3.6).
     pub(super) window_synced: bool,
+    /// ADR-025: the window's editor core makes the facade's blocks
+    /// (`ed_mirror`); the tick sends only their colours and figures
+    /// (`ed-enrich`), not the blocks (`ed-blocks`), until `fa_open`.
+    pub(super) window_facade: bool,
     /// The mirror's revision the window was last told of or answered with;
     /// a later one rings it (`ed-changed`).
     pub(super) told_rev: u32,
@@ -101,6 +105,7 @@ impl Tab {
             },
             mirror: Server::new(&body),
             window_synced: false,
+            window_facade: false,
             told_rev: 1,
             autosave: Autosave::default(),
             saving: false,

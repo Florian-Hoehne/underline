@@ -8372,6 +8372,7 @@ dependencies = [
 name = "underline-editor-wasm"
 version = "0.1.0"
 dependencies = [
+ "ropey",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

@@ -6,6 +6,7 @@ import App from '../App.svelte';
 import { connectedShell } from '../test/shell';
 import type { TabsView } from './bindings';
 import { activeSourceView } from './editor/active';
+import { EditorCore } from './editor/core';
 import { mockHandlers, mockHooks, MOCK_SAVE_ERROR, type MockStart } from './mock-backend';
 
 afterEach(() => {
@@ -170,7 +171,7 @@ describe('M-07.2 the switch of the editing view', () => {
     await fireEvent.click(source);
 
     await waitFor(() => expect(panel()).toHaveAttribute('data-view', 'source'));
-    expect(setView).toHaveBeenCalledWith({ note: 'Home', view: 'source' });
+    await waitFor(() => expect(setView).toHaveBeenCalledWith({ note: 'Home', view: 'source' }));
     expect(source).toHaveAttribute('aria-pressed', 'true');
     await textField();
     await waitFor(() => expect(document.activeElement).toBe(document.querySelector('.cm-content')));
@@ -181,6 +182,156 @@ describe('M-07.2 the switch of the editing view', () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(document.querySelector('.facade-text')),
     );
+  });
+});
+
+describe('ADR-025 the text in the window across a switch of the view', () => {
+  it('keys typed right before a switch reach the text, in the same task', async () => {
+    await workbench(NOTES);
+    const field = await textField();
+    const facade = within(screen.getByRole('group', { name: 'Editing view' })).getByRole('button', {
+      name: 'Facade',
+    });
+
+    type(field, 'a');
+    type(field, 'b');
+    type(field, 'c');
+    facade.click();
+
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toMatch(/^abc# Home/));
+    await waitFor(() =>
+      expect(document.querySelector('.facade-text [data-b="0"]')).toHaveTextContent('abc# Home'),
+    );
+  });
+
+  it('keys typed in the facade right before a switch reach the text', async () => {
+    await workbench({ givenDir: '/home/user/Notes' });
+    const text = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.facade-text');
+      expect(found?.querySelector('[data-b="0"]')).toBeTruthy();
+      return found!;
+    });
+    const source = within(screen.getByRole('group', { name: 'Editing view' })).getByRole('button', {
+      name: 'Source',
+    });
+
+    for (const data of ['x', 'y', 'z']) {
+      text.dispatchEvent(
+        new InputEvent('beforeinput', {
+          inputType: 'insertText',
+          data,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+    source.click();
+
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toContain('xyz'));
+    await waitFor(() => expect(activeSourceView()?.view.state.doc.toString()).toContain('xyz'));
+  });
+
+  it('the facade shown again takes the blocks it drew when nothing changed, else all anew', async () => {
+    await workbench({ givenDir: '/home/user/Notes' });
+    const block = () => document.querySelector('.facade-text [data-b="0"]');
+    await waitFor(() => expect(block()).toHaveTextContent('Home'));
+    const views = within(screen.getByRole('group', { name: 'Editing view' }));
+    const whole = vi.spyOn(EditorCore.prototype, 'facadeState');
+    const head = vi.spyOn(EditorCore.prototype, 'facadeHead');
+
+    views.getByRole('button', { name: 'Source' }).click();
+    await textField();
+    views.getByRole('button', { name: 'Facade' }).click();
+    await waitFor(() => expect(block()).toHaveTextContent('Home'));
+    expect(head).toHaveBeenCalled();
+    expect(whole).not.toHaveBeenCalled();
+
+    views.getByRole('button', { name: 'Source' }).click();
+    await waitFor(() => expect(activeSourceView()).not.toBeNull());
+    type(await textField(), 'q');
+    views.getByRole('button', { name: 'Facade' }).click();
+    await waitFor(() => expect(block()).toHaveTextContent('q# Home'));
+    expect(whole).toHaveBeenCalled();
+  });
+
+  it('M-21.1 the first tab of a workspace opened from the start screen can be edited in the facade', async () => {
+    const shell = await workbench({});
+    await shell.openWorkspace('/home/user/Notes');
+    const text = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.facade-text');
+      expect(found?.querySelector('[data-b="0"]')).toHaveTextContent('Home');
+      return found!;
+    });
+
+    text.dispatchEvent(
+      new InputEvent('beforeinput', {
+        inputType: 'insertText',
+        data: 'q',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toMatch(/q/));
+    expect(shell.status).not.toMatch(/not open/);
+  });
+
+  it('M-11.2 the Vim keys work in the facade of a tab that never showed the source view', async () => {
+    await workbench({ givenDir: '/home/user/Notes', settings: { inputMode: 'Vim' } });
+    const text = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.facade-text');
+      expect(found?.querySelector('[data-b="0"]')).toBeTruthy();
+      return found!;
+    });
+
+    const status = screen.getByRole('group', { name: 'Editor status' });
+    await waitFor(() => expect(status.querySelector('.badge')).toHaveTextContent('NORMAL'));
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).toMatch(/^# Home/));
+
+    // Vim's `x` deletes the character at the cursor, it types nothing.
+    text.dispatchEvent(
+      new InputEvent('beforeinput', {
+        inputType: 'insertText',
+        data: 'x',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).not.toMatch(/^# Home/));
+    expect(mockHooks().mirrorText('Home')).not.toMatch(/x/);
+  });
+
+  it('a change of the backend comes into the facade', async () => {
+    await workbench({ givenDir: '/home/user/Notes' });
+    await waitFor(() =>
+      expect(document.querySelector('.facade-text [data-b="0"]')).toHaveTextContent('Home'),
+    );
+    await waitFor(() => expect(mockHooks().mirrorText('Home')).not.toBeNull());
+
+    await mockHooks().backendEdit('Home', 2, 0, 'Agent ');
+
+    await waitFor(() =>
+      expect(document.querySelector('.facade-text [data-b="0"]')).toHaveTextContent('Agent Home'),
+    );
+  });
+});
+
+describe('Q-40 a failed editor core', () => {
+  it('says above the note that the latest edits were lost, until the user acts there', async () => {
+    const shell = await workbench({ givenDir: '/home/user/Notes' });
+    await waitFor(() =>
+      expect(document.querySelector('.facade-text [data-b="0"]')).toHaveTextContent('Home'),
+    );
+
+    shell.editorLost = ['Home'];
+
+    const alert = await screen.findByText(
+      'The editor failed. It shows the last stored text again; your latest edits were lost.',
+    );
+    expect(alert).toHaveAttribute('role', 'alert');
+    fireEvent.keyDown(document.querySelector('.facade-text')!, { key: 'ArrowRight' });
+    await waitFor(() => expect(alert).not.toBeInTheDocument());
   });
 });
 

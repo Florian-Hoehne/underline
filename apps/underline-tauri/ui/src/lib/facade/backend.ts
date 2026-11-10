@@ -3,6 +3,7 @@
 
 import {
   commands,
+  type BlockView,
   type ClipAction,
   type EditingViewName,
   type EditorPatch,
@@ -15,11 +16,15 @@ import {
   type RowsView,
   type UiError,
 } from '../bindings';
+import type { CoreListener } from '../editor/sync';
+import type { InputModeName } from '../editor/keys';
 
 /** The facade's commands. */
 export interface FacadeBackend {
-  /** The facade of `note` with its cursor (`fa_open`). */
-  open(note: string): Promise<FacadeState>;
+  /** The facade of `note` with its cursor (`fa_open`), its keys those of `mode` when given. */
+  open(note: string, mode?: InputModeName): Promise<FacadeState>;
+  /** M-11: the keys of the facade follow the input mode `mode` of the settings. */
+  setMode?(note: string, mode: InputModeName): void;
   /** Sets the selection in web units of revision `rev`; gives the place for the status line. */
   select(note: string, rev: number, anchor: number, head: number): Promise<string>;
   /** M-08.8: folds or expands the section of the heading on `line`. */
@@ -44,6 +49,19 @@ export interface FacadeBackend {
   readClipboard(): Promise<string | null>;
   /** M-11.2: puts what Vim's `"+` yanked on the system clipboard. */
   writeClipboard(text: string): Promise<void>;
+  /**
+   * ADR-025: the text lives in the window's editor core
+   * (`wasmBackend.ts`): its changes, sections and the backend's colours and
+   * figures come from `attach`, not from the backend's events.
+   */
+  attach?(note: string, listener: CoreListener): () => void;
+  /** ADR-025: the facade after a change of the backend. */
+  refresh?(note: string): Promise<FacadePatch>;
+  /**
+   * ADR-025: the facade of `note` is no longer shown; `kept` are the blocks
+   * it drew, of their version, which `open` may take again.
+   */
+  leave?(note: string, kept: { version: number; blocks: BlockView[] } | null): void;
 }
 
 type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };

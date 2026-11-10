@@ -40,6 +40,7 @@ import type {
   FacadeAt,
   FacadeInput,
   FacadePatch,
+  FigureView,
   TabPropertiesView,
   TabsView,
   ToolView,
@@ -407,6 +408,47 @@ function workspaceHandlers(
   const followMirror = (note: string, mirror: MirrorCore) => {
     const doc = new FakeEditor(note, mirror.text());
     docs.set(note, doc);
+  };
+  /**
+   * ADR-025: the backend's colours and figures of the facade's blocks
+   * (`ed-enrich`), from the fake blocks' figures; no code colours.
+   */
+  const sendEnrich = async (note: string) => {
+    const mirror = mirrors.get(note);
+    if (!mirror || disposed) {
+      return;
+    }
+    const images: Record<string, FigureView> = {};
+    let diagram: FigureView | null = null;
+    for (const block of fakeBlocks(mirror.text())) {
+      if (block.kind.type === 'image' && block.figure) {
+        images[block.kind.target] = { ...block.figure, caption: null };
+      } else if (block.kind.type === 'code' && block.figure) {
+        diagram = block.figure;
+      }
+    }
+    const looks = settings();
+    const sent = mirror.enrichment(
+      note,
+      true,
+      looks.theme,
+      looks.palette.dark,
+      images,
+      diagram ?? {
+        picture: null,
+        message: null,
+        failed: false,
+        sourceShown: false,
+        loading: null,
+        unreadable: null,
+        caption: null,
+      },
+    );
+    try {
+      await emit('ed-enrich', { ...sent, clear: true });
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
   };
   /** The fake document changed (the facade): a window's core fetches it. */
   const mirrorFollows = async (note: string) => {
@@ -916,6 +958,8 @@ function workspaceHandlers(
         mirror = new MirrorCore(docOf(note).text);
         mirrors.set(note, mirror);
       }
+      // The colours and figures follow, as the backend's tick sends them.
+      setTimeout(() => void sendEnrich(note), 20);
       return {
         note,
         rev: mirror.rev,
@@ -935,6 +979,7 @@ function workspaceHandlers(
       if (mirror.text() !== before) {
         followMirror(note, mirror);
         await changed(note);
+        setTimeout(() => void sendEnrich(note), 0);
       }
       if (reverted !== null) {
         // UC-004 A9, as the backend says it (`session/sync.rs`).

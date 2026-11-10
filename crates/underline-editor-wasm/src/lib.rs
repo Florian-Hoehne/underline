@@ -177,6 +177,16 @@ impl WasmTab {
         Ok(self.0.facade_state()?)
     }
 
+    /// `FacadeState` without its blocks, as JSON (the window holds them).
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = facadeHead)]
+    pub fn facade_head(&mut self) -> Result<String, JsError> {
+        Ok(self.0.facade_head()?)
+    }
+
     /// `FacadePatch` as JSON.
     ///
     /// # Errors
@@ -209,6 +219,26 @@ impl WasmTab {
         Ok(self
             .0
             .facade_clipboard(at, action, plain, text.as_deref())?)
+    }
+
+    /// `BlocksView[]` of the backend's colours and figures (`EnrichView`
+    /// JSON), as JSON.
+    ///
+    /// # Errors
+    ///
+    /// `sent` is not an `EnrichView`.
+    pub fn enrich(&mut self, sent: &str) -> Result<String, JsError> {
+        Ok(self.0.enrich(sent)?)
+    }
+
+    /// `FacadePatch` after a change of the backend, as JSON.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = facadeRefresh)]
+    pub fn facade_refresh(&mut self) -> Result<String, JsError> {
+        Ok(self.0.facade_refresh()?)
     }
 
     /// `KeysStatusView | null` of the facade, as JSON.
@@ -363,6 +393,26 @@ impl WasmMirror {
     ) -> Option<u32> {
         self.0
             .backend_edit(at as usize, remove as usize, insert, sealed)
+    }
+
+    /// `EnrichView` JSON for the mock: the figures of the images from
+    /// `images` (JSON object by target), every diagram with `diagram`.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the JSON it should be.
+    pub fn enrichment(
+        &self,
+        note: &str,
+        markdown: bool,
+        theme: &str,
+        dark: bool,
+        images: &str,
+        diagram: &str,
+    ) -> Result<String, JsError> {
+        Ok(self
+            .0
+            .enrichment(note, markdown, (theme, dark), images, diagram)?)
     }
 
     /// A change from outside; the new revision.

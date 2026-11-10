@@ -145,6 +145,7 @@ fn adr025_no_call_panics_with_arguments_that_do_not_fit() {
             }
         }
         let _ = core.facade_state();
+        let _ = core.facade_head();
         let _ = core.views(f64::NAN);
     }));
     assert!(found.is_empty(), "panics:\n{}", found.join("\n"));

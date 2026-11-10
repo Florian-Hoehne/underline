@@ -62,6 +62,8 @@
   th,
   td {
     min-width: 20px;
+    /* An empty cell keeps the height of a line (a cell's height is its least). */
+    height: 1.25em;
     padding: 5px 10px;
     vertical-align: top;
     white-space: pre-wrap;

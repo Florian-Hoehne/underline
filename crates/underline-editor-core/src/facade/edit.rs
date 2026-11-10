@@ -493,6 +493,30 @@ impl FacadeEdit<'_> {
         self.replace(start..end, "");
     }
 
+    /// M-09.11, M-09.12: Backspace with the cursor before block `index`,
+    /// outside every block: on the marker of an empty item (`> ` after
+    /// Enter in a quote, which is no block). The item goes, back to the end
+    /// of the block before; the block after stays.
+    fn delete_empty_item(&mut self, index: usize) -> bool {
+        if !self.editor.selection().is_empty() || index == 0 {
+            return false;
+        }
+        let rope = self.rope();
+        let cursor = self.editor.cursor();
+        let byte = rope.char_to_byte(cursor);
+        let previous = &self.blocks[index - 1];
+        if byte >= self.blocks[index].span.start || byte <= ext_end(previous) {
+            return false;
+        }
+        let start = floor_boundary(rope, previous.source_offset(shown_chars(previous)));
+        if start >= byte {
+            return false;
+        }
+        let start = self.char_of_byte(start);
+        self.replace(start..cursor, "");
+        true
+    }
+
     /// M-09.14: pastes `markup` as it is; markup of several lines stands on
     /// lines of its own, with blank lines around it.
     pub fn paste_markup(&mut self, markup: &str) {
@@ -678,6 +702,19 @@ impl FacadeEdit<'_> {
             }
             return;
         }
+        // M-10.1: the history and Select all also when the note has no
+        // blocks (all of it deleted).
+        match key {
+            Key::Z if modifiers.command && modifiers.shift => return self.redo(),
+            Key::Z if modifiers.command => return self.undo(),
+            Key::Y if modifiers.command => return self.redo(),
+            Key::A if modifiers.command => {
+                let len = self.len();
+                self.set_selection(len, 0);
+                return;
+            }
+            _ => {}
+        }
         let Some((index, at)) = self.cursor_position() else {
             if key == Key::Enter {
                 self.type_text("\n");
@@ -688,16 +725,11 @@ impl FacadeEdit<'_> {
             self.apply_tool(tool);
             return;
         }
+        if key == Key::Backspace && self.delete_empty_item(index) {
+            return;
+        }
         let count = shown_chars(&self.blocks[index]);
         let target = match key {
-            Key::Z if modifiers.command && modifiers.shift => return self.redo(),
-            Key::Z if modifiers.command => return self.undo(),
-            Key::Y if modifiers.command => return self.redo(),
-            Key::A if modifiers.command => {
-                let len = self.len();
-                self.set_selection(len, 0);
-                return;
-            }
             Key::Enter => return self.enter(),
             Key::Backspace => {
                 if !self.delete_selection() {

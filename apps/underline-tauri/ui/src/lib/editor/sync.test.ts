@@ -77,6 +77,7 @@ function backend(text: string) {
   setSyncReporter({
     status: (note, said_) => said.push(`${note}: ${said_}`),
     closeQuestion: (question) => questions.push(question),
+    dead: (note) => said.push(`${note}: dead`),
   });
   return {
     mirror,
@@ -181,7 +182,7 @@ describe('ADR-025 the window side of the sync', () => {
     expect(back.calls.sync).toBeGreaterThanOrEqual(6);
     expect(back.calls.sync).toBeLessThanOrEqual(7);
     expect(back.said).toEqual([
-      'Home: the edits could not be sent: the backend is busy. Underline keeps trying',
+      'Home: Underline could not hand your latest edits over to be stored: the backend is busy. Underline keeps trying',
     ]);
   });
 
@@ -197,7 +198,11 @@ describe('ADR-025 the window side of the sync', () => {
     expect(work).not.toHaveBeenCalled();
     expect(result).toEqual({
       status: 'error',
-      error: { kind: 'internal', message: 'The edits could not be sent: the backend is busy' },
+      error: {
+        kind: 'internal',
+        message:
+          'Underline could not hand your latest edits over to be stored: the backend is busy',
+      },
     });
     expect(await flushCores()).toBe('the backend is busy');
   }, 10_000);
@@ -234,7 +239,11 @@ describe('ADR-025 the window side of the sync', () => {
 
     expect(back.calls.closes).toEqual([false]);
     expect(back.questions).toEqual([
-      { tab: null, what: 'Underline', error: 'the backend is busy' },
+      {
+        tab: null,
+        what: 'Underline',
+        error: 'Underline could not hand your latest edits over to be stored: the backend is busy',
+      },
     ]);
   }, 10_000);
 
@@ -299,7 +308,7 @@ describe('ADR-025 the window side of the sync', () => {
     tab.core.onDead?.({ note: 'Home' } as never);
 
     expect(reopened).toBe(1);
-    expect(back.said).toEqual(['Home: the editor failed and shows the stored text again']);
+    expect(back.said).toEqual(['Home: dead']);
     const again = await openCore('Home', false);
     expect(again).not.toBe(tab);
     expect(again.core.text()).toBe(back.mirror.text());

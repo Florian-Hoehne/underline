@@ -125,7 +125,9 @@
   </div>
 {/if}
 {#if message}
-  <p class="message" class:failure={isFailure}>{message}</p>
+  <p class="message" class:failure={isFailure} role={isFailure ? 'status' : undefined}>
+    {message}
+  </p>
 {/if}
 {#if figure.caption}
   <p class="caption">{figure.caption}</p>

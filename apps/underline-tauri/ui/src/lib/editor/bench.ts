@@ -44,12 +44,25 @@ const timings: Record<'roundtrip' | 'acknowledge' | 'views', number[]> = {
 };
 const frameGaps: number[] = [];
 const violations: string[] = [];
+/** The frames longer than 50 ms, with the phase the driver was in. */
+const longFrames: { gap: number; phase: string }[] = [];
+
+/** What the driver does now, for the long frames (`setBenchPhase`). */
+let phase = 'start';
+
+/** The driver tells what it does now. */
+export function setBenchPhase(next: string): void {
+  phase = next;
+}
 
 /** Records the gaps between frames while `running` holds. */
 function watchFrames(running: () => boolean): void {
   let last = performance.now();
   const step = (now: number) => {
     frameGaps.push(now - last);
+    if (now - last > 50) {
+      longFrames.push({ gap: Math.round(now - last), phase });
+    }
     last = now;
     if (running()) {
       requestAnimationFrame(step);
@@ -277,6 +290,7 @@ async function measure(shell: Shell): Promise<void> {
       gaps: stats(frameGaps),
       over20ms: frameGaps.filter((gap) => gap > 20).length,
       over50ms: frameGaps.filter((gap) => gap > 50).length,
+      long: longFrames,
     },
   };
   // The results replace the note's text and are stored at once; Ctrl+A

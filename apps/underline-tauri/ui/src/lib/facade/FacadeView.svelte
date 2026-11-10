@@ -72,13 +72,13 @@
   import type { MinimapChange, MinimapSource } from '../editor/minimap';
   import { tabId } from '../tabs';
   import { setActiveFacade, type ActiveFacade } from './active';
-  import { tauriFacadeBackend, type FacadeBackend } from './backend';
+  import { type FacadeBackend } from './backend';
+  import { wasmFacadeBackend } from './wasmBackend';
   import Block from './Block.svelte';
   import Enlarged from './Enlarged.svelte';
   import { Heights } from './heights';
   import { routeBeforeInput, routeFacadeKey } from './keys';
   import {
-    applyBlocks,
     BLOCK_GAP,
     BODY_SIZE,
     blockAt,
@@ -90,6 +90,7 @@
     pointOf,
     revealIndex,
     sourceAt,
+    spliceBlocks,
   } from './model';
 
   type Props = {
@@ -121,7 +122,7 @@
     info,
     onError,
     onCommand,
-    backend = tauriFacadeBackend,
+    backend = wasmFacadeBackend(platform === 'macos'),
     probe = null,
   }: Props = $props();
 
@@ -161,6 +162,8 @@
   let rev = 0;
   let version = 0;
   let destroyed = false;
+  /** ADR-025: lets the core's listener go. */
+  let detach: (() => void) | null = null;
   const heights = new Heights();
   /** Changes of the blocks that came before the one they follow. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity -- a buffer, not state
@@ -310,14 +313,40 @@
 
   async function open(): Promise<void> {
     try {
-      const state = await backend.open(note);
+      const state = await backend.open(note, mode);
       if (!destroyed) {
         take(state);
+        attach();
       }
     } catch (error) {
       loading = false;
       onError(message(error));
     }
+  }
+
+  /**
+   * ADR-025: with the text in the window, the core's changes, sections and
+   * the backend's colours and figures reach the facade here.
+   */
+  function attach() {
+    detach?.();
+    detach =
+      backend.attach?.(note, {
+        patch: () => {
+          const refresh = backend.refresh;
+          if (refresh) {
+            enqueue(performance.now(), () => refresh(note));
+          }
+        },
+        views: (views) => {
+          if (views.sections?.note === note) {
+            sections = views.sections.sections;
+          }
+        },
+        synced: () => {},
+        reopened: () => void open(),
+        blocks: (changes) => takeBlocks(changes),
+      }) ?? null;
   }
 
   /** The first block in view and how far into it the view starts. */
@@ -327,33 +356,38 @@
     return { index, into: top - heights.top(index) };
   }
 
-  /** Applies `change`, which follows the blocks shown; the text in view stays. */
-  function applyChange(change: BlocksView) {
-    const next = applyBlocks({ rev, version, blocks }, change);
-    if (!next) {
-      return;
-    }
+  /**
+   * Applies `changes`, each following the one before and the first the
+   * blocks shown; the text in view stays. A burst (the backend's colours
+   * and figures) costs one copy of the blocks and one layout, not one each.
+   */
+  function applyChanges(changes: readonly BlocksView[]) {
     const before = anchorOf();
-    // A block changed in place keeps its height until it is measured again.
-    const kept = Math.min(change.removed, change.blocks.length);
-    heights.splice(
-      change.from,
-      change.removed,
-      change.blocks.map((block, k) =>
-        k < kept && heights.measured(change.from + k)
-          ? heights.get(change.from + k)
-          : estimateHeight(block, textWidth),
-      ),
-    );
-    rev = next.rev;
-    version = next.version;
-    blocks = next.blocks;
     let index = before.index;
-    if (index >= change.from + change.removed) {
-      index += change.blocks.length - change.removed;
-    } else if (index >= change.from) {
-      index = change.from;
+    const next = blocks.slice();
+    for (const change of changes) {
+      // A block changed in place keeps its height until it is measured again.
+      const kept = Math.min(change.removed, change.blocks.length);
+      heights.splice(
+        change.from,
+        change.removed,
+        change.blocks.map((block, k) =>
+          k < kept && heights.measured(change.from + k)
+            ? heights.get(change.from + k)
+            : estimateHeight(block, textWidth),
+        ),
+      );
+      const end = change.from + change.removed;
+      spliceBlocks(next, change);
+      rev = change.rev;
+      version = change.version;
+      if (index >= end) {
+        index += change.blocks.length - change.removed;
+      } else if (index >= change.from) {
+        index = change.from;
+      }
     }
+    blocks = next;
     if (scroller && before.index !== index) {
       scroller.scrollTop = PADDING + heights.top(index) + before.into;
     }
@@ -364,34 +398,45 @@
    * tick. A change that comes before the one it follows waits for it a
    * moment; a change of another version asks for all blocks again.
    */
-  function takeBlocks(change: BlocksView) {
-    if (change.note !== note || loading) {
+  function takeBlocks(changes: readonly BlocksView[]) {
+    if (loading) {
       return;
     }
-    if (change.base !== version) {
-      if (change.base > version) {
-        waiting.set(change.base, change);
-        waitingTimer ??= setTimeout(() => {
-          waitingTimer = null;
-          if (waiting.size > 0 && !destroyed) {
-            waiting.clear();
-            void open();
-          }
-        }, OUT_OF_STEP_MS);
-      } else {
-        // Older than the blocks shown: taken in already.
-        void 0;
+    const ready: BlocksView[] = [];
+    let at = version;
+    for (const change of changes) {
+      if (change.note !== note) {
+        continue;
       }
-      if (change.base > version + 1000 || change.base < version - 1000) {
-        void open();
+      if (change.base !== at) {
+        // One older than the blocks shown was taken in already.
+        if (change.base > at) {
+          waiting.set(change.base, change);
+          waitingTimer ??= setTimeout(() => {
+            waitingTimer = null;
+            if (waiting.size > 0 && !destroyed) {
+              waiting.clear();
+              void open();
+            }
+          }, OUT_OF_STEP_MS);
+        }
+        if (change.base > at + 1000 || change.base < at - 1000) {
+          void open();
+        }
+        continue;
       }
+      ready.push(change);
+      at = change.version;
+      for (let next = waiting.get(at); next; next = waiting.get(at)) {
+        waiting.delete(next.base);
+        ready.push(next);
+        at = next.version;
+      }
+    }
+    if (ready.length === 0) {
       return;
     }
-    applyChange(change);
-    for (let next = waiting.get(version); next; next = waiting.get(version)) {
-      waiting.delete(next.base);
-      applyChange(next);
-    }
+    applyChanges(ready);
     if (waiting.size === 0 && waitingTimer !== null) {
       clearTimeout(waitingTimer);
       waitingTimer = null;
@@ -470,6 +515,7 @@
       return;
     }
     modeSeen = now;
+    backend.setMode?.(note, now);
     backend
       .keys(note)
       .then((status) => {
@@ -640,9 +686,8 @@
   /** Runs `work` after every input before it; applies its patch. */
   function enqueue(start: number, work: () => Promise<FacadePatch | null>): void {
     queue = queue.then(async () => {
-      if (destroyed) {
-        return;
-      }
+      // An input still runs once the facade is gone: its key reaches the
+      // text (ADR-025, a switch of the view right after typing).
       try {
         const seen = selections;
         const patch = await work();
@@ -651,7 +696,10 @@
           probe?.(start, performance.now());
         }
       } catch (error) {
-        onError(message(error));
+        // Once the facade is gone (its tab closed), a late input's failure is no one's.
+        if (!destroyed) {
+          onError(message(error));
+        }
       }
     });
   }
@@ -660,7 +708,7 @@
   function send(input: FacadeInput, rows = false, start = performance.now()) {
     enqueue(start, async () => {
       const clipboard = wantsClipboard ? await backend.readClipboard() : null;
-      const measured = rows ? measureRows() : null;
+      const measured = rows && !destroyed ? measureRows() : null;
       return backend.input(note, at(), input, measured, clipboard);
     });
   }
@@ -696,9 +744,7 @@
    * moved the selection meanwhile; it stays then.
    */
   async function applyPatch(patch: FacadePatch, own: boolean) {
-    for (const change of patch.blocks) {
-      takeBlocks(change);
-    }
+    takeBlocks(patch.blocks);
     if (patch.blocks.length === 0) {
       relayout();
     }
@@ -1152,8 +1198,13 @@
     get note() {
       return note;
     },
-    takeBlocks,
-    takeSections,
+    // ADR-025: with the text in the window, the core brings these.
+    takeBlocks: (change: BlocksView) => {
+      if (!backend.attach) takeBlocks([change]);
+    },
+    takeSections: (view: SectionsView) => {
+      if (!backend.attach) takeSections(view);
+    },
     // UC-004 A7: a text replaced from outside comes as `ed-blocks`.
     replaced: () => {},
     reveal,
@@ -1190,6 +1241,8 @@
     });
     return () => {
       destroyed = true;
+      backend.leave?.(note, detach && !loading ? { version, blocks } : null);
+      detach?.();
       document.removeEventListener('selectionchange', onSelectionChange);
       resizes?.disconnect();
       if (relayoutFrame !== null) {

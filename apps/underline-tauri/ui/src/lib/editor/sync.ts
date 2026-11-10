@@ -16,8 +16,10 @@
 
 import {
   commands,
+  type BlocksView,
   type CloseQuestion,
   type EditorPatch,
+  type EnrichView,
   type FlushView,
   type FormatName,
   type MirrorView,
@@ -84,11 +86,22 @@ export function setSyncProbe(next: SyncProbe | null): void {
 export type SyncReporter = {
   /** A status text about `note` (its title is the window's to add). */
   status(note: string, text: string): void;
+  /** Q-40: the core of `note` failed; its latest edits were lost. */
+  dead(note: string): void;
   /** Closing: edits could not be sent; "Changes not stored" asks. */
   closeQuestion(question: CloseQuestion): void;
 };
 
 let reporter: SyncReporter | null = null;
+
+/** Why the latest edits of a note cannot be stored: they did not reach the backend. */
+export function handOverFailed(reason: string): string {
+  return `Underline could not hand your latest edits over to be stored: ${reason}`;
+}
+
+/** Q-40: what a note shows after its editor failed. */
+export const EDITOR_FAILED =
+  'The editor failed. It shows the last stored text again; your latest edits were lost.';
 
 /** The shell shows what the sync has to say. */
 export function setSyncReporter(next: SyncReporter | null): void {
@@ -105,6 +118,8 @@ export type CoreListener = {
   synced(): void;
   /** The core failed and was opened anew: the view shows its text again. */
   reopened(): void;
+  /** The facade's blocks took the backend's colours and figures (`ed-enrich`). */
+  blocks?(changes: BlocksView[]): void;
 };
 
 /** Runs `work` after the next frame was painted (the spike's method). */
@@ -192,6 +207,21 @@ export class TabCore {
         this.#problem(error);
       }
     });
+  }
+
+  /** ADR-025: the backend's colours and figures of the facade's blocks. */
+  enrich(sent: EnrichView): void {
+    if (!this.alive) {
+      return;
+    }
+    try {
+      const changes = this.core.enrich(sent);
+      if (changes.length > 0) {
+        this.listener?.blocks?.(changes);
+      }
+    } catch (error) {
+      this.#problem(error);
+    }
   }
 
   /** The backend changed the text (`ed-changed`, `ed-flush`): fetch it. */
@@ -305,10 +335,7 @@ export class TabCore {
     this.#failures += 1;
     if (this.#failures >= REPORT_AFTER && !this.#reported) {
       this.#reported = true;
-      reporter?.status(
-        this.note,
-        `the edits could not be sent: ${this.#lastError}. Underline keeps trying`,
-      );
+      reporter?.status(this.note, `${handOverFailed(this.#lastError)}. Underline keeps trying`);
     }
     if (this.#retry === null) {
       const wait = Math.min(LONGEST_WAIT, 100 * 2 ** (this.#failures - 1));
@@ -375,10 +402,16 @@ export class TabCore {
 
 /** The cores of the open notes, by note. */
 class Cores {
-  /** Being opened or open. */
-  readonly #made = new Map<string, Promise<TabCore>>();
+  /** Being opened or open, with the generation each was opened in. */
+  readonly #made = new Map<string, { core: Promise<TabCore>; generation: number }>();
   /** Open, for the synchronous calls of the views. */
   readonly #ready = new Map<string, TabCore>();
+  /** The generation of each open core. */
+  readonly #generations = new WeakMap<TabCore, number>();
+  /** The generation of cores opened from now on. */
+  #generation = 0;
+  /** Cores of a generation below this one were dropped, also those still opening. */
+  #droppedBelow = 0;
 
   get(note: string): TabCore | undefined {
     return this.#ready.get(note);
@@ -390,29 +423,42 @@ class Cores {
 
   open(note: string, mac: boolean): Promise<TabCore> {
     let made = this.#made.get(note);
-    if (!made) {
-      made = this.#make(note, mac);
-      this.#made.set(note, made);
-      made.catch(() => this.#made.delete(note));
+    // A core of before a workspace was being opened is not of its notes.
+    if (!made || made.generation < this.#generation) {
+      const generation = this.#generation;
+      const entry = { core: this.#make(note, mac, generation), generation };
+      made = entry;
+      this.#made.set(note, entry);
+      entry.core.catch(() => {
+        if (this.#made.get(note) === entry) {
+          this.#made.delete(note);
+        }
+      });
     }
-    return made;
+    return made.core;
   }
 
-  async #make(note: string, mac: boolean): Promise<TabCore> {
+  async #make(note: string, mac: boolean, generation: number): Promise<TabCore> {
     const [, mirror] = await Promise.all([loadEditorCore(), ipc.mirror(note)]);
     const core = EditorCore.open(note, mirror.text, mirror.format as FormatName, mac);
+    const tab = new TabCore(note, core);
+    if (generation < this.#droppedBelow) {
+      // Its workspace was left while it opened.
+      tab.close();
+      throw new Error(`The editor of ${note} is not open`);
+    }
     core.startSync(mirror.rev);
     core.select(core.state().rev, mirror.anchor, mirror.head);
-    const tab = new TabCore(note, core);
     core.onDead = () => {
       // Q-40: opened anew from the backend's text; the edits not confirmed
       // are lost, and the status line says so.
       console.error(`The editor's core of ${note} failed; it is opened again from the stored text`);
-      reporter?.status(note, 'the editor failed and shows the stored text again');
+      reporter?.dead(note);
       this.#forget(note, tab);
       tab.listener?.reopened();
     };
     this.#ready.set(note, tab);
+    this.#generations.set(tab, generation);
     return tab;
   }
 
@@ -430,11 +476,36 @@ class Cores {
     tab?.close();
   }
 
-  dropAll(): void {
-    for (const note of [...this.#ready.keys()]) {
-      this.drop(note);
+  /** Cores opened from now on belong to a new generation, which `dropBefore` keeps. */
+  mark(): number {
+    this.#generation += 1;
+    return this.#generation;
+  }
+
+  /** The workspace stays after all: every core counts as of now. */
+  adopt(): void {
+    for (const made of this.#made.values()) {
+      made.generation = this.#generation;
     }
-    this.#made.clear();
+    for (const tab of this.#ready.values()) {
+      this.#generations.set(tab, this.#generation);
+    }
+  }
+
+  /** Drops every core opened, or opening, before `mark`. */
+  dropBefore(mark: number): void {
+    this.#droppedBelow = Math.max(this.#droppedBelow, mark);
+    for (const [note, made] of [...this.#made]) {
+      if (made.generation < mark) {
+        this.#made.delete(note);
+      }
+    }
+    for (const [note, tab] of [...this.#ready]) {
+      if ((this.#generations.get(tab) ?? 0) < mark) {
+        this.#ready.delete(note);
+        tab.close();
+      }
+    }
   }
 }
 
@@ -458,9 +529,28 @@ export function dropCore(note: string): void {
   cores.drop(note);
 }
 
-/** Every core goes (another workspace). */
+/**
+ * ADR-025: another workspace opens. Cores opened from now on are of it;
+ * `dropCoresBefore` with the mark then drops those of the workspace left,
+ * also when the new one's first tab opened its core before the answer came.
+ */
+export function markCores(): number {
+  return cores.mark();
+}
+
+/** The workspace was left: the cores opened before `mark` go. */
+export function dropCoresBefore(mark: number): void {
+  cores.dropBefore(mark);
+}
+
+/** Every core goes (the tests start anew). */
 export function dropAllCores(): void {
-  cores.dropAll();
+  cores.dropBefore(cores.mark());
+}
+
+/** The workspace stayed (the open was asked about or failed): its cores stay. */
+export function keepCores(): void {
+  cores.adopt();
 }
 
 /**
@@ -474,6 +564,11 @@ export function keepCoresOf(open: Iterable<string>): void {
       cores.drop(tab.note);
     }
   }
+}
+
+/** `ed-enrich`: the backend's colours and figures for the facade of a note. */
+export function enrichCore(sent: EnrichView): void {
+  cores.get(sent.note)?.enrich(sent);
 }
 
 /** The backend rang for `note` (`ed-changed`). */
@@ -503,7 +598,7 @@ export async function flushed<T>(work: () => Promise<Result<T>>): Promise<Result
   if (failure !== null) {
     return {
       status: 'error',
-      error: { kind: 'internal', message: `The edits could not be sent: ${failure}` },
+      error: { kind: 'internal', message: handOverFailed(failure) },
     };
   }
   return work();
@@ -522,7 +617,7 @@ export async function takeFlush(view: FlushView): Promise<void> {
     if (view.closing) {
       await ipc.requestClose(failure === null);
       if (failure !== null) {
-        reporter?.closeQuestion({ tab: null, what: 'Underline', error: failure });
+        reporter?.closeQuestion({ tab: null, what: 'Underline', error: handOverFailed(failure) });
       }
     }
   }

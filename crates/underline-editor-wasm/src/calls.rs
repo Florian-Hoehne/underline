@@ -27,7 +27,7 @@ use underline_editor_view::editor_view::{
     ClipAction, Clipped, EditorInput, TabViews, VimChange, VimState,
 };
 use underline_editor_view::facade_view::{FacadeAt, FacadeInput, RowsView};
-use underline_editor_view::sync_view::{RemoteApplied, SyncAnswer, SyncBatch};
+use underline_editor_view::sync_view::{EnrichView, RemoteApplied, SyncAnswer, SyncBatch};
 use underline_editor_view::{CachedViews, EditorTab, FacadeCall};
 use underline_markup::NoteFormat;
 
@@ -389,6 +389,20 @@ impl Core {
         json(&self.tab.facade_state(&self.note))
     }
 
+    /// `FacadeState` without its blocks (`blocks` empty), its blocks made
+    /// when they are not of the text: when the window holds the blocks of
+    /// its `version`, it takes those again instead of all of them through
+    /// JSON.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn facade_head(&mut self) -> Result<String, CallError> {
+        self.facade_keys_mode();
+        self.tab.bring_facade_up_to_date(&mut self.views);
+        json(&self.tab.facade_head(&self.note))
+    }
+
     /// `FacadePatch` of one input of the facade (`FacadeInput`) at the
     /// selection `at` (`FacadeAt`), with the rows (`RowsView | null`) and
     /// the clipboard's text the Vim keys asked for.
@@ -449,6 +463,29 @@ impl Core {
         })
     }
 
+    /// `BlocksView[]`: the facade's blocks take what the backend sent of
+    /// colours and figures (`EnrichView`, `ed-enrich`).
+    ///
+    /// # Errors
+    ///
+    /// `sent` is not an `EnrichView`.
+    pub fn enrich(&mut self, sent: &str) -> Result<String, CallError> {
+        let sent: EnrichView = parse(sent, "The enrichment")?;
+        self.views.take(&sent);
+        json(&self.tab.facade_enriched(&self.note, &mut self.views))
+    }
+
+    /// `FacadePatch`: the facade after a change of the backend, its blocks
+    /// made anew where needed.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn facade_refresh(&mut self) -> Result<String, CallError> {
+        self.facade_keys_mode();
+        json(&self.tab.facade_refresh(&self.note, &mut self.views))
+    }
+
     /// `KeysStatusView | null` of the facade.
     ///
     /// # Errors
@@ -487,5 +524,30 @@ impl Core {
     #[must_use]
     pub fn hash(&self) -> String {
         underline_editor_core::sync::hash(&self.tab.editor.text())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::Core;
+
+    fn parsed(text: &str) -> Value {
+        serde_json::from_str(text).expect("JSON")
+    }
+
+    /// ADR-025, M-07.2: the facade shown again takes the blocks it drew;
+    /// its head is the whole facade without them, of the same version.
+    #[test]
+    fn adr025_the_facades_head_is_its_state_without_the_blocks() {
+        let mut core = Core::open("Home", "# Home\n\nText\n", "Markdown", false).expect("a format");
+        let whole = parsed(&core.facade_state().expect("the state"));
+        let mut head = parsed(&core.facade_head().expect("the head"));
+
+        assert_eq!(head["blocks"], Value::Array(Vec::new()));
+        assert!(!whole["blocks"].as_array().expect("blocks").is_empty());
+        head["blocks"] = whole["blocks"].clone();
+        assert_eq!(head, whole);
     }
 }

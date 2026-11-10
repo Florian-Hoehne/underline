@@ -240,7 +240,7 @@ pub struct RemoteApplied {
 /// their content (section 2.3): the colours of code (`colors_key`), the
 /// figures of diagrams (`diagram_key`) and of images (by their target,
 /// without the caption). `clear` drops what was sent before (another theme).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct EnrichView {
@@ -248,6 +248,10 @@ pub struct EnrichView {
     pub note: String,
     /// The backend's revision the entries were made at.
     pub rev: u32,
+    /// The theme the colours are for, by its name.
+    pub theme: String,
+    /// Whether the theme is dark, which the diagrams are drawn for.
+    pub dark: bool,
     /// What was sent before is dropped first.
     pub clear: bool,
     /// The colours of code by key; `None` when nothing in it is coloured.

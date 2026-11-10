@@ -24,6 +24,7 @@
   import type { EditingViewName, EditorCommandName, ToolName } from './bindings';
   import FacadeView from './facade/FacadeView.svelte';
   import EditorStatus from './EditorStatus.svelte';
+  import { EDITOR_FAILED } from './editor/sync';
   import { activeSourceView } from './editor/active';
   import { nextRegion } from './focus';
   import { EditorInfo } from './editor/info.svelte';
@@ -57,6 +58,23 @@
   const settings = $derived(shell.settings);
   const tools = $derived(shell.start?.tools ?? []);
   let editorWidth = $state(0);
+  let column = $state<HTMLElement | null>(null);
+
+  // Q-40: the note on lost edits goes with the next key or click in the note.
+  $effect(() => {
+    const element = column;
+    const note = activeTab?.note;
+    if (!element || !note || !shell.editorLost.includes(note)) {
+      return;
+    }
+    const seen = () => shell.editorLostSeen(note);
+    element.addEventListener('keydown', seen, true);
+    element.addEventListener('pointerdown', seen, true);
+    return () => {
+      element.removeEventListener('keydown', seen, true);
+      element.removeEventListener('pointerdown', seen, true);
+    };
+  });
   const withMinimap = $derived(minimapShown(settings?.showMinimap ?? false, editorWidth));
 
   let area = $state<HTMLElement | null>(null);
@@ -151,6 +169,7 @@
     <div class="note">
       <div
         class="editor-column"
+        bind:this={column}
         role="tabpanel"
         id={NOTE_PANEL_ID}
         aria-labelledby={tabId(activeTab.note)}
@@ -160,6 +179,10 @@
           <p class="save-error" role="alert">
             Not stored: {activeTab.saveError}. Underline keeps trying.
           </p>
+        {/if}
+        {#if shell.editorLost.includes(activeTab.note)}
+          <!-- Q-40: stays until the user acts in the note again. -->
+          <p class="save-error" role="alert">{EDITOR_FAILED}</p>
         {/if}
         <div class="views" role="group" aria-label="Editing view">
           <button
@@ -194,7 +217,8 @@
         <div class="editor" bind:clientWidth={editorWidth} style:gap="{GAP}px">
           <!-- A measuring build (editor/bench.ts) shows its own source view. -->
           <div class="text">
-            {#key `${activeTab.note}:${activeTab.view}`}
+            <!-- A note of the same name in another workspace is another text. -->
+            {#key `${shell.workspace?.root}:${activeTab.note}:${activeTab.view}`}
               {#if MEASURING}
                 <!-- The measuring build shows its own source view. -->
               {:else if activeTab.view === 'facade'}

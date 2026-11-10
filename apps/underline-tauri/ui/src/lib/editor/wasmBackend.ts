@@ -32,6 +32,7 @@ function input<T>(note: string, work: (tab: TabCore) => T): Promise<T> {
   try {
     const tab = tabOf(note);
     tab.core.setNow(performance.now());
+    tab.core.setView(false);
     const answer = work(tab);
     tab.afterInput();
     return Promise.resolve(answer);
@@ -49,6 +50,7 @@ export function wasmBackend(mac: boolean): EditorBackend {
   return {
     open: async (note) => {
       const tab = await openCore(note, mac);
+      tab.core.setView(false);
       const state = tab.core.state();
       // What the backend changed while the view was not shown comes now.
       tab.ring();

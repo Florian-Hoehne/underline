@@ -614,3 +614,61 @@ fn adr025_a_session_edit_meets_unsent_window_edits() {
         underline_editor_core::sync::hash("> one\ntwo\n!")
     );
 }
+
+/// ADR-025: the window's facade (its core) asks for the facade's colours
+/// and figures by showing it; the tick sends them with the theme they are
+/// for, also when the tab showed the facade already.
+#[test]
+fn adr025_the_windows_facade_gets_the_enrichment() {
+    let dir = temp_dir("enrich-window");
+    let (mut session, _) = session_with(&dir, "# A\n\n```rust\nfn main() {}\n```\n");
+    session.set_editing_view(&a(), EditingViewName::Facade);
+    session.set_editing_view(&a(), EditingViewName::Facade);
+
+    let mut sent = None;
+    let start = Instant::now();
+    while sent.is_none() && start.elapsed() < Duration::from_secs(10) {
+        sent = session
+            .tick(Instant::now())
+            .into_iter()
+            .find_map(|e| match e {
+                Event::Enrich(view) if view.colors.iter().any(|(_, c)| c.is_some()) => Some(view),
+                _ => None,
+            });
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let sent = sent.expect("an ed-enrich with colours");
+    assert_eq!(sent.theme, "Light");
+    assert!(!sent.dark);
+}
+
+/// ADR-025, M-07.2: once the window's core makes the facade (`ed_mirror`),
+/// the tick sends its colours (`ed-enrich`) but not its blocks: the first
+/// facade of a long note would be megabytes the window throws away.
+#[test]
+fn adr025_a_window_facade_gets_no_blocks_from_the_tick() {
+    let dir = temp_dir("enrich-no-blocks");
+    let (mut session, _) = session_with(&dir, "# A\n\n```rust\nfn main() {}\n```\n");
+    session.editor_mirror(&a()).expect("the mirror");
+    session.set_editing_view(&a(), EditingViewName::Facade);
+
+    let mut blocks = 0;
+    let mut enriched = false;
+    let start = Instant::now();
+    while !enriched && start.elapsed() < Duration::from_secs(10) {
+        for event in session.tick(Instant::now()) {
+            match event {
+                Event::Blocks(_) => blocks += 1,
+                Event::Enrich(view) if view.colors.iter().any(|(_, c)| c.is_some()) => {
+                    enriched = true;
+                }
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(enriched, "an ed-enrich with colours");
+    assert_eq!(blocks, 0);
+}

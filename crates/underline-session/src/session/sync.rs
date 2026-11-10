@@ -268,6 +268,12 @@ impl Session {
         // The window's core counts as holding the text with its first
         // `ed_sync` (so a core that failed to load blocks nothing).
         let tab = self.sync_tab(note)?;
+        // The window's core makes the facade's blocks from now on.
+        tab.window_facade = true;
+        // A new core in the window has none of the facade's colours yet.
+        if let Some(facade) = tab.facade.as_mut() {
+            facade.forget_sent();
+        }
         let (head, anchor) = tab.edit.editor.selection_web();
         Ok(MirrorView {
             note: note.as_str().to_owned(),

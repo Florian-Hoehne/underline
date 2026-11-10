@@ -840,3 +840,116 @@ fn adr025_cached_views_after_an_edit_equal_the_backends_views_of_the_new_text() 
         assert_eq!(tab.facade.views, expected, "{format:?}");
     }
 }
+
+/// The next `ed-enrich` of the tick with colours, within 10 s.
+fn next_enrich(session: &mut Session) -> Option<crate::EnrichView> {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        for event in session.tick(Instant::now()) {
+            if let Event::Enrich(view) = event {
+                if view.colors.iter().any(|(_, c)| c.is_some()) {
+                    return Some(*view);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+const CODE: &str = "# Home\n\n```rust\nfn main() {}\n```\n";
+
+/// ADR-025 (review B5b): `fa_open` (variant A) gives the window's blocks
+/// back to the backend: its tick sends `ed-blocks` again.
+#[test]
+fn adr025_fa_open_gives_the_blocks_back_to_the_backend() {
+    let dir = temp_dir("fa-open-window");
+    let (mut session, _root) = session_with(&dir, CODE);
+    session.editor_mirror(&home()).unwrap();
+    let window = |session: &Session| {
+        let open = session.open.as_ref().unwrap();
+        open.tabs
+            .get(open.tabs.find(&home()).unwrap())
+            .window_facade
+    };
+    assert!(window(&session));
+
+    session.facade_state(&home()).unwrap();
+
+    assert!(!window(&session));
+}
+
+/// ADR-025 (review B5b): a new core in the window (`ed_mirror`) gets all
+/// colours again, starting anew (`clear`).
+#[test]
+fn adr025_a_new_core_gets_everything_again() {
+    let dir = temp_dir("forget-sent");
+    let (mut session, _root) = session_with(&dir, CODE);
+    session.editor_mirror(&home()).unwrap();
+    session.set_editing_view(&home(), EditingViewName::Facade);
+    let first = next_enrich(&mut session).expect("the first ed-enrich with colours");
+    // Nothing new: nothing sent.
+    assert!(next_enrich_soon(&mut session).is_none());
+
+    session.editor_mirror(&home()).unwrap();
+    session.set_editing_view(&home(), EditingViewName::Facade);
+
+    let again = next_enrich(&mut session).expect("everything again");
+    assert!(again.clear);
+    assert_eq!(again.colors, first.colors);
+}
+
+/// An `ed-enrich` of the next few ticks.
+/// What the backend sent of the facade of Home.
+fn sent(session: &mut Session) -> &mut super::Sent {
+    let open = session.open.as_mut().unwrap();
+    let index = open.tabs.find(&home()).unwrap();
+    &mut open.tabs.get_mut(index).facade.as_mut().unwrap().sent
+}
+
+fn next_enrich_soon(session: &mut Session) -> Option<crate::EnrichView> {
+    for _ in 0..20 {
+        for event in session.tick(Instant::now()) {
+            if let Event::Enrich(view) = event {
+                return Some(*view);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    None
+}
+
+/// ADR-025 (rust-reviewer B5b): what was sent stays bounded: past
+/// `CODE_COLORS_KEPT` the backend starts anew (`clear`) with the colours of
+/// the blocks now, which the window then keeps alone.
+#[test]
+fn adr025_what_was_sent_stays_bounded() {
+    let dir = temp_dir("sent-bound");
+    let (mut session, _root) = session_with(&dir, CODE);
+    session.editor_mirror(&home()).unwrap();
+    session.set_editing_view(&home(), EditingViewName::Facade);
+    next_enrich(&mut session).expect("the first ed-enrich");
+    for i in 0..underline_editor_view::CODE_COLORS_KEPT {
+        sent(&mut session).colors.insert(format!("old {i}"), None);
+    }
+
+    let state = session.facade_state(&home()).unwrap();
+    session.editor_mirror(&home()).unwrap();
+    session.editor_select(&home(), state.rev, 30, 30).unwrap();
+    session
+        .editor_input(&home(), EditorInput::Text { text: "x".into() })
+        .unwrap();
+    let start = Instant::now();
+    let mut cleared = false;
+    while !cleared && start.elapsed() < Duration::from_secs(10) {
+        cleared = session
+            .tick(Instant::now())
+            .iter()
+            .any(|event| matches!(event, Event::Enrich(view) if view.clear));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    assert!(cleared, "an ed-enrich that starts anew");
+    // Only the code block's colours are kept now.
+    assert!(sent(&mut session).colors.len() <= 1);
+}

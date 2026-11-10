@@ -746,6 +746,99 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
 - **Undo nach einer Agent-Änderung:** Der Cursor steht am Ende des zurückgesetzten Textes. Das ist derselbe
   Code wie in egui (`Document::undo` → `after_history`), also gleiches Verhalten.
 
+### 7.5 Umsetzung B5b (2026-11-10): Stand, Abweichungen, Messpunkt
+
+- **Facade auf dem WASM-Kern:** `facade/wasmBackend.ts` (`wasmFacadeBackend(mac)`) ist das Standard-Backend von
+  `FacadeView`.
+  - `open` öffnet den Kern (`openCore`) und meldet dem Backend parallel die gezeigte Ansicht (`tab_set_view`).
+  - Jede Eingabe, Auswahl, Faltung und Zwischenablage-Aktion beantwortet der Kern in derselben Task wie die Taste;
+    die Edits gehen nach dem Frame mit `ed_sync`.
+  - Die System-Zwischenablage bleibt ein Command des Backends.
+- **`FacadeBackend.attach`:** Damit hängt sich die Facade an den Kern. Über diesen Weg kommen:
+  - Änderungen des Backends (`patch` → `facadeRefresh`);
+  - Sektionen für die Faltpfeile (`views`);
+  - Blöcke mit Farben und Bildern (`blocks`);
+  - ein neu geöffneter Kern (`reopened`).
+
+  Die Events `ed-blocks` und `ed-sections` des Backends ignoriert eine angehängte Facade.
+- **Anreicherung (Abweichung von 2.3):**
+  - Der Tick leitet Farben und Bilder aus den Facade-Views der Session ab, solange die Facade gezeigt ist
+    (`tab_set_view(facade)` setzt `shown` und weckt den Tick). Er schickt sie als `ed-enrich` mit Thema und `dark`.
+  - Der Kern übernimmt sie mit `enrich()` in seine Views (`CachedViews::enrich`). Nur die geänderten Blöcke gehen
+    an die Facade, als Blockänderungen mit Version.
+  - `open` bringt keine Anreicherung mit. Bis zum ersten `ed-enrich` zeigt die Facade Code ohne Farben und Diagramme
+    als Platzhalter.
+  - `ed_mirror` setzt das Gesendete zurück (`forget_sent`), damit ein neuer Kern alles bekommt.
+  - Der Mock rechnet die Anreicherung mit `WasmMirror.enrichment` aus derselben WASM-Datei.
+- **Keine `ed-blocks` mehr für eine Facade im Fenster:**
+  - Nach `ed_mirror` (`Tab::window_facade`) macht die Session ihre Facade-Views weiter, aber nur für die
+    Anreicherung. Ihre Blockänderungen schickt der Tick nicht mehr.
+  - Der erste Aufbau einer langen Notiz war ein einziges `ed-blocks` mit allen Blöcken: 3'697 Blöcke, 2,7 MB. Das
+    Fenster warf es weg, brauchte aber bis 180 ms, es anzunehmen. Ein `tab_set_view` direkt danach wartete so lange.
+  - `fa_open` (Variante A) schaltet das wieder ab.
+- **Facade wieder zeigen:**
+  - Beim Verlassen gibt die Facade ihre Blöcke samt Version an das Backend (`FacadeBackend.keep`); der `TabCore` hält
+    sie (`facadeKept`).
+  - Hat der Kern beim nächsten `open` noch dieselbe Version, holt `open` nur den Kopf (`facadeHead`: der
+    `FacadeState` ohne Blöcke) und nimmt die gehaltenen Blöcke. Sonst holt es den ganzen `facadeState`.
+  - Vorher kostete das zweite Öffnen einer langen Notiz so viel wie das erste.
+- **Blockänderungen in einem Zug:** `FacadeView.takeBlocks` nimmt eine Liste. Eine Folge von Änderungen kostet eine
+  Kopie der Blöcke, eine Rechnung der Höhen und ein Layout, nicht eine je Änderung.
+- **Eingaben beim Wechsel der Ansicht:** Eingaben in der Warteschlange gehen beim Abbau einer Ansicht nicht mehr
+  verloren. Facade und Quellansicht arbeiten sie noch ab, auch das Vim-Register der Quellansicht.
+- **Tests:**
+  - Vitest: Wechsel in derselben Task in beide Richtungen; Agent-Änderung in der Facade; die Facade nimmt beim
+    erneuten Zeigen ihre Blöcke, ausser der Text änderte sich.
+  - Rust: `facade_head` ist `facade_state` ohne Blöcke; die Facade im Fenster bekommt Farben, aber keine
+    `ed-blocks`; die Anreicherung kommt mit Thema; `CachedViews::enrich`.
+
+**Messpunkt B5b (Facade auf dem WASM-Kern):**
+
+- **Methode:** wie B5a; `VITE_UL_BENCH_F5B=1` für Tippen, Backspace und Enter; `VITE_UL_BENCH_F5=1` für Öffnen,
+  Wechsel und Scrollen. Der Bench nimmt das WASM-Backend der Facade.
+
+| Notiz / Lauf | Verarbeitung p99 (ms) | max | im nächsten Frame |
+|---|---|---|---|
+| Markdown, Normal/Vim/Nano, Tippen, Backspace, Enter, Anfang/Mitte/Ende | 2–4 | 2–10 | 98–100 % |
+| AsciiDoc, ebenso | 2–7, einmal 14 (Enter+Backspace Mitte) | 2–14 | 93–100 % |
+
+- **Ziel erreicht:** p99 ≤ 16 ms und mindestens 90 % im nächsten Frame.
+- **`ed_sync`:** Roundtrip median 1 ms, p99 6 ms, max 73–75 ms. `views()` p99 2 ms.
+- **Anreicherung** (Markdown; von der Taste bis das `ed-enrich` da ist):
+  - Farben median 56 ms, p99 83 ms;
+  - Diagramme median 52 ms, p99 79 ms. Der Bench ändert den Diagrammcode im Kern. Ob das `ed-enrich` schon das neue
+    Bild oder noch das letzte bringt (M-09.7), unterscheidet er nicht.
+  - Die AsciiDoc-Notiz ist aus der Markdown-Notiz umgewandelt und hat keine Sprache an den Codeblöcken. Darum gibt
+    es dort keine Messwerte für die Anreicherung.
+- **Öffnen und Wechsel** (Markdown, 3'697 Blöcke, 2,7 MB Facade):
+
+  | | F5a | B5b vorher | B5b |
+  |---|---|---|---|
+  | `open` kalt (Kern neu) | 216 ms | 193 ms | 187–220 ms |
+  | `open` warm | 38 ms | 199 ms | 41–46 ms |
+  | Facade zeigen bis gemalt, median | 83 ms | 51 ms | 30–32 ms |
+  | Facade → Quelle, median | 29 ms | 24 ms | 29–35 ms |
+  | Quelle → Facade, median | 69 ms | 54 ms | 38 ms |
+  | Scrollen je Seite median / max | 34 / 682 ms | 33 / 589 ms | 33–34 / 547–582 ms |
+
+  - „warm“ ist in F5a ein zweites `fa_open` mit fertigen Blöcken im Backend. In B5b ist es ein zweites `open` mit
+    bestehendem Kern: `tab_set_view` und `facadeHead`. Ohne das Warten auf `tab_set_view` sind es 2 ms.
+  - Vorher (199 ms) wartete `tab_set_view`, bis das Fenster das grosse `ed-blocks` angenommen hatte (siehe oben).
+- **Lange Frames (über 50 ms), nach Phase:**
+  - Öffnen und Einhängen: 123–226 ms beim ersten Öffnen. Der Kern baut die Facade der ganzen Notiz im Hauptthread
+    (`facadeState` kalt 169 ms). In F5a lief das im Backend.
+  - Ende der Notiz, beim ersten Tippen: ein Frame von 544–570 ms. Der Kern übernimmt Farben und Bilder in derselben
+    Messung in 1 ms, und die Facade braucht für die 76 geänderten Blöcke unter 1 ms. Der Frame ist also das Malen
+    der Diagrammbilder in WebKitGTK, wie das Maximum beim Scrollen (547–682 ms schon in F5a).
+  - Phase Anreicherung: 56–105 ms je Probe. Das ist der ganze `facadeState`, den der Bench für jede Probe holt.
+    Beim Warten auf `ed-enrich` gibt es keine langen Frames mehr.
+  - Tippen selbst: keine langen Frames ausser beim Setzen des Cursors (53–78 ms, Sprung an die Stelle).
+- **WASM:**
+  - 1'325 kB roh.
+  - Laden und kompilieren: 17–88 ms, zweigipflig um 20 und 85 ms. Ein frisches und ein behaltenes `HOME` streuen
+    gleich: 44, 85, 87 gegen 17, 88, 21, 85 ms. WebKitGTK legt für die App keinen Cache des kompilierten WASM an, und
+    die Streuung kommt vom gleichzeitigen Start der App.
+
 ## 8. Risiken und offene Fragen (für `offene-fragen.md`)
 
 1. **Agent und ungesendete Tasten (UC-019 BR-004):**

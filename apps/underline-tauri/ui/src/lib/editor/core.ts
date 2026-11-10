@@ -6,15 +6,18 @@
 
 import init, { initSync, WasmMirror, WasmTab } from '../wasm/pkg/underline_editor_wasm';
 import type {
+  BlocksView,
   ClipAction,
   Clipped,
   EditorInput,
   EditorPatch,
   EditorState,
+  EnrichView,
   FacadeAt,
   FacadeInput,
   FacadePatch,
   FacadeState,
+  FigureView,
   FormatName,
   KeysStatusView,
   RemoteApplied,
@@ -70,9 +73,12 @@ type Tab = Pick<
   | 'keysStatus'
   | 'clipboard'
   | 'facadeState'
+  | 'facadeHead'
   | 'facadeInput'
   | 'facadeClipboard'
   | 'facadeKeys'
+  | 'enrich'
+  | 'facadeRefresh'
   | 'views'
   | 'text'
   | 'hash'
@@ -246,6 +252,11 @@ export class EditorCore {
     return this.#json((tab) => tab.facadeState());
   }
 
+  /** The facade without its blocks (`blocks` empty): the window holds those of its `version`. */
+  facadeHead(): FacadeState {
+    return this.#json((tab) => tab.facadeHead());
+  }
+
   facadeInput(
     at: FacadeAt,
     input: FacadeInput,
@@ -266,6 +277,16 @@ export class EditorCore {
     return this.#json((tab) =>
       tab.facadeClipboard(JSON.stringify(at), JSON.stringify(action), plain, text),
     );
+  }
+
+  /** ADR-025: the backend's colours and figures (`ed-enrich`); the changed blocks. */
+  enrich(sent: EnrichView): BlocksView[] {
+    return this.#json((tab) => tab.enrich(JSON.stringify(sent)));
+  }
+
+  /** ADR-025: the facade after a change of the backend. */
+  facadeRefresh(): FacadePatch {
+    return this.#json((tab) => tab.facadeRefresh());
   }
 
   facadeKeys(): KeysStatusView | null {
@@ -372,6 +393,30 @@ export class MirrorCore {
   /** A change from outside; the new revision. */
   reload(text: string): number {
     return this.#mirror.reload(text);
+  }
+
+  /**
+   * For the mock: the backend's `ed-enrich` of this text, the images'
+   * figures from `images` by target, every diagram with `diagram`.
+   */
+  enrichment(
+    note: string,
+    markdown: boolean,
+    theme: string,
+    dark: boolean,
+    images: Record<string, FigureView>,
+    diagram: FigureView,
+  ): EnrichView {
+    return JSON.parse(
+      this.#mirror.enrichment(
+        note,
+        markdown,
+        theme,
+        dark,
+        JSON.stringify(images),
+        JSON.stringify(diagram),
+      ),
+    ) as EnrichView;
   }
 
   resync(text: string): SyncAnswer {
