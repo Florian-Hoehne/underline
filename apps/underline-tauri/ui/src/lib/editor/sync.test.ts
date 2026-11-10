@@ -14,6 +14,7 @@ import {
   flushed,
   openCore,
   setSyncIpc,
+  setSearches,
   setSyncReporter,
   takeFlush,
   tauriSyncIpc,
@@ -327,5 +328,32 @@ describe('ADR-025 the window side of the sync', () => {
 
     expect(back.said).toEqual([]);
     expect(tab.alive).toBe(false);
+  });
+});
+
+describe('M-13.2 the hits after a burst of typing (app-tester F9)', () => {
+  it('asks the core once more after the pause, so the last edit gets its marks', async () => {
+    backend('ferry\n');
+    const tab = await openCore('Home', false);
+    const found: number[] = [];
+    tab.listener = {
+      ...listener(),
+      views(views) {
+        if (views.found) found.push(views.found.count);
+      },
+    };
+    setSearches({ overlay: 'ferry', find: null });
+    await vi.waitFor(() => expect(found).toEqual([1]));
+
+    // Typed within the 300 ms the core waits: the views right after the
+    // input report nothing new.
+    tab.core.setNow(performance.now());
+    tab.core.input({ kind: 'text', text: 'ferry ' });
+    tab.afterInput();
+    await new Promise((done) => setTimeout(done, 60));
+    expect(found).toEqual([1]);
+
+    await vi.waitFor(() => expect(found).toEqual([1, 2]), { timeout: 2000 });
+    setSearches({ overlay: '', find: null });
   });
 });

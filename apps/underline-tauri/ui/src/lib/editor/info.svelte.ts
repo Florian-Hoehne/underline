@@ -20,6 +20,11 @@ export class EditorInfo {
   facade = $state.raw<
     (ActiveFacade & { tool(name: ToolName): void; settled(): Promise<unknown> }) | null
   >(null);
+  /**
+   * M-13.4: counts the changes of the marked hits of the view shown, so the
+   * find field says anew how many there are.
+   */
+  found = $state(0);
   /** M-12: what the minimap shows: the source view or the facade. */
   minimap = $state.raw<MinimapSource | null>(null);
   /**

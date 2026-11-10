@@ -20,7 +20,7 @@
   import { onMount } from 'svelte';
   import type { EditorCommandName } from './bindings';
   import { setActiveSourceView } from './editor/active';
-  import { takeJump } from './editor/jump';
+  import { runJump, takeJump } from './editor/jump';
   import type { EditorInfo } from './editor/info.svelte';
   import type { InputModeName } from './editor/keys';
   import type { LineNumberSide } from './editor/numbers';
@@ -101,6 +101,9 @@
       onKeys: (status) => {
         if (info) info.keys = status;
       },
+      onFound: () => {
+        if (info) info.found++;
+      },
       onCommand: (command) => onCommand?.(command),
       onRequest: (tool) => {
         if (info) info.request = tool;
@@ -120,10 +123,10 @@
           info.minimap = sourceMinimap(made);
         }
         loading = false;
-        // M-07.3: a link led here, to a heading.
+        // M-07.3: a link led here, to a heading; M-13.3: a found place.
         const waiting = takeJump(note);
         if (waiting !== null) {
-          made.jump(waiting.offset, waiting.rev);
+          runJump(made, waiting);
         } else if (focus) {
           made.focus();
         }

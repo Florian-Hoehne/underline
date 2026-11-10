@@ -94,6 +94,7 @@ export function wasmFacadeBackend(mac: boolean): FacadeBackend {
     },
     select: (note, rev, anchor, head) => input(note, (tab) => tab.core.select(rev, anchor, head)),
     fold: (note, line) => input(note, (tab) => tab.core.fold(line)),
+    find: (note, text, step) => input(note, (tab) => tab.core.find(text, step)),
     input: (note, at, facadeInput, rows, clipboard) =>
       input(note, (tab) => tab.core.facadeInput(at, facadeInput, rows, clipboard)),
     clipboard: async (note, at, action, plain) => {

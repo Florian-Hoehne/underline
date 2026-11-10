@@ -38,6 +38,8 @@
 //! and the outline, code and figures of the tool panel (M-16.5). Feature F8
 //! adds creating, renaming, deleting and restoring notes (UC-003, UC-006,
 //! UC-007, M-05.4 to M-05.6, M-14) with the undo offer of the status bar.
+//! Feature F9 adds the search of the workspace for the search overlay
+//! (UC-008, M-13.1, M-13.3); the window's editor cores mark its words.
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -50,6 +52,7 @@ mod event;
 mod facade_view;
 mod notes_view;
 mod palette;
+mod search_view;
 mod session;
 mod settings;
 mod start;
@@ -59,10 +62,11 @@ mod workspace_view;
 pub use clip::clipboard_view;
 pub use editor_view::{
     ClipAction, ClipContentView, Clipped, CloseQuestion, CopyOnSelectView, DragName,
-    EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FoundView,
-    HighlightView, IndexEntryView, IndexesView, Insertion, KeyHintView, KeyName, KeysStatusView,
-    LinkAnswer, NotePropertiesView, SectionView, SectionsView, SelectionCopy, SpanStyle,
-    TabPropertiesView, TabViews, TextChange, ToolName, ToolView, VimChange, VimModeName, VimState,
+    EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FindAnswer, FindStatus,
+    FindStep, FoundView, HighlightView, IndexEntryView, IndexesView, Insertion, KeyHintView,
+    KeyName, KeysStatusView, LinkAnswer, NotePropertiesView, SectionView, SectionsView,
+    SelectionCopy, SpanStyle, TabPropertiesView, TabViews, TextChange, ToolName, ToolView,
+    VimChange, VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
@@ -75,6 +79,10 @@ pub use notes_view::{
     RenameAnswer, RenameStart, RestoreAnswer, StatusOffer,
 };
 pub use palette::PaletteView;
+pub use search_view::{
+    FoundLineView, FoundNoteView, FoundPartView, FoundPlace, SearchOpened, SearchResultView,
+    SearchView,
+};
 pub use session::{
     CreatePlan, EmbedDone, EmbedPlan, Followed, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen,
     Session, Synced,

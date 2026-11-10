@@ -20,11 +20,15 @@
 
   The block's text carries its runs' indices (`Runs.svelte`); what the
   markup does not hold (prefix, bars, figures) is not editable.
+
+  M-13.2 (UC-008 BR-008): the words of a search are marked in the text of
+  headings, paragraphs, lists, quotes, code and markup, as egui marks them
+  where it shows text; not in tables and figures.
 -->
 <script lang="ts">
   import type { BlockView, Platform, SectionView } from '../bindings';
   import Figure from './Figure.svelte';
-  import { codeSegments, fontSize, gapAfter } from './model';
+  import { codeSegments, fontSize, gapAfter, hitParts, type HitRange } from './model';
   import Runs from './Runs.svelte';
   import Table from './Table.svelte';
 
@@ -36,18 +40,56 @@
     editing: boolean;
     /** M-08.8: the section whose heading this block is. */
     section: SectionView | null;
+    /** M-13.2: the hits in this block, sorted, in web units of the markup. */
+    hits?: readonly HitRange[];
+    /** A6: the hit that is the selection. */
+    current?: HitRange | null;
     onFold: (line: number) => void;
     onEnlarge: (url: string, width: number, height: number) => void;
     /** M-09.8: a click on the figure puts the cursor into the block. */
     onFigure: (index: number) => void;
   };
 
-  let { block, index, platform, editing, section, onFold, onEnlarge, onFigure }: Props = $props();
+  let {
+    block,
+    index,
+    platform,
+    editing,
+    section,
+    hits = [],
+    current = null,
+    onFold,
+    onEnlarge,
+    onFigure,
+  }: Props = $props();
 
   const kind = $derived(block.kind);
   const size = $derived(fontSize(block));
   const markupShown = $derived(editing || (block.figure?.sourceShown ?? false));
   const code = $derived(block.runs[0]?.text ?? '');
+  /** The code's coloured segments, split where the hits start and end. */
+  const codeParts = $derived.by(() => {
+    const segments = codeSegments(code, block.colors);
+    const run = block.runs[0];
+    if (!run || hits.length === 0) {
+      return segments.map((segment) => ({ ...segment, hit: false, current: false }));
+    }
+    const parts: { text: string; color: string | null; hit: boolean; current: boolean }[] = [];
+    let at = 0;
+    for (const segment of segments) {
+      const end = at + segment.text.length;
+      for (const part of hitParts(block, run, at, end, hits, current)) {
+        parts.push({
+          text: code.slice(part.from, part.to),
+          color: segment.color,
+          hit: part.hit,
+          current: part.current,
+        });
+      }
+      at = end;
+    }
+    return parts;
+  });
   /** The picture's text for screen readers: the alt text, or the caption, or what the diagram is. */
   const pictureAlt = $derived(
     kind.type === 'image'
@@ -86,7 +128,7 @@
   {/if}
   {#if kind.type === 'heading'}
     <div class="text heading" role="heading" aria-level={kind.level}>
-      <Runs runs={block.runs} strong />{#if section?.folded}<span
+      <Runs runs={block.runs} strong {block} {hits} {current} />{#if section?.folded}<span
           class="ellipsis"
           contenteditable="false"
           role="img"
@@ -98,13 +140,15 @@
   {:else if kind.type === 'code' && block.figure === null}
     <div class="code">
       <span data-r="0"
-        >{#each codeSegments(code, block.colors) as segment, s (s)}<span style:color={segment.color}
-            >{segment.text}</span
+        >{#each codeParts as segment, s (s)}<span
+            class:hit={segment.hit}
+            class:current={segment.current}
+            style:color={segment.color}>{segment.text}</span
           >{/each}</span
       >
     </div>
   {:else if kind.type === 'markup'}
-    <div class="code"><Runs runs={block.runs} /></div>
+    <div class="code"><Runs runs={block.runs} {block} {hits} {current} /></div>
   {:else if kind.type === 'table' || block.figure !== null}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="figure" contenteditable="false" onclick={() => onFigure(index)}>
@@ -130,7 +174,7 @@
           aria-hidden="true"
         ></span>{/each}{#if block.prefix}<span class="prefix" contenteditable="false"
           >{block.prefix}</span
-        >{/if}<Runs runs={block.runs} />
+        >{/if}<Runs runs={block.runs} {block} {hits} {current} />
     </div>
   {/if}
 </div>
@@ -197,6 +241,19 @@
 
   .frame {
     margin-top: 12px;
+  }
+
+  /* M-13.2: a hit in code, as in the runs (Runs.svelte). */
+  .hit {
+    background: var(--palette-found-background);
+    box-shadow: inset 0 -2px var(--palette-found);
+  }
+
+  /* The hit chosen by the find field: also by its outline, not only by colour. */
+  .hit.current {
+    background: var(--palette-selection);
+    outline: 1px solid var(--palette-foreground);
+    outline-offset: -1px;
   }
 
   .figure {

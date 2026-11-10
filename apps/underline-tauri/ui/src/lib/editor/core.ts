@@ -19,6 +19,9 @@ import type {
   FacadePatch,
   FacadeState,
   FigureView,
+  FindAnswer,
+  FindStatus,
+  FindStep,
   FormatName,
   Insertion,
   KeysStatusView,
@@ -88,6 +91,10 @@ type Tab = Pick<
   | 'enrich'
   | 'facadeRefresh'
   | 'views'
+  | 'setSearch'
+  | 'find'
+  | 'findStatus'
+  | 'selectedText'
   | 'text'
   | 'hash'
   | 'syncedRev'
@@ -338,9 +345,29 @@ export class EditorCore {
     return this.#json((tab) => tab.facadeKeys());
   }
 
-  /** The sections and the Nano hits at `ms` (`performance.now()`), once they changed. */
+  /** The sections and the marked hits at `ms` (`performance.now()`), once they changed. */
   views(ms: number): TabViews {
     return this.#json((tab) => tab.views(ms));
+  }
+
+  /** UC-008 BR-008, M-13.2: the words of `text` are marked from now on; `null`: none. */
+  setSearch(text: string | null): void {
+    this.#call((tab) => tab.setSearch(JSON.stringify(text)));
+  }
+
+  /** UC-008 A6, M-13.4: a step of the find field holding `text`; `null`: nothing found. */
+  find(text: string, step: FindStep): FindAnswer | null {
+    return this.#json((tab) => tab.find(JSON.stringify(text), JSON.stringify(step)));
+  }
+
+  /** M-13.4: the hit selected and how many there are. */
+  findStatus(): FindStatus {
+    return this.#json((tab) => tab.findStatus());
+  }
+
+  /** M-13.4: the selected markup, for the find field. */
+  selectedText(): string {
+    return this.#call((tab) => tab.selectedText());
   }
 
   text(): string {

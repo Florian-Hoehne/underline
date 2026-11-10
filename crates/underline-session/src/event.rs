@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
 use crate::notes_view::{DeletedNoteView, StatusOffer};
+use crate::search_view::SearchView;
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
@@ -50,4 +51,6 @@ pub enum Event {
     Indexes(IndexesView),
     /// M-05.6, UC-007 A5: the deleted notes of the workspace changed.
     Deleted(Vec<DeletedNoteView>),
+    /// M-13.1, UC-008 step 2: the text or the result of the search changed.
+    Search(SearchView),
 }

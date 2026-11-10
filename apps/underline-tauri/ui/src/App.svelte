@@ -14,6 +14,12 @@
 
   F2 renames the note of the active tab (M-14.2, UC-006 step 1), wherever
   the keyboard is, as in egui.
+
+  M-13.1 (UC-008 BR-007): Ctrl+Shift+F (Cmd+Shift+F) opens the search
+  overlay and puts the keyboard into its field, wherever the keyboard is,
+  before the editors see the key (the Vim keys too). While the overlay is
+  open, Escape closes it wherever the keyboard is, as in egui; only a
+  dialog that has the keyboard keeps its own Escape.
 -->
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
@@ -25,6 +31,7 @@
   import PurgeDialog from './lib/PurgeDialog.svelte';
   import RenameDialog from './lib/RenameDialog.svelte';
   import RestoreDialog from './lib/RestoreDialog.svelte';
+  import SearchOverlay from './lib/SearchOverlay.svelte';
   import EmptyScreen from './lib/EmptyScreen.svelte';
   import NoteArea from './lib/NoteArea.svelte';
   import OpenDialog from './lib/OpenDialog.svelte';
@@ -63,10 +70,37 @@
     }
   }
 
+  /** M-13.1, BR-007: Ctrl+Shift+F into the search field; Escape closes the overlay. */
+  function searchKey(event: KeyboardEvent) {
+    const mac = shell.platform === 'macos';
+    const command = mac ? event.metaKey : event.ctrlKey;
+    const other = mac ? event.ctrlKey : event.metaKey;
+    if (command && !other && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      event.stopPropagation();
+      shell.search.show();
+      return;
+    }
+    const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+    if (event.key === 'Escape' && plain && shell.search.open) {
+      const inDialog = (document.activeElement as Element | null)?.closest?.('[role="dialog"]');
+      if (inDialog) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      shell.search.close();
+    }
+  }
+
   // Before the editors see it, as egui takes F2 first.
   onMount(() => {
     window.addEventListener('keydown', renameKey, true);
-    return () => window.removeEventListener('keydown', renameKey, true);
+    window.addEventListener('keydown', searchKey, true);
+    return () => {
+      window.removeEventListener('keydown', renameKey, true);
+      window.removeEventListener('keydown', searchKey, true);
+    };
   });
 
   // When a workspace opens, the screen behind the keyboard may be gone
@@ -121,6 +155,9 @@
     {/if}
     {#if shell.closeQuestion}
       <CloseQuestionDialog {shell} question={shell.closeQuestion} />
+    {/if}
+    {#if shell.search.open}
+      <SearchOverlay {shell} />
     {/if}
   </main>
   <StatusBar

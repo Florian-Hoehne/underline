@@ -31,13 +31,31 @@
   Feature F7 adds, as in egui:
   - M-07.3: a Ctrl+click (Cmd+click) on a link in either view follows it
     (`shell.followLink`).
+
+  Feature F9 adds, as in egui:
+  - M-13.4 (UC-008 A6): Ctrl+F (Cmd+F) opens the find field above the note,
+    only with the input mode Normal (BR-009: Vim and Nano keep Ctrl+F),
+    holding the selection when it is within one line, else the text it
+    held while open. Its steps, and F3/Shift+F3 anywhere, go to the view
+    shown (`find`). Taken before the editors see the key, as egui does.
+  - M-13.2: the words of the search overlay are marked in every open note,
+    those of the find field instead in the note it finds in
+    (`editor/sync.ts`, `setSearches`).
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import type { EditingViewName, EditorCommandName, ToolName } from './bindings';
+  import { onMount, untrack } from 'svelte';
+  import type {
+    EditingViewName,
+    EditorCommandName,
+    FindAnswer,
+    FindStatus,
+    FindStep,
+    ToolName,
+  } from './bindings';
+  import FindBar from './FindBar.svelte';
   import FacadeView from './facade/FacadeView.svelte';
   import EditorStatus from './EditorStatus.svelte';
-  import { EDITOR_FAILED } from './editor/sync';
+  import { EDITOR_FAILED, coreOf, setSearches } from './editor/sync';
   import { activeSourceView } from './editor/active';
   import { setCopyOnSelect } from './editor/clipboard';
   import { listenDrops } from './editor/drop';
@@ -217,6 +235,169 @@
     }
   }
 
+  // M-13.2, UC-008 BR-008: the words marked in the open notes.
+  $effect(() => {
+    const find = shell.search.find;
+    const note = activeTab?.note;
+    setSearches({
+      overlay: shell.search.text,
+      find: find && note ? { note, text: find.text } : null,
+    });
+  });
+
+  /** M-13.4: what the find field says of the active note's hits. */
+  let findStatus = $state.raw<FindStatus | null>(null);
+  let statusFrame: number | null = null;
+
+  /** M-13.4: the count of the find field, worked out after the frame. */
+  function refreshFindStatus() {
+    if (statusFrame !== null) {
+      return;
+    }
+    const frame = globalThis.requestAnimationFrame ?? ((f: () => void) => setTimeout(f, 16));
+    statusFrame = frame(() => {
+      statusFrame = null;
+      const note = activeTab?.note;
+      const tab = note ? coreOf(note) : undefined;
+      try {
+        findStatus = tab?.alive ? tab.core.findStatus() : null;
+      } catch {
+        findStatus = null;
+      }
+    }) as number;
+  }
+
+  // The count follows the text, the hits and the selection of the note.
+  $effect(() => {
+    if (shell.search.find === null) {
+      return;
+    }
+    void info.place;
+    void info.found;
+    void activeTab?.note;
+    untrack(refreshFindStatus);
+  });
+
+  /** The view shown, for the find field's steps. */
+  function findTarget(): {
+    find(text: string, step: FindStep): Promise<FindAnswer | null>;
+    settled(): Promise<unknown>;
+  } | null {
+    const tab = activeTab;
+    if (!tab) {
+      return null;
+    }
+    if (tab.view === 'facade') {
+      const facade = info.facade;
+      return facade && facade.note === tab.note ? facade : null;
+    }
+    const source = activeSourceView();
+    return source && source.note === tab.note ? source : null;
+  }
+
+  /** The steps of the find field run one after the other. */
+  let finding: Promise<unknown> = Promise.resolve();
+
+  /** M-13.4: a step of the find field in the view shown. */
+  function findStep(step: FindStep) {
+    finding = finding.then(async () => {
+      const find = shell.search.find;
+      const target = findTarget();
+      if (!find || !target) {
+        return;
+      }
+      try {
+        const answer = await target.find(find.text, step);
+        if (answer) {
+          findStatus = answer.status;
+        }
+      } catch (error) {
+        shell.editorFailed(error instanceof Error ? error.message : String(error));
+      }
+      refreshFindStatus();
+    });
+  }
+
+  /** M-13.4: a changed text selects the first hit from the cursor on. */
+  function findText(text: string) {
+    shell.search.setFindText(text);
+    if (text.trim() !== '') {
+      findStep('first');
+    }
+    refreshFindStatus();
+  }
+
+  /** M-13.4: the find field closes; the keyboard goes back to the text. */
+  function closeFind() {
+    shell.search.closeFind();
+    if (activeTab?.view === 'facade') {
+      info.facade?.focus();
+    } else {
+      activeSourceView()?.focus();
+    }
+  }
+
+  /**
+   * M-13.4, UC-008 A6, BR-009: Ctrl+F (Cmd+F) with the input mode Normal
+   * opens the find field; F3 and Shift+F3 step while it is open.
+   */
+  function findKey(event: KeyboardEvent) {
+    const command = shell.platform === 'macos' ? event.metaKey : event.ctrlKey;
+    const other = shell.platform === 'macos' ? event.ctrlKey : event.metaKey;
+    if (
+      event.key === 'F3' &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      shell.search.find !== null &&
+      activeTab
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      findStep(event.shiftKey ? 'previous' : 'next');
+      return;
+    }
+    if (
+      event.key.toLowerCase() !== 'f' ||
+      !command ||
+      other ||
+      event.shiftKey ||
+      event.altKey ||
+      (settings?.inputMode ?? 'Normal') !== 'Normal' ||
+      !activeTab
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const note = activeTab.note;
+    const target = findTarget();
+    void (target?.settled() ?? Promise.resolve()).then(() => {
+      let selected: string;
+      try {
+        const tab = coreOf(note);
+        selected = tab?.alive ? tab.core.selectedText() : '';
+      } catch {
+        selected = '';
+      }
+      const text =
+        selected !== '' && !selected.includes('\n') ? selected : (shell.search.find?.text ?? '');
+      shell.search.openFind(text);
+      if (text.trim() !== '') {
+        findStep('first');
+      }
+    });
+  }
+
+  // Before the editors see the keys, as egui takes them first.
+  onMount(() => {
+    window.addEventListener('keydown', findKey, true);
+    return () => {
+      window.removeEventListener('keydown', findKey, true);
+      if (statusFrame !== null) cancelAnimationFrame?.(statusFrame);
+    };
+  });
+
   /** M-10.9: the Vim or Nano keys store the note or close its tab. */
   function command(note: string, command: EditorCommandName) {
     if (command === 'store') {
@@ -241,6 +422,16 @@
         aria-labelledby={tabId(activeTab.note)}
         data-view={activeTab.view}
       >
+        {#if shell.search.find !== null}
+          <FindBar
+            text={shell.search.find.text}
+            status={findStatus}
+            focusAsked={shell.search.findFocusAsked}
+            onText={findText}
+            onStep={(by) => findStep(by > 0 ? 'next' : 'previous')}
+            onClose={closeFind}
+          />
+        {/if}
         {#if activeTab.saveError !== null}
           <p class="save-error" role="alert">
             Not stored: {activeTab.saveError}. Underline keeps trying.

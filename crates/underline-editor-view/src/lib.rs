@@ -26,12 +26,14 @@ mod cached;
 pub mod editor_view;
 pub mod facade_view;
 pub mod folds;
+mod found;
 pub mod sync_view;
 mod tab;
 pub mod views;
 
 pub use cached::{CachedViews, CODE_COLORS_KEPT};
+pub use found::FOUND_EVERY_MS;
 pub use tab::{
     blocks_views, fold_key, gap_view, indicator, keys_status, link_at_web, EditorTab, FacadeCall,
-    FacadeClipped, FacadeModel, Handled, Versioned, FOUND_EVERY_MS,
+    FacadeClipped, FacadeModel, Handled, Versioned,
 };

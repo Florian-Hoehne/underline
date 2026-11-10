@@ -263,6 +263,25 @@ export const commands = {
 	 *  them with `null`.
 	 */
 	wsPurge: (key: string | null) => typedError<null, UiError>(__TAURI_INVOKE("ws_purge", { key })),
+	/**
+	 *  M-13.1, UC-008 steps 1–2, A2: the search overlay holds `text`; the
+	 *  search of the workspace starts again on its own thread, and its result
+	 *  comes as the event `search`. Only spaces end the search.
+	 */
+	searchSet: (text: string) => typedError<null, UiError>(__TAURI_INVOKE("search_set", { text })),
+	/**
+	 *  M-13.1, UC-008 step 2: more found notes of the result `serial`, from the
+	 *  `from`th on; `null` when a newer result replaced it.
+	 */
+	searchPage: (serial: number, from: number) => typedError<FoundNoteView[] | null, UiError>(__TAURI_INVOKE("search_page", { serial, from })),
+	/**
+	 *  M-13.3, UC-008 step 4: opens the found note `note` as the overview does;
+	 *  with `place` (bytes of the text searched), the word to select in the
+	 *  backend's text, which the window's edits reached first (`flushed`,
+	 *  ADR-025). `null` when there is none or the note did not open (the
+	 *  status says why).
+	 */
+	searchOpen: (note: string, place: FoundPlace | null) => typedError<SearchOpened | null, UiError>(__TAURI_INVOKE("search_open", { note, place })),
 };
 
 /** Events */
@@ -276,6 +295,7 @@ export const events = {
 	indexes: makeEvent<IndexesEvent, IndexesEvent>("indexes"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
+	search: makeEvent<SearchEvent, SearchEvent>("search"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
 	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
@@ -935,6 +955,40 @@ export type FigureView = {
 	caption: string | null,
 };
 
+/**  UC-008 A6, M-13.4: the hit a step of the find field selected. */
+export type FindAnswer = {
+	/**  The revision of the text (the core's own). */
+	rev: number,
+	/**  The start of the hit, in UTF-16 units. */
+	anchor: number,
+	/**  Its end, where the cursor is. */
+	head: number,
+	/**  The place for the status line (M-11.4). */
+	place: string,
+	/**  What the find field says now. */
+	status: FindStatus,
+};
+
+/**
+ *  M-13.4: what the find field says: the hit selected, counted from 1, if
+ *  the selection is one exactly, and how many there are.
+ */
+export type FindStatus = {
+	/**  "{at} of {count}"; `None`: "{count} found". */
+	at: number | null,
+	/**  How many hits there are. */
+	count: number,
+};
+
+/**  UC-008 A6, M-13.4: where a step of the find field moves the selection. */
+export type FindStep = 
+/**  The text changed: the first hit from the selection on. */
+"first" | 
+/**  Enter, F3, "Next": the next hit, wrapping around. */
+"next" | 
+/**  Shift+Enter, Shift+F3, "Previous": the hit before, wrapping around. */
+"previous";
+
 /**  ADR-025: the window sends its edits now, even none. */
 export type FlushEvent = FlushView;
 
@@ -960,8 +1014,60 @@ export type FormatName =
 "AsciiDoc";
 
 /**
- *  UC-008 BR-008, M-11.3: the hits of the search of the Nano keys while
- *  they are marked, in UTF-16 units; empty when none are. At most
+ *  BR-004: a line found, as stored, shortened around the words, with the
+ *  words found marked.
+ */
+export type FoundLineView = {
+	/**  The line in parts, the words found marked. */
+	parts: FoundPartView[],
+	/**  Where the note opens when the line is chosen: its first word. */
+	place: FoundPlace,
+};
+
+/**  UC-008 step 2, A5: a found note with its first lines found. */
+export type FoundNoteView = {
+	/**  The note. */
+	note: string,
+	/**  Its title. */
+	title: string,
+	/**  Its folder; `None` in the top folder. */
+	folder: string | null,
+	/**  "in the title or folder", "1 place" or "{n} places". */
+	places: string,
+	/**  The first lines found (BR-004). */
+	lines: FoundLineView[],
+	/**  A5: how many more places the note holds than lines are shown. */
+	more: number,
+	/**
+	 *  Where the note opens when it is chosen itself: at its first line
+	 *  found, or without moving the cursor when none is shown.
+	 */
+	place: FoundPlace | null,
+};
+
+/**  A part of a line found. */
+export type FoundPartView = {
+	/**  The text. */
+	text: string,
+	/**  A word found, marked. */
+	hit: boolean,
+};
+
+/**
+ *  UC-008 step 4: a word found, as bytes of the note's text the search
+ *  read; the session finds it in the text the tab holds then, as egui does.
+ */
+export type FoundPlace = {
+	/**  The first byte of the word. */
+	from: number,
+	/**  The byte after it. */
+	to: number,
+};
+
+/**
+ *  UC-008 BR-008, M-11.3, M-13.2: the marked hits of a tab, in UTF-16
+ *  units: the words of the workspace search (or of the find field, A6) and
+ *  those of the search of the Nano keys; empty when none are. At most
  *  [`FoundView::MAX`] hits are sent; `count` says how many there are.
  */
 export type FoundView = {
@@ -1583,6 +1689,65 @@ export type RunView = {
 };
 
 /**
+ *  M-13.1, UC-008 step 2: the text or the result of the workspace search
+ *  changed.
+ */
+export type SearchEvent = SearchView;
+
+/**
+ *  UC-008 step 4: the found note is open; the word found to select, in
+ *  web units of the backend's text of `rev`.
+ */
+export type SearchOpened = {
+	/**  The note. */
+	note: string,
+	/**  The backend's revision of its text. */
+	rev: number,
+	/**  The start of the word. */
+	anchor: number,
+	/**  Its end, where the cursor goes. */
+	head: number,
+};
+
+/**  UC-008 step 2, A4: one result of the search. */
+export type SearchResultView = {
+	/**
+	 *  The number of this result in the session; the window asks for more
+	 *  of its notes by it (`search_page`).
+	 */
+	serial: number,
+	/**  What it was searched for. */
+	text: string,
+	/**  How many notes were found. */
+	total: number,
+	/**
+	 *  The first [`SearchResultView::PAGE`] found notes, title and folder
+	 *  matches first (BR-003).
+	 */
+	notes: FoundNoteView[],
+	/**  A4: "{n} note(s) could not be searched.", when some could not. */
+	unreadable: string | null,
+};
+
+/**
+ *  UC-008 step 2, A1: the search of the overlay. Sent as the event
+ *  `search` when its text or its result changed.
+ */
+export type SearchView = {
+	/**
+	 *  The text searched for, without the spaces around it; empty when
+	 *  nothing is searched.
+	 */
+	text: string,
+	/**
+	 *  The newest result that fits a text searched for; `None` until the
+	 *  first came ("Searching…"). While a new text is searched, the result
+	 *  of the text before stays (egui).
+	 */
+	result: SearchResultView | null,
+};
+
+/**
  *  M-08.8, UC-004 BR-012: one section of the note, as the source view folds
  *  it: lines counted from 0.
  */
@@ -1839,7 +2004,7 @@ export type TabView = {
 export type TabViews = {
 	/**  The sections for the fold arrows. */
 	sections: SectionsView | null,
-	/**  The marked hits of the Nano search. */
+	/**  The marked hits: the words of the searches and of the Nano search. */
 	found: FoundView | null,
 };
 

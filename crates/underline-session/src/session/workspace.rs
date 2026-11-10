@@ -10,9 +10,10 @@
 //!
 //! Feature F3 adds storing the tabs' changes before a switch or a close
 //! and the open tabs' text in the changes from outside. Left for later
-//! features, with a hook where they go: the syncer (F13), the searcher
-//! (F9), the change tracker (F12) and the window presence (F14). Feature F8
-//! reads the deleted notes when the workspace opens (M-05.6).
+//! features, with a hook where they go: the syncer (F13), the change
+//! tracker (F12) and the window presence (F14). Feature F8 reads the deleted
+//! notes when the workspace opens (M-05.6); feature F9 starts the searcher
+//! of the workspace (UC-008).
 //!
 //! Opening and creating a workspace read the directory, list its notes and
 //! may run git while the session is locked, as the egui app does them in
@@ -26,8 +27,8 @@ use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace, now,
     outside_copy_path, user_settings_dir, CreateError, CreateProblem, DeletedNote,
     DirectoryProblem, EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, OpenProblem,
-    OverviewEntry, Surroundings, TabList, TabState, TodoListState, Workspace, WorkspaceEvent,
-    WorkspaceWatcher, HOME_TITLE,
+    OverviewEntry, Searcher, Surroundings, TabList, TabState, TodoListState, Workspace,
+    WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
 };
 
 use super::tab::Tab;
@@ -47,7 +48,7 @@ pub(super) struct OpenWorkspace {
     /// Watches the workspace for changes from outside (ADR-011).
     watcher: WorkspaceWatcher,
     /// UC-002 step 7: the note overview, recently opened first.
-    overview: Vec<OverviewEntry>,
+    pub(super) overview: Vec<OverviewEntry>,
     /// Grows with every change of `overview`, so only a change is sent.
     pub(super) overview_generation: u64,
     /// UC-021 BR-005: the tab "Todos", its sort and filter.
@@ -56,6 +57,11 @@ pub(super) struct OpenWorkspace {
     pub(super) deleted: Vec<DeletedNote>,
     /// Grows with every change of `deleted`, so only a change is sent.
     pub(super) deleted_generation: u64,
+    /// UC-008: searches the notes on a thread of its own (BR-005).
+    pub(super) searcher: Searcher,
+    /// Grows with every refresh of the overview, changed or not, so the
+    /// search runs again (A3), as egui's `overview_generation`.
+    pub(super) search_generation: u64,
 }
 
 impl OpenWorkspace {
@@ -501,7 +507,6 @@ impl Session {
         // Opening this one:
         // - F13: start a `Syncer` when it has a git remote, then a full sync
         //   (UC-014); with it the git state of the status bar (D-06).
-        // - F9: start a `Searcher` for the workspace (UC-008).
         // - F12: start a `ChangeTracker` when it is a git repository
         //   (UC-011).
         let wake = self.wake.clone();
@@ -512,6 +517,10 @@ impl Session {
             move || wake.wake(),
         );
         let polling = watcher.is_polling();
+        // UC-008: the searcher of the workspace; its answer wakes the tick.
+        let wake = self.wake.clone();
+        let searcher = Searcher::start(root.clone(), move || wake.wake());
+        self.search_switched();
         self.settings.open_workspace(&root, &self.git);
         self.state.workspace_opened(&root, now());
         // UC-021 BR-005: the tab "Todos", its sort and filter come back.
@@ -525,6 +534,8 @@ impl Session {
             todo_list,
             deleted: Vec::new(),
             deleted_generation: 0,
+            searcher,
+            search_generation: 0,
         });
         // UC-004: the remembered tabs come back in their order; restoring
         // them does not change the order of the note overview.
@@ -790,6 +801,7 @@ impl Session {
             open.overview = overview;
             open.overview_generation += 1;
         }
+        open.search_generation += 1;
         // F12: the git changes are asked again here (`refresh_changes`).
     }
 

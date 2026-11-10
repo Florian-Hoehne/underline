@@ -39,7 +39,7 @@ import {
   type WorkspaceView,
 } from './bindings';
 import { activeSourceView } from './editor/active';
-import { jumpTo } from './editor/jump';
+import { focusNote, jumpTo } from './editor/jump';
 import {
   coreHash,
   inStepRevision,
@@ -62,6 +62,7 @@ import {
 } from './editor/sync';
 import { applyPalette } from './theme';
 import { focusNoteEntry } from './focus';
+import { SearchState, type FoundChoice } from './search.svelte';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
 export type OpenDialog = {
@@ -247,8 +248,13 @@ export class Shell {
   closeQuestion = $state<CloseQuestion | null>(null);
   /** M-03.5: the wiki project URL typed in the Workspace menu, not stored. */
   wikiUrl = $state('');
-  /** M-03.2: the search overlay (feature F9). */
-  searchOpen = $state(false);
+  /**
+   * M-03.2, M-13: the search overlay and the find field of the active note
+   * (UC-008), not stored (M-22.4).
+   */
+  readonly search = new SearchState((command, message) =>
+    this.#fail(command, { kind: 'internal', message }),
+  );
   /** M-03.7: the settings window (feature F10). */
   settingsOpen = $state(false);
 
@@ -318,6 +324,8 @@ export class Shell {
         if (event.payload?.root !== this.workspace?.root) {
           // The note dialogs were of the workspace left.
           this.notes = NO_NOTE_DIALOGS;
+          // M-21.3: the find field closes; the search starts anew there.
+          this.search.workspaceChanged();
         }
         this.workspace = event.payload;
         // A note of the same name in another workspace is another text.
@@ -341,6 +349,10 @@ export class Shell {
       }),
       events.closeQuestion.listen((event) => {
         this.closeQuestion = event.payload;
+      }),
+      // M-13.1, UC-008 step 2: the found notes of the search.
+      events.search.listen((event) => {
+        this.search.take(event.payload);
       }),
       // The editor's events are listened to here, once for the window, and
       // handed to the source view shown now: listening per view left events
@@ -642,6 +654,32 @@ export class Shell {
         break;
       case 'done':
         break;
+    }
+  }
+
+  /**
+   * M-13.3, UC-008 step 4: opens a found note as the overview does, once the
+   * window's edits reached the backend (ADR-025): at the word found, which
+   * is selected, or as it is when it was found by its title or folder; the
+   * note's view takes the keyboard. Enter closes the overlay too (`close`),
+   * a click keeps it open, as in egui.
+   */
+  async openFound(choice: FoundChoice, close = false): Promise<void> {
+    if (close) {
+      // The found note's view takes the keyboard instead.
+      this.search.close(false);
+    }
+    const result = await this.#serial(() =>
+      flushed(() => commands.searchOpen(choice.note, choice.place)),
+    );
+    if (result.status === 'error') {
+      this.#fail('search_open', result.error);
+      return;
+    }
+    if (result.data) {
+      jumpTo(result.data.note, result.data.rev, result.data.anchor, result.data.head);
+    } else if (choice.place === null) {
+      focusNote(choice.note);
     }
   }
 

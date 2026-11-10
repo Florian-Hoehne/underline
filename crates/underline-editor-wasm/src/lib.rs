@@ -136,6 +136,44 @@ impl WasmTab {
         Ok(self.0.apply(base, changes, anchor, head, new_step)?)
     }
 
+    /// UC-008 BR-008, M-13.2: marks the words of `text` (JSON
+    /// `string | null`) from now on.
+    ///
+    /// # Errors
+    ///
+    /// `text` is not a string or `null`.
+    #[wasm_bindgen(js_name = setSearch)]
+    pub fn set_search(&mut self, text: &str) -> Result<(), JsError> {
+        Ok(self.0.set_search(text)?)
+    }
+
+    /// UC-008 A6, M-13.4: `FindAnswer | null` of the step `step` (JSON
+    /// `FindStep`) of the find field holding `text` (a JSON string).
+    ///
+    /// # Errors
+    ///
+    /// An argument is not what it should be.
+    pub fn find(&mut self, text: &str, step: &str) -> Result<String, JsError> {
+        Ok(self.0.find(text, step)?)
+    }
+
+    /// M-13.4: the selected text (markup), for the find field.
+    #[wasm_bindgen(js_name = selectedText)]
+    #[must_use]
+    pub fn selected_text(&self) -> String {
+        self.0.selected_text()
+    }
+
+    /// M-13.4: `FindStatus` of the find field, as JSON.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = findStatus)]
+    pub fn find_status(&mut self) -> Result<String, JsError> {
+        Ok(self.0.find_status()?)
+    }
+
     /// The place for the status line, as a JSON string.
     ///
     /// # Errors

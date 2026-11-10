@@ -14,15 +14,15 @@ use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use underline_session::{
     ClipAction, Clipped, CopyOnSelectView, EditorInput, EditorPatch, EditorState, FacadeAt,
-    FacadeInput, FacadePatch, FacadeState, PaletteView, RemoteApplied, RowsView, TabViews,
-    VimChange, VimState,
+    FacadeInput, FacadePatch, FacadeState, FindAnswer, FindStep, PaletteView, RemoteApplied,
+    RowsView, TabViews, VimChange, VimState,
 };
 
 use crate::commands;
 use crate::events::{
     ChangedEvent, CloseQuestionEvent, DeletedEvent, EnrichEvent, FlushEvent, HighlightEvent,
-    IndexesEvent, OverviewEvent, PropertiesEvent, SettingsEvent, StatusEvent, TabsEvent,
-    WorkspaceEvent,
+    IndexesEvent, OverviewEvent, PropertiesEvent, SearchEvent, SettingsEvent, StatusEvent,
+    TabsEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -86,7 +86,10 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::note_undo_delete,
             commands::ws_restore,
             commands::ws_restore_as,
-            commands::ws_purge
+            commands::ws_purge,
+            commands::search_set,
+            commands::search_page,
+            commands::search_open
         ])
         .events(collect_events![
             StatusEvent,
@@ -101,7 +104,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             FlushEvent,
             EnrichEvent,
             IndexesEvent,
-            DeletedEvent
+            DeletedEvent,
+            SearchEvent
         ])
         // ADR-025: what crosses only between the window and the editor's
         // WASM (`ui/src/lib/editor/core.ts`).
@@ -119,6 +123,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .typ::<CopyOnSelectView>()
         .typ::<TabViews>()
         .typ::<RemoteApplied>()
+        .typ::<FindStep>()
+        .typ::<FindAnswer>()
         .disable_serde_phases()
 }
 

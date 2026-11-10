@@ -62,6 +62,8 @@ import {
   type EditorInput,
   type EditorPatch,
   type EditorState as EditorStateView,
+  type FindAnswer,
+  type FindStep,
   type FoundView,
   type HighlightView,
   type KeysStatusView,
@@ -116,6 +118,11 @@ export interface EditorBackend {
   textHash(note: string): string | null;
   /** Sets the selection; gives the place for the status line. */
   select(note: string, rev: number, anchor: number, head: number): Promise<string>;
+  /**
+   * UC-008 A6, M-13.4: a step of the find field holding `text`: the hit the
+   * core selected, `null` when nothing is found.
+   */
+  find(note: string, text: string, step: FindStep): Promise<FindAnswer | null>;
   viewport(note: string, from: number, to: number): Promise<void>;
   /**
    * A-01: the Vim keys' changes; `newStep` marks the start of an insert
@@ -271,6 +278,8 @@ export type SourceViewOptions = {
   onPlace?: (place: string) => void;
   /** M-11.4: the status of the Vim or Nano keys changed (`null`: none). */
   onKeys?: (status: KeysStatusView | null) => void;
+  /** M-13.4: the marked hits changed. */
+  onFound?: () => void;
   /** M-10.9: the keys ask to store the note or close its tab. */
   onCommand?: (command: EditorCommandName) => void;
   /** UC-005 A2: a toolbar function asks first (Link, Image; feature F6). */
@@ -528,19 +537,50 @@ export class SourceView {
    * backend's text of that revision: when the view's text is no longer it,
    * nothing moves.
    */
-  jump(offset: number, rev?: number): void {
+  jump(offset: number, rev?: number, to?: number): void {
     this.#enqueue(async () => {
       if (this.#destroyed || (rev !== undefined && !this.#inStepWith(rev))) {
         return null;
       }
-      const at = Math.min(Math.max(offset, 0), this.view.state.doc.length);
+      const length = this.view.state.doc.length;
+      const at = Math.min(Math.max(offset, 0), length);
+      const end = to === undefined ? at : Math.min(Math.max(to, 0), length);
       this.view.dispatch({
-        selection: { anchor: at },
+        selection: { anchor: at, head: end },
         scrollIntoView: true,
         userEvent: 'select',
       });
       this.focus();
       return null;
+    });
+  }
+
+  /**
+   * UC-008 A6, M-13.4: a step of the find field holding `text`, after the
+   * inputs before it: the core selects the hit, the view shows it (egui's
+   * `select_chars`, which scrolls to it); the keyboard stays where it is.
+   */
+  find(text: string, step: FindStep): Promise<FindAnswer | null> {
+    return new Promise((resolve) => {
+      this.#enqueue(async () => {
+        let answer: FindAnswer | null = null;
+        try {
+          if (!this.#destroyed) {
+            answer = await this.#backend.find(this.note, text, step);
+          }
+          if (answer && !this.#destroyed && this.#inStep(answer.rev)) {
+            this.view.dispatch({
+              selection: { anchor: answer.anchor, head: answer.head },
+              scrollIntoView: true,
+              userEvent: 'select',
+            });
+            this.#options.onPlace?.(answer.place);
+          }
+        } finally {
+          resolve(answer);
+        }
+        return null;
+      });
     });
   }
 
@@ -603,13 +643,14 @@ export class SourceView {
     }
   }
 
-  /** M-11.3: the marked hits of the Nano search; kept for a later revision. */
+  /** M-11.3, M-13.2: the marked hits (searches, Nano); kept for a later revision. */
   #ownFound(found: FoundView): void {
     if (found.note !== this.note) {
       return;
     }
     if (this.#inStep(found.rev)) {
       this.view.dispatch({ effects: setFound.of(found.ranges) });
+      this.#options.onFound?.();
     } else {
       this.#pendingFound = found;
     }
@@ -1124,6 +1165,7 @@ export class SourceView {
     if (found && this.#inStep(found.rev)) {
       this.#pendingFound = null;
       this.view.dispatch({ effects: setFound.of(found.ranges) });
+      this.#options.onFound?.();
     }
   }
 

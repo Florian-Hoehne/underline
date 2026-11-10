@@ -353,8 +353,9 @@ pub struct SectionsView {
     pub sections: Vec<SectionView>,
 }
 
-/// UC-008 BR-008, M-11.3: the hits of the search of the Nano keys while
-/// they are marked, in UTF-16 units; empty when none are. At most
+/// UC-008 BR-008, M-11.3, M-13.2: the marked hits of a tab, in UTF-16
+/// units: the words of the workspace search (or of the find field, A6) and
+/// those of the search of the Nano keys; empty when none are. At most
 /// [`FoundView::MAX`] hits are sent; `count` says how many there are.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -685,6 +686,48 @@ pub enum Insertion {
 pub struct TabViews {
     /// The sections for the fold arrows.
     pub sections: Option<SectionsView>,
-    /// The marked hits of the Nano search.
+    /// The marked hits: the words of the searches and of the Nano search.
     pub found: Option<FoundView>,
+}
+
+/// UC-008 A6, M-13.4: where a step of the find field moves the selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum FindStep {
+    /// The text changed: the first hit from the selection on.
+    First,
+    /// Enter, F3, "Next": the next hit, wrapping around.
+    Next,
+    /// Shift+Enter, Shift+F3, "Previous": the hit before, wrapping around.
+    Previous,
+}
+
+/// M-13.4: what the find field says: the hit selected, counted from 1, if
+/// the selection is one exactly, and how many there are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FindStatus {
+    /// "{at} of {count}"; `None`: "{count} found".
+    pub at: Option<u32>,
+    /// How many hits there are.
+    pub count: u32,
+}
+
+/// UC-008 A6, M-13.4: the hit a step of the find field selected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FindAnswer {
+    /// The revision of the text (the core's own).
+    pub rev: u32,
+    /// The start of the hit, in UTF-16 units.
+    pub anchor: u32,
+    /// Its end, where the cursor is.
+    pub head: u32,
+    /// The place for the status line (M-11.4).
+    pub place: String,
+    /// What the find field says now.
+    pub status: FindStatus,
 }

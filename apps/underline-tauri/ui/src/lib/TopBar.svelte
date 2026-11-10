@@ -1,8 +1,9 @@
 <!--
   M-03.1 to M-03.3: the top bar. The burger button shows or hides the menu
   bar (stored like a quick switch, UC-010 A3); the magnifier switches the
-  search overlay (UC-008 step 1; the overlay comes with feature F9). With the
-  menu bar hidden, the name of the workspace stands in its place.
+  search overlay (UC-008 step 1, M-03.2): opening puts the keyboard into its
+  field, closing empties it. With the menu bar hidden, the name of the
+  workspace stands in its place.
 -->
 <script lang="ts">
   import MenuBar from './MenuBar.svelte';
@@ -23,7 +24,7 @@
   const workspaceName = $derived(shell.workspace?.name ?? 'No workspace open');
 
   function toggleSearch() {
-    shell.searchOpen = !shell.searchOpen;
+    shell.search.toggle();
   }
 </script>
 
@@ -40,7 +41,15 @@
       <path d="M3 4.5h10M3 8h10M3 11.5h10" />
     </svg>
   </button>
-  <button type="button" class="icon" aria-label="Search" title={searchHint} onclick={toggleSearch}>
+  <button
+    type="button"
+    class="icon"
+    aria-label="Search"
+    title={searchHint}
+    aria-expanded={shell.search.open}
+    data-search-toggle
+    onclick={toggleSearch}
+  >
     <svg viewBox="0 0 16 16" aria-hidden="true">
       <circle cx="6.75" cy="6.75" r="3.75" />
       <path d="M9.5 9.5l3.5 3.5" />

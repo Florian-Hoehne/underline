@@ -8,7 +8,7 @@
 //! refused, and JSON that is not the DTO is a [`CallError`] (the tests in
 //! `hostile.rs`).
 //!
-//! **The clock.** The calls that find the sections and the Nano hits again
+//! **The clock.** The calls that find the sections and the marked hits again
 //! at most every 300 ms (`views`) take the window's time in milliseconds,
 //! `performance.now()`; `setNow` sets it before an input. One tab has one
 //! clock with one epoch, and only the window feeds it: the session's clock
@@ -24,7 +24,8 @@ use serde::Serialize;
 use underline_editor_core::keys::InputMode as KeysInputMode;
 use underline_editor_core::sync::{Answer, Change, Client};
 use underline_editor_view::editor_view::{
-    ClipAction, ClipContentView, Clipped, EditorInput, Insertion, TabViews, VimChange, VimState,
+    ClipAction, ClipContentView, Clipped, EditorInput, FindStep, Insertion, TabViews, VimChange,
+    VimState,
 };
 use underline_editor_view::facade_view::{FacadeAt, FacadeInput, RowsView};
 use underline_editor_view::sync_view::{EnrichView, RemoteApplied, SyncAnswer, SyncBatch};
@@ -352,6 +353,49 @@ impl Core {
         json(&self.tab.select(rev, anchor, head))
     }
 
+    /// UC-008 BR-008, M-13.2: the words of `text` (`string | null`, JSON)
+    /// are marked in the tab from now on; `null` or no word marks none.
+    /// The Nano search keeps its own marks.
+    ///
+    /// # Errors
+    ///
+    /// `text` is not a string or `null`.
+    pub fn set_search(&mut self, text: &str) -> Result<(), CallError> {
+        let text: Option<String> = parse(text, "The search")?;
+        self.tab.set_search(text.as_deref());
+        Ok(())
+    }
+
+    /// UC-008 A6, M-13.4: `FindAnswer | null` of a step (`FindStep`) of the
+    /// find field holding `text` (a JSON string): the hit it selected, or
+    /// `null` when nothing is found.
+    ///
+    /// # Errors
+    ///
+    /// `text` is not a string or `step` no `FindStep`.
+    pub fn find(&mut self, text: &str, step: &str) -> Result<String, CallError> {
+        let text: String = parse(text, "The find text")?;
+        let step: FindStep = parse(step, "The find step")?;
+        json(&self.tab.find(&text, step))
+    }
+
+    /// M-13.4: the selected text, as the find field takes it when it
+    /// opens (a selection within one line).
+    #[must_use]
+    pub fn selected_text(&self) -> String {
+        self.tab.editor.selected_text()
+    }
+
+    /// M-13.4: `FindStatus` of the find field: the hit selected and how
+    /// many there are.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn find_status(&mut self) -> Result<String, CallError> {
+        json(&self.tab.find_status())
+    }
+
     /// `EditorPatch` after the fold arrow of the heading on `line`.
     ///
     /// # Errors
@@ -444,6 +488,8 @@ impl Core {
     pub fn facade_state(&mut self) -> Result<String, CallError> {
         self.facade_keys_mode();
         self.tab.bring_facade_up_to_date(&mut self.views);
+        // M-13.2: the facade shown anew is told the sections and hits.
+        self.tab.shown_anew();
         json(&self.tab.facade_state(&self.note))
     }
 
@@ -458,6 +504,7 @@ impl Core {
     pub fn facade_head(&mut self) -> Result<String, CallError> {
         self.facade_keys_mode();
         self.tab.bring_facade_up_to_date(&mut self.views);
+        self.tab.shown_anew();
         json(&self.tab.facade_head(&self.note))
     }
 

@@ -5,7 +5,7 @@
 // the boundary (`underline_editor_core::utf16`).
 
 import type { BlockView, BlocksView, CodeColors, RunView, SectionView } from '../bindings';
-import type { Area, Mark } from '../editor/minimap';
+import type { Area, Hit, Mark } from '../editor/minimap';
 
 /** The blocks of a facade at one version. */
 export type Blocks = { rev: number; version: number; blocks: BlockView[] };
@@ -320,4 +320,151 @@ export function facadeMarks(
     }
   });
   return { marks, areas };
+}
+
+/** A hit of a search, `[from, to]` in web units of the markup (UC-008 BR-008). */
+export type HitRange = readonly [number, number];
+
+/**
+ * M-13.2: one part of a run's text, units `[from, to)` of the run: plain,
+ * a hit, or the hit that is selected (the find field's, A6).
+ */
+export type HitPart = { from: number; to: number; hit: boolean; current: boolean };
+
+/** The hits of `hits` (sorted by start) that touch the markup of `block`. */
+export function blockHits(block: BlockView, hits: readonly HitRange[]): HitRange[] {
+  const end = block.start + block.length;
+  // The first hit starting in the block or after it; hits starting before
+  // may reach into it (a hit of the Nano search may overlap one of the
+  // words), so the walk goes back over those.
+  let low = 0;
+  let high = hits.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (hits[mid][0] < block.start) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  let first = low;
+  while (first > 0 && hits[first - 1][1] > block.start) {
+    first--;
+  }
+  const found: HitRange[] = [];
+  for (let k = first; k < hits.length && hits[k][0] < end; k++) {
+    if (hits[k][1] > block.start) {
+      found.push(hits[k]);
+    }
+  }
+  return found;
+}
+
+/**
+ * M-13.2, as egui marks the words found in a block: the units `[from, to)`
+ * of `run` in parts, each unit a hit when the markup it shows lies in a hit
+ * of `hits` (sorted, web units); `current` marks the hit that is the
+ * selection.
+ */
+export function hitParts(
+  block: BlockView,
+  run: RunView,
+  from: number,
+  to: number,
+  hits: readonly HitRange[],
+  current: HitRange | null,
+): HitPart[] {
+  if (hits.length === 0 || from >= to) {
+    return [{ from, to, hit: false, current: false }];
+  }
+  const parts: HitPart[] = [];
+  let k = 0;
+  for (let unit = from; unit < to; unit++) {
+    const at = sourceAt(block, run, unit);
+    while (k < hits.length && hits[k][1] <= at) {
+      k++;
+    }
+    const inside = k < hits.length && hits[k][0] <= at ? hits[k] : null;
+    const hit = inside !== null;
+    const chosen =
+      inside !== null && current !== null && inside[0] === current[0] && inside[1] === current[1];
+    const last = parts.at(-1);
+    if (last && last.hit === hit && last.current === chosen && last.to === unit) {
+      last.to = unit + 1;
+    } else {
+      parts.push({ from: unit, to: unit + 1, hit, current: chosen });
+    }
+  }
+  return parts;
+}
+
+/**
+ * M-13.2: the hits after `change` of `blocks` (before it): those before
+ * the blocks it replaces stay, those after them move with its shift, those
+ * in them go until the core finds them again (after the input, at most 300
+ * ms later).
+ */
+export function mapHits(
+  hits: readonly HitRange[],
+  blocks: readonly BlockView[],
+  change: BlocksView,
+): HitRange[] {
+  const first = blocks[change.from];
+  const after = blocks[change.from + change.removed];
+  const start = first ? first.start : Infinity;
+  const end = after ? after.start : Infinity;
+  const mapped: HitRange[] = [];
+  for (const hit of hits) {
+    if (hit[1] <= start) {
+      mapped.push(hit);
+    } else if (hit[0] >= end) {
+      mapped.push([hit[0] + change.shift, hit[1] + change.shift]);
+    }
+  }
+  return mapped;
+}
+
+/**
+ * M-12.4: the hits for the minimap's sieve, each at the row and column of
+ * the block's text it falls in, estimated as `facadeMarks` lays out the
+ * rows (by its place in the block's markup); hits in folded blocks and in
+ * figures are left out.
+ */
+export function facadeHits(
+  blocks: readonly BlockView[],
+  hits: readonly HitRange[],
+  hidden: ReadonlySet<number>,
+  top: (index: number) => number,
+  height: (index: number) => number,
+  width: number,
+  padding: number,
+): Hit[] {
+  const found: Hit[] = [];
+  for (const [from, to] of hits) {
+    const index = blockAt(blocks, from);
+    const block = blocks[index];
+    if (!block || hidden.has(index) || isFigure(block) || from >= block.start + block.length) {
+      continue;
+    }
+    const shown = Math.max(height(index) - gapAfter(block), 0);
+    const size = fontSize(block);
+    const rows = Math.max(1, Math.round(shown / (size * LINE_HEIGHT)));
+    const row = shown / rows;
+    const columns = Math.max(
+      1,
+      Math.floor(Math.max(width, 80) / (size * (isCodeLike(block) ? 0.61 : 0.55))),
+    );
+    const text = block.prefix.length + blockText(block).length;
+    const share = (from - block.start) / Math.max(block.length, 1);
+    const at = Math.min(Math.floor(share * text), Math.max(text - 1, 0));
+    const r = Math.min(Math.floor(at / columns), rows - 1);
+    const column = at % columns;
+    found.push({
+      top: padding + top(index) + r * row,
+      height: row,
+      left: column / columns,
+      width: Math.min(Math.max(to - from, 1), columns - column) / columns,
+    });
+  }
+  return found;
 }

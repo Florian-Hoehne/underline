@@ -4,7 +4,7 @@
 // (M-07.3). Its blocks come from the window's editor
 // core (ADR-025), not from the backend's events.
 
-import type { Insertion } from '../bindings';
+import type { FindAnswer, FindStep, Insertion } from '../bindings';
 
 /** M-10.5: where the cursor stood (web units) in the text of a hash. */
 export type CursorMark = { head: number; hash: string };
@@ -16,9 +16,15 @@ export interface ActiveFacade {
   reveal(offset: number): void;
   /**
    * M-07.3: the cursor to the markup offset `offset`, shown, with the
-   * keyboard; with `rev`, only while the text is the backend's of `rev`.
+   * keyboard; with `rev`, only while the text is the backend's of `rev`;
+   * with `to` (M-13.3), the text from `offset` to `to` selected.
    */
-  jump(offset: number, rev?: number): void;
+  jump(offset: number, rev?: number, to?: number): void;
+  /**
+   * UC-008 A6, M-13.4: a step of the find field holding `text`: the hit is
+   * selected and shown; the keyboard stays where it is.
+   */
+  find(text: string, step: FindStep): Promise<FindAnswer | null>;
   focus(): void;
   /** M-10.3 to M-10.5: puts `insertion` in at the cursor; resolves once it is shown. */
   insert(insertion: Insertion): Promise<void>;

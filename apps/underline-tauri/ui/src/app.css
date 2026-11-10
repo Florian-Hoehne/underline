@@ -135,3 +135,22 @@ body {
     transition: none !important;
   }
 }
+
+/*
+ * M-13.2, UX review F9: the marked hits in high contrast mode (Windows):
+ * the system's highlight, as the theme's colours are replaced there.
+ */
+@media (forced-colors: active) {
+  .cm-ul-found,
+  .cm-searchMatch,
+  .hit {
+    forced-color-adjust: none;
+    color: HighlightText;
+    background: Highlight;
+    box-shadow: none;
+  }
+
+  .hit.current {
+    outline: 2px solid CanvasText;
+  }
+}

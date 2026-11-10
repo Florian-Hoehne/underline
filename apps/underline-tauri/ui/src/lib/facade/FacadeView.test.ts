@@ -158,6 +158,7 @@ function backendWith(opened: FacadeState): FacadeBackend & {
   open: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
   fold: ReturnType<typeof vi.fn>;
+  find: ReturnType<typeof vi.fn>;
   input: ReturnType<typeof vi.fn>;
   clipboard: ReturnType<typeof vi.fn>;
   pasteImage: ReturnType<typeof vi.fn>;
@@ -172,6 +173,7 @@ function backendWith(opened: FacadeState): FacadeBackend & {
     open: vi.fn(async () => opened),
     select: vi.fn(async () => 'Ln 3, Col 2'),
     fold: vi.fn(async () => PATCH),
+    find: vi.fn(async () => null),
     input: vi.fn(async () => FACADE_PATCH),
     clipboard: vi.fn(async () => ({ patch: FACADE_PATCH, image: null })),
     pasteImage: vi.fn(async () => FACADE_PATCH),

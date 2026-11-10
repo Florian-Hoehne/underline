@@ -29,18 +29,15 @@ use underline_markup::formatting::apply_format;
 use underline_markup::NoteFormat;
 
 use crate::editor_view::{
-    revision, units, ClipAction, ClipContentView, EditorInput, EditorPatch, EditorState, FoundView,
-    KeyName, KeysStatusView, TextChange, ToolName, VimChange, VimModeName, VimState,
+    revision, units, ClipAction, ClipContentView, EditorInput, EditorPatch, EditorState, KeyName,
+    KeysStatusView, TextChange, ToolName, VimChange, VimModeName, VimState,
 };
 use crate::facade_view::{
     BlockView, BlocksView, FacadeAt, FacadeInput, FacadePatch, FacadeState, GapView, RowsView,
 };
 use crate::folds::Folds;
+use crate::found::Found;
 use crate::CachedViews;
-
-/// How often the marked hits of the Nano search are found again while the
-/// text changes: 300 ms.
-pub const FOUND_EVERY_MS: f64 = 300.0;
 
 /// One change of the facade's blocks for the window, with the version it
 /// applies to.
@@ -284,10 +281,8 @@ pub struct EditorTab {
     /// clipboard held before (`copied_selection` of egui).
     pub(crate) copied_selection: Option<Range<usize>>,
     pub(crate) folds: Folds,
-    /// The revision and the search of the hits the window was told of last.
-    found_told: Option<(u64, Option<String>)>,
-    /// When the hits were found last, in milliseconds of the host's clock.
-    found_at: Option<f64>,
+    /// UC-008 BR-008: the marked words (`found.rs`).
+    pub(crate) found: Found,
     /// The host's clock, in milliseconds ([`EditorTab::set_now`]).
     pub(crate) now_ms: f64,
 }
@@ -304,8 +299,7 @@ impl EditorTab {
             own_markup: None,
             copied_selection: None,
             folds: Folds::default(),
-            found_told: None,
-            found_at: None,
+            found: Found::default(),
             now_ms: 0.0,
         }
     }
@@ -474,11 +468,17 @@ impl EditorTab {
         }
     }
 
+    /// A view of the window starts showing the tab (the source view or the
+    /// facade): it is told the sections and the marked hits again.
+    pub fn shown_anew(&mut self) {
+        self.folds.told = None;
+        self.found.told = None;
+    }
+
     /// ADR-024: the text with its cursor, as the window starts showing it or
     /// shows it again; it is told the sections and hits again.
     pub fn state(&mut self, note: &str) -> EditorState {
-        self.folds.told = None;
-        self.found_told = None;
+        self.shown_anew();
         let (head, anchor) = self.editor.selection_web();
         EditorState {
             note: note.to_owned(),
@@ -680,54 +680,6 @@ impl EditorTab {
             self.unfold_at_cursor();
         }
         self.editor.cursor_place().label()
-    }
-
-    /// M-12.2, UC-008 BR-008: the marked hits of the Nano search at
-    /// `now_ms`, once they changed; while typing goes on with the same
-    /// search, at most every [`FOUND_EVERY_MS`] (ADR-024). `None` while the
-    /// window has them.
-    pub fn found_view(&mut self, note: &str, now_ms: f64) -> Option<FoundView> {
-        self.set_now(now_ms);
-        let now_ms = self.now_ms;
-        let rev = self.editor.revision();
-        let search = self.keys.search().map(str::to_owned);
-        let told = self.found_told.clone();
-        let key = (rev, search);
-        if told.as_ref() == Some(&key) {
-            return None;
-        }
-        let same_search = told.as_ref().is_some_and(|(_, p)| *p == key.1);
-        let recent = self
-            .found_at
-            .is_some_and(|at| (now_ms - at).max(0.0) < FOUND_EVERY_MS);
-        if same_search && recent && key.1.is_some() {
-            return None;
-        }
-        let all = key
-            .1
-            .as_deref()
-            .map(|pattern| self.editor.find_all(pattern))
-            .unwrap_or_default();
-        let count = units(all.len());
-        let ranges = all
-            .into_iter()
-            .take(FoundView::MAX)
-            .map(|range| {
-                let web = self.editor.to_web_range(range);
-                (units(web.start), units(web.end))
-            })
-            .collect();
-        // Nothing to tell when no hits were marked and none are.
-        let was_marked = told.as_ref().is_some_and(|(_, p)| p.is_some());
-        let view = (key.1.is_some() || was_marked).then(|| FoundView {
-            note: note.to_owned(),
-            rev: revision(rev),
-            ranges,
-            count,
-        });
-        self.found_told = Some(key);
-        self.found_at = Some(now_ms);
-        view
     }
 
     /// M-09: parses the blocks of the text and makes all their views anew

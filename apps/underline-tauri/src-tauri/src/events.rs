@@ -6,7 +6,7 @@ use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
     ChangedView, CloseQuestion, DeletedNoteView, EnrichView, Event, FlushView, HighlightView,
-    IndexesView, OverviewItem, SettingsView, StatusView, TabPropertiesView, TabsView,
+    IndexesView, OverviewItem, SearchView, SettingsView, StatusView, TabPropertiesView, TabsView,
     WorkspaceView,
 };
 
@@ -80,6 +80,12 @@ pub struct IndexesEvent(pub IndexesView);
 #[tauri_specta(event_name = "deleted")]
 pub struct DeletedEvent(pub Vec<DeletedNoteView>);
 
+/// M-13.1, UC-008 step 2: the text or the result of the workspace search
+/// changed.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "search")]
+pub struct SearchEvent(pub SearchView);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -97,6 +103,7 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Enrich(enrich) => EnrichEvent(*enrich).emit(app),
             Event::Indexes(indexes) => IndexesEvent(indexes).emit(app),
             Event::Deleted(deleted) => DeletedEvent(deleted).emit(app),
+            Event::Search(search) => SearchEvent(search).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

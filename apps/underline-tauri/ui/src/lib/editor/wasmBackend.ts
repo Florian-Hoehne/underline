@@ -64,6 +64,7 @@ export function wasmBackend(mac: boolean): EditorBackend {
       return state;
     },
     input: (note, editorInput) => input(note, (tab) => tab.core.input(editorInput)),
+    find: (note, text, step) => input(note, (tab) => tab.core.find(text, step)),
     clipboard: async (note, action, imageOnly = false) => {
       if (action !== 'paste') {
         const clipped = await input(note, (tab) => tab.core.clipboard(action, null));

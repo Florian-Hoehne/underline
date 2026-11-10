@@ -5,9 +5,13 @@ import { Heights } from './heights';
 import {
   applyBlocks,
   blockAt,
+  blockHits,
   codeSegments,
   estimateHeight,
+  facadeHits,
   facadeMarks,
+  hitParts,
+  mapHits,
   foldingOf,
   gapAfter,
   isFigure,
@@ -209,5 +213,101 @@ describe('ADR-024 the heights of a virtualized facade', () => {
     heights.reestimate(() => 1, false);
     expect(heights.get(1)).toBe(25);
     expect(heights.get(0)).toBe(1);
+  });
+});
+
+describe('M-13.2 the hits of a search in the facade (UC-008 BR-008)', () => {
+  // "**bold** ferry" shows "bold ferry": "bold" stands at 2, " ferry" at 8.
+  const shown = paragraph(10, 0, [run('bold', [[0, 2]], 8), run(' ferry', [[0, 8]], 14)], 15);
+
+  it('marks the units whose markup lies in a hit, the selected hit apart', () => {
+    const hits = [[19, 24]] as const;
+    expect(hitParts(shown, shown.runs[1], 0, 6, hits, null)).toEqual([
+      { from: 0, to: 1, hit: false, current: false },
+      { from: 1, to: 6, hit: true, current: false },
+    ]);
+    expect(hitParts(shown, shown.runs[1], 0, 6, hits, [19, 24])[1].current).toBe(true);
+    // A hit over the markup of "**" marks only what is shown.
+    expect(hitParts(shown, shown.runs[0], 0, 4, [[10, 14]], null)).toEqual([
+      { from: 0, to: 2, hit: true, current: false },
+      { from: 2, to: 4, hit: false, current: false },
+    ]);
+    expect(hitParts(shown, shown.runs[0], 0, 4, [], null)).toEqual([
+      { from: 0, to: 4, hit: false, current: false },
+    ]);
+  });
+
+  it('finds the hits of a block, also one that starts before it', () => {
+    const hits = [
+      [0, 3],
+      [8, 12],
+      [12, 14],
+      [24, 26],
+      [30, 31],
+    ] as const;
+    expect(blockHits(shown, hits)).toEqual([
+      [8, 12],
+      [12, 14],
+      [24, 26],
+    ]);
+  });
+
+  it('moves the hits after a change of the text, and drops those in its blocks', () => {
+    const blocks = [
+      paragraph(0, 0, [run('a', [[0, 0]], 1)], 10),
+      paragraph(10, 1, [run('b', [[0, 0]], 1)], 10),
+      paragraph(20, 2, [run('c', [[0, 0]], 1)], 10),
+    ];
+    const change: BlocksView = {
+      note: 'A',
+      rev: 2,
+      base: 1,
+      version: 2,
+      from: 1,
+      removed: 1,
+      blocks: [paragraph(10, 1, [run('bb', [[0, 0]], 2)], 12)],
+      shift: 2,
+      lineShift: 0,
+    };
+    expect(
+      mapHits(
+        [
+          [2, 4],
+          [12, 13],
+          [22, 25],
+        ],
+        blocks,
+        change,
+      ),
+    ).toEqual([
+      [2, 4],
+      [24, 27],
+    ]);
+  });
+
+  it('M-12.4 places a hit of the sieve in the row of its block', () => {
+    const hits = facadeHits(
+      [shown],
+      [[19, 24]],
+      new Set(),
+      () => 0,
+      () => 19 * 3,
+      400,
+      6,
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].top).toBe(6);
+    expect(hits[0].left).toBeGreaterThan(0);
+    expect(
+      facadeHits(
+        [shown],
+        [[19, 24]],
+        new Set([0]),
+        () => 0,
+        () => 57,
+        400,
+        6,
+      ),
+    ).toEqual([]);
   });
 });

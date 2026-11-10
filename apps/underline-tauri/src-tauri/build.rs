@@ -46,6 +46,9 @@ fn main() {
         "ws_restore",
         "ws_restore_as",
         "ws_purge",
+        "search_set",
+        "search_page",
+        "search_open",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

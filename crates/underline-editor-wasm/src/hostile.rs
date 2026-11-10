@@ -105,6 +105,21 @@ fn adr025_no_call_panics_with_arguments_that_do_not_fit() {
             let _ = core.views(f64::from(line));
         }
     }));
+    // UC-008, M-13: the searches and the find field over every place.
+    found.extend(panics("find", |core| {
+        for text in ["\"😀\"", "\"\\r\"", "\"\\\"\"", "\"a b\"", "\"\"", "null"] {
+            let _ = core.set_search(text);
+            let _ = core.views(2.0);
+            for a in OFFSETS {
+                let _ = core.select(0, a, a);
+                for step in ["\"first\"", "\"next\"", "\"previous\""] {
+                    let _ = core.find(text, step);
+                }
+                let _ = core.find_status();
+                let _ = core.input(&json!({ "kind": "text", "text": "😀\r\n" }).to_string());
+            }
+        }
+    }));
     found.extend(panics("apply", |core| {
         for base in REVS {
             for from in OFFSETS {
@@ -190,6 +205,13 @@ fn adr025_wrong_json_is_an_error() {
                 core.facade_input(&at, &input, wrong, None).is_err(),
                 "rows {wrong}"
             );
+        }
+        assert!(core.find("\"a\"", wrong).is_err(), "find step {wrong}");
+        if !wrong.starts_with('"') {
+            assert!(core.find(wrong, "\"next\"").is_err(), "find text {wrong}");
+        }
+        if wrong != "null" && !wrong.starts_with('"') {
+            assert!(core.set_search(wrong).is_err(), "search {wrong}");
         }
         if wrong != "\"copy\"" {
             assert!(core.clipboard(wrong, "null").is_err(), "action {wrong}");

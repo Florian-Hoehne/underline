@@ -69,6 +69,8 @@
     FacadeInput,
     FacadePatch,
     FacadeState,
+    FindAnswer,
+    FindStep,
     GapView,
     Insertion,
     KeysStatusView,
@@ -82,7 +84,7 @@
   import type { InputModeName, KeysState } from '../editor/keys';
   import type { MinimapChange, MinimapSource } from '../editor/minimap';
   import { tabId } from '../tabs';
-  import { takeJump } from '../editor/jump';
+  import { runJump, takeJump } from '../editor/jump';
   import { coreInStep } from '../editor/sync';
   import { setActiveFacade, type ActiveFacade, type CursorMark } from './active';
   import { type FacadeBackend } from './backend';
@@ -95,8 +97,12 @@
     BLOCK_GAP,
     BODY_SIZE,
     blockAt,
+    blockHits,
     estimateHeight,
+    facadeHits,
     facadeMarks,
+    mapHits,
+    type HitRange,
     foldingOf,
     isFigure,
     LINE_HEIGHT,
@@ -158,9 +164,15 @@
   let blocks = $state.raw<BlockView[]>([]);
   let format = $state('');
   let sections = $state.raw<SectionView[]>([]);
+  /** M-13.2: the marked hits, sorted, in web units of the markup. */
+  let found = $state.raw<HitRange[]>([]);
   /** The cursor and the other end of the selection, in web units. */
   let head = $state(0);
   let anchor = $state(0);
+  /** A6: the hit that is the selection, shown also while the keyboard is elsewhere. */
+  const current = $derived<HitRange | null>(
+    anchor === head ? null : [Math.min(anchor, head), Math.max(anchor, head)],
+  );
   /** M-09.11: the empty lines the cursor stands on. */
   let gap = $state.raw<GapView | null>(null);
   /** FR-026: the status of the Vim or Nano keys. */
@@ -359,6 +371,12 @@
         if (views.sections?.note === note) {
           sections = views.sections.sections;
         }
+        if (views.found?.note === note) {
+          // M-13.2, M-12.4: the words of the searches and the Nano hits.
+          found = views.found.ranges;
+          notify('content');
+          if (info) info.found++;
+        }
       },
       synced: () => {},
       reopened: () => void open(),
@@ -382,7 +400,13 @@
     const before = anchorOf();
     let index = before.index;
     const next = blocks.slice();
+    let hits = found;
     for (const change of changes) {
+      // M-13.2: the hits follow a change of the text until the core finds
+      // them again; the backend's colours and figures change no text.
+      if (change.rev !== rev && hits.length > 0) {
+        hits = mapHits(hits, next, change);
+      }
       // A block changed in place keeps its height until it is measured again.
       const kept = Math.min(change.removed, change.blocks.length);
       heights.splice(
@@ -405,6 +429,9 @@
       }
     }
     blocks = next;
+    if (hits !== found) {
+      found = hits;
+    }
     if (scroller && before.index !== index) {
       scroller.scrollTop = PADDING + heights.top(index) + before.into;
     }
@@ -481,7 +508,7 @@
    * `request_focus`). With `rev`, the offset is in the backend's text of
    * that revision: when the core's text is no longer it, nothing moves.
    */
-  function jump(offset: number, rev?: number) {
+  function jump(offset: number, rev?: number, to?: number) {
     void opened.then(async () => {
       await queue;
       if (destroyed || (rev !== undefined && !coreInStep(note, rev))) {
@@ -489,12 +516,42 @@
       }
       selections++;
       anchor = offset;
-      head = offset;
+      head = to ?? offset;
       gap = null;
       sendSelection();
       // The place the facade came back to gives way.
       holding = null;
       await focusCursor();
+    });
+  }
+
+  /**
+   * UC-008 A6, M-13.4: a step of the find field: the core selects the hit,
+   * the facade shows it (egui's `scroll_to_cursor`); the keyboard stays in
+   * the find field, so the hit shows as the selection without it.
+   */
+  function find(text: string, step: FindStep): Promise<FindAnswer | null> {
+    return opened.then(async () => {
+      await queue;
+      if (destroyed) {
+        return null;
+      }
+      const answer = await backend.find(note, text, step);
+      if (!answer || destroyed || answer.rev !== rev) {
+        return answer;
+      }
+      selections++;
+      anchor = answer.anchor;
+      head = answer.head;
+      gap = null;
+      holding = null;
+      if (info) info.place = answer.place;
+      if (content && document.activeElement === content) {
+        await focusCursor();
+      } else {
+        showCursor();
+      }
+      return answer;
     });
   }
 
@@ -1054,8 +1111,9 @@
   }
 
   /** Scrolls the cursor's block into view and puts the keyboard there. */
-  async function focusCursor() {
-    if (!scroller || !content) {
+  /** Scrolls the block of the cursor into view when it is not. */
+  function showCursor() {
+    if (!scroller) {
       return;
     }
     const index = gap ? Math.min(gap.before, blocks.length - 1) : blockAt(blocks, head);
@@ -1066,6 +1124,13 @@
         scroller.scrollTop = Math.max(top - scroller.clientHeight / 3, 0);
       }
     }
+  }
+
+  async function focusCursor() {
+    if (!scroller || !content) {
+      return;
+    }
+    showCursor();
     content.focus({ preventScroll: true });
     await tick();
     placeSelection(anchor, head);
@@ -1310,7 +1375,16 @@
       );
       return { marks, areas, content: minimap.contentHeight(), visible: minimap.visible() };
     },
-    hits: () => [],
+    hits: () =>
+      facadeHits(
+        blocks,
+        found,
+        folding.hidden,
+        (i) => heights.top(i),
+        (i) => heights.get(i),
+        textWidth,
+        PADDING,
+      ),
     visible: () => {
       const top = scroller?.scrollTop ?? 0;
       return [top, top + (scroller?.clientHeight ?? 0)];
@@ -1334,6 +1408,7 @@
     },
     reveal,
     jump,
+    find,
     focus: () => void focusCursor(),
     tool,
     settled: () => queue,
@@ -1385,10 +1460,10 @@
         await focusCursor();
       }
     });
-    // M-07.3: a link led here, to a heading.
+    // M-07.3: a link led here, to a heading; M-13.3: a found place.
     const waiting = takeJump(note);
     if (waiting !== null) {
-      jump(waiting.offset, waiting.rev);
+      runJump(controller, waiting);
     }
     return () => {
       destroyed = true;
@@ -1461,6 +1536,8 @@
               {platform}
               editing={editing === index}
               section={folding.headings.get(index) ?? null}
+              hits={found.length > 0 ? blockHits(blocks[index], found) : []}
+              {current}
               onFold={fold}
               onEnlarge={(url, w, h) => (enlarged = { url, width: w, height: h })}
               {onFigure}

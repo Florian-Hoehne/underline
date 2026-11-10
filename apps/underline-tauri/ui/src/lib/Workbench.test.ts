@@ -46,7 +46,9 @@ describe('M-05 note overview', () => {
       'Getting Started',
       'Home  (guide)',
       'Ideas',
+      'Log',
       'Reading List',
+      'Trip',
     ]);
     expect(entry('Home (top folder)')).toHaveAttribute('aria-current', 'true');
   });

@@ -338,8 +338,9 @@ Regeln für die Einfügestelle `p` von `a` gegenüber `b` (mit Δb = |b.insert| 
   - Bis dahin verschiebt CodeMirror die gezeigten Dekorationen mit jeder Transaktion (`highlight.ts`, `colorField`).
   - Ergebnisse durch die offenen Edits zu verschieben (`changesSince` → `ChangeSet` → `RangeSet.map`) ist in B5 nicht
     vorgesehen. Es kommt nur, wenn die Messung sichtbaren Farbverzug zeigt (8).
-- **Workspace-Suche (M-13, F9):** Wo ihre Markierung entsteht, entscheidet F9. Der Entwurf empfiehlt das WASM mit der
-  Anfrage als Eingabe.
+- **Workspace-Suche (M-13, F9):** Entschieden in F9 (Q-38): Die Markierung entsteht im WASM. Das Fenster gibt jedem Kern
+  den Suchtext (`setSearch`); der Kern findet die Wörter mit denselben Regeln (`Query`, jetzt in `underline-markup`) zusammen
+  mit den Nano-Treffern in `views()`, lokale `rev`. Die Suche über den Workspace selbst bleibt im Backend (`Searcher`).
 
 ## 5. Build-Pipeline
 
@@ -891,6 +892,6 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
     Spike nur synthetisch). Echte Tests in F16/Phase 4.
 11. **Versionspflege:** `wasm-bindgen` in `Cargo.lock` und die CLI müssen gleich bleiben. Ein Update von Abhängigkeiten
     kann sie trennen; das Skript bricht dann ab. Soll Dependabot den Pin ausnehmen?
-12. **Die Markierung der Workspace-Suche** (M-13): im WASM oder im Backend? Entscheidet F9.
+12. **Die Markierung der Workspace-Suche** (M-13): entschieden in F9 für das WASM (Q-38).
 13. **Plattformen:** WebView2 und WKWebView: `instantiateStreaming`, MIME von `.wasm` über `tauri://` bzw.
     `http://tauri.localhost`. Bisher nur unter WebKitGTK geprüft.

@@ -48,6 +48,9 @@
     "allow-note-undo-delete",
     "allow-ws-restore",
     "allow-ws-restore-as",
-    "allow-ws-purge"
+    "allow-ws-purge",
+    "allow-search-set",
+    "allow-search-page",
+    "allow-search-open"
   ]
 }

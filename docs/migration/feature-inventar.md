@@ -47,7 +47,7 @@ Allgemeine Konventionen der heutigen UI:
 
 - [x] **M-03.1** Burger-Button (a11y „Menu“, Hover „Hide the menu“/„Show the menu“) schaltet die Menüleiste um.
   Die Einstellung `show_menu_bar` wird sofort gespeichert.
-- [ ] **M-03.2** Lupe (a11y „Search“, Hover „Search notes  Ctrl+Shift+F“) schaltet das Such-Overlay um. Öffnen
+- [~] **M-03.2** Lupe (a11y „Search“, Hover „Search notes  Ctrl+Shift+F“) schaltet das Such-Overlay um. Öffnen
   fokussiert das Feld, Schliessen leert den Text.
 - [x] **M-03.3** Ist die Menüleiste ausgeblendet, zeigt die Top-Bar den Ordnernamen des Workspace fett und
   gekürzt, ohne Workspace „No workspace open“.
@@ -321,19 +321,19 @@ Reihenfolge von links nach rechts:
 - [x] **M-12.2** In der Quellansicht ein Balken je Zeile, Überschriften kräftiger. In der Facade ein Balken je
   Layoutzeile, Abbildungen als Fläche. Neuaufbau höchstens alle 150 ms.
 - [x] **M-12.3** Der sichtbare Bereich ist getönt. Klick oder Ziehen zentriert die Ansicht auf diese Stelle.
-- [ ] **M-12.4** Sieb (UC-008): Gibt es Treffer, wird der Streifen abgedunkelt (schwarz, Alpha 150). Jeder Treffer
+- [~] **M-12.4** Sieb (UC-008): Gibt es Treffer, wird der Streifen abgedunkelt (schwarz, Alpha 150). Jeder Treffer
   leuchtet an Zeile und Spalte. Treffer blinken 0,6 s an, 0,4 s aus; das Blinken ist per Einstellung abschaltbar.
 
 ## M-13 Suche (UC-008)
 
-- [ ] **M-13.1** Such-Overlay: Ctrl+Shift+F oder die Lupe. Volltextsuche im Hintergrund (`Searcher`), mit
+- [~] **M-13.1** Such-Overlay: Ctrl+Shift+F oder die Lupe. Volltextsuche im Hintergrund (`Searcher`), mit
   „Searching…“. Ein Ergebnis gilt nur, wenn es zum aktuellen Text passt. Neu gesucht wird, wenn sich Text,
   Übersicht oder Tab-Revisionen ändern.
-- [ ] **M-13.2** Treffer werden in allen offenen Tabs markiert (Hintergrund `found_background` plus 2 px
+- [~] **M-13.2** Treffer werden in allen offenen Tabs markiert (Hintergrund `found_background` plus 2 px
   Unterstrich `found`), auch in der Minimap (M-12.4).
-- [ ] **M-13.3** Ein Klick schliesst das Overlay (ausser auf der Lupe) und öffnet die Notiz an der Fundstelle.
+- [~] **M-13.3** Ein Klick schliesst das Overlay (ausser auf der Lupe) und öffnet die Notiz an der Fundstelle.
   *Feinverhalten des Overlays ist im Commit `af807f6` neu; vor F7 gegen `app` und UC-008 nachprüfen.*
-- [ ] **M-13.4** Suchleiste in der Notiz:
+- [~] **M-13.4** Suchleiste in der Notiz:
   - Öffnen mit Ctrl+F, nur im Modus Normal mit aktivem Tab. Vorbefüllt mit einer einzeiligen Auswahl, sonst mit
     dem letzten Text.
   - Aufbau: „Find in note:“, Feld 200 px, „{i} of {n}“/„{n} found“, „Previous“, „Next“, „×“.

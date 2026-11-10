@@ -39,6 +39,14 @@
 // figures come as `indexes` events, from a rough stand-in for the facade's
 // blocks. The note `Link-Tour` of `/home/user/Work` holds a link of every
 // kind.
+//
+// Feature F9: the search of the overlay (`search_set`) runs over the fake
+// notes and the open texts with a rough stand-in for `search_notes` (words,
+// quotes, case, title and folder first), answers as the event `search`
+// with the first 100 found notes, gives more with `search_page`, and
+// `search_open` opens a found note at its word. It searches again when a
+// text or the overview changes (UC-008 A3). `Trip` and `Log` of
+// `/home/user/Notes` hold "ferry" and "deploy" in many places.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
@@ -73,6 +81,9 @@ import type {
   UiError,
   WorkspaceSnapshot,
   SyncBatch,
+  FoundLineView,
+  FoundNoteView,
+  FoundPlace,
 } from './bindings';
 import { loadEditorCore, MirrorCore } from './editor/core';
 import { mockDrop, useMockDrops } from './editor/drop';
@@ -181,6 +192,12 @@ export type MockHandlers = {
     folder: string;
   }) => Promise<Ok<typeof commands.wsRestoreAs>>;
   ws_purge: (args: { key: string | null }) => Promise<Ok<typeof commands.wsPurge>>;
+  search_set: (args: { text: string }) => Promise<Ok<typeof commands.searchSet>>;
+  search_page: (args: { serial: number; from: number }) => Ok<typeof commands.searchPage>;
+  search_open: (args: {
+    note: string;
+    place: FoundPlace | null;
+  }) => Promise<Ok<typeof commands.searchOpen>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
@@ -230,6 +247,8 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
   '/home/user/Notes': [
     'Home',
     'Ideas',
+    'Trip',
+    'Log',
     'Reading-List',
     'guide/Getting-Started',
     'guide/Home',
@@ -360,11 +379,32 @@ export const FAKE_TOOLS: readonly ToolView[] = [
   { tool: 'table', label: 'Table', hint: 'Table (Ctrl+Shift+T)' },
 ];
 
+/** F9, UC-008: notes with places to find (TC-008-01, TC-008-11). */
+const SEARCH_TEXTS: Readonly<Record<string, string>> = {
+  Trip: `# Trip
+
+Book the ferry to Hydra.
+Pack light; the FERRY leaves at nine.
+
+## Islands
+
+Hydra has no cars; the Ferryman knows every harbour.
+`,
+  Log: `# Log
+
+${Array.from({ length: 7 }, (_, n) => `- ${n + 1}: deploy the site`).join('\n')}
+- ${'A very long line that goes on and on about nothing in particular, '.repeat(5)}and only then does it deploy, at its end.
+`,
+};
+
 /** The reason a failing save gives in the mock. */
 export const MOCK_SAVE_ERROR = 'Permission denied (os error 13)';
 
 /** The text of a fake note. */
 export function fakeNoteText(note: string): string {
+  if (note in SEARCH_TEXTS) {
+    return SEARCH_TEXTS[note];
+  }
   if (note === TOUR_NOTE) {
     return TOUR_TEXT;
   }
@@ -472,6 +512,96 @@ export function mockIndexes(note: string, rev: number, text: string): IndexesVie
  * Handlers answering like a window started without a workspace (M-02),
  * with their own settings and status that the commands change.
  */
+/** F9, UC-008 BR-002: the words of a search text, roughly as `Query::parse`. */
+export function mockQuery(text: string): string[] {
+  const words: string[] = [];
+  for (const match of text.matchAll(/"([^"]*)"?|(\S+)/g)) {
+    const word = (match[1] ?? match[2] ?? '').toLowerCase();
+    if (word !== '' && !words.includes(word)) {
+      words.push(word);
+    }
+  }
+  return words;
+}
+
+/** The UTF-8 length of `text`. */
+function bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/** The web offset (UTF-16) of the UTF-8 offset `byte` of `text`, clamped. */
+export function webAtByte(text: string, byte: number): number {
+  let at = 0;
+  let seen = 0;
+  for (const char of text) {
+    if (seen >= byte) {
+      break;
+    }
+    seen += bytes(char);
+    at += char.length;
+  }
+  return at;
+}
+
+/** F9, UC-008 BR-004, A5: a found note, roughly as `found_lines`. */
+function mockFoundNote(
+  note: string,
+  title: string,
+  folder: string | null,
+  text: string,
+  words: readonly string[],
+): FoundNoteView {
+  const lines: FoundLineView[] = [];
+  let places = 0;
+  let start = 0;
+  for (const line of text.split('\n')) {
+    const low = line.toLowerCase();
+    const at = words
+      .map((w) => [low.indexOf(w), w.length] as const)
+      .filter(([i]) => i >= 0)
+      .sort((a, b) => a[0] - b[0]);
+    if (at.length > 0) {
+      places += 1;
+      if (lines.length < 5) {
+        const [first, length] = at[0];
+        const from = Math.max(0, first - 40);
+        const to = Math.min(line.length, from + 120);
+        const shown = `${from > 0 ? '…' : ''}${line.slice(from, to)}${to < line.length ? '…' : ''}`;
+        const parts: FoundLineView['parts'] = [];
+        const lower = shown.toLowerCase();
+        let last = 0;
+        for (let i = 0; i < shown.length;) {
+          const word = words.find((w) => lower.startsWith(w, i));
+          if (word) {
+            if (i > last) parts.push({ text: shown.slice(last, i), hit: false });
+            parts.push({ text: shown.slice(i, i + word.length), hit: true });
+            i += word.length;
+            last = i;
+          } else {
+            i += 1;
+          }
+        }
+        if (last < shown.length) parts.push({ text: shown.slice(last), hit: false });
+        const byte = start + bytes(line.slice(0, first));
+        lines.push({
+          parts,
+          place: { from: byte, to: byte + bytes(line.slice(first, first + length)) },
+        });
+      }
+    }
+    start += bytes(line) + 1;
+  }
+  return {
+    note,
+    title,
+    folder,
+    places: places === 0 ? 'in the title or folder' : places === 1 ? '1 place' : `${places} places`,
+    lines,
+    more: Math.max(places - lines.length, 0),
+    place: lines[0]?.place ?? null,
+  };
+}
+
 export function mockHandlers(start: MockStart = {}): MockHandlers {
   let settings: SettingsView = { ...defaultSettings(), ...start.settings };
   let status = start.status ?? '';
@@ -590,6 +720,9 @@ function workspaceHandlers(
   | 'ws_restore'
   | 'ws_restore_as'
   | 'ws_purge'
+  | 'search_set'
+  | 'search_page'
+  | 'search_open'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -949,10 +1082,65 @@ function workspaceHandlers(
       // The mock was taken down meanwhile (a test ended).
     }
   };
+  /** F9: the search of the overlay, as the mock runs it. */
+  let searchText = '';
+  let searchSerial = 0;
+  let searchFound: FoundNoteView[] = [];
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  const SEARCH_PAGE = 100;
+  /** UC-008, roughly as `search_notes` (BR-001 to BR-004). */
+  const runSearch = async () => {
+    if (disposed || root === null || searchText === '') {
+      return;
+    }
+    const words = mockQuery(searchText);
+    if (words.length === 0) {
+      return;
+    }
+    const byName: FoundNoteView[] = [];
+    const byText: FoundNoteView[] = [];
+    for (const { note } of overview()) {
+      const text = mirrors.get(note)?.text() ?? textOf(note);
+      const name = [title(note).toLowerCase(), (folder(note) ?? '').toLowerCase()];
+      const low = text.toLowerCase();
+      if (!words.every((w) => name.some((n) => n.includes(w)) || low.includes(w))) {
+        continue;
+      }
+      const found = mockFoundNote(note, title(note), folder(note), text, words);
+      (words.every((w) => name.some((n) => n.includes(w))) ? byName : byText).push(found);
+    }
+    searchFound = [...byName, ...byText];
+    searchSerial += 1;
+    try {
+      await emit('search', {
+        text: searchText,
+        result: {
+          serial: searchSerial,
+          text: searchText,
+          total: searchFound.length,
+          notes: searchFound.slice(0, SEARCH_PAGE),
+          unreadable: null,
+        },
+      });
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
+  };
+  /** UC-008 A3: a text or the overview changed: the search runs again soon. */
+  const searchAgain = () => {
+    if (searchText === '' || searchTimer !== null) {
+      return;
+    }
+    searchTimer = setTimeout(() => {
+      searchTimer = null;
+      void runSearch();
+    }, 30);
+  };
   const sendAll = async () => {
     if (disposed) {
       return;
     }
+    searchAgain();
     const now = snapshot();
     try {
       await emit('workspace', now.workspace);
@@ -1176,6 +1364,43 @@ function workspaceHandlers(
       await setStatus(`Workspace created in ${dir}`);
       return { stage: 'done' };
     },
+    search_set: async ({ text }) => {
+      searchText = text.trim();
+      if (searchText === '') {
+        searchFound = [];
+        await emit('search', { text: '', result: null });
+      } else {
+        // As the searcher's thread: the answer comes a moment later.
+        setTimeout(() => void runSearch(), 20);
+      }
+      return null;
+    },
+    search_page: ({ serial, from }) =>
+      serial === searchSerial ? searchFound.slice(from, from + SEARCH_PAGE) : null,
+    search_open: async ({ note, place }) => {
+      if (!root || !files[root]?.includes(note)) {
+        await setStatus(`${title(note)} cannot be read: note \`${note}\` not found`);
+        return null;
+      }
+      openTab(note);
+      await sendAll();
+      if (place === null) {
+        return null;
+      }
+      await loadEditorCore();
+      let mirror = mirrors.get(note);
+      if (!mirror) {
+        mirror = new MirrorCore(textOf(note));
+        mirrors.set(note, mirror);
+      }
+      const text = mirror.text();
+      return {
+        note,
+        rev: mirror.rev,
+        anchor: webAtByte(text, place.from),
+        head: webAtByte(text, place.to),
+      };
+    },
     tab_open: async ({ note }) => {
       if (root && files[root]?.includes(note)) {
         openTab(note);
@@ -1356,6 +1581,7 @@ function workspaceHandlers(
       const before = mirror.text();
       const { answer, reverted } = mirror.receive(batch);
       if (mirror.text() !== before) {
+        searchAgain();
         if (quiet.delete(note)) {
           // The user's own change: the tab shows its mark now.
           unstored.delete(note);
@@ -1621,7 +1847,13 @@ function workspaceHandlers(
     },
     outsideChange: async (note, text) => {
       const mirror = mirrors.get(note);
+      // F9, UC-008 A3: a change from outside searches again.
+      searchAgain();
       if (!mirror) {
+        // A note not open: its file holds the new text.
+        if (root !== null && files[root]?.includes(note)) {
+          texts.set(note, text);
+        }
         return null;
       }
       const rev = mirror.reload(text);
@@ -1648,6 +1880,10 @@ function workspaceHandlers(
         clearTimeout(timer);
       }
       saveTimers.clear();
+      if (searchTimer !== null) {
+        clearTimeout(searchTimer);
+        searchTimer = null;
+      }
       disposed = true;
     },
   };

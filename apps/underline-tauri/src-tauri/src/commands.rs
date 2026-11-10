@@ -27,6 +27,7 @@ use underline_session::{
     RenameStart, RestoreAnswer, Session, SettingName, StartInfo, StartOpened, SyncAnswer,
     SyncBatch, Synced, UiError, UiErrorKind,
 };
+use underline_session::{FoundNoteView, FoundPlace, SearchOpened};
 
 use crate::clipboard::SystemClipboard;
 use crate::events::CloseQuestionEvent;
@@ -944,6 +945,51 @@ pub async fn ws_purge(
     .await
 }
 
+/// M-13.1, UC-008 steps 1–2, A2: the search overlay holds `text`; the
+/// search of the workspace starts again on its own thread, and its result
+/// comes as the event `search`. Only spaces end the search.
+#[tauri::command]
+#[specta::specta]
+pub async fn search_set(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    text: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| session.search_set(&text)).await
+}
+
+/// M-13.1, UC-008 step 2: more found notes of the result `serial`, from the
+/// `from`th on; `null` when a newer result replaced it.
+#[tauri::command]
+#[specta::specta]
+pub async fn search_page(
+    session: State<'_, SharedSession>,
+    serial: u32,
+    from: u32,
+) -> Result<Option<Vec<FoundNoteView>>, UiError> {
+    read_session(&session, move |session| session.search_page(serial, from)).await
+}
+
+/// M-13.3, UC-008 step 4: opens the found note `note` as the overview does;
+/// with `place` (bytes of the text searched), the word to select in the
+/// backend's text, which the window's edits reached first (`flushed`,
+/// ADR-025). `null` when there is none or the note did not open (the
+/// status says why).
+#[tauri::command]
+#[specta::specta]
+pub async fn search_open(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    place: Option<FoundPlace>,
+) -> Result<Option<SearchOpened>, UiError> {
+    let id = NoteId::from_relative(&note);
+    on_session(&session, &waker, move |session| {
+        session.search_open(&id, place)
+    })
+    .await?
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1013,6 +1059,9 @@ mod tests {
         "ws_restore",
         "ws_restore_as",
         "ws_purge",
+        "search_set",
+        "search_page",
+        "search_open",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user

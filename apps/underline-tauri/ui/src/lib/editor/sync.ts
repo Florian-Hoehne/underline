@@ -112,7 +112,7 @@ export function setSyncReporter(next: SyncReporter | null): void {
 export type CoreListener = {
   /** The backend's changes, as a patch of the source view. */
   patch(patch: EditorPatch): void;
-  /** The sections and the Nano hits, once they changed. */
+  /** The sections and the marked hits, once they changed. */
   views(views: TabViews): void;
   /** The core confirmed a revision: results of the backend may apply now. */
   synced(): void;
@@ -129,6 +129,12 @@ function afterFrame(work: () => void): void {
 }
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * How long after the last views the core is asked once more: just over the
+ * 300 ms it waits between finding sections or hits again.
+ */
+export const VIEWS_TRAILING_MS = 320;
 
 /** The status line says so after this many failures in a row. */
 const REPORT_AFTER = 3;
@@ -147,6 +153,8 @@ export class TabCore {
   listener: CoreListener | null = null;
   #scheduled = false;
   #viewsScheduled = false;
+  /** The views asked once more after a burst of inputs. */
+  #trailing: ReturnType<typeof setTimeout> | null = null;
   #sending: Promise<boolean> | null = null;
   #retry: ReturnType<typeof setTimeout> | null = null;
   #failures = 0;
@@ -189,6 +197,26 @@ export class TabCore {
     });
   }
 
+  /** The words this core marks now (`undefined`: not set yet). */
+  #search: string | null | undefined = undefined;
+
+  /**
+   * UC-008 BR-008, M-13.2: the core marks the words of `text` (`null`:
+   * none); the hits follow with the views.
+   */
+  setSearch(text: string | null): void {
+    if (!this.alive || this.#search === text) {
+      return;
+    }
+    try {
+      this.core.setSearch(text);
+      this.#search = text;
+      this.scheduleViews();
+    } catch (error) {
+      this.#problem(error);
+    }
+  }
+
   /** Works out the sections and hits after the frame. */
   scheduleViews(): void {
     if (this.#viewsScheduled || !this.alive) {
@@ -197,20 +225,37 @@ export class TabCore {
     this.#viewsScheduled = true;
     afterFrame(() => {
       this.#viewsScheduled = false;
-      if (!this.alive) {
-        return;
+      this.#runViews();
+      // The core finds sections and hits at most every 300 ms while the
+      // text changes (A-30, A-90): the last input of a burst may fall in
+      // that pause, so they are asked once more after it (app-tester F9:
+      // the facade's marks of an edited block came back only with the next
+      // key).
+      if (this.#trailing !== null) {
+        clearTimeout(this.#trailing);
       }
-      try {
-        const start = performance.now();
-        const views = this.core.views(start);
-        probe?.('views', performance.now() - start);
-        if (views.sections || views.found) {
-          this.listener?.views(views);
-        }
-      } catch (error) {
-        this.#problem(error);
-      }
+      this.#trailing = setTimeout(() => {
+        this.#trailing = null;
+        this.#runViews();
+      }, VIEWS_TRAILING_MS);
     });
+  }
+
+  /** Asks the core for the sections and hits that changed, for the view. */
+  #runViews(): void {
+    if (!this.alive) {
+      return;
+    }
+    try {
+      const start = performance.now();
+      const views = this.core.views(start);
+      probe?.('views', performance.now() - start);
+      if (views.sections || views.found) {
+        this.listener?.views(views);
+      }
+    } catch (error) {
+      this.#problem(error);
+    }
   }
 
   /** ADR-025: the backend's colours and figures of the facade's blocks. */
@@ -395,6 +440,10 @@ export class TabCore {
   /** The tab closed: the core goes, and nothing more is said of it. */
   close(): void {
     this.#closed = true;
+    if (this.#trailing !== null) {
+      clearTimeout(this.#trailing);
+      this.#trailing = null;
+    }
     if (this.#retry !== null) {
       clearTimeout(this.#retry);
       this.#retry = null;
@@ -454,6 +503,8 @@ class Cores {
     }
     core.startSync(mirror.rev);
     core.select(core.state().rev, mirror.anchor, mirror.head);
+    // M-13.2: the words searched now are marked in a note opened meanwhile.
+    tab.setSearch(searchFor(note));
     core.onDead = () => {
       // Q-40: opened anew from the backend's text; the edits not confirmed
       // are lost, and the status line says so. The note may have been
@@ -546,6 +597,32 @@ const cores = new Cores();
 const renaming = new Map<string, { done: Promise<void>; end: () => void }>();
 /** UC-006 step 7: renamed cores that wait for a tab bar with their new name. */
 const renamed = new Set<string>();
+
+/**
+ * UC-008 BR-008, A6, M-13.2, M-13.4: what the cores mark: the words of the
+ * search overlay in every note, the words of the find field instead in the
+ * note it finds in (as egui's `run_search`); text with no word marks none.
+ */
+type Searches = { overlay: string; find: { note: string; text: string } | null };
+
+let searches: Searches = { overlay: '', find: null };
+
+/** The text whose words the core of `note` marks; `null`: none. */
+export function searchFor(note: string): string | null {
+  const find = searches.find;
+  if (find && find.note === note && find.text.trim() !== '') {
+    return find.text;
+  }
+  return searches.overlay.trim() !== '' ? searches.overlay : null;
+}
+
+/** The words searched changed: every core marks what `searchFor` says. */
+export function setSearches(next: Searches): void {
+  searches = next;
+  for (const tab of cores.all()) {
+    tab.setSearch(searchFor(tab.note));
+  }
+}
 
 /** The core of `note` once it is ready. */
 export function coreOf(note: string): TabCore | undefined {

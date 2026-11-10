@@ -12,6 +12,8 @@ import {
   type FacadeInput,
   type FacadePatch,
   type FacadeState,
+  type FindAnswer,
+  type FindStep,
   type Insertion,
   type KeysStatusView,
   type Platform,
@@ -32,6 +34,11 @@ export interface FacadeBackend {
   select(note: string, rev: number, anchor: number, head: number): Promise<string>;
   /** M-08.8: folds or expands the section of the heading on `line`. */
   fold(note: string, line: number): Promise<EditorPatch>;
+  /**
+   * UC-008 A6, M-13.4: a step of the find field holding `text`: the hit it
+   * selected in the core, or `null` when nothing is found.
+   */
+  find(note: string, text: string, step: FindStep): Promise<FindAnswer | null>;
   /**
    * UC-005, M-09.10 to M-09.13: one input at the selection `at`, with the
    * rows measured around the cursor and, when the Vim keys asked, the

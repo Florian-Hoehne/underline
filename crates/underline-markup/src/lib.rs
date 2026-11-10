@@ -13,6 +13,7 @@ pub mod diagram;
 mod format;
 pub mod formatting;
 pub mod html;
+pub mod search;
 pub mod sections;
 
 pub use format::NoteFormat;

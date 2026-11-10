@@ -10,6 +10,7 @@ mod facade;
 mod indexes;
 mod links;
 mod notes;
+mod search;
 mod sync;
 mod tab;
 #[cfg(test)]
@@ -119,6 +120,8 @@ pub struct Session {
     undo_delete: Option<notes::UndoDelete>,
     /// UC-007 A6: the deleted note "Restore note" asks a new place for.
     restoring: Option<notes::Restoring>,
+    /// UC-008: the search of the overlay, kept when another workspace opens.
+    search: search::Search,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -216,6 +219,7 @@ impl Session {
             web_asked: None,
             undo_delete: None,
             restoring: None,
+            search: search::Search::default(),
             views_dirty: false,
             told,
         };
@@ -302,7 +306,9 @@ impl Session {
     /// change is due (M-22.1), the colours of the lines the source view
     /// shows are worked out (M-08.2), the facade's colours and figures
     /// for the window's editor core (M-09, `ed-enrich`), and the outline,
-    /// code and figures of the tool panel (M-16.5). Returns what changed
+    /// code and figures of the tool panel (M-16.5); the answer of the
+    /// workspace search is taken in and the search started again when its
+    /// notes changed (UC-008 A3, M-13.1). Returns what changed
     /// for the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
@@ -317,6 +323,7 @@ impl Session {
         events.extend(self.highlight_event(now));
         events.extend(self.facade_events());
         events.extend(self.indexes_events(now));
+        events.extend(self.search_events());
         events
     }
 
