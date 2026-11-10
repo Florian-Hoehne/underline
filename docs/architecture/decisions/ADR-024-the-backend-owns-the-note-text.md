@@ -1,8 +1,9 @@
 # ADR-024: The backend owns the text of an open note; every edit is one IPC command
 
-**Status:** Accepted
-**Date:** 2026-11-09
+**Status:** Superseded
+**Date:** 2026-11-10
 **Requirements:** NFR-002, NFR-007, NFR-008, NFR-013
+**Superseded by:** ADR-025
 
 ## Context
 

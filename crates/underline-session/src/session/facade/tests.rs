@@ -472,19 +472,21 @@ fn adr024_an_older_job_never_overwrites_a_newer_one() {
     let job = |seq: u64, text: &str| Job {
         seq,
         rev: seq,
-        looks: (underline_core::Theme::Light, false),
         generation: 0,
         rope: ropey::Rope::from_str(text),
         format: NoteFormat::Markdown,
         blocks: None,
-        root: PathBuf::from("/nowhere"),
-        note: PathBuf::from("/nowhere/Home.md"),
-        colors: None,
-        dark: false,
-        diagrams: None,
-        code_colors: std::sync::Arc::default(),
-        images: std::sync::Arc::default(),
         last_pictures: std::collections::HashMap::new(),
+        ctx: super::build::Context {
+            looks: (underline_core::Theme::Light, false),
+            colors: None,
+            dark: false,
+            diagrams: None,
+            code_colors: std::sync::Arc::default(),
+            images: std::sync::Arc::default(),
+            root: PathBuf::from("/nowhere"),
+            note: PathBuf::from("/nowhere/Home.md"),
+        },
     };
     let mut facade = Facade::default();
     let older = run(job(1, "# Old\n"));

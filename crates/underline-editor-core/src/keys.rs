@@ -285,6 +285,14 @@ impl Keys {
         }
     }
 
+    /// Whether the Vim keys wait for a yank or a put through the system
+    /// clipboard (`"+`, `"*`): a window that reads the clipboard by itself
+    /// reads it before the next key.
+    #[must_use]
+    pub fn wants_clipboard(&self) -> bool {
+        self.mode == InputMode::Vim && self.vim.clipboard
+    }
+
     /// Whether the search prompt of the Nano keys is open: it takes every
     /// key and every text until Enter, Escape or Ctrl+C.
     #[must_use]

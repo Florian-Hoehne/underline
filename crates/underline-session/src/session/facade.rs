@@ -15,6 +15,10 @@
 //! one figure.
 
 mod build;
+mod edit;
+mod input;
+mod reparse;
+mod rules;
 mod splice;
 
 use std::collections::HashMap;
@@ -25,7 +29,7 @@ use underline_core::{EditingView, NoteFormat, NoteId};
 use underline_facade::blocks::Block;
 use underline_facade::highlight::HighlightSet;
 
-use self::build::{diagram_figure, diagram_language, Built, Job, Looks};
+use self::build::{diagram_figure, diagram_language, Built, Context, Job, Looks};
 pub(super) use self::build::{CodeColorCache, ImageCache};
 use self::splice::{splices, Splice};
 use super::diagrams::SvgDiagrams;
@@ -64,6 +68,12 @@ pub(super) struct Facade {
     committed: u64,
     /// A job of the tick runs.
     building: bool,
+    /// Markdown: the note may hold link reference definitions, so an edit
+    /// parses it whole (`reparse.rs`).
+    refs: bool,
+    /// Code blocks sent without their colours, which the tick makes
+    /// (ADR-024).
+    recolor: Vec<usize>,
 }
 
 /// What making the views needs of the session.
@@ -87,19 +97,12 @@ impl Facade {
         Job {
             seq: self.next_seq,
             rev,
-            looks: tools.looks,
             generation: tools.diagrams.as_deref().map_or(0, SvgDiagrams::generation),
             rope: tab.editor.document().rope().clone(),
             format: tab.format,
             blocks: (self.parsed == Some(rev)).then(|| Arc::clone(&self.blocks)),
-            root: root.to_owned(),
-            note: tab.path.clone(),
-            colors: tools.colors.clone(),
-            dark: tools.dark,
-            diagrams: tools.diagrams.clone(),
-            code_colors: Arc::clone(&session.code_colors),
-            images: Arc::clone(&session.images),
             last_pictures: self.last_pictures.clone(),
+            ctx: context(tab, root, tools, session),
         }
     }
 
@@ -118,6 +121,9 @@ impl Facade {
         self.looks = Some(built.looks);
         self.diagrams_seen = built.generation;
         self.last_pictures = built.last_pictures;
+        if let Some(refs) = built.refs {
+            self.refs = refs;
+        }
         Some(self.versioned(changes))
     }
 
@@ -173,6 +179,20 @@ impl Facade {
     /// Whether the facade is shown.
     pub(super) fn shown(&self) -> bool {
         self.shown
+    }
+}
+
+/// What making views needs of the session and the tab.
+fn context(tab: &Tab, root: &std::path::Path, tools: &Tools, session: &Shared) -> Context {
+    Context {
+        looks: tools.looks,
+        colors: tools.colors.clone(),
+        dark: tools.dark,
+        diagrams: tools.diagrams.clone(),
+        code_colors: Arc::clone(&session.code_colors),
+        images: Arc::clone(&session.images),
+        root: root.to_owned(),
+        note: tab.path.clone(),
     }
 }
 
@@ -448,6 +468,10 @@ impl Session {
             }
         } else if let Some(parsed) = facade.parsed {
             out.extend(events(note, parsed, facade.figures(&tools)));
+            if !facade.recolor.is_empty() {
+                let ctx = context(tab, &root, &tools, &self.facade);
+                out.extend(events(note, parsed, facade.recolored(&ctx)));
+            }
         }
         tab.facade = Some(facade);
         out
@@ -525,6 +549,17 @@ fn facade_state(note: &NoteId, tab: &Tab, facade: &Facade) -> FacadeState {
         anchor: units(anchor),
         head: units(head),
         place: tab.editor.cursor_place().label(),
+        gap: (facade.parsed == Some(tab.editor.revision()))
+            .then(|| {
+                edit::gap_at(
+                    tab.editor.document().rope(),
+                    tab.editor.cursor(),
+                    &facade.blocks,
+                )
+            })
+            .flatten()
+            .map(edit::Gap::view),
+        keys: input::keys_status(&tab.keys),
     }
 }
 

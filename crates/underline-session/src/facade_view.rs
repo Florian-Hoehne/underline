@@ -9,9 +9,9 @@
 //! everything else in a block is relative to its start, so a block after an
 //! edit keeps its view and only moves (`BlocksView::shift`).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::editor_view::SpanStyle;
+use crate::editor_view::{EditorCommandName, KeyName, KeysStatusView, SpanStyle, ToolName};
 
 /// A run of text in one style (M-09.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -209,6 +209,129 @@ pub struct FacadeState {
     pub head: u32,
     /// UC-005: the place of the cursor for the status line.
     pub place: String,
+    /// M-09.11: the empty lines the cursor stands on, if it does.
+    pub gap: Option<GapView>,
+    /// FR-026: the status of the Vim or Nano keys; `None` with the usual
+    /// keys.
+    pub keys: Option<KeysStatusView>,
+}
+
+/// M-09.11, UC-005: the empty lines the cursor stands on after Enter, before
+/// anything is typed: an empty paragraph is no block, so they are shown on
+/// their own, before block `before` (the number of blocks: at the end).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct GapView {
+    /// The block the empty lines come before.
+    pub before: u32,
+    /// How many empty lines are shown, at least one; the cursor is on the
+    /// last.
+    pub lines: u32,
+}
+
+/// UC-005, ADR-024: the selection the facade shows when it sends an input,
+/// in web units of the revision `rev`; the input applies there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FacadeAt {
+    /// The revision the offsets are of.
+    pub rev: u32,
+    /// The other end of the selection.
+    pub anchor: u32,
+    /// The cursor.
+    pub head: u32,
+}
+
+/// M-09.13: where the cursor goes one row up or down, or to the start or
+/// the end of its row, as the window lays the cursor's block out; web
+/// offsets. `up` and `down` are `None` on the first and the last row of the
+/// block, where the cursor goes into the block before or after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct RowsView {
+    /// The cursor the rows were measured at.
+    pub at: u32,
+    /// One row up in the same block.
+    pub up: Option<u32>,
+    /// One row down in the same block.
+    pub down: Option<u32>,
+    /// The start of the cursor's row.
+    pub start: u32,
+    /// The end of the cursor's row.
+    pub end: u32,
+}
+
+/// One input of the facade (UC-005, M-09.10 to M-09.13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FacadeInput {
+    /// Typed text, or the finished text of an input method.
+    Text {
+        /// The text.
+        text: String,
+    },
+    /// A key with the modifiers the webview reported; the backend makes the
+    /// platform's command key of them (Ctrl, or Cmd on macOS).
+    Key {
+        /// The key.
+        key: KeyName,
+        /// `ctrlKey`.
+        ctrl: bool,
+        /// `altKey`.
+        alt: bool,
+        /// `shiftKey`.
+        shift: bool,
+        /// `metaKey` (Cmd on macOS).
+        meta: bool,
+    },
+    /// M-10.2: a button of the formatting toolbar.
+    Tool {
+        /// The function.
+        tool: ToolName,
+    },
+}
+
+/// ADR-024: the answer to an input of the facade: the blocks that changed,
+/// and where the cursor and the selection are now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FacadePatch {
+    /// The revision before the input.
+    pub base: u32,
+    /// The revision after it.
+    pub rev: u32,
+    /// The changes of the blocks, in order, each in the chain of versions
+    /// of `ed-blocks`.
+    pub blocks: Vec<BlocksView>,
+    /// The other end of the selection, in web units.
+    pub anchor: u32,
+    /// The cursor, in web units.
+    pub head: u32,
+    /// M-09.11: the empty lines the cursor stands on, if it does.
+    pub gap: Option<GapView>,
+    /// The cursor moved or the text changed; it is scrolled into view.
+    pub scroll: bool,
+    /// M-06.1: the note holds changes that are not stored yet.
+    pub unstored: bool,
+    /// UC-005: the place of the cursor for the status line.
+    pub place: String,
+    /// FR-026: the status of the Vim or Nano keys after the input.
+    pub keys: Option<KeysStatusView>,
+    /// M-10.9: what the Vim or Nano keys ask of the window, in order.
+    pub commands: Vec<EditorCommandName>,
+    /// UC-005 A2: a toolbar function that asks first (Link, Image).
+    pub request: Option<ToolName>,
+    /// M-11.2: what a yank into `"+` or `"*` puts on the system clipboard;
+    /// the window writes it.
+    pub copied: Option<String>,
+    /// M-11.2: the Vim keys wait for a put or yank through the system
+    /// clipboard; the window sends the next input with its text.
+    pub wants_clipboard: bool,
 }
 
 /// ADR-024: the blocks changed after an input, a change from outside, a

@@ -20,8 +20,9 @@ use tauri::State;
 use underline_core::NoteId;
 use underline_session::{
     ClipAction, CloseQuestion, CreateAnswer, EditingViewName, EditorInput, EditorPatch,
-    EditorState, FacadeState, KeysStatusView, NewWorkspaceRequest, OpenAnswer, Session,
-    SettingName, StartInfo, StartOpened, UiError, UiErrorKind, VimChange, VimState,
+    EditorState, FacadeAt, FacadeInput, FacadePatch, FacadeState, KeysStatusView,
+    NewWorkspaceRequest, OpenAnswer, RowsView, Session, SettingName, StartInfo, StartOpened,
+    UiError, UiErrorKind, VimChange, VimState,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -297,6 +298,82 @@ pub async fn fa_open(
         state
     })
     .await?
+}
+
+/// ADR-024, UC-005, M-09.10 to M-09.13, M-11.2, M-11.3: one input of the
+/// facade at the selection `at` the window shows; the answer carries the
+/// blocks that changed and the cursor. `rows` are the rows the window
+/// measured around the cursor (Up, Down, Home, End); `clipboard` is the
+/// system clipboard's text when the Vim keys asked for it
+/// (`wantsClipboard`). Synchronous, like `ed_input`.
+#[tauri::command]
+#[specta::specta]
+pub fn fa_input(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    at: FacadeAt,
+    input: FacadeInput,
+    rows: Option<RowsView>,
+    clipboard: Option<String>,
+) -> Result<FacadePatch, UiError> {
+    let patch =
+        session
+            .lock()
+            .facade_input(&NoteId::from_relative(&note), at, input, rows, clipboard);
+    waker.wake();
+    patch
+}
+
+/// M-09.14, M-08.6, ADR-014: copy, cut or paste in the facade at the
+/// selection `at`; `plain` pastes the text as typed (Ctrl+Shift+V). The
+/// clipboard is read before the session is taken and written after it is
+/// let go, never on the main thread (see `ed_clipboard`).
+#[tauri::command]
+#[specta::specta]
+pub async fn fa_clipboard(
+    session: State<'_, SharedSession>,
+    clipboard: State<'_, SharedClipboard>,
+    waker: State<'_, Waker>,
+    note: String,
+    at: FacadeAt,
+    action: ClipAction,
+    plain: bool,
+) -> Result<FacadePatch, UiError> {
+    let session = Arc::clone(&session);
+    let clipboard = Arc::clone(&clipboard);
+    let waker = waker.inner().clone();
+    blocking(move || {
+        let note = NoteId::from_relative(&note);
+        let text = (action == ClipAction::Paste)
+            .then(|| clipboard.lock().read_text())
+            .flatten();
+        let answer = session
+            .lock()
+            .facade_clipboard(&note, at, action, plain, text.as_deref());
+        let patch = answer.map(|(copied, patch)| {
+            if let Some(copied) = copied {
+                clipboard.lock().write_text(&copied);
+            }
+            patch
+        });
+        waker.wake();
+        patch
+    })
+    .await?
+}
+
+/// M-11.4, FR-026: the left part of the status line while the facade shows
+/// the note of `note`, in the input mode of the settings.
+#[tauri::command]
+#[specta::specta]
+pub fn fa_keys_status(
+    session: State<'_, SharedSession>,
+    note: String,
+) -> Result<Option<KeysStatusView>, UiError> {
+    session
+        .lock()
+        .facade_keys_status(&NoteId::from_relative(&note))
 }
 
 /// ADR-024: the text of the tab of `note` with its cursor, when the source

@@ -16,6 +16,7 @@
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
+  BlocksView,
   ClipAction,
   commands,
   CreateAnswer,
@@ -29,6 +30,9 @@ import type {
   SettingsView,
   StartInfo,
   EditorPatch,
+  FacadeAt,
+  FacadeInput,
+  FacadePatch,
   TabPropertiesView,
   TabsView,
   ToolView,
@@ -76,6 +80,20 @@ export type MockHandlers = {
     view: EditingViewName;
   }) => Promise<Ok<typeof commands.tabSetView>>;
   fa_open: (args: { note: string }) => Ok<typeof commands.faOpen>;
+  fa_input: (args: {
+    note: string;
+    at: FacadeAt;
+    input: FacadeInput;
+    rows: unknown;
+    clipboard: string | null;
+  }) => Promise<Ok<typeof commands.faInput>>;
+  fa_clipboard: (args: {
+    note: string;
+    at: FacadeAt;
+    action: ClipAction;
+    plain: boolean;
+  }) => Promise<Ok<typeof commands.faClipboard>>;
+  fa_keys_status: (args: { note: string }) => Ok<typeof commands.faKeysStatus>;
   ed_open: (args: { note: string }) => Ok<typeof commands.edOpen>;
   ed_input: (args: {
     note: string;
@@ -287,6 +305,9 @@ function workspaceHandlers(
   | 'tab_store'
   | 'tab_set_view'
   | 'fa_open'
+  | 'fa_input'
+  | 'fa_clipboard'
+  | 'fa_keys_status'
   | 'ed_open'
   | 'ed_input'
   | 'ed_select'
@@ -381,6 +402,46 @@ function workspaceHandlers(
       shift: 0,
       lineShift: 0,
     });
+  };
+  /**
+   * ADR-024: the answer to an input of the facade: in the mock the blocks
+   * are made anew whole and sent with it, in the chain of versions.
+   */
+  const facadePatch = (note: string, base: number, patch: EditorPatch): FacadePatch => {
+    const doc = docOf(note);
+    const shown = facades.get(note);
+    const blocks: BlocksView[] = [];
+    if (shown && shown.rev !== doc.rev) {
+      const fresh = fakeBlocks(doc.text);
+      blocks.push({
+        note,
+        rev: doc.rev,
+        base: shown.version,
+        version: shown.version + 1,
+        from: 0,
+        removed: shown.count,
+        blocks: fresh,
+        shift: 0,
+        lineShift: 0,
+      });
+      facades.set(note, { version: shown.version + 1, count: fresh.length, rev: doc.rev });
+    }
+    return {
+      base,
+      rev: patch.rev,
+      blocks,
+      anchor: patch.anchor,
+      head: patch.head,
+      gap: null,
+      scroll: patch.scroll,
+      unstored: patch.unstored,
+      place: patch.place,
+      keys: patch.keys,
+      commands: patch.commands,
+      request: patch.request,
+      copied: null,
+      wantsClipboard: false,
+    };
   };
   /** M-08.8, M-11.3: the sections and the Nano hits follow each input, as events. */
   const editorEvents = async (note: string) => {
@@ -676,7 +737,46 @@ function workspaceHandlers(
         anchor: state.anchor,
         head: state.head,
         place: state.place,
+        gap: null,
+        keys: doc.mode === 'Vim' ? fakeVimStatus(null) : doc.keys(),
       };
+    },
+    fa_input: async ({ note, at, input }) => {
+      const doc = docOf(note);
+      doc.select(at.rev, at.anchor, at.head);
+      const base = doc.rev;
+      const patch = doc.input(
+        input.kind === 'key' ? { ...input, page: 1 } : (input as EditorInput),
+      );
+      if (patch.changes.length > 0) {
+        await changed(note);
+      }
+      setTimeout(() => void editorEvents(note), 0);
+      return facadePatch(note, base, marked(patch, note));
+    },
+    fa_clipboard: async ({ note, at, action }) => {
+      const doc = docOf(note);
+      doc.select(at.rev, at.anchor, at.head);
+      const base = doc.rev;
+      let patch: EditorPatch;
+      if (action === 'copy') {
+        clipboard = doc.selected() || clipboard;
+        patch = doc.unchanged();
+      } else if (action === 'cut') {
+        const cut = doc.cut();
+        clipboard = cut.text || clipboard;
+        patch = cut.patch;
+      } else {
+        patch = clipboard === null ? doc.unchanged() : doc.paste(clipboard);
+      }
+      if (patch.changes.length > 0) {
+        await changed(note);
+      }
+      return facadePatch(note, base, marked(patch, note));
+    },
+    fa_keys_status: ({ note }) => {
+      const doc = docOf(note);
+      return doc.mode === 'Vim' ? fakeVimStatus(null) : doc.keys();
     },
     ed_open: ({ note }) => {
       if (!tabs.some((tab) => tab.note === note)) {

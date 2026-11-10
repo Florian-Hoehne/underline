@@ -408,3 +408,30 @@ Vorgaben für F3 und F5:
 - **F-4 Bekannte Defekte D-01 bis D-16:** 1:1 übernehmen oder in der Tauri-App beheben? Empfohlen: D-01 bis D-09
   und D-11 beheben, als gewollte Abweichung in `paritaet.md`; den Rest (D-10, D-12 bis D-16) wie heute lassen und
   als offene Punkte führen.
+
+## 17. Umbau auf Variante B (2026-11-10)
+
+Der Messpunkt von F5b wurde verfehlt (Q-24); der Benutzer hat Variante B gewählt
+([ADR-025](../architecture/decisions/ADR-025-the-webview-owns-the-note-text-with-a-wasm-editor-core.md), ersetzt
+ADR-024). F5b (Variante A) ist als Basis committet; die Regeln, das Reparse und der Edit sind reine Rust-Logik und
+ziehen unverändert um. Reihenfolge, je Schritt ein Commit mit allen Prüfungen grün:
+
+- **B1 `underline-markup`:** neue wasm32-fähige Crate mit `NoteFormat` (und `InputMode`, falls der Editor-Kern es
+  braucht), `blocks`, `asciidoc`, `sections`, `formatting`, `link_at`. `underline-core` und `underline-facade`
+  re-exportieren alles unter den bisherigen Pfaden; die egui-App, MCP und Wiki bleiben unverändert. Die Tests ziehen
+  mit. Prüfung: `cargo check -p underline-markup --target wasm32-unknown-unknown`, ganzer Workspace grün.
+- **B2 Facade-Regeln in den Editor-Kern:** `rules`, `reparse`, `edit` und der reine Teil von `input` (Splice der
+  Views ohne Highlighting, Bilder, Diagramme) nach `underline-editor-core::facade`. Das Bauen der Views wird hinter
+  ein Trait gelegt; die Anreicherung (Code-Farben, Figuren, Asset-URLs) bleibt im Backend. `mac: bool` statt
+  `Platform::current()`. Kein `Instant`, kein `Mutex` im portablen Teil. `underline-session` nutzt den Kern weiter
+  (Spiegel), die Tests bleiben grün.
+- **B3 `underline-editor-wasm`:** `wasm-bindgen` (exakt gepinnt, CLI gleiche Version lokal unter `.tools/`), Build
+  per `npm run wasm` vor `vite build`; `cargo tauri build` ruft es über `beforeBuildCommand` auf.
+- **B4 Sync:** Revisionen je Tab im Backend; Edits `{base, from, removed, inserted}` (Zeichen) nach dem Frame in einem
+  Befehl; Backend-Änderungen (Agent, Aussenänderung, Umbenennen, Neu laden) als Event mit Rebase im Webview;
+  Backend-Ergebnisse (Highlighting, Sektionen, Treffer, Minimap, Figuren) tragen die Revision. Vor Speichern beim
+  Schliessen und vor jedem Befehl, der den Text liest, schickt das Fenster offene Edits. Tests: gleichzeitige Edits,
+  Agent-Edit während des Tippens, Schliessen mit unbestätigten Edits, Hash-Vergleich.
+- **B5 Quellansicht und Facade auf WASM, Messpunkt:** beide Ansichten nutzen den Kern im Webview; Nachmessen mit der
+  Spike-Methode. Ziel p99 ≤ 16 ms und ≥ 90 % der Tasten im nächsten Frame. Danach Reviews (rust, ux), app-tester,
+  F5b abhaken, Commit.

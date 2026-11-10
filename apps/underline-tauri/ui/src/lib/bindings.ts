@@ -90,6 +90,27 @@ export const commands = {
 	 */
 	faOpen: (note: string) => typedError<FacadeState, UiError>(__TAURI_INVOKE("fa_open", { note })),
 	/**
+	 *  ADR-024, UC-005, M-09.10 to M-09.13, M-11.2, M-11.3: one input of the
+	 *  facade at the selection `at` the window shows; the answer carries the
+	 *  blocks that changed and the cursor. `rows` are the rows the window
+	 *  measured around the cursor (Up, Down, Home, End); `clipboard` is the
+	 *  system clipboard's text when the Vim keys asked for it
+	 *  (`wantsClipboard`). Synchronous, like `ed_input`.
+	 */
+	faInput: (note: string, at: FacadeAt, input: FacadeInput, rows: RowsView | null, clipboard: string | null) => typedError<FacadePatch, UiError>(__TAURI_INVOKE("fa_input", { note, at, input, rows, clipboard })),
+	/**
+	 *  M-09.14, M-08.6, ADR-014: copy, cut or paste in the facade at the
+	 *  selection `at`; `plain` pastes the text as typed (Ctrl+Shift+V). The
+	 *  clipboard is read before the session is taken and written after it is
+	 *  let go, never on the main thread (see `ed_clipboard`).
+	 */
+	faClipboard: (note: string, at: FacadeAt, action: ClipAction, plain: boolean) => typedError<FacadePatch, UiError>(__TAURI_INVOKE("fa_clipboard", { note, at, action, plain })),
+	/**
+	 *  M-11.4, FR-026: the left part of the status line while the facade shows
+	 *  the note of `note`, in the input mode of the settings.
+	 */
+	faKeysStatus: (note: string) => typedError<KeysStatusView | null, UiError>(__TAURI_INVOKE("fa_keys_status", { note })),
+	/**
 	 *  ADR-024: the text of the tab of `note` with its cursor, when the source
 	 *  view starts showing it or after its text was replaced.
 	 * 
@@ -473,6 +494,89 @@ export type EditorState = {
 };
 
 /**
+ *  UC-005, ADR-024: the selection the facade shows when it sends an input,
+ *  in web units of the revision `rev`; the input applies there.
+ */
+export type FacadeAt = {
+	/**  The revision the offsets are of. */
+	rev: number,
+	/**  The other end of the selection. */
+	anchor: number,
+	/**  The cursor. */
+	head: number,
+};
+
+/**  One input of the facade (UC-005, M-09.10 to M-09.13). */
+export type FacadeInput = 
+/**  Typed text, or the finished text of an input method. */
+{ kind: "text"; 
+/**  The text. */
+text: string } | 
+/**
+ *  A key with the modifiers the webview reported; the backend makes the
+ *  platform's command key of them (Ctrl, or Cmd on macOS).
+ */
+{ kind: "key"; 
+/**  The key. */
+key: KeyName; 
+/**  `ctrlKey`. */
+ctrl: boolean; 
+/**  `altKey`. */
+alt: boolean; 
+/**  `shiftKey`. */
+shift: boolean; 
+/**  `metaKey` (Cmd on macOS). */
+meta: boolean } | 
+/**  M-10.2: a button of the formatting toolbar. */
+{ kind: "tool"; 
+/**  The function. */
+tool: ToolName };
+
+/**
+ *  ADR-024: the answer to an input of the facade: the blocks that changed,
+ *  and where the cursor and the selection are now.
+ */
+export type FacadePatch = {
+	/**  The revision before the input. */
+	base: number,
+	/**  The revision after it. */
+	rev: number,
+	/**
+	 *  The changes of the blocks, in order, each in the chain of versions
+	 *  of `ed-blocks`.
+	 */
+	blocks: BlocksView[],
+	/**  The other end of the selection, in web units. */
+	anchor: number,
+	/**  The cursor, in web units. */
+	head: number,
+	/**  M-09.11: the empty lines the cursor stands on, if it does. */
+	gap: GapView | null,
+	/**  The cursor moved or the text changed; it is scrolled into view. */
+	scroll: boolean,
+	/**  M-06.1: the note holds changes that are not stored yet. */
+	unstored: boolean,
+	/**  UC-005: the place of the cursor for the status line. */
+	place: string,
+	/**  FR-026: the status of the Vim or Nano keys after the input. */
+	keys: KeysStatusView | null,
+	/**  M-10.9: what the Vim or Nano keys ask of the window, in order. */
+	commands: EditorCommandName[],
+	/**  UC-005 A2: a toolbar function that asks first (Link, Image). */
+	request: ToolName | null,
+	/**
+	 *  M-11.2: what a yank into `"+` or `"*` puts on the system clipboard;
+	 *  the window writes it.
+	 */
+	copied: string | null,
+	/**
+	 *  M-11.2: the Vim keys wait for a put or yank through the system
+	 *  clipboard; the window sends the next input with its text.
+	 */
+	wantsClipboard: boolean,
+};
+
+/**
  *  M-09, ADR-024: the facade of an open note as the window starts showing
  *  it.
  */
@@ -496,6 +600,13 @@ export type FacadeState = {
 	head: number,
 	/**  UC-005: the place of the cursor for the status line. */
 	place: string,
+	/**  M-09.11: the empty lines the cursor stands on, if it does. */
+	gap: GapView | null,
+	/**
+	 *  FR-026: the status of the Vim or Nano keys; `None` with the usual
+	 *  keys.
+	 */
+	keys: KeysStatusView | null,
 };
 
 /**  The picture of an image or a diagram block (M-09.6, M-09.7). */
@@ -553,6 +664,21 @@ export type FoundView = {
 	ranges: ([number, number])[],
 	/**  How many hits there are in all. */
 	count: number,
+};
+
+/**
+ *  M-09.11, UC-005: the empty lines the cursor stands on after Enter, before
+ *  anything is typed: an empty paragraph is no block, so they are shown on
+ *  their own, before block `before` (the number of blocks: at the end).
+ */
+export type GapView = {
+	/**  The block the empty lines come before. */
+	before: number,
+	/**
+	 *  How many empty lines are shown, at least one; the cursor is on the
+	 *  last.
+	 */
+	lines: number,
 };
 
 /**  M-08.2, ADR-024: the colours of the lines the source view shows. */
@@ -648,6 +774,8 @@ export type KeyName =
 "O" | 
 /**  Q, for Ctrl/Cmd+Shift+Q (M-10.2). */
 "Q" | 
+/**  R, for Vim's Ctrl+R in the facade (M-11.2). */
+"R" | 
 /**  S, for Nano's Ctrl+S. */
 "S" | 
 /**  T, for Ctrl/Cmd+Shift+T (M-10.2). */
@@ -844,6 +972,25 @@ export type Platform =
 
 /**  M-16.2: the properties of the active tab's note; `null` without one. */
 export type PropertiesEvent = TabPropertiesView | null;
+
+/**
+ *  M-09.13: where the cursor goes one row up or down, or to the start or
+ *  the end of its row, as the window lays the cursor's block out; web
+ *  offsets. `up` and `down` are `None` on the first and the last row of the
+ *  block, where the cursor goes into the block before or after.
+ */
+export type RowsView = {
+	/**  The cursor the rows were measured at. */
+	at: number,
+	/**  One row up in the same block. */
+	up: number | null,
+	/**  One row down in the same block. */
+	down: number | null,
+	/**  The start of the cursor's row. */
+	start: number,
+	/**  The end of the cursor's row. */
+	end: number,
+};
 
 /**  A run of text in one style (M-09.2). */
 export type RunView = {

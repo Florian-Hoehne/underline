@@ -3,11 +3,16 @@
 
 import {
   commands,
+  type ClipAction,
   type EditingViewName,
-  type EditorInput,
   type EditorPatch,
+  type FacadeAt,
+  type FacadeInput,
+  type FacadePatch,
   type FacadeState,
+  type KeysStatusView,
   type Platform,
+  type RowsView,
   type UiError,
 } from '../bindings';
 
@@ -20,10 +25,25 @@ export interface FacadeBackend {
   /** M-08.8: folds or expands the section of the heading on `line`. */
   fold(note: string, line: number): Promise<EditorPatch>;
   /**
-   * An input the facade takes before feature F5b: the toolbar (M-10.2) and
-   * the folding keys (M-08.8). Typing comes with F5b.
+   * UC-005, M-09.10 to M-09.13: one input at the selection `at`, with the
+   * rows measured around the cursor and, when the Vim keys asked, the
+   * clipboard's text (`fa_input`).
    */
-  input(note: string, input: EditorInput): Promise<EditorPatch>;
+  input(
+    note: string,
+    at: FacadeAt,
+    input: FacadeInput,
+    rows: RowsView | null,
+    clipboard: string | null,
+  ): Promise<FacadePatch>;
+  /** M-09.14: copy, cut or paste (`plain`: as typed) at the selection `at`. */
+  clipboard(note: string, at: FacadeAt, action: ClipAction, plain: boolean): Promise<FacadePatch>;
+  /** M-11.4: the status of the Vim or Nano keys in the facade. */
+  keys(note: string): Promise<KeysStatusView | null>;
+  /** M-11.2: the system clipboard's text, for Vim's `"+`. */
+  readClipboard(): Promise<string | null>;
+  /** M-11.2: puts what Vim's `"+` yanked on the system clipboard. */
+  writeClipboard(text: string): Promise<void>;
 }
 
 type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };
@@ -41,7 +61,14 @@ export const tauriFacadeBackend: FacadeBackend = {
   open: (note) => unwrap(commands.faOpen(note)),
   select: (note, rev, anchor, head) => unwrap(commands.edSelect(note, rev, anchor, head)),
   fold: (note, line) => unwrap(commands.edFold(note, line)),
-  input: (note, input) => unwrap(commands.edInput(note, input)),
+  input: (note, at, input, rows, clipboard) =>
+    unwrap(commands.faInput(note, at, input, rows, clipboard)),
+  clipboard: (note, at, action, plain) => unwrap(commands.faClipboard(note, at, action, plain)),
+  keys: (note) => unwrap(commands.faKeysStatus(note)),
+  readClipboard: () => unwrap(commands.clipReadText()),
+  writeClipboard: async (text) => {
+    await unwrap(commands.clipWriteText(text));
+  },
 };
 
 /** M-07.2: the tab of `note` shows `view` from now on. */

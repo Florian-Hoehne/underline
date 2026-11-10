@@ -74,7 +74,7 @@ impl Done {
 
 /// M-10.2: the formatting `tool` applies at once, or `None` when it asks
 /// first (as `toolbar::format` of the egui widget).
-fn format_of(tool: Tool) -> Option<Format> {
+pub(super) fn format_of(tool: Tool) -> Option<Format> {
     Some(match tool {
         Tool::Heading => Format::Heading,
         Tool::Bold => Format::Bold,
@@ -89,7 +89,7 @@ fn format_of(tool: Tool) -> Option<Format> {
 
 /// M-08.8: Ctrl/Cmd+Shift+[ folds (`Some(true)`), Ctrl/Cmd+Shift+]
 /// expands (`Some(false)`).
-fn fold_key(key: KeyName, modifiers: Modifiers) -> Option<bool> {
+pub(super) fn fold_key(key: KeyName, modifiers: Modifiers) -> Option<bool> {
     if !(modifiers.command && modifiers.shift) {
         return None;
     }
@@ -209,7 +209,7 @@ fn tab_in<'a>(open: &'a mut Option<OpenWorkspace>, note: &NoteId) -> Result<&'a 
 
 /// The colours, the folds, the autosave clock and the tab mark follow an
 /// input; the patch for the window, and whether the tab's mark changed.
-fn after_input(tab: &mut Tab, base: u64, outcome: &Outcome) -> (EditorPatch, bool) {
+pub(super) fn after_input(tab: &mut Tab, base: u64, outcome: &Outcome) -> (EditorPatch, bool) {
     tab.refold_after(outcome);
     tab.unfold_at_cursor();
     let mut marked = false;
@@ -841,7 +841,8 @@ impl Session {
     /// active tab's note and the marked hits of its Nano search, once they
     /// changed (ADR-024: never within the keystroke command).
     pub(super) fn editor_events(&mut self, now: Instant) -> Vec<Event> {
-        let mode = self.source_keys_mode();
+        let source_mode = self.source_keys_mode();
+        let facade_mode = self.facade_keys_mode();
         let Some(open) = self.open.as_mut() else {
             return Vec::new();
         };
@@ -856,7 +857,12 @@ impl Session {
             // Neither the source view nor the facade shows the note.
             return Vec::new();
         }
-        tab.keys.mode = mode;
+        // The keys of the view shown: the facade has the editor core's Vim.
+        tab.keys.mode = if facade_shown {
+            facade_mode
+        } else {
+            source_mode
+        };
         let mut events = Vec::new();
         events.extend(tab.sections_view(note.as_str(), now).map(Event::Sections));
         let rev = tab.editor.revision();

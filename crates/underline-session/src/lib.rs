@@ -55,8 +55,8 @@ pub use editor_view::{
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView, TextReplaced};
 pub use facade_view::{
-    BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeState, FigureView,
-    RunView, TableView,
+    BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeAt, FacadeInput,
+    FacadePatch, FacadeState, FigureView, GapView, RowsView, RunView, TableView,
 };
 pub use palette::PaletteView;
 pub use session::{

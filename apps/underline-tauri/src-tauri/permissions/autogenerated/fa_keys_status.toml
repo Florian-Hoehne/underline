@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-fa-keys-status"
+description = "Enables the fa_keys_status command without any pre-configured scope."
+commands.allow = ["fa_keys_status"]
+
+[[permission]]
+identifier = "deny-fa-keys-status"
+description = "Denies the fa_keys_status command without any pre-configured scope."
+commands.deny = ["fa_keys_status"]

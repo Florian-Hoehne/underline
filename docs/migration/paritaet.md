@@ -12,6 +12,7 @@ entsteht in Phase 4.
 | F2 Workspace | M-01.1, M-02.1, M-03.4, M-05.1, M-05.2, M-06.1–3 (ohne Editor-Teile), M-06.5 (nur Zustand), M-06.7, M-21.1–3, M-22.1, M-22.2 ✔ (M-06.1–3 und M-21.3 werden mit F3 bzw. den Dienst-Features abgehakt). Folgen: M-05.3 mit F12, M-05.4–6 und „New note…“ mit F8, M-06.4 mit F8, M-06.6 mit F16, Tab-Marken „ ⚠“/„ •“ und die Rückfrage beim Schliessen mit F3, Tab „Todos (N)“ mit F15, Syncer/Searcher/ChangeTracker mit F13/F9/F12, D-05 mit F14 | fertig | siehe git log „F2“ |
 | F3 Quellansicht | M-06.1 (Marken), M-06.3, M-07.5, M-08.1–M-08.4, M-08.6 (Text), M-08.9, M-08.10, M-10.1, M-10.8, M-10.9 (nur `Store`, Befehl `tab_store`), M-16.1, M-16.2, M-21.4 (Speichern und Rückfrage) umgesetzt, noch nicht von app-tester geprüft. Folgen: M-07.2 (Facade gesperrt bis F5, Q-12), M-08.5 nur synthetisch geprüft (Q-09), M-08.7/M-08.8/M-10.2/Statuszeile/Minimap/Vim/Nano mit F4, Bilder in der Zwischenablage mit F6, Sync vor dem Schliessen mit F13, Werkzeugpanel ohne aktiven Tab mit F12/F15 | umgesetzt, Prüfung offen | – |
 | F5a Facade: Darstellung | M-07.2, M-07.4 (nur der Hinweis; Folgen mit F7), M-08.8 (Facade-Hälfte), M-09.1–M-09.9, M-09.16, M-12.2 (Facade) umgesetzt; M-09.15 nur so weit, dass die Webview nichts selbst lädt (Web-Bilder bis Q-19 nicht geladen). Noch nicht von app-tester geprüft. Folgen: Bearbeiten in der Facade (M-09.10–M-09.13, Vim/Nano in der Facade) mit F5b, Einfügen/Kopieren (M-09.14) mit F6, Links folgen mit F7, Suchtreffer in der Facade mit F9 | umgesetzt, Prüfung offen | – |
+| F5b Facade: Bearbeiten | M-09.8 (Bearbeiten im Rahmen), M-09.10–M-09.13, M-09.14 ohne HTML (Kopieren/Ausschneiden als Markup-Text, eigenes Markup kommt als Markup zurück, Ctrl+Shift+V tippt; HTML und Bilder mit F6), M-10.1 (eine History für beide Ansichten), M-11.2/M-11.3 (Facade-Hälfte, Vim und Nano des Editor-Kerns, eine „Zeile“ ist ein Block), M-11.4 in der Facade; D-17 und D-18 behoben (A-02). Noch nicht von app-tester geprüft. **Messpunkt ADR-024 verfehlt:** 64–89 % der getippten Tasten im ersten Frame (Vim am Ende 93 %), verlangt sind 90 % (Messpunkt F5b, unten). Arbeit dort angehalten; ob die Facade zu Variante B wechselt, entscheidet der Benutzer (Q-24). | umgesetzt, Messpunkt verfehlt, Entscheid offen | – |
 | F4 Eingabemodi, Statuszeile, Toolbar, Falten, Zeilennummern, Minimap | M-08.7, M-08.8, M-10.2 (ohne Link-/Bild-Dialog, F6), M-10.9 (Vim `:w`/`:q`/`:q!`/`:wq`/`:x`, Nano Ctrl+O/Ctrl+S/Ctrl+X), M-11.1–M-11.4, M-12.1–M-12.3, M-12.4 (Darstellung, mit den Treffern der Vim-/Nano-Suche; die Suche selbst folgt mit F9) umgesetzt, noch nicht von app-tester geprüft. Folgen: Link- und Bild-Dialog mit F6 (bis dahin gesperrt, Q-14), Copy on select selbst mit F6 (der Umschalter speichert schon), Falten in der Facade mit F5 | fertig | – |
 
 ## Gewollte Abweichungen
@@ -64,14 +65,24 @@ Vom Benutzer entschieden:
 | A-37 | F5a | Bilder kommen nur über `ul-asset` (ADR-023): Ein Bild ausserhalb des Workspace (voller Pfad, `file://`) oder in einem versteckten Ordner (`.git`, `.underline`, …) zeigt „{target} lies outside the workspace“, egui zeigt es (Q-20). Ist das Ziel kein Bild (nach der Endung), steht „The image {alt} cannot be shown: the image cannot be read: The image format could not be determined“ (der Text der Bildbibliothek; egui nennt den Grund des Decoders). Kann die Webview ein Bild nicht lesen, steht „The image {alt} cannot be shown: the image cannot be read“ ohne den Grund des Decoders (egui nennt ihn). Grosse Bilder verkleinert egui auf 4096 px, die Webview nicht. Einer auf der Platte geänderten Bilddatei folgt die Facade, wenn ihre Blöcke neu entstehen (nächste Änderung der Notiz); egui prüft in jedem Frame. | ADR-023 |
 | A-38 | F5a | Web-Bilder werden nicht geladen; an ihrer Stelle steht egui's Text für ein nicht ladbares Web-Bild „The image {alt} cannot be shown: {address} could not be loaded“. egui lädt sie ohne Rückfrage. | Q-19 |
 | A-39 | F5a | Diagramme erscheinen als SVG (kein Rastern, das Vergrössern rendert nichts nach). Das Backend rendert alle Diagramme der Notiz im Hintergrund, die nächsten am Anfang zuerst; egui rendert die sichtbaren, das zuletzt verlangte zuerst. Meldungen der Abbildungen: ein Fehler in der Textfarbe, halbfett mit Balken (wie A-12/A-20), egui in Rot; „Rendering…“/„Loading…“ wie egui in der schwachen Farbe. | ADR-009, Q-05 |
-| A-40 | F5a | Bis F5b nimmt die Facade keine Eingabe an, die den Text ändert (Tippen, Enter, Löschen, Einfügen, Ziehen); Cursor und Auswahl setzt man mit Maus und Pfeilen (die Pfeile der Webview, nicht egui's Regeln M-09.13), sie gehen ans Backend. Escape führt in jedem Eingabemodus zum Tab der Notiz (Vim und Nano der Facade kommen mit F5b), Tab tut nichts. Toolbar und Falttasten wirken. Kopieren ist bis F6 das der Webview. Ein Klick auf eine Abbildung setzt den Cursor an den Anfang ihres Markups; der Klick auf die Lupe nicht. | Feature-Schnitt F5a/F5b |
+| A-40 | F5a | Bis F5b nimmt die Facade keine Eingabe an, die den Text ändert (Tippen, Enter, Löschen, Einfügen, Ziehen); Cursor und Auswahl setzt man mit Maus und Pfeilen (die Pfeile der Webview, nicht egui's Regeln M-09.13), sie gehen ans Backend. Escape führt in jedem Eingabemodus zum Tab der Notiz (Vim und Nano der Facade kommen mit F5b), Tab tut nichts. Toolbar und Falttasten wirken. Kopieren ist bis F6 das der Webview. Ein Klick auf eine Abbildung setzt den Cursor an den Anfang ihres Markups; der Klick auf die Lupe nicht. *Erledigt mit F5b: Die Facade nimmt jede Eingabe an (A-48 bis A-57); Escape verlässt den Text nur noch im Modus Normal, Vim und Nano behalten es; Kopieren legt das Markup ab (A-53). Ziehen und Ablegen bleiben bis F6 gesperrt.* | Feature-Schnitt F5a/F5b |
 | A-41 | F5a | Die Facade ist virtualisiert (ADR-024): nur Blöcke nahe der Sicht stehen im DOM, die übrigen als Höhe, geschätzt bis gezeichnet. Ändert ein Block oberhalb der Sicht seine Höhe, verschiebt sich die Scrollposition um ebenso viel. Die Scrollposition je Notiz bleibt wie A-25. Der Fokus zeigt sich wie in der Quellansicht als feine Linie um den Text. | ADR-024 |
-| A-42 | F5a | Hinweise ohne egui-Gegenstück: Der Hinweis zu einem Link ist ein eigener, sofort erscheinender Kasten am Zeiger, Text wie egui. Die vergrösserte Ansicht ist ein modaler Dialog „Enlarged picture“, ihr Schliessknopf heisst für Screenreader „Close“, Tab bleibt im Dialog; Pinch kommt als Rad mit Ctrl oder als Geste der Webview. Die Lupe heisst für Screenreader „Enlarge picture“, ihr Hover-Text ist egui's „Enlarge (double click)“. Bilder tragen ihren Alternativtext, Diagramme ihre Beschriftung oder „Mermaid diagram“/„PlantUML diagram“. Der Text der Facade hat wie die Quellansicht die Beschreibung „Escape leaves the text“ und ist bis F5b schreibgeschützt (`aria-readonly`). Der Faltpfeil ist wie in der Quellansicht nur für den Zeiger, „…“ heisst „folded“. | NFR-011, Q-22 |
+| A-42 | F5a | Hinweise ohne egui-Gegenstück: Der Hinweis zu einem Link ist ein eigener, sofort erscheinender Kasten am Zeiger, Text wie egui. Die vergrösserte Ansicht ist ein modaler Dialog „Enlarged picture“, ihr Schliessknopf heisst für Screenreader „Close“, Tab bleibt im Dialog; Pinch kommt als Rad mit Ctrl oder als Geste der Webview. Die Lupe heisst für Screenreader „Enlarge picture“, ihr Hover-Text ist egui's „Enlarge (double click)“. Bilder tragen ihren Alternativtext, Diagramme ihre Beschriftung oder „Mermaid diagram“/„PlantUML diagram“. Der Text der Facade hat wie die Quellansicht die Beschreibung „Escape leaves the text“ und war bis F5b schreibgeschützt (`aria-readonly`; seit F5b nicht mehr). Der Faltpfeil ist wie in der Quellansicht nur für den Zeiger, „…“ heisst „folded“. | NFR-011, Q-22 |
 | A-43 | F5a | Zeilenhöhe der Facade 1,25 der Schriftgrösse (egui: Zeilenhöhe der Schrift). Die 4 px Code-Hintergrund liegen innerhalb des Blocks statt über dem Abstand; die Abstände zwischen den Blöcken (8 px, Abbildungen 16, Trennlinie 24) wie egui. | Webview |
 | A-44 | F5a | Links der Blöcke stehen 24 px statt egui's 12 px, damit der Faltpfeil den Zeiger auf 24 × 24 px annimmt, ohne über dem Text zu liegen (Glyphe wie egui). Die Format-Anzeige steht auf dem Hintergrund der Facade, damit Text darunter nicht durchscheint. | WCAG 2.2 Zielgrösse, UX-Review F5a |
 | A-45 | F5a | Ctrl+Enter (Cmd+Enter auf macOS) vergrössert die Abbildung, in der der Cursor steht; egui öffnet die Vergrösserung nur mit der Maus. | NFR-011, Q-23 |
 | A-46 | F5a | Umschalter und Formatierungs-Toolbar bleiben eine Zeile: Ist der Editor zu schmal, scrollt die Zeile waagrecht, statt umzubrechen (egui bricht um). | UX-Review F5a |
 | A-47 | F5a | Die Blöcke der Facade entstehen nicht unter der Sitzung (ADR-024): Der Tick gibt eine Momentaufnahme des Texts an einen eigenen Thread und nimmt das Ergebnis mit einem späteren Tick, aber nur, wenn es noch zum Text des Tabs passt und kein späteres schon genommen wurde; sonst entsteht es neu. Eine Änderung zeigt sich so einen Tick später; wer schneller tippt, als die Blöcke entstehen, sieht die Facade erst in der Pause nachziehen (F5b parst inkrementell). Ein fertiges Diagramm ändert nur seine Abbildung, unter der Sitzung. Die Adresse eines Diagramms trägt seine Version, ein gecachtes SVG bleibt höchstens bis 128 Diagramme oder 32 MB. Startet der Diagramm-Dienst nicht oder endet er, sagen die Diagramme „… cannot be shown: the diagram could not be rendered: …“ statt ewig „Rendering…“. | ADR-024, Review F5a |
+| A-48 | F5b | Die Facade hat eine `contenteditable`-Fläche; jedes `beforeinput` wird abgefangen und als ein Befehl (`fa_input`) ans Backend geschickt, die Antwort bringt nur die geänderten Blöcke und den Cursor. Getippter Text, Enter, Backspace, Delete, Rückgängig/Wiederholen der Webview (`historyUndo`/`historyRedo`) und Einfügen werden übersetzt, alles andere (fett per Kontextmenü, wortweises Löschen, Ziehen) wird verworfen. Rechtschreibprüfung, Autokorrektur und Grossschreibung sind aus. Eine IME-Komposition ist im Text sichtbar, bis sie fertig ist (wie A-21); danach werden die gezeichneten Blöcke neu aufgebaut und der fertige Text geschickt. Ein Doppel- oder Dreifachklick wählt kein Wort und keine Zeile (wie M-08.3). | ADR-021, ADR-024, Q-09 |
+| A-49 | F5b | Auf und Ab (und Vims `j`/`k`) gehen eine Layoutzeile weiter, Pos1/Ende an Zeilenanfang/-ende: die Webview misst das Ziel im Block des Cursors (`Selection.modify`) und schickt es mit; von der ersten bzw. letzten Layoutzeile geht es wie in egui in den Nachbarblock an denselben Index. Ein Vim-Befehl, der mehrere Zeilen geht (`5j`, `3G`), misst nur den ersten Schritt; jeder weitere Schritt zählt einen Block als eine Zeile. egui misst jeden Schritt an seinem Layout. | Q-26 |
+| A-50 | F5b | D-17 behoben: Backspace am Anfang eines Blocks (und Delete am Ende des Blocks davor) lässt die Leerzeichen stehen, die nach dem letzten Zeilenumbruch den neuen Block einrücken; Enter und danach Backspace geben den Text so Byte für Byte zurück. egui löscht sie mit (`Absatz\n\n  x` wird `Absatzx`, hier `Absatz  x`). | A-02, Q-25 |
+| A-51 | F5b | Ein `\r\n`-Paar ist auch in der Facade ein Schritt für Links, Rechts, Backspace und Delete (wie A-26); egui hält zwischen `\r` und `\n`. | A-26 |
+| A-52 | F5b | Enter und Backspace parsen nur die Blöcke um die Änderung (ADR-024): die Region reicht vom Block davor bis zum Block danach, Listen, Zitate und Admonitions am Rand ganz; sie gilt, wenn die Blöcke davor gleich bleiben und der Block am Ende nur verschoben ist, sonst wächst sie bis zur ganzen Notiz. Eine Markdown-Notiz mit Link-Referenzdefinitionen (`[x]: …`) wird nach jeder solchen Änderung ganz geparst. egui parst nach jedem Enter und Backspace die ganze Notiz. Ergebnis gleich (Tests gegen das volle Parsen). Ändert eine Bearbeitung, wie viele Abbildungen oder Tabellen eine Beschriftung haben, folgen die Nummern („Figure n.“, „Table n.“) der späteren mit dem nächsten Tick. Das letzte Bild eines Diagramms (M-09.7) bleibt bei seinem Block, auch wenn davor Blöcke hinzukommen (egui: beim Index). | ADR-024 |
+| A-53 | F5b | Kopieren und Ausschneiden in der Facade legen das Markup der Auswahl als Text ab, das HTML dazu kommt mit F6. Das zuletzt kopierte Markup (auch aus der Quellansicht und Vims `"+y`) merkt sich der Tab; fügt man genau diesen Text in der Facade ein, kommt er als Markup, mehrzeilig mit Leerzeilen davor und danach (M-09.14). Anderer Text und alles mit Ctrl/Cmd+Shift+V wird getippt (escaped). HTML aus anderen Programmen und Bilder kommen mit F6. | Feature-Schnitt F5b/F6 |
+| A-54 | F5b | Tippt man in einem Code-Block der Facade, behält er bis zum nächsten Tick die bisherigen Farben, mit dem Text verschoben; dann kommen die neuen (ADR-024: keine Hervorhebung im Tastenbefehl). egui färbt im selben Frame. | ADR-024, ADR-010 |
+| A-55 | F5b | Vim und Nano der Facade sind die des Editor-Kerns (A-01), eine „Zeile“ ist ein Block. Liest oder schreibt Vim die Systemzwischenablage (`"+`, `"*`), liest das Fenster sie vor der nächsten Taste bzw. schreibt sie nach der Antwort (die Sitzung hält die Zwischenablage nie). Die Falttasten und die Toolbar-Tasten verschluckt Vim ausserhalb von INSERT wie in egui (anders als in der Quellansicht, A-27). Die Statuszeile zeigt Modus, wartende Tasten und Hinweise der Facade-Tasten. | A-01, F-2 |
+| A-56 | F5b | Leerzeilen nach Enter (M-09.11): Sie stehen als eigene Zeilen vor ihrem Block, je 15 px × 1,25 hoch und 8 px Abstand (egui: Zeilenhöhe der Schrift), mit dem Cursor auf der letzten. Sie gehören nicht zur virtualisierten Höhe der Blöcke. | Webview, wie A-43 |
+| A-57 | F5b | Eine Auswahl, deren Enden nicht gezeichnet sind (virtualisiert, A-41), wird auf den gezeichneten Blöcken gemalt und beim Scrollen nachgezogen; das Backend kennt immer die ganze Auswahl. Klickt oder zieht man mit der Maus, während eine Eingabe unterwegs ist, gilt die neue Auswahl; die Antwort der Eingabe setzt den Cursor dann nicht zurück. Änderungen der Blöcke, die vor der vorigen ankommen, warten bis 150 ms auf sie, sonst holt die Facade alle Blöcke neu. | ADR-024 |
 
 Nicht testbar war in F1 der Screenshot des echten Tauri-Fensters: Es ist ein natives Wayland-Fenster, und `xdotool`,
 `grim` und `import` fehlen. Geprüft wurde im Mock-Modus mit Playwright. Das echte Fenster lief ohne Fehler im
@@ -87,6 +98,8 @@ Rust-Log.
 | Tippen Quellansicht F4, p99 (10'000 Zeilen, Hervorhebung, Zeilennummern, Minimap, eine Sektion gefaltet) | 1,2 ms (Verarbeitung) | Normal 9–12 ms, Vim 9 ms, Nano 9 ms (Verarbeitung) | Messpunkt F4, unten |
 | Facade öffnen, Median (10'000 Zeilen, 3'697 Blöcke) | – | 83 ms bis gezeichnet; `fa_open` allein 216 ms beim ersten Mal, 38 ms danach | Messpunkt F5a, unten |
 | Wechsel Facade → Quelle / Quelle → Facade, Median | – | 29 ms / 69 ms | Messpunkt F5a, unten |
+| Tippen Facade F5b, p99 (10'000 Zeilen, virtualisiert) | 1,4 ms (Verarbeitung) | Normal 11–15 ms, Vim 8–15 ms, Nano 10–15 ms (Verarbeitung); 64–89 % im ersten Frame (Vim am Ende 93 %) | Messpunkt F5b, unten |
+| Enter/Backspace Facade F5b, p99 | – | 8–17 ms (Spike: 54–65 ms); im Backend allein ≤ 1,5 ms | Messpunkt F5b, unten |
 
 ### Messpunkt F3: Quellansicht (ADR-024)
 
@@ -168,4 +181,86 @@ Sitzung, und die Blöcke bleiben beim Wechsel zur Quelle erhalten. Der Ausreisse
 in die Zeit, in der die Diagramme der Notiz im Hintergrund fertig wurden. Offen für F5b: Die Blöcke gehen beim Öffnen
 ganz über IPC (2,7 MB JSON, rund 35 ms); bei Bedarf werden nur die Blöcke um die Sicht geschickt. Nicht gemessen:
 WebView2, WKWebView, echte OS-Eingaben.
+
+### Messpunkt F5b: Bearbeiten in der Facade (ADR-024)
+
+Methode wie im Spike und in F3/F4 (Release-Build mit eingebettetem Frontend, `VITE_UL_BENCH=1 VITE_UL_BENCH_F5B=1`,
+Treiber `ui/src/lib/facade/bench.ts`, `measureF5b`; eigenes `HOME`; Testnotiz des Spikes mit 10'000 Zeilen und 3'697
+Blöcken als `Home.md`; WebKitGTK 2.52 auf Wayland, dieselbe Maschine). Der Treiber hängt eine eigene, virtualisierte
+Facade derselben Komponente ein, setzt den Cursor wie ein Klick ans Ende eines Absatzes bei 2 %, 50 % und 98 % der
+Blöcke (von hinten nach vorn) und schickt synthetische `beforeinput`-Ereignisse an ihren Text: 30 Tasten zum
+Aufwärmen, 500 gezählte Tasten (`the quick brown fox *jumps* over the lazy_dog, `, `*` und `_` werden escaped), dann
+100 Backspace und 30-mal Enter mit Backspace; jede Eingabe nach dem Zeichnen der vorigen plus 0–17 ms Jitter. In Vim
+wird nach `A` in INSERT getippt. „Verarbeitung“ läuft vom Start des Handlers, bis der Patch im DOM ist und der Cursor
+steht (`fa_input` eingeschlossen). „Im ersten Frame“: der Patch war vor dem ersten `requestAnimationFrame` nach dem
+Ereignis im DOM, und dieser Frame kam innerhalb von 17,5 ms. Auflösung von `performance.now()`: 1 ms.
+
+Erster Lauf (alle Modi), Werte in ms:
+
+| Modus | Eingabe | Stelle (Block) | median | p95 | p99 | max | nächster Paint p99 | im ersten Frame |
+|---|---|---|---|---|---|---|---|---|
+| Normal | Tippen | Ende (3'623) | 4 | 8 | 11 | 28 | 27 | 89 % |
+| Normal | Tippen | Mitte (1'849) | 6 | 11 | 13 | 29 | 29 | 77 % |
+| Normal | Tippen | Anfang (89) | 7 | 13 | 15 | 18 | 30 | 72 % |
+| Normal | Backspace | Ende | 6 | 9 | 9 | 10 | 26 | 84 % |
+| Normal | Backspace | Mitte | 9 | 11 | 12 | 12 | 26 | 79 % |
+| Normal | Backspace | Anfang | 4 | 10 | 12 | 13 | 27 | 83 % |
+| Normal | Enter + Backspace | Ende | 3 | 5 | 8 | 8 | 35 | 85 % |
+| Normal | Enter + Backspace | Mitte | 7 | 12 | 14 | 14 | 31 | 75 % |
+| Normal | Enter + Backspace | Anfang | 7 | 12 | 14 | 14 | 30 | 73 % |
+| Vim (INSERT) | Tippen | Ende | 3 | 7 | 8 | 17 | 24 | 93 % |
+| Vim (INSERT) | Tippen | Mitte | 4 | 10 | 11 | 16 | 34 | 83 % |
+| Vim (INSERT) | Tippen | Anfang | 9 | 14 | 15 | 30 | 30 | 68 % |
+| Nano | Tippen | Ende | 6 | 9 | 10 | 12 | 26 | 86 % |
+| Nano | Tippen | Mitte | 6 | 12 | 12 | 14 | 27 | 82 % |
+| Nano | Tippen | Anfang | 8 | 14 | 15 | 18 | 31 | 72 % |
+
+Zweiter Lauf (Normal, mit Aufteilung): „IPC“ ist der Aufruf `fa_input` allein, wie das Fenster auf ihn wartet
+(Serialisieren, IPC, Befehl, Antwort); „Fenster“ ist der Rest: Warteschlange, Patch anwenden, Svelte, DOM, Cursor.
+
+| Eingabe | Stelle | Verarbeitung median / p99 | IPC median / p99 | Fenster median / p99 | im ersten Frame |
+|---|---|---|---|---|---|
+| Tippen | Ende | 6 / 9 | 2 / 4 | 4 / 6 | 83 % |
+| Tippen | Mitte | 8 / 12 | 4 / 6 | 5 / 7 | 75 % |
+| Tippen | Anfang | 9 / 14 | 5 / 7 | 5 / 7 | 66 % |
+| Backspace | Ende / Mitte / Anfang | 6 / 9, 8 / 12, 10 / 15 | 2 / 4, 4 / 6, 5 / 8 | 4 / 7, 4 / 7, 5 / 8 | 82 %, 71 %, 64 % |
+| Enter + Backspace | Ende / Mitte / Anfang | 6 / 10, 7 / 13, 9 / 17 | 2 / 4, 3 / 5, 4 / 8 | 4 / 7, 4 / 8, 4 / 10 | 80 %, 83 %, 73 % |
+
+Der Befehl allein, nativ im Release-Build (`adr024_facade_input_timing`, `#[ignore]`, 300 Tasten, 60 Enter/Backspace,
+100 Backspace je Stelle), ms:
+
+| Stelle | Tippen median / p99 | Enter/Backspace median / p99 | Backspace median / p99 | Patch |
+|---|---|---|---|---|
+| Ende | 0,05 / 0,06 | 0,10 / 0,14 | 0,09 / 0,10 | rund 3 KB JSON |
+| Mitte | 0,42 / 0,53 | 0,44 / 0,51 | 0,43 / 0,47 | rund 1 KB |
+| Anfang | 1,02 / 1,22 | 1,16 / 1,52 | 1,12 / 1,19 | rund 3 KB |
+
+Das Anwenden einer Änderung auf alle 3'697 Blöcke im Fenster (`applyBlocks`) und das Neuberechnen der Faltung
+(`foldingOf`) kosten in JavaScriptCore je unter 1 ms (median 0, p99 1 bei 1 ms Auflösung).
+
+**Ergebnis:** Die Verarbeitung bleibt unter 16 ms p99 (8–17 ms, ein Ausreisser 17 ms bei Enter am Anfang), Enter und
+Backspace sind von 54–65 ms (Spike) auf 8–17 ms gefallen. Die Facade bringt aber nur 64–89 % der Tasten in den ersten
+Frame (Vim am Ende 93 %); verlangt sind 90 % (ADR-024). Die Arbeit an F5b wurde dort angehalten; nach ADR-024 wäre
+der Wechsel zu Variante B per neuem ADR fällig (Entscheid des Benutzers, Q-24). Der Benutzer hat am 2026-11-10 Variante B gewählt ([ADR-025](../architecture/decisions/ADR-025-the-webview-owns-the-note-text-with-a-wasm-editor-core.md)); F5b ist als Basis für den Umbau committet.
+
+**Wohin die Zeit geht:**
+
+- Die Antwort kommt über IPC in einem späteren Task. Kommt der nächste Frame, bevor sie da und angewendet ist, ist die
+  Taste einen Frame später sichtbar. Bei zufälliger Lage der Taste im Frame (16,7 ms) liegt der Anteil im ersten Frame
+  ungefähr bei 1 − Verarbeitung/16,7: bei 6–9 ms median also bei 50–65 %, gemessen 64–89 % (der Treiber wartet nach
+  jedem Paint, die Lage ist nicht ganz gleichverteilt). Für 90 % müsste die ganze Verarbeitung im Mittel unter etwa
+  2 ms liegen. Allein der IPC-Weg kostet hier 2 ms median (Ende), mehr als das. Variante B verarbeitet im selben Task
+  und kam im Spike auf 97–99 %.
+- **IPC:** 2 ms median am Ende, 4–5 ms vorn. Der Unterschied kommt vom Befehl (vorn verschiebt er die Offsets aller
+  folgenden Blöcke und ihrer Views, nativ rund 1 ms) und vom Warten auf die Sitzung, die der Tick nach jeder Taste
+  kurz hält (Sektionen höchstens alle 300 ms, Farben).
+- **Fenster:** 4–5 ms median, p99 6–10 ms: Svelte gleicht die Blöcke im DOM ab (jeder Block nach der Änderung bekommt
+  ein neues Objekt mit verschobenem Start), dann Layout und das Setzen der Auswahl. JavaScript allein ist unter 1 ms.
+- Möglich, ohne Variante B und ohne Tricks: Offsets relativ zum Block speichern (spart vorn rund 1 ms im Befehl), den
+  Start der Blöcke getrennt von ihren Views halten (spart Svelte-Arbeit), die Sektionen nicht unter der Sitzung
+  suchen. Geschätzt bleibt die Verarbeitung damit bei 4–6 ms median; der IPC-Weg allein liegt schon über dem, was 90 %
+  zuliessen. Die 90 % sind mit Variante A daher kaum erreichbar.
+
+Nicht gemessen: echte OS-Tasten (`xdotool` fehlt), Tottasten, eine echte IME, das Messen der Zeilen
+(`Selection.modify`) im echten Fenster, WebView2, WKWebView.
 

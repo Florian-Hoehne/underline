@@ -249,6 +249,25 @@ impl SourceEditor {
         self.set_selection(cursor, anchor)
     }
 
+    /// The char index at web offset `web` of the window; past the end, the
+    /// end. No offset falls between the `\r` and the `\n` of a pair.
+    #[must_use]
+    pub fn char_at_web(&self, web: usize) -> usize {
+        self.with_web(|offsets| offsets.from_web(self.doc.rope(), web))
+    }
+
+    /// The web offset of char index `at`; past the end, the end.
+    #[must_use]
+    pub fn web_at_char(&self, at: usize) -> usize {
+        self.to_web(at)
+    }
+
+    /// The lines hidden by folded sections, in order (feature F4).
+    #[must_use]
+    pub fn hidden_lines(&self) -> &[Range<usize>] {
+        &self.hidden
+    }
+
     /// The cursor and the anchor as web offsets.
     #[must_use]
     pub fn selection_web(&self) -> (usize, usize) {

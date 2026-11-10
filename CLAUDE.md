@@ -62,7 +62,8 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-021 | Editor in the webview: CodeMirror 6, own facade surface, Rust editor core (replaces ADR-012) | Accepted |
 | ADR-022 | UI-free session crate, backend tick, events | Accepted |
 | ADR-023 | Webview loads nothing from the network; own `ul-asset://` protocol | Accepted |
-| ADR-024 | The backend owns the note text; one IPC command per edit; facade virtualized | Accepted |
+| ADR-024 | The backend owns the note text; one IPC command per edit; facade virtualized | Superseded by ADR-025 |
+| ADR-025 | The webview owns the note text: editor core as WASM, backend mirror with rebase | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use ropey::Rope;
 use underline_core::{resolve_link, LinkTarget, NoteFormat, Theme};
-use underline_facade::blocks::{parse_blocks, Block, BlockKind, CellAlign, ListMarker, Run};
+use underline_facade::blocks::{Block, BlockKind, CellAlign, ListMarker, Run};
 use underline_facade::diagram::{DiagramError, DiagramLanguage};
 use underline_facade::highlight::{highlight_code, HighlightSet};
 use underline_facade::images::ImageError;
@@ -49,27 +49,33 @@ pub(in crate::session) type CodeColorCache = HashMap<u64, Option<CodeColors>>;
 /// M-09.6: what was found of the image files, by their place, and when.
 pub(in crate::session) type ImageCache = HashMap<PathBuf, (Instant, Result<String, FileProblem>)>;
 
+/// What making the views of blocks needs besides the blocks: the look,
+/// the colours for code, the diagrams, and where the note's images are.
+pub(in crate::session) struct Context {
+    pub(super) looks: Looks,
+    pub(super) colors: Option<Arc<HighlightSet>>,
+    pub(super) dark: bool,
+    pub(super) diagrams: Option<Arc<SvgDiagrams>>,
+    pub(super) code_colors: Arc<Mutex<CodeColorCache>>,
+    pub(super) images: Arc<Mutex<ImageCache>>,
+    pub(super) root: PathBuf,
+    pub(super) note: PathBuf,
+}
+
 /// Everything making the views needs, owned, so it runs without the
 /// session.
 pub(in crate::session) struct Job {
     /// Counts the jobs of one facade; a later job wins.
     pub(super) seq: u64,
     pub(super) rev: u64,
-    pub(super) looks: Looks,
     pub(super) generation: u64,
     /// A snapshot of the text (a rope is copied in no time).
     pub(super) rope: Rope,
     pub(super) format: NoteFormat,
     /// The blocks already parsed from this revision, if any.
     pub(super) blocks: Option<Arc<Vec<Block>>>,
-    pub(super) root: PathBuf,
-    pub(super) note: PathBuf,
-    pub(super) colors: Option<Arc<HighlightSet>>,
-    pub(super) dark: bool,
-    pub(super) diagrams: Option<Arc<SvgDiagrams>>,
-    pub(super) code_colors: Arc<Mutex<CodeColorCache>>,
-    pub(super) images: Arc<Mutex<ImageCache>>,
     pub(super) last_pictures: HashMap<usize, String>,
+    pub(super) ctx: Context,
 }
 
 /// What a [`Job`] made.
@@ -81,14 +87,23 @@ pub(in crate::session) struct Built {
     pub(super) blocks: Arc<Vec<Block>>,
     pub(super) views: Vec<BlockView>,
     pub(super) last_pictures: HashMap<usize, String>,
+    /// Whether a Markdown note may hold link reference definitions, when
+    /// the job parsed the blocks.
+    pub(super) refs: Option<bool>,
 }
 
 /// Turns byte offsets of the markup into web offsets (`utf16`), walking
 /// forward from the last one asked: the blocks are converted in order, so
-/// the whole text is walked about once. A `\r` of a `\r\n` pair counts
-/// nothing, so the pair is one unit, as in the window.
-struct WebWalker<'a> {
+/// the text is walked about once. A `\r` of a `\r\n` pair counts nothing,
+/// so the pair is one unit, as in the window.
+///
+/// The text may be a part of the note, starting at byte `origin`, whose web
+/// offset is `origin_web`; offsets asked are those of the whole note.
+pub(super) struct WebWalker<'a> {
     text: &'a str,
+    origin: usize,
+    origin_web: usize,
+    /// Where the walk stands in `text`, and its web offset from there.
     byte: usize,
     web: usize,
     /// Where the block being converted starts; going back starts there.
@@ -96,9 +111,17 @@ struct WebWalker<'a> {
 }
 
 impl<'a> WebWalker<'a> {
-    fn new(text: &'a str) -> Self {
+    pub(super) fn new(text: &'a str) -> Self {
+        Self::part(text, 0, 0)
+    }
+
+    /// A walker over `text`, the part of the note from byte `origin` on,
+    /// whose web offset is `origin_web`.
+    pub(super) fn part(text: &'a str, origin: usize, origin_web: usize) -> Self {
         Self {
             text,
+            origin,
+            origin_web,
             byte: 0,
             web: 0,
             mark: (0, 0),
@@ -107,7 +130,7 @@ impl<'a> WebWalker<'a> {
 
     /// The web offset of byte offset `byte`; inside a char, of its start.
     fn at(&mut self, byte: usize) -> usize {
-        let mut byte = byte.min(self.text.len());
+        let mut byte = byte.saturating_sub(self.origin).min(self.text.len());
         while !self.text.is_char_boundary(byte) {
             byte -= 1;
         }
@@ -127,20 +150,23 @@ impl<'a> WebWalker<'a> {
             }
         }
         self.byte = byte;
-        self.web
+        self.origin_web + self.web
     }
 
     /// Going back from now on starts at `byte`, the start of a block.
     fn mark(&mut self, byte: usize) -> usize {
         let web = self.at(byte);
-        self.mark = (self.byte, web);
+        self.mark = (self.byte, self.web);
         web
     }
 
     /// Whether the char at `byte` is the `\r` of a `\r\n` pair.
     fn pair_at(&self, byte: usize) -> bool {
+        let Some(at) = byte.checked_sub(self.origin) else {
+            return false;
+        };
         let bytes = self.text.as_bytes();
-        bytes.get(byte) == Some(&b'\r') && bytes.get(byte + 1) == Some(&b'\n')
+        bytes.get(at) == Some(&b'\r') && bytes.get(at + 1) == Some(&b'\n')
     }
 }
 
@@ -310,9 +336,9 @@ fn image_path(images: &Mutex<ImageCache>, root: &Path, file: &Path) -> Result<St
 /// facade). The window loads files only through `ul-asset`, so an image
 /// outside the workspace or in a hidden folder is not shown (ADR-023), and
 /// a web image is not loaded until the user's consent is settled (Q-19).
-fn image_figure(job: &Job, target: &str, alt: &str) -> FigureView {
-    let root = job.root.as_path();
-    let file = match resolve_link(root, &job.note, target) {
+fn image_figure(ctx: &Context, target: &str, alt: &str) -> FigureView {
+    let root = ctx.root.as_path();
+    let file = match resolve_link(root, &ctx.note, target) {
         LinkTarget::Web(address) => {
             return message_figure(
                 format!(
@@ -325,7 +351,7 @@ fn image_figure(job: &Job, target: &str, alt: &str) -> FigureView {
         LinkTarget::File(path) => path,
         LinkTarget::Note { id, .. } => root.join(id.as_str()),
         LinkTarget::MissingNote { .. } | LinkTarget::Heading(_) => {
-            job.note.parent().unwrap_or(root).join(target)
+            ctx.note.parent().unwrap_or(root).join(target)
         }
         LinkTarget::Outside => {
             return message_figure(format!("{target} lies outside the workspace"), true);
@@ -333,7 +359,7 @@ fn image_figure(job: &Job, target: &str, alt: &str) -> FigureView {
     };
     let cannot =
         |why: String| message_figure(format!("The image {alt} cannot be shown: {why}"), true);
-    match image_path(&job.images, root, &file) {
+    match image_path(&ctx.images, root, &file) {
         Ok(path) => FigureView {
             loading: Some(format!("Loading {target}…")),
             unreadable: Some(format!(
@@ -352,14 +378,38 @@ fn image_figure(job: &Job, target: &str, alt: &str) -> FigureView {
     }
 }
 
-/// Makes the views of all blocks.
-struct Maker<'a> {
-    job: &'a Job,
-    blocks: &'a [Block],
-    last_pictures: HashMap<usize, String>,
+/// Makes the views of blocks, in order.
+pub(super) struct Maker<'a> {
+    pub(super) ctx: &'a Context,
+    pub(super) blocks: &'a [Block],
+    pub(super) last_pictures: HashMap<usize, String>,
+    /// Whether code is coloured when its colours are not kept yet; the
+    /// keystroke command leaves that to the tick (ADR-024).
+    pub(super) colour_now: bool,
+    /// Code blocks made without their colours, which follow.
+    pub(super) uncoloured: bool,
+    /// The figures and tables with a caption so far, for their numbers.
+    figures: usize,
+    tables: usize,
 }
 
-impl Maker<'_> {
+impl<'a> Maker<'a> {
+    pub(super) fn new(
+        ctx: &'a Context,
+        blocks: &'a [Block],
+        last_pictures: HashMap<usize, String>,
+    ) -> Self {
+        Self {
+            ctx,
+            blocks,
+            last_pictures,
+            colour_now: true,
+            uncoloured: false,
+            figures: 0,
+            tables: 0,
+        }
+    }
+
     /// M-09.7, UC-004 A11: the picture of diagram block `index`; while a
     /// changed source renders, the last picture stays, as long as it is
     /// still served.
@@ -370,22 +420,20 @@ impl Maker<'_> {
         source: &str,
     ) -> FigureView {
         diagram_figure(
-            self.job.diagrams.as_deref(),
+            self.ctx.diagrams.as_deref(),
             &mut self.last_pictures,
             self.blocks.len(),
-            (index, language, source, self.job.dark),
+            (index, language, source, self.ctx.dark),
         )
     }
 
     /// M-09.4: the colours of a code block, kept by theme, language and
     /// code.
-    fn colors_of(&self, language: &str, code: &str) -> Option<CodeColors> {
-        let set = self.job.colors.as_deref()?;
-        let mut hasher = DefaultHasher::new();
-        (self.job.looks.0.label(), language, code).hash(&mut hasher);
-        let key = hasher.finish();
+    fn colors_of(&mut self, language: &str, code: &str) -> Option<CodeColors> {
+        let set = self.ctx.colors.as_deref()?;
+        let key = colors_key(self.ctx.looks.0, language, code);
         if let Some(colors) = self
-            .job
+            .ctx
             .code_colors
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -393,136 +441,182 @@ impl Maker<'_> {
         {
             return colors.clone();
         }
-        // Coloured without holding the cache, which another job may use.
-        let colors = Some(code_colors(set, language, code)).filter(|c| !c.spans.is_empty());
-        let mut cache = self
-            .job
-            .code_colors
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if cache.len() >= CODE_COLORS_KEPT {
-            cache.clear();
+        if !self.colour_now {
+            self.uncoloured = true;
+            return None;
         }
-        cache.insert(key, colors.clone());
-        colors
+        Some(remember_colors(
+            &self.ctx.code_colors,
+            key,
+            set,
+            language,
+            code,
+        ))
+        .flatten()
     }
 
-    fn views(&mut self, text: &str) -> Vec<BlockView> {
-        let rope = &self.job.rope;
+    /// The views of all blocks of `text`, the whole note in `rope`.
+    pub(super) fn views(&mut self, text: &str, rope: &Rope) -> Vec<BlockView> {
         let mut walker = WebWalker::new(text);
-        let (mut figures, mut tables) = (0, 0);
-        let mut views = Vec::with_capacity(self.blocks.len());
-        for (index, block) in self.blocks.iter().enumerate() {
-            let base = walker.mark(block.span.start);
-            let runs: Vec<RunView> = block
-                .runs
-                .iter()
-                .map(|run| run_view(run, &mut walker, base))
-                .collect();
-            let mut figure = None;
-            let mut colors = None;
-            let kind = match &block.kind {
-                BlockKind::Heading(level) => BlockKindView::Heading { level: *level },
-                BlockKind::Paragraph => BlockKindView::Paragraph,
-                BlockKind::ListItem { depth, .. } => BlockKindView::ListItem {
-                    depth: units(*depth),
-                },
-                BlockKind::Quote(depth) => BlockKindView::Quote {
-                    depth: units(*depth),
-                },
-                BlockKind::Code { language } => {
-                    let code: String = runs.iter().map(|r| r.text.as_str()).collect();
-                    if let Some(diagram) = diagram_language(&block.kind) {
-                        figure = Some(self.diagram_figure(index, diagram, &code));
-                    } else {
-                        colors = self.colors_of(language, &code);
-                    }
-                    BlockKindView::Code {
-                        language: language.clone(),
-                    }
-                }
-                BlockKind::ThematicBreak => BlockKindView::ThematicBreak,
-                BlockKind::Admonition(label) => BlockKindView::Admonition {
-                    label: label.clone(),
-                },
-                BlockKind::Markup => BlockKindView::Markup,
-                BlockKind::Table(table) => {
-                    // TC-004-02: numbered as Asciidoctor numbers tables.
-                    let caption = table.caption.as_ref().map(|caption| {
-                        tables += 1;
-                        format!("Table {tables}. {caption}")
-                    });
-                    BlockKindView::Table {
-                        table: TableView {
-                            header: table.header,
-                            align: table
-                                .align
-                                .iter()
-                                .map(|align| match align {
-                                    CellAlign::Left => CellAlignName::Left,
-                                    CellAlign::Center => CellAlignName::Center,
-                                    CellAlign::Right => CellAlignName::Right,
-                                })
-                                .collect(),
-                            rows: table
-                                .rows
-                                .iter()
-                                .map(|row| {
-                                    row.iter()
-                                        .map(|cell| {
-                                            cell.iter()
-                                                .map(|run| run_view(run, &mut walker, base))
-                                                .collect()
-                                        })
-                                        .collect()
-                                })
-                                .collect(),
-                            caption,
-                        },
-                    }
-                }
-                BlockKind::Image {
-                    target,
-                    alt,
-                    caption,
-                } => {
-                    let mut image = image_figure(self.job, target, alt);
-                    // TC-004-02: numbered as Asciidoctor numbers figures.
-                    image.caption = caption.as_ref().map(|caption| {
-                        figures += 1;
-                        format!("Figure {figures}. {caption}")
-                    });
-                    figure = Some(image);
-                    BlockKindView::Image {
-                        target: target.clone(),
-                        alt: alt.clone(),
-                    }
-                }
-            };
-            let end = walker.at(block.span.end);
-            let first = rope.byte_to_line(block.span.start.min(text.len()));
-            let last = rope.byte_to_line(
-                block
-                    .span
-                    .end
-                    .saturating_sub(1)
-                    .max(block.span.start)
-                    .min(text.len()),
-            );
-            views.push(BlockView {
-                kind,
-                start: units(base),
-                line: units(first),
-                length: units(end.saturating_sub(base)),
-                lines: units(last - first + 1),
-                prefix: prefix_text(&block.kind),
-                runs,
-                colors,
-                figure,
-            });
-        }
-        views
+        (0..self.blocks.len())
+            .map(|index| self.view(index, &mut walker, rope))
+            .collect()
     }
+
+    /// The views of the blocks `range`; `walker` walks a part of the note
+    /// holding them. Figures and tables are numbered after those before.
+    pub(super) fn views_of_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        walker: &mut WebWalker<'_>,
+        rope: &Rope,
+    ) -> Vec<BlockView> {
+        for block in &self.blocks[..range.start] {
+            match &block.kind {
+                BlockKind::Table(table) if table.caption.is_some() => self.tables += 1,
+                BlockKind::Image { caption, .. } if caption.is_some() => self.figures += 1,
+                _ => {}
+            }
+        }
+        range.map(|index| self.view(index, walker, rope)).collect()
+    }
+
+    /// The view of block `index`.
+    fn view(&mut self, index: usize, walker: &mut WebWalker<'_>, rope: &Rope) -> BlockView {
+        let block = &self.blocks[index];
+        let len = rope.len_bytes();
+        let base = walker.mark(block.span.start);
+        let runs: Vec<RunView> = block
+            .runs
+            .iter()
+            .map(|run| run_view(run, walker, base))
+            .collect();
+        let mut figure = None;
+        let mut colors = None;
+        let kind = match &block.kind {
+            BlockKind::Heading(level) => BlockKindView::Heading { level: *level },
+            BlockKind::Paragraph => BlockKindView::Paragraph,
+            BlockKind::ListItem { depth, .. } => BlockKindView::ListItem {
+                depth: units(*depth),
+            },
+            BlockKind::Quote(depth) => BlockKindView::Quote {
+                depth: units(*depth),
+            },
+            BlockKind::Code { language } => {
+                let code: String = runs.iter().map(|r| r.text.as_str()).collect();
+                if let Some(diagram) = diagram_language(&block.kind) {
+                    figure = Some(self.diagram_figure(index, diagram, &code));
+                } else {
+                    colors = self.colors_of(language, &code);
+                }
+                BlockKindView::Code {
+                    language: language.clone(),
+                }
+            }
+            BlockKind::ThematicBreak => BlockKindView::ThematicBreak,
+            BlockKind::Admonition(label) => BlockKindView::Admonition {
+                label: label.clone(),
+            },
+            BlockKind::Markup => BlockKindView::Markup,
+            BlockKind::Table(table) => {
+                // TC-004-02: numbered as Asciidoctor numbers tables.
+                let caption = table.caption.as_ref().map(|caption| {
+                    self.tables += 1;
+                    format!("Table {}. {caption}", self.tables)
+                });
+                BlockKindView::Table {
+                    table: TableView {
+                        header: table.header,
+                        align: table
+                            .align
+                            .iter()
+                            .map(|align| match align {
+                                CellAlign::Left => CellAlignName::Left,
+                                CellAlign::Center => CellAlignName::Center,
+                                CellAlign::Right => CellAlignName::Right,
+                            })
+                            .collect(),
+                        rows: table
+                            .rows
+                            .iter()
+                            .map(|row| {
+                                row.iter()
+                                    .map(|cell| {
+                                        cell.iter().map(|run| run_view(run, walker, base)).collect()
+                                    })
+                                    .collect()
+                            })
+                            .collect(),
+                        caption,
+                    },
+                }
+            }
+            BlockKind::Image {
+                target,
+                alt,
+                caption,
+            } => {
+                let mut image = image_figure(self.ctx, target, alt);
+                // TC-004-02: numbered as Asciidoctor numbers figures.
+                image.caption = caption.as_ref().map(|caption| {
+                    self.figures += 1;
+                    format!("Figure {}. {caption}", self.figures)
+                });
+                figure = Some(image);
+                BlockKindView::Image {
+                    target: target.clone(),
+                    alt: alt.clone(),
+                }
+            }
+        };
+        let end = walker.at(block.span.end);
+        let first = rope.byte_to_line(block.span.start.min(len));
+        let last = rope.byte_to_line(
+            block
+                .span
+                .end
+                .saturating_sub(1)
+                .max(block.span.start)
+                .min(len),
+        );
+        BlockView {
+            kind,
+            start: units(base),
+            line: units(first),
+            length: units(end.saturating_sub(base)),
+            lines: units(last - first + 1),
+            prefix: prefix_text(&block.kind),
+            runs,
+            colors,
+            figure,
+        }
+    }
+}
+
+/// The key the colours of `code` in `language` are kept by, in `theme`.
+pub(super) fn colors_key(theme: Theme, language: &str, code: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    (theme.label(), language, code).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Colours `code` and keeps its colours by `key`; `None` when nothing in it
+/// is coloured.
+pub(super) fn remember_colors(
+    cache: &Mutex<CodeColorCache>,
+    key: u64,
+    set: &HighlightSet,
+    language: &str,
+    code: &str,
+) -> Option<CodeColors> {
+    // Coloured without holding the cache, which another job may use.
+    let colors = Some(code_colors(set, language, code)).filter(|c| !c.spans.is_empty());
+    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if cache.len() >= CODE_COLORS_KEPT {
+        cache.clear();
+    }
+    cache.insert(key, colors.clone());
+    colors
 }
 
 /// M-09.7, UC-004 A11: the picture of the diagram `(index, language,
@@ -579,26 +673,26 @@ pub(super) fn diagram_figure(
 /// Makes the blocks (parsing them when the job has none) and their views.
 pub(in crate::session) fn run(job: Job) -> Built {
     let text = job.rope.to_string();
-    let blocks = job
-        .blocks
-        .clone()
-        .unwrap_or_else(|| Arc::new(parse_blocks(&text, job.format)));
-    let mut maker = Maker {
-        job: &job,
-        blocks: &blocks,
-        last_pictures: job.last_pictures.clone(),
+    let (blocks, refs) = match job.blocks.clone() {
+        Some(blocks) => (blocks, None),
+        None => {
+            let (blocks, refs) = super::reparse::parse_all(&text, job.format);
+            (Arc::new(blocks), Some(refs))
+        }
     };
-    let views = maker.views(&text);
+    let mut maker = Maker::new(&job.ctx, &blocks, job.last_pictures.clone());
+    let views = maker.views(&text, &job.rope);
     let mut last_pictures = maker.last_pictures;
     last_pictures.retain(|index, _| *index < blocks.len());
     Built {
         seq: job.seq,
         rev: job.rev,
-        looks: job.looks,
+        looks: job.ctx.looks,
         generation: job.generation,
         views,
         last_pictures,
         blocks,
+        refs,
     }
 }
 
@@ -609,19 +703,21 @@ pub(super) fn views_of(text: &str, format: NoteFormat) -> Vec<BlockView> {
     run(Job {
         seq: 0,
         rev: 0,
-        looks: (Theme::Light, false),
         generation: 0,
         rope: Rope::from_str(text),
         format,
         blocks: None,
-        root: PathBuf::from("/nowhere"),
-        note: PathBuf::from("/nowhere/Note.md"),
-        colors: None,
-        dark: false,
-        diagrams: None,
-        code_colors: Arc::default(),
-        images: Arc::default(),
         last_pictures: HashMap::new(),
+        ctx: Context {
+            looks: (Theme::Light, false),
+            colors: None,
+            dark: false,
+            diagrams: None,
+            code_colors: Arc::default(),
+            images: Arc::default(),
+            root: PathBuf::from("/nowhere"),
+            note: PathBuf::from("/nowhere/Note.md"),
+        },
     })
     .views
 }

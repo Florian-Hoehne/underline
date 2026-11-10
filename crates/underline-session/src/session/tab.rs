@@ -63,6 +63,9 @@ pub(super) struct Tab {
     pub(super) found_at: Option<Instant>,
     /// M-09: the facade's blocks, while the facade shows the note.
     pub(super) facade: Option<Facade>,
+    /// M-09.14: the markup Underline copied last from this tab, which
+    /// pasting in the facade brings back as markup (`own_markup` of egui).
+    pub(super) own_markup: Option<String>,
 }
 
 impl std::fmt::Debug for Tab {
@@ -108,6 +111,7 @@ impl Tab {
             found_told: None,
             found_at: None,
             facade: None,
+            own_markup: None,
         }
     }
 

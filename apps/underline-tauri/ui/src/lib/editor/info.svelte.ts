@@ -16,7 +16,9 @@ export class EditorInfo {
   /** The source view shown, once its text is in. */
   view = $state.raw<SourceView | null>(null);
   /** M-09: the facade shown, with the toolbar's functions. */
-  facade = $state.raw<(ActiveFacade & { tool(name: ToolName): void }) | null>(null);
+  facade = $state.raw<
+    (ActiveFacade & { tool(name: ToolName): void; settled(): Promise<unknown> }) | null
+  >(null);
   /** M-12: what the minimap shows: the source view or the facade. */
   minimap = $state.raw<MinimapSource | null>(null);
   /**

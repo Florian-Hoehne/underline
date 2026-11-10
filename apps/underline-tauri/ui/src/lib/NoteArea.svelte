@@ -78,8 +78,9 @@
       }
       return;
     }
-    // The source view's inputs and selection reach the backend first.
+    // The inputs and the selection of the view shown reach the backend first.
     await activeSourceView()?.settled();
+    await info.facade?.settled();
     focusFor = `${tab.note}:${view}`;
     await shell.setView(tab.note, view);
   }
@@ -201,9 +202,11 @@
                   note={activeTab.note}
                   label={activeTab.title}
                   platform={shell.platform}
+                  mode={(settings?.inputMode ?? 'Normal') as InputModeName}
                   focus={focusFor === `${activeTab.note}:facade`}
                   {info}
                   onError={(message) => shell.editorFailed(message)}
+                  onCommand={(name) => command(activeTab.note, name)}
                 />
               {:else}
                 <SourceEditor

@@ -174,9 +174,13 @@ async function measure(shell: Shell): Promise<void> {
   document.body.append(host);
   const rows: Row[] = [];
   const opened: Record<string, number> = {};
-  const f5 = import.meta.env.VITE_UL_BENCH_F5 === '1';
+  const f5 = import.meta.env.VITE_UL_BENCH_F5 === '1' || import.meta.env.VITE_UL_BENCH_F5B === '1';
   let facade: unknown = null;
-  if (f5) {
+  if (import.meta.env.VITE_UL_BENCH_F5B === '1') {
+    // Feature F5b: editing in the facade (`facade/bench.ts`).
+    const { measureF5b } = await import('../facade/bench');
+    facade = await measureF5b(host, note, keys);
+  } else if (f5) {
     // Feature F5a: the facade (`facade/bench.ts`); no typing yet.
     const { measureF5 } = await import('../facade/bench');
     facade = await measureF5(host, note);

@@ -432,6 +432,8 @@ pub enum KeyName {
     O,
     /// Q, for Ctrl/Cmd+Shift+Q (M-10.2).
     Q,
+    /// R, for Vim's Ctrl+R in the facade (M-11.2).
+    R,
     /// S, for Nano's Ctrl+S.
     S,
     /// T, for Ctrl/Cmd+Shift+T (M-10.2).
@@ -476,6 +478,7 @@ impl From<KeyName> for underline_editor_core::Key {
             KeyName::L => Self::L,
             KeyName::O => Self::O,
             KeyName::Q => Self::Q,
+            KeyName::R => Self::R,
             KeyName::S => Self::S,
             KeyName::T => Self::T,
             KeyName::U => Self::U,

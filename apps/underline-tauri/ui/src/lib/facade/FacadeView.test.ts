@@ -4,7 +4,7 @@ import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App.svelte';
 import { connectedShell } from '../../test/shell';
-import type { BlockView, EditorPatch, FacadeState } from '../bindings';
+import type { BlockView, EditorPatch, FacadePatch, FacadeState } from '../bindings';
 import { EditorInfo } from '../editor/info.svelte';
 import { activeFacade } from './active';
 import type { FacadeBackend } from './backend';
@@ -130,20 +130,48 @@ function state(blocks: BlockView[], head = 0): FacadeState {
     anchor: head,
     head,
     place: 'Ln 1, Col 1',
+    gap: null,
+    keys: null,
   };
 }
+
+/** A facade patch moving nothing, of revision 1. */
+const FACADE_PATCH: FacadePatch = {
+  base: 1,
+  rev: 1,
+  blocks: [],
+  anchor: 0,
+  head: 0,
+  gap: null,
+  scroll: false,
+  unstored: false,
+  place: 'Ln 1, Col 1',
+  keys: null,
+  commands: [],
+  request: null,
+  copied: null,
+  wantsClipboard: false,
+};
 
 function backendWith(opened: FacadeState): FacadeBackend & {
   open: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
   fold: ReturnType<typeof vi.fn>;
   input: ReturnType<typeof vi.fn>;
+  clipboard: ReturnType<typeof vi.fn>;
+  keys: ReturnType<typeof vi.fn>;
+  readClipboard: ReturnType<typeof vi.fn>;
+  writeClipboard: ReturnType<typeof vi.fn>;
 } {
   return {
     open: vi.fn(async () => opened),
     select: vi.fn(async () => 'Ln 3, Col 2'),
     fold: vi.fn(async () => PATCH),
-    input: vi.fn(async () => PATCH),
+    input: vi.fn(async () => FACADE_PATCH),
+    clipboard: vi.fn(async () => FACADE_PATCH),
+    keys: vi.fn(async () => null),
+    readClipboard: vi.fn(async () => 'from the clipboard'),
+    writeClipboard: vi.fn(async () => {}),
   };
 }
 
@@ -389,10 +417,10 @@ describe('M-07.4, M-08.8 links and folding', () => {
   });
 });
 
-describe('ADR-024 the facade is virtualized', () => {
-  const many = (count: number) =>
-    fakeBlocks(Array.from({ length: count }, (_, i) => `Paragraph ${i}`).join('\n\n') + '\n');
+const many = (count: number) =>
+  fakeBlocks(Array.from({ length: count }, (_, i) => `Paragraph ${i}`).join('\n\n') + '\n');
 
+describe('ADR-024 the facade is virtualized', () => {
   it('only the blocks near the part in view are in the DOM', async () => {
     await show(state(many(2000)));
 
@@ -460,24 +488,241 @@ describe('ADR-024 the facade is virtualized', () => {
     });
     await waitFor(() => expect(backend.open).toHaveBeenCalledTimes(2));
   });
+});
 
-  it('typing is refused until F5b; Tab does nothing', async () => {
-    await show(state(fakeBlocks(TOUR_TEXT)));
-    const text = document.querySelector<HTMLElement>('.facade-text')!;
-    const input = new InputEvent('beforeinput', {
-      inputType: 'insertText',
-      data: 'x',
+describe('F5b editing in the facade (ADR-024, UC-005)', () => {
+  const text = () => document.querySelector<HTMLElement>('.facade-text')!;
+  const beforeInput = (inputType: string, data: string | null = null) => {
+    const event = new InputEvent('beforeinput', {
+      inputType,
+      data,
       bubbles: true,
       cancelable: true,
     });
+    text().dispatchEvent(event);
+    return event;
+  };
+  const keyDown = (key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
+    text().dispatchEvent(event);
+    return event;
+  };
 
-    text.dispatchEvent(input);
-    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
-    text.dispatchEvent(tab);
+  it('M-09.10 typing goes to the backend with the selection; its blocks and caret come back', async () => {
+    const blocks = fakeBlocks('Hello\n\nWorld\n');
+    const { backend, info } = await show(state(blocks, 5));
+    const typed = fakeBlocks('Hello!\n\nWorld\n');
+    backend.input.mockResolvedValueOnce({
+      ...FACADE_PATCH,
+      base: 1,
+      rev: 2,
+      anchor: 6,
+      head: 6,
+      place: 'Ln 1, Col 7',
+      blocks: [
+        {
+          note: 'Home',
+          rev: 2,
+          base: 1,
+          version: 2,
+          from: 0,
+          removed: 1,
+          blocks: [typed[0]],
+          shift: 1,
+          lineShift: 0,
+        },
+      ],
+    });
 
-    expect(input.defaultPrevented).toBe(true);
-    expect(tab.defaultPrevented).toBe(true);
-    expect(text).toHaveAttribute('aria-readonly', 'true');
+    const event = beforeInput('insertText', '!');
+
+    expect(event.defaultPrevented).toBe(true);
+    await waitFor(() => expect(block(0)).toHaveTextContent('Hello!'));
+    expect(backend.input).toHaveBeenCalledWith(
+      'Home',
+      { rev: 1, anchor: 5, head: 5 },
+      { kind: 'text', text: '!' },
+      null,
+      null,
+    );
+    expect(info.place).toBe('Ln 1, Col 7');
+    expect(block(1)).toHaveTextContent('World');
+    // The facade is no longer read only (A-40 resolved).
+    expect(text()).not.toHaveAttribute('aria-readonly');
+    expect(text()).toHaveAttribute('spellcheck', 'false');
+  });
+
+  it('M-09.11, M-09.12, M-10.1 Enter, Backspace, Delete, undo and redo of the webview', async () => {
+    const { backend } = await show(state(fakeBlocks(TOUR_TEXT)));
+    const key = (name: string, ctrl = false) => ({
+      kind: 'key',
+      key: name,
+      ctrl,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+
+    beforeInput('insertParagraph');
+    beforeInput('deleteContentBackward');
+    beforeInput('deleteContentForward');
+    beforeInput('historyUndo');
+    beforeInput('historyRedo');
+    const bold = beforeInput('formatBold');
+
+    await waitFor(() => expect(backend.input).toHaveBeenCalledTimes(5));
+    const sent = backend.input.mock.calls.map((call) => call[2]);
+    expect(sent).toEqual([
+      key('Enter'),
+      key('Backspace'),
+      key('Delete'),
+      key('Z', true),
+      key('Y', true),
+    ]);
+    // Anything else changes nothing.
+    expect(bold.defaultPrevented).toBe(true);
+  });
+
+  it('M-09.13 Tab and Page Up do nothing; Escape leaves the text in the Normal mode', async () => {
+    const { backend } = await show(state(fakeBlocks(TOUR_TEXT)));
+    const tab = document.createElement('button');
+    tab.id = 'tab-Home';
+    document.body.append(tab);
+
+    expect(keyDown('Tab').defaultPrevented).toBe(true);
+    expect(keyDown('PageUp').defaultPrevented).toBe(true);
+    keyDown('Escape');
+
+    expect(backend.input).not.toHaveBeenCalled();
+    tab.remove();
+  });
+
+  it('M-09.13 arrows go to the backend; Up and Down ask the layout first', async () => {
+    const { backend } = await show(state(fakeBlocks(TOUR_TEXT)));
+
+    keyDown('ArrowRight');
+    keyDown('ArrowDown', { shiftKey: true });
+
+    await waitFor(() => expect(backend.input).toHaveBeenCalledTimes(2));
+    expect(backend.input.mock.calls[0][2]).toMatchObject({ key: 'ArrowRight' });
+    expect(backend.input.mock.calls[1][2]).toMatchObject({ key: 'ArrowDown', shift: true });
+  });
+
+  it('M-09.11 the empty lines after Enter are drawn before their block', async () => {
+    const blocks = fakeBlocks('First.\n\nSecond.\n');
+    const { backend } = await show(state(blocks, 6));
+    backend.input.mockResolvedValueOnce({
+      ...FACADE_PATCH,
+      rev: 1,
+      anchor: 8,
+      head: 8,
+      gap: { before: 1, lines: 2 },
+    });
+
+    keyDown('Enter');
+
+    await waitFor(() => expect(document.querySelectorAll('[data-gap] .gap-line')).toHaveLength(2));
+    const gap = document.querySelector('[data-gap]')!;
+    expect(gap.nextElementSibling?.querySelector('[data-b="1"]')).not.toBeNull();
+  });
+
+  it('M-08.5 an input method composes in the text; its finished text is sent at the end', async () => {
+    const { backend } = await show(state(fakeBlocks(TOUR_TEXT)));
+
+    text().dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+    const composing = beforeInput('insertCompositionText', '日');
+    text().dispatchEvent(new CompositionEvent('compositionend', { data: '日本' }));
+
+    expect(composing.defaultPrevented).toBe(false);
+    await waitFor(() => expect(backend.input).toHaveBeenCalledTimes(1));
+    expect(backend.input.mock.calls[0][2]).toEqual({ kind: 'text', text: '日本' });
+  });
+
+  it('M-09.14 copy, cut and paste go through the backend; Ctrl+Shift+V pastes plain text', async () => {
+    const { backend } = await show(state(fakeBlocks(TOUR_TEXT)));
+
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    text().dispatchEvent(paste);
+    keyDown('V', { ctrlKey: true, shiftKey: true });
+    text().dispatchEvent(new Event('copy', { bubbles: true, cancelable: true }));
+
+    expect(paste.defaultPrevented).toBe(true);
+    await waitFor(() => expect(backend.clipboard).toHaveBeenCalledTimes(3));
+    expect(backend.clipboard.mock.calls.map((call) => [call[2], call[3]])).toEqual([
+      ['paste', false],
+      ['paste', true],
+      ['copy', false],
+    ]);
+  });
+
+  it('M-11.2, M-11.4 the keys status, the commands and a yank to the clipboard follow the patch', async () => {
+    const info = new EditorInfo();
+    const commands: string[] = [];
+    const status = {
+      keymap: 'VIM',
+      mode: 'NORMAL',
+      color: 0,
+      pending: '',
+      hints: [],
+      prompting: false,
+    };
+    const backend = backendWith({ ...state(fakeBlocks(TOUR_TEXT)), keys: status });
+    backend.input.mockResolvedValueOnce({
+      ...FACADE_PATCH,
+      keys: { ...status, mode: 'INSERT', color: 1 },
+      commands: ['store'],
+      copied: 'yanked',
+      wantsClipboard: true,
+    });
+    render(FacadeView, {
+      props: {
+        note: 'Home',
+        label: 'Home',
+        platform: 'linux',
+        mode: 'Vim',
+        info,
+        backend,
+        onError: () => {},
+        onCommand: (name: string) => commands.push(name),
+      },
+    });
+    await waitFor(() => expect(info.keys?.mode).toBe('NORMAL'));
+
+    beforeInput('insertText', 'i');
+
+    await waitFor(() => expect(info.keys?.mode).toBe('INSERT'));
+    expect(commands).toEqual(['store']);
+    expect(backend.writeClipboard).toHaveBeenCalledWith('yanked');
+    // The next input brings the clipboard's text along (`"+p`).
+    beforeInput('insertText', 'p');
+    await waitFor(() => expect(backend.input).toHaveBeenCalledTimes(2));
+    expect(backend.input.mock.calls[1][4]).toBe('from the clipboard');
+  });
+
+  it('ADR-024 a change of blocks that comes early waits for the one before it', async () => {
+    const blocks = many(3);
+    const { backend } = await show(state(blocks));
+    const changed = (name: string) => ({ ...fakeBlocks(`${name}\n`)[0], start: 0, line: 0 });
+    const change = (base: number, name: string) => ({
+      note: 'Home',
+      rev: base + 1,
+      base,
+      version: base + 1,
+      from: 0,
+      removed: 1,
+      blocks: [changed(name)],
+      shift: 0,
+      lineShift: 0,
+    });
+
+    activeFacade()!.takeBlocks(change(2, 'Second change'));
+    await tick();
+    expect(block(0)).not.toHaveTextContent('Second change');
+    activeFacade()!.takeBlocks(change(1, 'First change'));
+    await tick();
+
+    expect(block(0)).toHaveTextContent('Second change');
+    expect(backend.open).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -503,5 +748,30 @@ describe('M-07.2, M-09 with the mock backend', () => {
       'data-view',
       'facade',
     );
+  });
+
+  it('F5b the mock backend types in the facade', async () => {
+    const shell = await connectedShell({ givenDir: '/home/user/Work' });
+    render(App, { props: { shell } });
+    await shell.startWorkspace();
+    await shell.openNote(TOUR_NOTE);
+    const text = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.facade-text');
+      expect(found?.querySelector('[data-b="0"]')).toBeTruthy();
+      return found!;
+    });
+
+    for (const data of ['N', 'e', 'w']) {
+      text.dispatchEvent(
+        new InputEvent('beforeinput', {
+          inputType: 'insertText',
+          data,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+
+    await waitFor(() => expect(text.querySelector('[data-b="0"]')).toHaveTextContent('New'));
   });
 });
