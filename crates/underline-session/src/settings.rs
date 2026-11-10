@@ -3,7 +3,15 @@
 //! stored, and watching the user settings file.
 //!
 //! Ported from `apps/underline-desktop/src/settings.rs` (`SettingsState`);
-//! the settings window itself comes with feature F10 (M-20.1 to M-20.4).
+//! what the settings window shows and changes is in [`window`] (feature F10,
+//! M-20.1 to M-20.5).
+
+mod window;
+
+pub use window::{
+    SettingChoiceView, SettingControlView, SettingNoteView, SettingRowView, SettingsAnswer,
+    SettingsWindowView,
+};
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -19,8 +27,11 @@ use crate::palette::PaletteView;
 /// How often the user settings file is looked at (M-20.6, UC-010 A5).
 pub const USER_SETTINGS_POLL: Duration = Duration::from_millis(500);
 
-/// The two parts of the settings (UC-010 step 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The two parts of the settings (UC-010 step 2), named `me` and
+/// `workspace` for the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
 pub enum Scope {
     /// "For me": the user settings file.
     Me,
@@ -49,6 +60,9 @@ pub struct SettingsState {
     /// Counts the times a settings file was read again (Q-03): each time,
     /// the panels go back to their stored widths, as in the egui app.
     width_generation: u32,
+    /// Grows whenever what a settings file says may have changed, so the
+    /// settings window is told only then (M-20.2 to M-20.4).
+    revision: u32,
 }
 
 impl SettingsState {
@@ -73,6 +87,7 @@ impl SettingsState {
             effective: Effective::default(),
             messages: Vec::new(),
             width_generation: 0,
+            revision: 0,
         };
         state.read_user();
         state.recompute();
@@ -114,6 +129,7 @@ impl SettingsState {
             return;
         };
         self.user_seen = modified(&path);
+        self.revision = self.revision.wrapping_add(1);
         match Settings::load_file(&path) {
             Ok(settings) => {
                 self.user = settings;
@@ -146,6 +162,7 @@ impl SettingsState {
         };
         let shared = root.join(".git").exists() && !git.is_ignored(root, SETTINGS_FILE_NAME);
         self.workspace = Some((root.to_owned(), settings, shared));
+        self.revision = self.revision.wrapping_add(1);
         // A workspace opened anew is reported even when the last one asked
         // for more too.
         self.effective.agent_access_refused = false;
@@ -162,6 +179,7 @@ impl SettingsState {
             Ok(settings) => {
                 self.broken.retain(|p| p != &path);
                 self.workspace = Some((root, settings, shared));
+                self.revision = self.revision.wrapping_add(1);
                 self.width_generation = self.width_generation.wrapping_add(1);
                 self.recompute();
             }
@@ -226,27 +244,28 @@ impl SettingsState {
     /// Changes `key` in `scope` (UC-010 A1 to A4): in effect at once, stored
     /// within 1 second (BR-004, BR-005); a file with an error or one that
     /// cannot be written keeps the change for this session and says so (A6,
-    /// A7).
-    pub fn change(&mut self, scope: Scope, key: SettingKey, value: Option<String>) {
+    /// A7). Returns whether the change applied, stored or not.
+    pub fn change(&mut self, scope: Scope, key: SettingKey, value: Option<String>) -> bool {
         let Some(settings) = self.settings_mut(scope) else {
-            return;
+            return false;
         };
         if let Err(reason) = settings.set(key, value.as_deref()) {
             self.messages.push(reason);
-            return;
+            return false;
         }
+        self.revision = self.revision.wrapping_add(1);
         self.recompute();
         let Some(path) = self.path(scope) else {
             self.messages
                 .push("There is no home directory to store the setting in".into());
-            return;
+            return true;
         };
         if self.broken.contains(&path) {
             self.messages.push(format!(
                 "{} has an error; the setting applies until Underline is closed and is stored once the file is corrected",
                 path.display()
             ));
-            return;
+            return true;
         }
         match store_setting(&path, key, value.as_deref()) {
             Ok(()) => {
@@ -258,13 +277,15 @@ impl SettingsState {
                 "The setting could not be stored and applies until Underline is closed: {err}"
             )),
         }
+        true
     }
 
     /// UC-010 A3, A4, M-20.5: changes a setting from outside the settings
     /// window, in the file BR-003 names.
     pub fn quick_change(&mut self, key: SettingKey, value: String) {
         let scope = self.scope_of(key);
-        self.change(scope, key, Some(value));
+        // Whether it applied is said in the status bar by `change`.
+        let _ = self.change(scope, key, Some(value));
     }
 
     /// UC-017 BR-002: the agent access the user settings allow.

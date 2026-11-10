@@ -35,7 +35,10 @@ use underline_wiki::WikiRemote;
 use crate::editor_view::TabPropertiesView;
 use crate::settings::theme_names;
 use crate::workspace_view::{TabsView, WorkspaceView};
-use crate::{Event, Platform, SettingName, SettingsState, StartInfo, StatusOffer, StatusView};
+use crate::{
+    Event, Platform, Scope, SettingName, SettingsAnswer, SettingsState, SettingsWindowView,
+    StartInfo, StatusOffer, StatusView,
+};
 
 use self::editing::Colors;
 use self::workspace::OpenWorkspace;
@@ -148,6 +151,10 @@ struct Told {
     /// The settings in effect; the view is built only when they changed.
     settings: Effective,
     width_generation: u32,
+    /// What the settings window was told (M-20.2 to M-20.4): built only
+    /// when a settings file or the workspace's notes may have changed.
+    settings_window: (u32, Option<(PathBuf, u64)>),
+    settings_window_view: Option<SettingsWindowView>,
     workspace: Option<WorkspaceView>,
     /// The overview by the generation of the workspace it was taken from.
     overview: Option<(PathBuf, u64)>,
@@ -188,6 +195,8 @@ impl Session {
             offer: None,
             settings: settings.effective().clone(),
             width_generation: settings.width_generation(),
+            settings_window: (settings.revision(), None),
+            settings_window_view: None,
             workspace: None,
             overview: None,
             deleted: None,
@@ -289,6 +298,42 @@ impl Session {
         self.take_settings_messages();
     }
 
+    /// UC-010 step 2, M-20.2 to M-20.4: what the settings window shows.
+    #[must_use]
+    pub fn settings_window(&self) -> SettingsWindowView {
+        let derived = self
+            .open
+            .as_ref()
+            .map(|open| open.workspace.default_format());
+        self.settings.window_view(derived)
+    }
+
+    /// UC-010 steps 3 and 4, A1, A2, A8, M-20.5: `key` changed to `value`
+    /// in the part `scope` of the settings window (`None`: "As for me",
+    /// "Follow the notes"); in effect at once, stored at once, a failure
+    /// said in the status bar and in the answer. Returns what the settings
+    /// window shows now, which is then not sent again as an event.
+    pub fn change_setting(
+        &mut self,
+        scope: Scope,
+        key: SettingName,
+        value: Option<String>,
+    ) -> SettingsAnswer {
+        self.settings.window_change(scope, key.into(), value);
+        let problem = self.settings.take_messages().pop();
+        if let Some(message) = &problem {
+            self.status.clone_from(message);
+        }
+        // Marks the view as told; the answer carries it instead of an event.
+        let _ = self.settings_window_event();
+        let view = self
+            .told
+            .settings_window_view
+            .clone()
+            .unwrap_or_else(|| self.settings_window());
+        SettingsAnswer { view, problem }
+    }
+
     /// M-03.5: the wiki project URL of the Workspace menu, checked. The
     /// status says which repository it maps to, or why it does not. Nothing
     /// is stored or connected (inventory D-13).
@@ -352,6 +397,7 @@ impl Session {
             self.told.width_generation = self.settings.width_generation();
             events.push(Event::Settings(Box::new(self.settings.view())));
         }
+        events.extend(self.settings_window_event());
         let dirty = std::mem::take(&mut self.views_dirty);
         if dirty {
             let workspace = self.workspace_view();
@@ -418,6 +464,27 @@ impl Session {
             }));
         }
         events
+    }
+
+    /// M-20.2 to M-20.4, UC-010 A5: the settings window is told what it
+    /// shows whenever that changed: a settings file was read or changed, a
+    /// workspace opened, or its notes changed (the derived default format).
+    fn settings_window_event(&mut self) -> Option<Event> {
+        let overview = self
+            .open
+            .as_ref()
+            .map(|open| (open.root().to_owned(), open.overview_generation));
+        let signature = (self.settings.revision(), overview);
+        if signature == self.told.settings_window {
+            return None;
+        }
+        self.told.settings_window = signature;
+        let view = self.settings_window();
+        if self.told.settings_window_view.as_ref() == Some(&view) {
+            return None;
+        }
+        self.told.settings_window_view = Some(view.clone());
+        Some(Event::SettingsWindow(Box::new(view)))
     }
 
     /// The settings' messages become the status, the last one wins.
@@ -694,10 +761,12 @@ mod tests {
             "theme: Solarized Dark\n"
         );
         let events = session.take_events();
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2, "{events:?}");
         assert!(
             matches!(&events[0], Event::Settings(view) if view.theme == "Solarized Dark" && view.palette.dark)
         );
+        // M-20.4: an open settings window shows the new theme too.
+        assert!(matches!(&events[1], Event::SettingsWindow(_)));
     }
 
     #[test]
@@ -760,6 +829,67 @@ mod tests {
         let events = session.tick(start + Duration::from_millis(500));
 
         assert_eq!(session.settings().effective().theme, Theme::Nord);
-        assert!(matches!(&events[..], [Event::Settings(view)] if view.theme == "Nord"));
+        assert!(matches!(
+            &events[..],
+            [Event::Settings(view), Event::SettingsWindow(_)] if view.theme == "Nord"
+        ));
+    }
+
+    #[test]
+    fn uc010_m20_2_a_change_in_the_settings_window_is_answered_not_sent_again() {
+        let dir = temp_dir("window-told");
+        let mut session = session_in(&dir, None);
+
+        let answer =
+            session.change_setting(Scope::Me, SettingName::ShowMinimap, Some("false".into()));
+        let view = answer.view;
+        assert_eq!(answer.problem, None);
+
+        assert!(!session.settings().effective().show_minimap);
+        assert_eq!(
+            fs::read_to_string(dir.join(SETTINGS_FILE_NAME)).unwrap(),
+            "show_minimap: false\n"
+        );
+        assert_eq!(view, session.settings_window());
+        // The answer told the window; the event only carries the settings
+        // in effect.
+        let events = session.take_events();
+        assert!(
+            matches!(&events[..], [Event::Settings(settings)] if !settings.show_minimap),
+            "{events:?}"
+        );
+        assert!(session.take_events().is_empty());
+
+        // Changed outside (A5), the window is told by an event.
+        fs::write(dir.join(SETTINGS_FILE_NAME), "show_minimap: true\n").unwrap();
+        let events = session.tick(Instant::now() + Duration::from_secs(1));
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                Event::SettingsWindow(view) if **view == session.settings_window()
+            )),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn uc010_a8_m20_4_the_default_format_follows_the_notes_of_the_workspace() {
+        let dir = temp_dir("window-derived");
+        let root = dir.join("wiki");
+        fs::create_dir_all(&root).unwrap();
+        for (name, text) in [("a.adoc", "= A\n"), ("b.adoc", "= B\n"), ("c.md", "# C\n")] {
+            fs::write(root.join(name), text).unwrap();
+        }
+        let mut session = session_in(&dir, Some(root));
+        session.start_workspace();
+
+        let view = session.settings_window();
+
+        let format = &view.this_workspace[0];
+        assert_eq!(format.label, "Default format");
+        assert!(matches!(
+            &format.control,
+            crate::SettingControlView::Choice { shown, .. } if shown == "AsciiDoc (from the notes)"
+        ));
     }
 }

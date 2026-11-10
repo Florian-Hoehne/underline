@@ -9,6 +9,10 @@
   dialog itself, so Tab continues inside it. When it closes with the
   keyboard inside, the keyboard goes back to where it was before, or, when
   that is gone, to the note overview (`focusFallback`).
+
+  A window that stays open while the user works (the settings, M-20.1)
+  gives `width`, may be `resizable`, and shows a close button "×" beside its
+  title, as egui's windows do.
 -->
 <script lang="ts" module>
   /** The event on `window` when a dialog shows. */
@@ -30,10 +34,26 @@
     step?: string;
     /** The id of the text that describes the dialog, for screen readers. */
     describedBy?: string;
+    /** The width it opens with, in pixels; else as wide as its content. */
+    width?: number;
+    /** The user can change its size with the corner (M-20.1). */
+    resizable?: boolean;
+    /** A close button "×" beside the title. */
+    closeButton?: boolean;
     children: Snippet;
   };
 
-  let { title, onClose, busy = false, step = '', describedBy, children }: Props = $props();
+  let {
+    title,
+    onClose,
+    busy = false,
+    step = '',
+    describedBy,
+    width,
+    resizable = false,
+    closeButton = false,
+    children,
+  }: Props = $props();
 
   let frame = $state<HTMLElement | null>(null);
   const headingId = `dialog-${Math.random().toString(36).slice(2)}`;
@@ -63,12 +83,30 @@
     void takeFocus();
   });
 
+  /**
+   * A dialog with a width is centred where it opens, and again when the
+   * window changes size, measured at the left edge so a narrower window
+   * does not squeeze it (app-tester F10: 1200 → 500 px left it 114 px wide).
+   */
+  function place() {
+    const parent = frame?.offsetParent as HTMLElement | null;
+    if (width === undefined || !frame || !parent) {
+      return;
+    }
+    frame.style.setProperty('--dialog-left', '16px');
+    const left = Math.max(16, (parent.clientWidth - frame.offsetWidth) / 2);
+    frame.style.setProperty('--dialog-left', `${Math.round(left)}px`);
+  }
+
   onMount(() => {
+    place();
+    window.addEventListener('resize', place);
     const before = document.activeElement as HTMLElement | null;
     // Hints shown at the pointer go (app-tester F8: a link's hint stayed
     // above "New note").
     window.dispatchEvent(new Event(DIALOG_OPENED));
     return () => {
+      window.removeEventListener('resize', place);
       const inside = frame?.contains(document.activeElement) ?? false;
       if (!inside && document.activeElement !== document.body) {
         return;
@@ -93,6 +131,10 @@
    * Shift+Tab go round inside it (ux review F3).
    */
   function onKey(event: KeyboardEvent) {
+    // A control inside took the key for itself (an open list, F10).
+    if (event.defaultPrevented) {
+      return;
+    }
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -121,6 +163,9 @@
 
 <div
   class="dialog"
+  class:sized={width !== undefined}
+  class:resizable
+  style:--dialog-width={width === undefined ? undefined : `${width}px`}
   role="dialog"
   aria-labelledby={headingId}
   aria-describedby={describedBy}
@@ -129,7 +174,14 @@
   bind:this={frame}
   onkeydown={onKey}
 >
-  <h2 id={headingId}>{title}</h2>
+  <div class="title">
+    <h2 id={headingId}>{title}</h2>
+    {#if closeButton}
+      <button type="button" class="close" aria-label="Close" title="Close" onclick={onClose}
+        >×</button
+      >
+    {/if}
+  </div>
   <div class="body">
     {@render children()}
   </div>
@@ -157,6 +209,22 @@
     box-shadow: 0 8px 24px rgb(0 0 0 / 0.3);
   }
 
+  /* M-20.1: at least its width and as wide as its content, inside the
+     window; centred once when it opens (`place`), not by a transform, so
+     the resize corner follows the pointer. */
+  .dialog.sized {
+    left: var(--dialog-left, var(--space-4));
+    width: max-content;
+    min-width: min(var(--dialog-width), calc(100% - var(--dialog-left, 0px) - var(--space-4)));
+    max-width: calc(100% - var(--dialog-left, var(--space-4)) - var(--space-4));
+    transform: none;
+  }
+
+  .dialog.resizable {
+    min-height: 160px;
+    resize: both;
+  }
+
   .dialog:focus {
     outline: none;
   }
@@ -166,13 +234,42 @@
     outline-offset: 1px;
   }
 
-  h2 {
+  .title {
     flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-1) 0 0;
+    border-bottom: 1px solid var(--ui-rule);
+  }
+
+  h2 {
+    flex: 1 1 auto;
+    min-width: 0;
     margin: 0;
     padding: var(--space-2) var(--space-3);
     font-size: 14px;
     font-weight: 700;
-    border-bottom: 1px solid var(--ui-rule);
+  }
+
+  .close {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font: inherit;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--ui-text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+
+  .close:hover {
+    color: var(--ui-chosen-text);
+    background: var(--ui-chosen);
   }
 
   /* In a small window the dialog scrolls inside, under its title. */

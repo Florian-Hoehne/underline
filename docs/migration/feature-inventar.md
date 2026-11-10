@@ -56,7 +56,7 @@ Allgemeine Konventionen der heutigen UI:
 - [x] **M-03.5** Menü **Workspace**: Feld „Wiki project URL“ mit „Check“ oder Enter. Danach Status „Wiki repository:
   {clone_url}“ oder der Fehler, das Menü schliesst. *Stub, nirgends angebunden und nicht gespeichert.*
 - [x] **M-03.6** Menü **Theme**: Radio-Liste aller Themes. Die Wahl wird sofort gespeichert, das Menü schliesst.
-- [ ] **M-03.7** Menü **Settings**: „Settings…“ mit Shortcut-Text „Ctrl+,“ schaltet das Einstellungsfenster um.
+- [~] **M-03.7** Menü **Settings**: „Settings…“ mit Shortcut-Text „Ctrl+,“ schaltet das Einstellungsfenster um.
 
 ## M-04 Statusleiste (FR-020, FR-021)
 
@@ -542,24 +542,24 @@ Reihenfolge von links nach rechts:
 
 ## M-20 Einstellungen (UC-010)
 
-- [ ] **M-20.1** Fenster „Settings“, Ctrl/Cmd+, schaltet es um, 460 px breit, in der Grösse veränderbar.
-- [ ] **M-20.2** Bereiche „For me“ und „This workspace“ (nur mit Workspace). Liegt die Workspace-Datei im
+- [~] **M-20.1** Fenster „Settings“, Ctrl/Cmd+, schaltet es um, 460 px breit, in der Grösse veränderbar.
+- [~] **M-20.2** Bereiche „For me“ und „This workspace“ (nur mit Workspace). Liegt die Workspace-Datei im
   Repository, warnt „These values are in underline.yaml of the repository and apply to everyone who uses it.“
-- [ ] **M-20.3** Einträge (`SettingKey::ALL`):
+- [~] **M-20.3** Einträge (`SettingKey::ALL`):
   - Default format (nur Workspace).
   - Theme, Input mode, Line number side.
   - Line numbers, Minimap, Copy on select, Menu bar, Search hits in the minimap.
   - Git sync every 1–60 min.
   - Panelbreiten 100–1000.
   - Agent access (im Workspace nur bis zur Benutzerstufe).
-- [ ] **M-20.4** Dritte Spalte:
+- [~] **M-20.4** Dritte Spalte:
   - Workspace: „As for me“, „own“, „as for me“.
   - Benutzer: „this workspace asks for more; not followed“, „this workspace uses its own value“.
   - Format: „{fmt}“, „{fmt} (from the notes)“, „Follow the notes“.
-- [ ] **M-20.5** Jede Änderung wirkt sofort und wird sofort geschrieben. Schnellumschalter gehen in die
+- [~] **M-20.5** Jede Änderung wirkt sofort und wird sofort geschrieben. Schnellumschalter gehen in die
   Workspace-Datei, wenn diese den Schlüssel setzt, sonst in die Benutzerdatei (BR-003). Fehlermeldungen stehen in
   `settings.rs:360-377`.
-- [ ] **M-20.6** Die Benutzerdatei wird alle 500 ms auf Änderungen geprüft. Die Workspace-Datei kommt über den
+- [~] **M-20.6** Die Benutzerdatei wird alle 500 ms auf Änderungen geprüft. Die Workspace-Datei kommt über den
   Watcher.
 
 ## M-21 Workspace öffnen, anlegen, schliessen (UC-001, UC-002)
@@ -591,7 +591,7 @@ Reihenfolge von links nach rechts:
   nach einer Änderung und beim Beenden.
 - [x] **M-22.2** `<ws>/.underline/state.yaml`: Tabs (Notiz, Position, Ansicht, aktiv), „zuletzt geöffnet“ je Notiz,
   Zustand des Todos-Tabs.
-- [ ] **M-22.3** Einstellungen in `~/underline.yaml` und `<ws>/underline.yaml`, sofort geschrieben.
+- [~] **M-22.3** Einstellungen in `~/underline.yaml` und `<ws>/underline.yaml`, sofort geschrieben.
 - [ ] **M-22.4** Nicht gespeichert: Fenstergeometrie, Klappzustände, Web-Zustimmung, letzter Export-Ordner,
   Wiki-URL, Such- und Find-Text, Commit-Nachricht, Cursor- und Scrollpositionen.
 

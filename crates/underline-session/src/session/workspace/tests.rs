@@ -894,12 +894,13 @@ fn adr022_m01_1_the_start_snapshot_is_not_sent_again_as_events() {
 
     let events = session.take_events();
 
-    // The properties of the tool panel (M-16.2) and the deleted notes
-    // (M-05.6) are no part of the snapshot; they follow as events.
+    // The properties of the tool panel (M-16.2), the deleted notes
+    // (M-05.6) and what the settings window shows (M-20.2) are no part of
+    // the snapshot; they follow as events.
     assert!(
         events.iter().all(|e| matches!(
             e,
-            Event::Status(_) | Event::Properties(_) | Event::Deleted(_)
+            Event::Status(_) | Event::Properties(_) | Event::Deleted(_) | Event::SettingsWindow(_)
         )),
         "{events:?}"
     );

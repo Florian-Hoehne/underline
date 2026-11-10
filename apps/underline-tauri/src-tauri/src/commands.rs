@@ -24,8 +24,8 @@ use underline_session::{
     clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, CreateNoteAnswer, DeleteAnswer,
     DeleteQuestion, DragName, EditingViewName, EmbedAnswer, FormatName, Insertion, LinkAnswer,
     MirrorView, NewNoteRequest, NewNoteStart, NewWorkspaceRequest, OpenAnswer, RenameAnswer,
-    RenameStart, RestoreAnswer, Session, SettingName, StartInfo, StartOpened, SyncAnswer,
-    SyncBatch, Synced, UiError, UiErrorKind,
+    RenameStart, RestoreAnswer, Scope, Session, SettingName, SettingsAnswer, SettingsWindowView,
+    StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
 };
 use underline_session::{FoundNoteView, FoundPlace, SearchOpened};
 
@@ -70,6 +70,38 @@ pub async fn settings_quick(
     })
     .await
     .map_err(|error| UiError::new(UiErrorKind::Internal, error.to_string()))
+}
+
+/// UC-010 step 2, M-20.2 to M-20.4: what the settings window shows of "For
+/// me" and "This workspace". The window asks when it opens; the event
+/// `settings-window` keeps it current.
+#[tauri::command]
+#[specta::specta]
+pub async fn settings_window(
+    session: State<'_, SharedSession>,
+) -> Result<SettingsWindowView, UiError> {
+    read_session(&session, Session::settings_window).await
+}
+
+/// UC-010 steps 3 and 4, A1, A2, A8, M-20.5: a setting changed in the part
+/// `scope` of the settings window; `value` is `null` for "As for me" and
+/// "Follow the notes". It applies at once and is stored at once; a failure
+/// is said in the status bar and in the answer. Answers with what the
+/// window shows now, so its controls never show a value that did not take. Writes a file, so on
+/// the blocking pool.
+#[tauri::command]
+#[specta::specta]
+pub async fn settings_set(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    scope: Scope,
+    key: SettingName,
+    value: Option<String>,
+) -> Result<SettingsAnswer, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.change_setting(scope, key, value)
+    })
+    .await
 }
 
 /// Runs `work` on the session on the blocking pool, as file and git I/O
@@ -1018,6 +1050,8 @@ mod tests {
     const COMMANDS: &[&str] = &[
         "app_start",
         "settings_quick",
+        "settings_window",
+        "settings_set",
         "wiki_check",
         "ws_start",
         "ws_recent",
@@ -1191,6 +1225,80 @@ mod tests {
         let mock = Mock::new(None, &dir);
 
         let response = mock.invoke("settings_quick", json!({ "key": "colour", "value": "red" }));
+
+        assert!(response.is_err());
+        assert!(!dir.join(SETTINGS_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn uc010_m20_2_settings_window_shows_for_me_without_a_workspace() {
+        let dir = temp_dir("window");
+        let mock = Mock::new(None, &dir);
+
+        let view = mock.invoke("settings_window", json!({})).unwrap();
+
+        assert_eq!(view["workspace"], json!(false));
+        assert_eq!(view["thisWorkspace"], json!([]));
+        assert_eq!(view["me"][0]["key"], json!("theme"));
+        assert_eq!(view["me"][0]["label"], json!("Theme"));
+        assert_eq!(view["me"][0]["control"]["kind"], json!("choice"));
+        assert_eq!(view["me"][0]["control"]["shown"], json!("Light"));
+        assert_eq!(view["me"][0]["note"], Value::Null);
+        assert!(!dir.join(SETTINGS_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn uc010_m20_5_settings_set_stores_the_change_and_wakes_the_tick() {
+        let dir = temp_dir("set");
+        let mock = Mock::new(None, &dir);
+
+        let response = mock.invoke(
+            "settings_set",
+            json!({ "scope": "me", "key": "git_sync_interval", "value": "15" }),
+        );
+
+        let answer = response.unwrap();
+        assert_eq!(answer["view"]["me"][6]["control"]["value"], json!(15));
+        assert_eq!(answer["problem"], Value::Null);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(SETTINGS_FILE_NAME)).unwrap(),
+            "git_sync_interval: 15\n"
+        );
+        assert_eq!(mock.wakes.try_recv(), Ok(()));
+        let view = mock.invoke("settings_window", json!({})).unwrap();
+        assert_eq!(view["me"][6]["control"]["value"], json!(15));
+    }
+
+    #[test]
+    fn uc010_a2_settings_set_takes_null_as_no_value() {
+        let dir = temp_dir("set-null");
+        std::fs::write(dir.join(SETTINGS_FILE_NAME), "theme: Nord\n").unwrap();
+        let mock = Mock::new(None, &dir);
+
+        let response = mock.invoke(
+            "settings_set",
+            json!({ "scope": "me", "key": "theme", "value": null }),
+        );
+
+        assert_eq!(
+            response.unwrap()["view"]["me"][0]["control"]["shown"],
+            json!("Light")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(SETTINGS_FILE_NAME)).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn uc010_settings_set_refuses_an_unknown_scope() {
+        let dir = temp_dir("set-scope");
+        let mock = Mock::new(None, &dir);
+
+        let response = mock.invoke(
+            "settings_set",
+            json!({ "scope": "everyone", "key": "theme", "value": "Nord" }),
+        );
 
         assert!(response.is_err());
         assert!(!dir.join(SETTINGS_FILE_NAME).exists());

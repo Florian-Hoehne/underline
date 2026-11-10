@@ -47,6 +47,14 @@
 // `search_open` opens a found note at its word. It searches again when a
 // text or the overview changes (UC-008 A3). `Trip` and `Log` of
 // `/home/user/Notes` hold "ferry" and "deploy" in many places.
+//
+// Feature F10: the settings are a user file and one file per workspace
+// (`mock-settings.ts`); the settings window shows and changes them
+// (`settings_window`, `settings_set`), quick switches go where the setting
+// comes from (BR-003), and the hooks change a file from outside (A5), break
+// it (A6) or make the files unwritable (A7). `/home/user/Work` shares its
+// settings through git (BR-007). The notes of every fake workspace give
+// Markdown as their format.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
@@ -68,6 +76,7 @@ import type {
   OpenAnswer,
   OverviewItem,
   PaletteView,
+  Scope,
   SettingName,
   SettingsView,
   StartInfo,
@@ -88,6 +97,7 @@ import type {
 import { loadEditorCore, MirrorCore } from './editor/core';
 import { mockDrop, useMockDrops } from './editor/drop';
 import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
+import { MockSettings, userFileOf, type MockSettingsPlace } from './mock-settings';
 import palettes from './palettes.generated.json';
 
 /** The success value of a command in the generated bindings. */
@@ -103,6 +113,13 @@ export type MockHandlers = {
     key: SettingName;
     value: string;
   }) => Ok<typeof commands.settingsQuick> | Promise<Ok<typeof commands.settingsQuick>>;
+  settings_window: () =>
+    Ok<typeof commands.settingsWindow> | Promise<Ok<typeof commands.settingsWindow>>;
+  settings_set: (args: {
+    scope: Scope;
+    key: SettingName;
+    value: string | null;
+  }) => Ok<typeof commands.settingsSet> | Promise<Ok<typeof commands.settingsSet>>;
   wiki_check: (args: {
     url: string;
   }) => Ok<typeof commands.wikiCheck> | Promise<Ok<typeof commands.wikiCheck>>;
@@ -335,24 +352,7 @@ export function paletteOf(name: string): PaletteView | undefined {
 
 /** The built-in settings (UC-010 BR-001): light theme, menu bar hidden. */
 export function defaultSettings(): SettingsView {
-  return {
-    theme: 'Light',
-    palette: PALETTES[0],
-    inputMode: 'Normal',
-    showLineNumbers: true,
-    lineNumberSide: 'Left',
-    showMinimap: true,
-    copyOnSelect: true,
-    gitSyncInterval: 5,
-    agentAccess: 'Off',
-    agentAccessLowered: false,
-    agentAccessRefused: false,
-    overviewWidth: 200,
-    toolPanelWidth: 240,
-    showMenuBar: false,
-    blinkFoundInMinimap: true,
-    widthGeneration: 0,
-  };
+  return new MockSettings({}, PALETTES).effective();
 }
 
 /** What the mock starts with; every part can be replaced. */
@@ -603,11 +603,17 @@ function mockFoundNote(
 }
 
 export function mockHandlers(start: MockStart = {}): MockHandlers {
-  let settings: SettingsView = { ...defaultSettings(), ...start.settings };
+  // F10: the settings files of the mock, the user's seeded from `start.settings`.
+  const model = new MockSettings(userFileOf(start.settings ?? {}), PALETTES);
   let status = start.status ?? '';
   const setStatus = async (text: string, offer: StatusOffer | null = null) => {
     status = text;
     await emit('status', { text, offer });
+  };
+  /** The window is told the settings in effect and what the settings window shows. */
+  const sendSettings = async () => {
+    await emit('settings', model.effective());
+    await emit('settings-window', model.windowView('Markdown'));
   };
   return {
     app_start: () => {
@@ -621,51 +627,32 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         tools: [...FAKE_TOOLS],
         inputModes: ['Normal', 'Vim', 'Nano'],
         ...info,
-        settings,
+        settings: model.effective(),
         status,
       };
     },
     settings_quick: async ({ key, value }) => {
-      if (key === 'theme') {
-        const palette = paletteOf(value);
-        if (!palette) {
-          const names = PALETTES.map((p) => p.theme).join(', ');
-          await setStatus(`${JSON.stringify(value)} is none of ${names}`);
-          return null;
-        }
-        settings = { ...settings, theme: value, palette };
-      } else if (key === 'show_menu_bar') {
-        settings = { ...settings, showMenuBar: value === 'true' };
-      } else if (key === 'overview_width') {
-        settings = { ...settings, overviewWidth: Number(value) };
-      } else if (key === 'input_mode') {
-        settings = { ...settings, inputMode: value };
-      } else if (key === 'show_minimap') {
-        settings = { ...settings, showMinimap: value === 'true' };
-      } else if (key === 'copy_on_select') {
-        settings = { ...settings, copyOnSelect: value === 'true' };
-      } else if (key === 'show_line_numbers') {
-        settings = { ...settings, showLineNumbers: value === 'true' };
-      } else if (key === 'line_number_side') {
-        settings = { ...settings, lineNumberSide: value };
-      } else if (key === 'blink_found_in_minimap') {
-        settings = { ...settings, blinkFoundInMinimap: value === 'true' };
-      } else {
-        return null;
+      const said = model.quick(key, value);
+      if (said !== null) {
+        await setStatus(said);
       }
-      await emit('settings', settings);
+      await sendSettings();
       return null;
+    },
+    settings_window: () => model.windowView('Markdown'),
+    settings_set: async ({ scope, key, value }) => {
+      const said = model.windowChange(scope, key, value);
+      if (said !== null) {
+        await setStatus(said);
+      }
+      await emit('settings', model.effective());
+      return { view: model.windowView('Markdown'), problem: said };
     },
     wiki_check: async ({ url }) => {
       await setStatus(wikiStatus(url));
       return null;
     },
-    ...workspaceHandlers(
-      start,
-      setStatus,
-      () => settings,
-      () => status,
-    ),
+    ...workspaceHandlers(start, setStatus, model, sendSettings, () => status),
   };
 }
 
@@ -676,7 +663,8 @@ type FakeTab = { note: string; view: EditingViewName };
 function workspaceHandlers(
   start: MockStart,
   setStatus: (text: string, offer?: StatusOffer | null) => Promise<void>,
-  settings: () => SettingsView,
+  model: MockSettings,
+  sendSettings: () => Promise<void>,
   status: () => string = () => '',
 ): Pick<
   MockHandlers,
@@ -968,7 +956,7 @@ function workspaceHandlers(
         diagram = block.figure;
       }
     }
-    const looks = settings();
+    const looks = model.effective();
     const sent = mirror.enrichment(
       note,
       true,
@@ -1149,6 +1137,14 @@ function workspaceHandlers(
       await emit('tabs', now.tabs);
       await emit('properties', properties());
       await sendIndexes();
+      if (settingsSaid !== undefined) {
+        const said = settingsSaid;
+        settingsSaid = undefined;
+        await sendSettings();
+        if (said !== null) {
+          await setStatus(said);
+        }
+      }
     } catch {
       // The mock was taken down meanwhile (a test ended).
     }
@@ -1255,8 +1251,11 @@ function workspaceHandlers(
     viewed(note);
     remember();
   };
+  /** F10: the settings of the workspace opened last, still to be sent. */
+  let settingsSaid: string | null | undefined;
   const switchTo = (dir: string) => {
     root = dir;
+    settingsSaid = model.openWorkspace(dir);
     recent = [dir, ...recent.filter((r) => r !== dir)];
     const back = remembered[dir];
     tabs = back ? [...back.tabs] : [];
@@ -1546,7 +1545,7 @@ function workspaceHandlers(
         lines: lines.map((line) =>
           line.startsWith('#') ? [[0, line.length, 0] as [number, number, number]] : [],
         ),
-        styles: [{ color: settings().palette.heading, bold: true, italic: false }],
+        styles: [{ color: model.effective().palette.heading, bold: true, italic: false }],
       });
       return null;
     },
@@ -1620,7 +1619,12 @@ function workspaceHandlers(
       return link === null ? { kind: 'done' } : followLink(note, link);
     },
     note_new_start: () =>
-      root === null ? null : { folder: (active && folder(active)) ?? '', format: 'Markdown' },
+      root === null
+        ? null
+        : {
+            folder: (active && folder(active)) ?? '',
+            format: model.defaultFormat('Markdown') as FormatName,
+          },
     note_plan: ({ request }) => {
       const planned = planNote(request.title, request.folder);
       return 'id' in planned ? `${planned.id}.${extension(request.format)}` : null;
@@ -1864,6 +1868,25 @@ function workspaceHandlers(
       return rev;
     },
     mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    settingsOutside: async (place, key, value) => {
+      const said = model.outside(place, key, value);
+      await sendSettings();
+      if (said !== null) {
+        await setStatus(said);
+      }
+    },
+    settingsBroken: async (place) => {
+      model.broken.add(place);
+      await setStatus(
+        `The settings keep their last values: ${place === 'user' ? '/home/user' : root}/underline.yaml, line 1: theme: "Purple" is none of the themes`,
+      );
+    },
+    settingsUnwritable: (on) => {
+      model.unwritable = on;
+    },
+    settingsFile: (place) => ({
+      ...(place === 'user' ? model.user : (model.workspaces[root ?? ''] ?? {})),
+    }),
     cannotKeep: (on) => {
       keepFails = on;
     },
@@ -1904,6 +1927,14 @@ export type MockHooks = {
   outsideChange(note: string, text: string): Promise<number | null>;
   /** The backend's text of `note`, if a window's core holds it. */
   mirrorText(note: string): string | null;
+  /** F10, UC-010 A5: another program sets `key` in a settings file (`null` removes it). */
+  settingsOutside(place: MockSettingsPlace, key: SettingName, value: string | null): Promise<void>;
+  /** F10, UC-010 A6: the settings file cannot be read now; changes are not stored. */
+  settingsBroken(place: MockSettingsPlace): Promise<void>;
+  /** F10, UC-010 A7: the settings files cannot be written (`true`) or can again. */
+  settingsUnwritable(on: boolean): void;
+  /** F10: what a settings file holds now, by key. */
+  settingsFile(place: MockSettingsPlace): Partial<Record<SettingName, string>>;
   /** F8, UC-007 A8: the deleted notes cannot keep a note (`true`) or can again. */
   cannotKeep(on: boolean): void;
   /** F7, UC-004 BR-007: what the system's program would have opened, in order. */

@@ -29,8 +29,10 @@ import {
   type OpenOffer,
   type OverviewItem,
   type Platform,
+  type Scope,
   type SettingName,
   type SettingsView,
+  type SettingsWindowView,
   type StartInfo,
   type TabPropertiesView,
   type TabsView,
@@ -255,8 +257,30 @@ export class Shell {
   readonly search = new SearchState((command, message) =>
     this.#fail(command, { kind: 'internal', message }),
   );
-  /** M-03.7: the settings window (feature F10). */
+  /** M-03.7, M-20.1: the settings window is open (UC-010 step 1). */
   settingsOpen = $state(false);
+  /**
+   * M-20.2 to M-20.4: what the settings window shows, as the backend
+   * answered or sent last; `null` until it was asked.
+   */
+  settingsWindow = $state.raw<SettingsWindowView | null>(null);
+  /**
+   * M-20.2: the part of the settings window shown, "For me" or "This
+   * workspace"; kept while Underline runs, as in egui, and "For me" while
+   * no workspace is open (UC-010 A9).
+   */
+  settingsScope = $state<Scope>('me');
+  /**
+   * Why the settings window could not be filled, or what went wrong with the
+   * last change made in it (UC-010 A6, A7, in the status bar's words);
+   * cleared by the next change that applies and is stored.
+   */
+  settingsProblem = $state<string | null>(null);
+  /**
+   * The settings window's work before it closes: a number typed but not
+   * sent yet goes to the backend (ux review F10).
+   */
+  settingsBeforeClose: (() => void) | null = null;
 
   #unlisten: UnlistenFn[] = [];
   /**
@@ -318,6 +342,9 @@ export class Shell {
       }),
       events.settings.listen((event) => {
         this.#takeSettings(event.payload);
+      }),
+      events.settingsWindow.listen((event) => {
+        this.#takeSettingsWindow(event.payload);
       }),
       events.workspace.listen((event) => {
         this.#sentDuringStart?.add('workspace');
@@ -1128,6 +1155,59 @@ export class Shell {
     }
   }
 
+  /**
+   * M-03.7, M-20.1, UC-010 BR-006: "Settings…" and Ctrl/Cmd+, open the
+   * settings window or close it.
+   */
+  toggleSettings(): Promise<void> {
+    if (this.settingsOpen) {
+      this.closeSettings();
+      return Promise.resolve();
+    }
+    return this.openSettings();
+  }
+
+  /**
+   * M-20.1: opens the settings window, at `scope` if given (UC-017 A1 opens
+   * "This workspace"); what it shows is asked anew each time.
+   */
+  async openSettings(scope?: Scope): Promise<void> {
+    if (scope === 'me' || (scope === 'workspace' && this.workspace !== null)) {
+      this.settingsScope = scope;
+    }
+    this.settingsOpen = true;
+    this.settingsProblem = null;
+    const result = await commands.settingsWindow();
+    if (result.status === 'ok') {
+      this.#takeSettingsWindow(result.data);
+    } else {
+      this.settingsProblem = result.error.message;
+      this.#fail('settings_window', result.error);
+    }
+  }
+
+  /** M-20.1: closes the settings window; the changes stay (UC-010 step 5). */
+  closeSettings(): void {
+    this.settingsBeforeClose?.();
+    this.settingsOpen = false;
+  }
+
+  /**
+   * M-20.5, UC-010 steps 3 and 4, A1, A2, A8: `key` changed in the part
+   * `scope` of the settings window; `null` for "As for me" and "Follow the
+   * notes". The backend answers with what the window shows now.
+   */
+  async changeSetting(scope: Scope, key: SettingName, value: string | null): Promise<void> {
+    const result = await commands.settingsSet(scope, key, value);
+    if (result.status === 'ok') {
+      this.#takeSettingsWindow(result.data.view);
+      this.settingsProblem = result.data.problem;
+    } else {
+      this.settingsProblem = result.error.message;
+      this.#fail('settings_set', result.error);
+    }
+  }
+
   /** M-03.6: the theme chosen in the Theme menu. */
   chooseTheme(name: string): Promise<void> {
     return this.quickSetting('theme', name);
@@ -1160,6 +1240,18 @@ export class Shell {
       this.toolPanelWidth = toolPanelWidthWithin(settings.toolPanelWidth);
     }
     applyPalette(settings.palette);
+  }
+
+  #takeSettingsWindow(view: SettingsWindowView): void {
+    // An answer and an event can cross: the newer view stays.
+    if (this.settingsWindow !== null && view.revision < this.settingsWindow.revision) {
+      return;
+    }
+    this.settingsWindow = view;
+    // UC-010 A9: without a workspace only "For me" is there.
+    if (!view.workspace) {
+      this.settingsScope = 'me';
+    }
   }
 
   /** Takes the parts of `snapshot` no newer event has replaced yet. */

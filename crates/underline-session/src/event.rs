@@ -8,7 +8,7 @@ use crate::notes_view::{DeletedNoteView, StatusOffer};
 use crate::search_view::SearchView;
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
-use crate::SettingsView;
+use crate::{SettingsView, SettingsWindowView};
 
 /// The status message of the status bar (M-04.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -30,6 +30,9 @@ pub enum Event {
     /// The settings in effect changed (UC-010); boxed, as it is much larger
     /// than a status.
     Settings(Box<SettingsView>),
+    /// What the settings window shows changed (M-20.2 to M-20.4, UC-010
+    /// A5); boxed, as it holds every setting twice.
+    SettingsWindow(Box<SettingsWindowView>),
     /// A workspace was opened (M-21.3); `None` while none is open.
     Workspace(Option<WorkspaceView>),
     /// The note overview changed (M-05.2).

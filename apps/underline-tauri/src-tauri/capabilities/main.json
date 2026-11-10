@@ -8,6 +8,8 @@
     "core:window:allow-show",
     "allow-app-start",
     "allow-settings-quick",
+    "allow-settings-window",
+    "allow-settings-set",
     "allow-wiki-check",
     "allow-ws-start",
     "allow-ws-recent",

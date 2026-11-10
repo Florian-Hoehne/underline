@@ -40,6 +40,8 @@
 //! UC-007, M-05.4 to M-05.6, M-14) with the undo offer of the status bar.
 //! Feature F9 adds the search of the workspace for the search overlay
 //! (UC-008, M-13.1, M-13.3); the window's editor cores mark its words.
+//! Feature F10 adds what the settings window shows of "For me" and "This
+//! workspace" and the changes made in it (UC-010, M-20).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -88,8 +90,9 @@ pub use session::{
     Session, Synced,
 };
 pub use settings::{
-    agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,
-    USER_SETTINGS_POLL,
+    agent_access_refused_message, theme_names, Scope, SettingChoiceView, SettingControlView,
+    SettingName, SettingNoteView, SettingRowView, SettingsAnswer, SettingsState, SettingsView,
+    SettingsWindowView, USER_SETTINGS_POLL,
 };
 pub use start::{Platform, StartInfo};
 pub use sync_view::{

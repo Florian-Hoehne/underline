@@ -20,6 +20,10 @@
   before the editors see the key (the Vim keys too). While the overlay is
   open, Escape closes it wherever the keyboard is, as in egui; only a
   dialog that has the keyboard keeps its own Escape.
+
+  M-20.1 (UC-010 BR-006): Ctrl+, (Cmd+, on macOS) opens the settings window
+  or closes it, wherever the keyboard is, before the editors see the key.
+  The window floats above the central area, not modal, like egui's.
 -->
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
@@ -32,6 +36,7 @@
   import RenameDialog from './lib/RenameDialog.svelte';
   import RestoreDialog from './lib/RestoreDialog.svelte';
   import SearchOverlay from './lib/SearchOverlay.svelte';
+  import SettingsWindow from './lib/SettingsWindow.svelte';
   import EmptyScreen from './lib/EmptyScreen.svelte';
   import NoteArea from './lib/NoteArea.svelte';
   import OpenDialog from './lib/OpenDialog.svelte';
@@ -93,13 +98,27 @@
     }
   }
 
+  /** M-20.1, UC-010 BR-006: Ctrl+, (Cmd+,) opens or closes the settings. */
+  function settingsKey(event: KeyboardEvent) {
+    const mac = shell.platform === 'macos';
+    const command = mac ? event.metaKey : event.ctrlKey;
+    const other = mac ? event.ctrlKey : event.metaKey;
+    if (command && !other && !event.altKey && !event.shiftKey && event.key === ',') {
+      event.preventDefault();
+      event.stopPropagation();
+      void shell.toggleSettings();
+    }
+  }
+
   // Before the editors see it, as egui takes F2 first.
   onMount(() => {
     window.addEventListener('keydown', renameKey, true);
     window.addEventListener('keydown', searchKey, true);
+    window.addEventListener('keydown', settingsKey, true);
     return () => {
       window.removeEventListener('keydown', renameKey, true);
       window.removeEventListener('keydown', searchKey, true);
+      window.removeEventListener('keydown', settingsKey, true);
     };
   });
 
@@ -155,6 +174,9 @@
     {/if}
     {#if shell.closeQuestion}
       <CloseQuestionDialog {shell} question={shell.closeQuestion} />
+    {/if}
+    {#if shell.settingsOpen}
+      <SettingsWindow {shell} />
     {/if}
     {#if shell.search.open}
       <SearchOverlay {shell} />

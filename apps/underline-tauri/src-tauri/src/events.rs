@@ -6,8 +6,8 @@ use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
     ChangedView, CloseQuestion, DeletedNoteView, EnrichView, Event, FlushView, HighlightView,
-    IndexesView, OverviewItem, SearchView, SettingsView, StatusView, TabPropertiesView, TabsView,
-    WorkspaceView,
+    IndexesView, OverviewItem, SearchView, SettingsView, SettingsWindowView, StatusView,
+    TabPropertiesView, TabsView, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -20,6 +20,11 @@ pub struct StatusEvent(pub StatusView);
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
 #[tauri_specta(event_name = "settings")]
 pub struct SettingsEvent(pub SettingsView);
+
+/// UC-010 A5, M-20.2 to M-20.4: what the settings window shows changed.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "settings-window")]
+pub struct SettingsWindowEvent(pub SettingsWindowView);
 
 /// M-21.3, M-03.3, M-04.7: a workspace was opened; `null` while none is.
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
@@ -93,6 +98,7 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
         let sent = match event {
             Event::Status(status) => StatusEvent(status).emit(app),
             Event::Settings(settings) => SettingsEvent(*settings).emit(app),
+            Event::SettingsWindow(window) => SettingsWindowEvent(*window).emit(app),
             Event::Workspace(workspace) => WorkspaceEvent(workspace).emit(app),
             Event::Overview(overview) => OverviewEvent(overview).emit(app),
             Event::Tabs(tabs) => TabsEvent(tabs).emit(app),

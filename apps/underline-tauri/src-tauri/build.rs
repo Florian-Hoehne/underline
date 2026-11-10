@@ -5,6 +5,8 @@ fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
         "app_start",
         "settings_quick",
+        "settings_window",
+        "settings_set",
         "wiki_check",
         "ws_start",
         "ws_recent",

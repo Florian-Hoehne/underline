@@ -21,8 +21,8 @@ use underline_session::{
 use crate::commands;
 use crate::events::{
     ChangedEvent, CloseQuestionEvent, DeletedEvent, EnrichEvent, FlushEvent, HighlightEvent,
-    IndexesEvent, OverviewEvent, PropertiesEvent, SearchEvent, SettingsEvent, StatusEvent,
-    TabsEvent, WorkspaceEvent,
+    IndexesEvent, OverviewEvent, PropertiesEvent, SearchEvent, SettingsEvent, SettingsWindowEvent,
+    StatusEvent, TabsEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -46,6 +46,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .commands(collect_commands![
             commands::app_start,
             commands::settings_quick,
+            commands::settings_window,
+            commands::settings_set,
             commands::wiki_check,
             commands::ws_start,
             commands::ws_recent,
@@ -94,6 +96,7 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .events(collect_events![
             StatusEvent,
             SettingsEvent,
+            SettingsWindowEvent,
             WorkspaceEvent,
             OverviewEvent,
             TabsEvent,

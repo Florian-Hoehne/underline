@@ -23,6 +23,21 @@ export const commands = {
 	 */
 	settingsQuick: (key: SettingName, value: string) => typedError<null, UiError>(__TAURI_INVOKE("settings_quick", { key, value })),
 	/**
+	 *  UC-010 step 2, M-20.2 to M-20.4: what the settings window shows of "For
+	 *  me" and "This workspace". The window asks when it opens; the event
+	 *  `settings-window` keeps it current.
+	 */
+	settingsWindow: () => typedError<SettingsWindowView, UiError>(__TAURI_INVOKE("settings_window")),
+	/**
+	 *  UC-010 steps 3 and 4, A1, A2, A8, M-20.5: a setting changed in the part
+	 *  `scope` of the settings window; `value` is `null` for "As for me" and
+	 *  "Follow the notes". It applies at once and is stored at once; a failure
+	 *  is said in the status bar and in the answer. Answers with what the
+	 *  window shows now, so its controls never show a value that did not take. Writes a file, so on
+	 *  the blocking pool.
+	 */
+	settingsSet: (scope: Scope, key: SettingName, value: string | null) => typedError<SettingsAnswer, UiError>(__TAURI_INVOKE("settings_set", { scope, key, value })),
+	/**
 	 *  M-03.5: checks the wiki project URL of the Workspace menu; the status
 	 *  bar says the repository or why the URL does not fit. Nothing is stored.
 	 */
@@ -297,6 +312,7 @@ export const events = {
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
 	search: makeEvent<SearchEvent, SearchEvent>("search"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
+	settingsWindow: makeEvent<SettingsWindowEvent, SettingsWindowEvent>("settings-window"),
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
 	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
 	workspace: makeEvent<WorkspaceEvent, WorkspaceEvent>("workspace"),
@@ -1689,6 +1705,16 @@ export type RunView = {
 };
 
 /**
+ *  The two parts of the settings (UC-010 step 2), named `me` and
+ *  `workspace` for the window.
+ */
+export type Scope = 
+/**  "For me": the user settings file. */
+"me" | 
+/**  "This workspace": the workspace settings file. */
+"workspace";
+
+/**
  *  M-13.1, UC-008 step 2: the text or the result of the workspace search
  *  changed.
  */
@@ -1789,8 +1815,92 @@ export type SelectionCopy = {
 	first: boolean,
 };
 
+/**  One value of a choice. */
+export type SettingChoiceView = {
+	/**  The name shown, such as "GitHub Light". */
+	label: string,
+	/**
+	 *  What is sent back to choose it; `None` removes the value (only
+	 *  "Follow the notes" of the default format, A8).
+	 */
+	value: string | null,
+	/**  It is the value chosen now. */
+	selected: boolean,
+};
+
+/**  The control of one setting, as egui draws it. */
+export type SettingControlView = 
+/**
+ *  A choice of values (egui's combo box). `shown` is the text of the
+ *  closed box; it is one of the choices' labels except for the default
+ *  format, which shows "{fmt} (from the notes)" while it follows the
+ *  notes.
+ */
+{ kind: "choice"; 
+/**  The text of the closed box. */
+shown: string; 
+/**  The values to choose from, in their order. */
+choices: SettingChoiceView[] } | 
+/**  A check box with its text, such as "Shown". */
+{ kind: "check"; 
+/**  Whether it is checked. */
+on: boolean; 
+/**  The text beside it. */
+text: string } | 
+/**  A whole number within `min` and `max`. */
+{ kind: "number"; 
+/**  The value in effect. */
+value: number; 
+/**  The smallest value allowed. */
+min: number; 
+/**  The largest value allowed. */
+max: number };
+
 /**  One setting of UC-010 BR-001, named as in the settings file. */
 export type SettingName = "default_format" | "theme" | "input_mode" | "show_line_numbers" | "line_number_side" | "show_minimap" | "copy_on_select" | "git_sync_interval" | "agent_access" | "overview_width" | "tool_panel_width" | "show_menu_bar" | "blink_found_in_minimap";
+
+/**  The third column of a row (M-20.4). */
+export type SettingNoteView = 
+/**  A2: the button "As for me", which sends the change to `None`. */
+{ kind: "asForMe"; 
+/**  "As for me". */
+label: string; 
+/**  "Use the setting from "For me" again". */
+hint: string } | 
+/**
+ *  A weak text, such as "as for me" or "this workspace uses its own
+ *  value".
+ */
+{ kind: "text"; 
+/**  The text. */
+text: string };
+
+/**
+ *  One row of the settings window: the name, the control with the value in
+ *  effect, and the note in the third column (M-20.3, M-20.4).
+ */
+export type SettingRowView = {
+	/**  The setting, sent back with a change. */
+	key: SettingName,
+	/**  Its name, such as "Git sync every (minutes)". */
+	label: string,
+	/**  The control and the value it shows. */
+	control: SettingControlView,
+	/**  The third column, if it says anything. */
+	note: SettingNoteView | null,
+};
+
+/**
+ *  The answer to a change in the settings window (M-20.5): what it shows
+ *  now, and what went wrong, if anything, in the words of the status bar
+ *  (UC-010 A6, A7, a refused value), so the window can say it too.
+ */
+export type SettingsAnswer = {
+	/**  What the settings window shows now. */
+	view: SettingsWindowView,
+	/**  The message of the change, `None` when it applied and was stored. */
+	problem: string | null,
+};
 
 /**
  *  UC-010, M-01.6: the settings in effect changed, with the palette of the
@@ -1845,6 +1955,33 @@ export type SettingsView = {
 	 *  then sets the panels back to `overview_width` and `tool_panel_width`.
 	 */
 	widthGeneration: number,
+};
+
+/**  UC-010 A5, M-20.2 to M-20.4: what the settings window shows changed. */
+export type SettingsWindowEvent = SettingsWindowView;
+
+/**  What the settings window shows (UC-010 step 2, M-20.2 to M-20.4). */
+export type SettingsWindowView = {
+	/**
+	 *  Grows with every change of a settings file the session knows of; the
+	 *  window keeps the newest view and drops an older one that arrives
+	 *  late (an answer after an event, or the other way round).
+	 */
+	revision: number,
+	/**  A workspace is open, so "This workspace" is offered (A9). */
+	workspace: boolean,
+	/**
+	 *  BR-007: the workspace settings file is in a git repository that does
+	 *  not ignore it; "This workspace" says that its values are shared.
+	 */
+	shared: boolean,
+	/**
+	 *  The rows of "For me", in the order of `SettingKey::ALL`, without the
+	 *  default format (it exists only for a workspace).
+	 */
+	me: SettingRowView[],
+	/**  The rows of "This workspace"; empty without a workspace. */
+	thisWorkspace: SettingRowView[],
 };
 
 /**  How one kind of highlighted text looks (ADR-010). */

@@ -13,7 +13,8 @@
   a menu.
 -->
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import { DIALOG_OPENED } from './DialogWindow.svelte';
   import type { Shell } from './shell.svelte';
 
   type Props = {
@@ -79,6 +80,14 @@
       titles[id]?.focus();
     }
   }
+
+  // An open menu closes when a dialog shows, such as the settings opened
+  // with Ctrl+, (app-tester F10: the window covered the open menu).
+  onMount(() => {
+    const closeMenu = () => close(false);
+    window.addEventListener(DIALOG_OPENED, closeMenu);
+    return () => window.removeEventListener(DIALOG_OPENED, closeMenu);
+  });
 
   function entries(): HTMLElement[] {
     return popup ? Array.from(popup.querySelectorAll<HTMLElement>('[role^="menuitem"]')) : [];
@@ -356,7 +365,8 @@
               type="button"
               role="menuitem"
               tabindex="-1"
-              onclick={() => choose(() => (shell.settingsOpen = !shell.settingsOpen))}
+              aria-keyshortcuts={shell.platform === 'macos' ? 'Meta+,' : 'Control+,'}
+              onclick={() => choose(() => void shell.toggleSettings())}
             >
               Settings…
               <span class="shortcut" aria-hidden="true">{shell.command}+,</span>
