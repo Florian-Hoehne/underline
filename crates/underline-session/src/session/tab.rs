@@ -3,30 +3,31 @@
 //!
 //! Ported from `OpenTab` of `apps/underline-desktop/src/app.rs`, without
 //! the egui widgets: the window shows the text, the session owns it
-//! (ADR-024).
+//! (ADR-024). The text with what answers the window's inputs is the
+//! editor's tab ([`EditorTab`], ADR-025), the same code the window runs
+//! with variant B.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use underline_core::{Autosave, EditingView, NoteFormat, NoteProperties, NoteSaver};
-use underline_editor_core::{Keys, SourceEditor};
+use underline_editor_view::EditorTab;
 use underline_facade::highlight::DocumentHighlight;
 
 use super::facade::Facade;
-use super::folding::Folds;
 use crate::editor_view::{NotePropertiesView, TabPropertiesView};
 
 /// One open tab.
 pub(super) struct Tab {
     pub(super) path: PathBuf,
     pub(super) title: String,
-    /// The note format, for the highlighting and the properties.
-    pub(super) format: NoteFormat,
     /// The editing view the tab shows (UC-004 BR-003).
     pub(super) editing_view: EditingView,
-    /// The text with its cursor and history (ADR-024).
-    pub(super) editor: SourceEditor,
+    /// The text with its cursor and history, its keys, folds and facade
+    /// blocks, as the window will hold it (ADR-025; the note's format is
+    /// its `format`).
+    pub(super) edit: EditorTab,
     /// When the text is stored next (UC-005 BR-001).
     pub(super) autosave: Autosave,
     /// A background save of this tab is running.
@@ -52,20 +53,9 @@ pub(super) struct Tab {
     pub(super) viewport: Option<Range<usize>>,
     /// The revision and the lines whose colours the window has.
     pub(super) highlight_told: Option<(u64, Range<usize>)>,
-    /// M-11.3: the state of the Nano keys (the Vim keys of the source view
-    /// are the window's, A-01).
-    pub(super) keys: Keys,
-    /// M-08.8: what is folded, shared by both views.
-    pub(super) folds: Folds,
-    /// The revision and the pattern whose marked Nano hits the window has.
-    pub(super) found_told: Option<(u64, Option<String>)>,
-    /// When the marked hits were found last.
-    pub(super) found_at: Option<Instant>,
-    /// M-09: the facade's blocks, while the facade shows the note.
+    /// M-09: how the backend makes the facade's views (its jobs, figures
+    /// and colours); the blocks are the editor's (`edit.facade`).
     pub(super) facade: Option<Facade>,
-    /// M-09.14: the markup Underline copied last from this tab, which
-    /// pasting in the facade brings back as markup (`own_markup` of egui).
-    pub(super) own_markup: Option<String>,
 }
 
 impl std::fmt::Debug for Tab {
@@ -73,7 +63,7 @@ impl std::fmt::Debug for Tab {
         f.debug_struct("Tab")
             .field("path", &self.path)
             .field("title", &self.title)
-            .field("revision", &self.editor.revision())
+            .field("revision", &self.edit.editor.revision())
             .field("error", &self.error)
             .field("deleted", &self.deleted)
             .finish_non_exhaustive()
@@ -92,9 +82,8 @@ impl Tab {
         Self {
             path,
             title,
-            format,
             editing_view,
-            editor: SourceEditor::new(&body),
+            edit: EditorTab::new(&body, format),
             autosave: Autosave::default(),
             saving: false,
             saving_text: None,
@@ -106,12 +95,7 @@ impl Tab {
             highlight: None,
             viewport: None,
             highlight_told: None,
-            keys: Keys::default(),
-            folds: Folds::default(),
-            found_told: None,
-            found_at: None,
             facade: None,
-            own_markup: None,
         }
     }
 
@@ -133,7 +117,7 @@ impl Tab {
 
     /// M-16.2: reads the properties of the note again.
     pub(super) fn read_properties(&mut self, root: &Path) {
-        self.properties = NoteProperties::read(root, &self.path, self.format).ok();
+        self.properties = NoteProperties::read(root, &self.path, self.edit.format).ok();
     }
 
     /// M-16.2: the properties section for this tab, showing `note`.
@@ -157,7 +141,7 @@ impl Tab {
             return Ok(());
         }
         let started = Instant::now();
-        let text = self.editor.text();
+        let text = self.edit.editor.text();
         match saver.save_now(&self.path, &text) {
             Ok(()) => {
                 self.on_disk = text;
@@ -188,7 +172,7 @@ impl Tab {
         let Some(highlight) = &mut self.highlight else {
             return;
         };
-        let lines = self.editor.document().len_lines();
+        let lines = self.edit.editor.document().len_lines();
         for change in changes {
             if change.history {
                 highlight.invalidate_from(change.line, lines);
@@ -201,11 +185,11 @@ impl Tab {
     /// Shows `text` from outside instead (UC-004 A7): the cursor stays at
     /// its line and column, the history and the colours start anew.
     pub(super) fn reload(&mut self, text: String) {
-        self.editor.reload(&text);
+        // M-08.8: the folded sections stay folded where they are now.
+        self.edit.set_now(super::editing::millis(Instant::now()));
+        self.edit.reload(&text);
         self.on_disk = text;
         self.highlight = None;
         self.highlight_told = None;
-        // M-08.8: the folded sections stay folded where they are now.
-        self.refold();
     }
 }

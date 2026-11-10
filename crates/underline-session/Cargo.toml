@@ -10,12 +10,13 @@ rust-version.workspace = true
 [features]
 # Derives `specta::Type` on the DTOs so the Tauri app can generate TypeScript
 # bindings; core and facade stay free of code generation.
-specta = ["dep:specta"]
+specta = ["dep:specta", "underline-editor-view/specta"]
 
 [dependencies]
 underline-core.workspace = true
 underline-facade.workspace = true
 underline-editor-core.workspace = true
+underline-editor-view.workspace = true
 underline-wiki.workspace = true
 ropey.workspace = true
 serde.workspace = true

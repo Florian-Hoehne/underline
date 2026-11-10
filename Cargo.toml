@@ -6,6 +6,7 @@ members = [
     "crates/underline-core",
     "crates/underline-editor",
     "crates/underline-editor-core",
+    "crates/underline-editor-view",
     "crates/underline-facade",
     "crates/underline-markup",
     "crates/underline-mcp",
@@ -39,6 +40,7 @@ ropey = "1.6"
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 underline-editor = { path = "crates/underline-editor" }
 underline-editor-core = { path = "crates/underline-editor-core" }
+underline-editor-view = { path = "crates/underline-editor-view" }
 underline-facade = { path = "crates/underline-facade" }
 underline-markup = { path = "crates/underline-markup" }
 underline-session = { path = "crates/underline-session" }

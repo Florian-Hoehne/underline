@@ -489,13 +489,14 @@ fn adr024_an_older_job_never_overwrites_a_newer_one() {
         },
     };
     let mut facade = Facade::default();
+    let mut model = underline_editor_view::FacadeModel::default();
     let older = run(job(1, "# Old\n"));
     let newer = run(job(2, "# New\n"));
 
-    assert!(facade.commit(newer).is_some());
-    assert_eq!(facade.commit(older), None);
-    assert_eq!(facade.views[0].runs[0].text, "New");
-    assert_eq!(facade.version, 1);
+    assert!(facade.commit(&mut model, newer).is_some());
+    assert_eq!(facade.commit(&mut model, older), None);
+    assert_eq!(model.views[0].runs[0].text, "New");
+    assert_eq!(model.version, 1);
 }
 
 /// M-07.2, M-22.2: the switch remembers the view of the tab; the facade is
@@ -642,4 +643,97 @@ fn m09_6_targets_that_are_no_images() {
         message(1).as_deref(),
         Some(".underline/c.png lies outside the workspace")
     );
+}
+
+/// The backend's views of `text` in `format`, with the colours of code, in
+/// the workspace `root`.
+fn backend_views(
+    root: &Path,
+    text: &str,
+    format: NoteFormat,
+) -> (Vec<underline_facade::blocks::Block>, Vec<BlockView>) {
+    let built = run(Job {
+        seq: 1,
+        rev: 1,
+        generation: 0,
+        rope: ropey::Rope::from_str(text),
+        format,
+        blocks: None,
+        last_pictures: std::collections::HashMap::new(),
+        ctx: super::build::Context {
+            looks: (underline_core::Theme::Light, true),
+            colors: Some(std::sync::Arc::new(
+                underline_facade::highlight::HighlightSet::for_theme(underline_core::Theme::Light),
+            )),
+            dark: false,
+            diagrams: None,
+            code_colors: std::sync::Arc::default(),
+            images: std::sync::Arc::default(),
+            root: root.to_owned(),
+            note: root.join("Home.md"),
+        },
+    });
+    (built.blocks.to_vec(), built.views)
+}
+
+/// ADR-025, M-09.4, M-09.6, M-09.7, TC-004-02: the webview's views
+/// (`CachedViews`), given what the backend made of the colours and figures,
+/// are the backend's views, in Markdown and in AsciiDoc: the kinds, runs,
+/// offsets, prefixes and the numbers of the captions are made by the same
+/// code (`docs/migration/variante-b.md`, step B3b).
+#[test]
+fn adr025_cached_views_with_the_backends_figures_equal_the_backends_views() {
+    use underline_editor_core::facade::MakeViews;
+    use underline_editor_view::views::{colors_key, diagram_key, diagram_language};
+    use underline_editor_view::CachedViews;
+    use underline_facade::blocks::BlockKind;
+
+    let dir = temp_dir("equivalence");
+    let root = dir.join("notes");
+    fs::create_dir_all(root.join("img")).unwrap();
+    fs::write(root.join("img/plan.png"), b"\x89PNG").unwrap();
+    let markdown = "# Notes\n\nSome *text* with `code`, emoji 😀\r\nand CRLF.\n\n- one\n- [x] two\n\n> quoted\n\n```rust\nfn main() { let x = 1; }\n```\n\n```mermaid\ngraph TD\nA-->B\n```\n\n![The plan](img/plan.png)\n\n![Gone](img/gone.png)\n\n| a | b |\n|:--|--:|\n| 1 | 2 |\n";
+    let asciidoc = "= Notes\n\nNOTE: An admonition.\n\n.The plan\nimage::img/plan.png[Plan]\n\n.Numbers\n|===\n| a | b\n| 1 | 2\n|===\n\n[source,python]\n----\nprint(\"hi\")\n----\n\n.Again\nimage::img/gone.png[Gone]\n";
+    for (text, format) in [
+        (markdown, NoteFormat::Markdown),
+        (asciidoc, NoteFormat::AsciiDoc),
+    ] {
+        let (blocks, backend) = backend_views(&root, text, format);
+        let mut cached = CachedViews::new(underline_core::Theme::Light.label(), false);
+        for (block, view) in blocks.iter().zip(&backend) {
+            let code: String = view.runs.iter().map(|r| r.text.as_str()).collect();
+            match &block.kind {
+                BlockKind::Code { language } => match diagram_language(&block.kind) {
+                    Some(diagram) => cached.insert_diagram(
+                        diagram_key(diagram, &code, false),
+                        view.figure.clone().unwrap(),
+                    ),
+                    None => cached.insert_colors(
+                        colors_key(underline_core::Theme::Light.label(), language, &code),
+                        view.colors.clone(),
+                    ),
+                },
+                BlockKind::Image { target, .. } => {
+                    let mut figure = view.figure.clone().unwrap();
+                    figure.caption = None;
+                    cached.insert_image(target, figure);
+                }
+                _ => {}
+            }
+        }
+
+        let made = cached.all(&blocks, text, &ropey::Rope::from_str(text));
+
+        assert_eq!(made, backend, "{format:?}");
+        assert!(
+            backend.iter().any(|v| v.colors.is_some()),
+            "{format:?}: code is coloured"
+        );
+        // Markdown has no captions; AsciiDoc numbers figures and tables.
+        let captioned = backend.iter().any(|v| {
+            v.figure.as_ref().is_some_and(|f| f.caption.is_some())
+                || matches!(&v.kind, BlockKindView::Table { table } if table.caption.is_some())
+        });
+        assert_eq!(captioned, format == NoteFormat::AsciiDoc, "{format:?}");
+    }
 }

@@ -21,19 +21,19 @@ use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use underline_core::{EditingView, NoteFormat, NoteId};
-use underline_editor_core::facade::{splices, ShownBlock};
-use underline_facade::blocks::Block;
+use underline_core::{EditingView, NoteId};
+use underline_editor_core::facade::splices;
+use underline_editor_view::views::diagram_language;
+use underline_editor_view::{blocks_views, FacadeModel, Versioned};
 use underline_facade::highlight::HighlightSet;
 
-use self::build::{diagram_figure, diagram_language, Built, Context, Job, Looks};
+use self::build::{diagram_figure, Built, Context, Job, Looks};
 pub(super) use self::build::{CodeColorCache, ImageCache};
 use super::diagrams::SvgDiagrams;
 use super::tab::Tab;
 use super::Session;
 use crate::assets::{percent_decode, request_path, Asset, AssetError, AssetPlan};
-use crate::editor_view::{revision, units};
-use crate::facade_view::{BlockKindView, BlockView, BlocksView, FacadeState};
+use crate::facade_view::{BlockView, FacadeState};
 use crate::workspace_view::EditingViewName;
 use crate::{Event, UiError, UiErrorKind};
 
@@ -43,70 +43,15 @@ use self::build::views_of;
 /// ADR-024: one change of the window's blocks (`ed-blocks`).
 type Splice = underline_editor_core::facade::Splice<BlockView>;
 
-/// ADR-025: the editor core's facade rules move the window's views of the
-/// blocks; the views themselves are made here (`build.rs`).
-impl ShownBlock for BlockView {
-    fn start(&self) -> u32 {
-        self.start
-    }
-
-    fn line(&self) -> u32 {
-        self.line
-    }
-
-    fn is_moved(&self, old: &Self, shift: i64, line_shift: i64) -> bool {
-        let BlockView {
-            kind,
-            start,
-            line,
-            length,
-            lines,
-            prefix,
-            runs,
-            colors,
-            figure,
-        } = old;
-        i64::from(*start) + shift == i64::from(self.start)
-            && i64::from(*line) + line_shift == i64::from(self.line)
-            && *kind == self.kind
-            && *length == self.length
-            && *lines == self.lines
-            && *prefix == self.prefix
-            && *runs == self.runs
-            && *colors == self.colors
-            && *figure == self.figure
-    }
-
-    fn shift(&mut self, shift: i64, line_shift: i64) {
-        let start = i64::from(self.start) + shift;
-        let line = i64::from(self.line) + line_shift;
-        // A view after an edit never moves before the start of the note.
-        debug_assert!(start >= 0 && line >= 0, "view moved before the note");
-        self.start = u32::try_from(start).unwrap_or(0);
-        self.line = u32::try_from(line).unwrap_or(0);
-    }
-
-    fn captioned(&self) -> bool {
-        match &self.kind {
-            BlockKindView::Table { table } => table.caption.is_some(),
-            _ => self.figure.as_ref().is_some_and(|f| f.caption.is_some()),
-        }
-    }
-}
-
-/// The facade of one tab: the blocks of the text and what the window was
-/// told of them.
+/// How the backend makes the facade of one tab: its jobs, the look and the
+/// diagrams the views were made with, the pictures and colours that
+/// follow. The blocks and their views as the window has them are the
+/// editor's ([`FacadeModel`], `tab.edit.facade`, ADR-025).
 #[derive(Debug, Default)]
 pub(super) struct Facade {
-    /// The blocks of the text of revision `parsed`.
-    blocks: Arc<Vec<Block>>,
-    parsed: Option<u64>,
     /// The look and the diagrams' generation the views were made with.
     looks: Option<Looks>,
     diagrams_seen: u64,
-    /// The blocks as the window has them, and their version.
-    views: Vec<BlockView>,
-    version: u32,
     /// M-09.7: the last picture of each diagram block, shown while its
     /// changed source renders (`last_pictures` of the egui facade).
     last_pictures: HashMap<usize, String>,
@@ -118,9 +63,6 @@ pub(super) struct Facade {
     committed: u64,
     /// A job of the tick runs.
     building: bool,
-    /// Markdown: the note may hold link reference definitions, so an edit
-    /// parses it whole (`reparse.rs`).
-    refs: bool,
     /// Code blocks sent without their colours, which the tick makes
     /// (ADR-024).
     recolor: Vec<usize>,
@@ -135,75 +77,66 @@ struct Tools {
 }
 
 impl Facade {
-    /// Whether the views must be made anew for revision `rev` in `looks`.
-    fn stale(&self, rev: u64, looks: Looks) -> bool {
-        self.parsed != Some(rev) || self.looks != Some(looks)
+    /// Whether the views of `model` must be made anew for revision `rev` in
+    /// `looks`.
+    fn stale(&self, model: &FacadeModel, rev: u64, looks: Looks) -> bool {
+        model.parsed != Some(rev) || self.looks != Some(looks)
     }
 
     /// The job that makes the views of `tab`'s text.
     fn job(&mut self, tab: &Tab, root: &std::path::Path, tools: &Tools, session: &Shared) -> Job {
         self.next_seq += 1;
-        let rev = tab.editor.revision();
+        let rev = tab.edit.editor.revision();
+        let model = &tab.edit.facade;
         Job {
             seq: self.next_seq,
             rev,
             generation: tools.diagrams.as_deref().map_or(0, SvgDiagrams::generation),
-            rope: tab.editor.document().rope().clone(),
-            format: tab.format,
-            blocks: (self.parsed == Some(rev)).then(|| Arc::clone(&self.blocks)),
+            rope: tab.edit.editor.document().rope().clone(),
+            format: tab.edit.format,
+            blocks: (model.parsed == Some(rev)).then(|| Arc::clone(&model.blocks)),
             last_pictures: self.last_pictures.clone(),
             ctx: context(tab, root, tools, session),
         }
     }
 
-    /// Takes in what a job made, unless a later job's result was taken in
-    /// already; the changes for the window, each with the version it
-    /// applies to.
-    fn commit(&mut self, built: Built) -> Option<Vec<(u32, Splice)>> {
+    /// Takes in what a job made into `model`, unless a later job's result
+    /// was taken in already; the changes for the window, each with the
+    /// version it applies to.
+    fn commit(&mut self, model: &mut FacadeModel, built: Built) -> Option<Vec<Versioned>> {
         if built.seq <= self.committed {
             return None;
         }
         self.committed = built.seq;
-        let changes = splices(&self.views, &built.views);
-        self.views = built.views;
-        self.blocks = built.blocks;
-        self.parsed = Some(built.rev);
+        let changes = splices(&model.views, &built.views);
+        model.views = built.views;
+        model.blocks = built.blocks;
+        model.parsed = Some(built.rev);
         self.looks = Some(built.looks);
         self.diagrams_seen = built.generation;
         self.last_pictures = built.last_pictures;
         if let Some(refs) = built.refs {
-            self.refs = refs;
+            model.refs = refs;
         }
-        Some(self.versioned(changes))
+        Some(model.versioned(changes))
     }
 
-    /// Numbers `changes` in the chain of versions.
-    fn versioned(&mut self, changes: Vec<Splice>) -> Vec<(u32, Splice)> {
-        changes
-            .into_iter()
-            .map(|splice| {
-                let base = self.version;
-                self.version = self.version.wrapping_add(1);
-                (base, splice)
-            })
-            .collect()
-    }
-
-    /// M-09.7: the figures of the diagram blocks that changed since the
-    /// window was told, worked into the views; the other views stay.
-    fn figures(&mut self, tools: &Tools) -> Vec<(u32, Splice)> {
+    /// M-09.7: the figures of the diagram blocks of `model` that changed
+    /// since the window was told, worked into the views; the other views
+    /// stay.
+    fn figures(&mut self, model: &mut FacadeModel, tools: &Tools) -> Vec<Versioned> {
         let generation = tools.diagrams.as_deref().map_or(0, SvgDiagrams::generation);
         if generation == self.diagrams_seen {
             return Vec::new();
         }
         self.diagrams_seen = generation;
-        let count = self.blocks.len();
+        let count = model.blocks.len();
         let mut changes = Vec::new();
-        for index in 0..count.min(self.views.len()) {
-            let Some(language) = diagram_language(&self.blocks[index].kind) else {
+        for index in 0..count.min(model.views.len()) {
+            let Some(language) = diagram_language(&model.blocks[index].kind) else {
                 continue;
             };
-            let view = &self.views[index];
+            let view = &model.views[index];
             let code: String = view.runs.iter().map(|r| r.text.as_str()).collect();
             let figure = diagram_figure(
                 tools.diagrams.as_deref(),
@@ -211,7 +144,7 @@ impl Facade {
                 count,
                 (index, language, &code, tools.dark),
             );
-            let view = &mut self.views[index];
+            let view = &mut model.views[index];
             if view.figure.as_ref() != Some(&figure) {
                 view.figure = Some(figure);
                 changes.push(Splice {
@@ -223,7 +156,7 @@ impl Facade {
                 });
             }
         }
-        self.versioned(changes)
+        model.versioned(changes)
     }
 
     /// Whether the facade is shown.
@@ -273,29 +206,12 @@ impl std::fmt::Debug for Shared {
     }
 }
 
-/// `n` as an `i32` for a shift; a note is never that long.
-fn signed(n: i64) -> i32 {
-    i32::try_from(n).unwrap_or(if n < 0 { i32::MIN } else { i32::MAX })
-}
-
 /// The events of `changes` of the facade of `note`, whose blocks are of
 /// revision `rev`.
-fn events(note: &NoteId, rev: u64, changes: Vec<(u32, Splice)>) -> Vec<Event> {
-    changes
+fn events(note: &NoteId, rev: u64, changes: Vec<Versioned>) -> Vec<Event> {
+    blocks_views(note.as_str(), rev, changes)
         .into_iter()
-        .map(|(base, splice)| {
-            Event::Blocks(BlocksView {
-                note: note.as_str().to_owned(),
-                rev: revision(rev),
-                base,
-                version: base.wrapping_add(1),
-                from: units(splice.from),
-                removed: units(splice.removed),
-                blocks: splice.blocks,
-                shift: signed(splice.shift),
-                line_shift: signed(splice.line_shift),
-            })
-        })
+        .map(Event::Blocks)
         .collect()
 }
 
@@ -304,14 +220,6 @@ fn not_open(note: &NoteId) -> UiError {
         UiErrorKind::Invalid,
         format!("The tab {} is not open", note.title()),
     )
-}
-
-/// M-09.3: the format indicator.
-fn indicator(format: NoteFormat) -> &'static str {
-    match format {
-        NoteFormat::Markdown => "Markdown",
-        NoteFormat::AsciiDoc => "AsciiDoc",
-    }
 }
 
 /// `fa_open`, first step: the facade as it is, or the job that makes it.
@@ -393,10 +301,10 @@ impl Session {
         // The source view is not shown; the sections are sent again.
         tab.viewport = None;
         tab.highlight_told = None;
-        tab.folds.told = None;
+        tab.edit.forget_sections();
         let mut facade = tab.facade.take().unwrap_or_default();
         facade.shown = true;
-        let prep = if facade.stale(tab.editor.revision(), tools.looks) {
+        let prep = if facade.stale(&tab.edit.facade, tab.edit.editor.revision(), tools.looks) {
             // The tick starts no job of its own meanwhile.
             facade.building = true;
             Prep::Build(
@@ -405,8 +313,8 @@ impl Session {
             )
         } else {
             // The window gets all blocks; the changed figures need no event.
-            facade.figures(&tools);
-            Prep::Ready(facade_state(note, tab, &facade))
+            facade.figures(&mut tab.edit.facade, &tools);
+            Prep::Ready(tab.edit.facade_state(note.as_str()))
         };
         tab.facade = Some(facade);
         Ok(FacadePrep(prep))
@@ -432,11 +340,8 @@ impl Session {
         facade.building = false;
         // The window takes all blocks; a stale text is followed up by the
         // tick, with its changes.
-        let _ = facade.commit(*built);
-        let facade = tab.facade.take().unwrap_or_default();
-        let state = facade_state(&note, tab, &facade);
-        tab.facade = Some(facade);
-        Ok(state)
+        let _ = facade.commit(&mut tab.edit.facade, *built);
+        Ok(tab.edit.facade_state(note.as_str()))
     }
 
     /// M-09, ADR-024: `fa_open` in one go (holding the session throughout).
@@ -494,13 +399,13 @@ impl Session {
         let Some((note, tab)) = open.tabs.active_mut() else {
             return out;
         };
-        let rev = tab.editor.revision();
+        let rev = tab.edit.editor.revision();
         let Some(mut facade) = tab.facade.take() else {
             return out;
         };
         if facade.building {
             // The running job brings the figures too.
-        } else if facade.stale(rev, tools.looks) {
+        } else if facade.stale(&tab.edit.facade, rev, tools.looks) {
             let job = facade.job(tab, &root, &tools, &self.facade);
             let send = self.facade.send.clone();
             let note = note.clone();
@@ -516,11 +421,19 @@ impl Session {
                 facade.building = false;
                 self.status = format!("The facade could not be made: {error}");
             }
-        } else if let Some(parsed) = facade.parsed {
-            out.extend(events(note, parsed, facade.figures(&tools)));
+        } else if let Some(parsed) = tab.edit.facade.parsed {
+            out.extend(events(
+                note,
+                parsed,
+                facade.figures(&mut tab.edit.facade, &tools),
+            ));
             if !facade.recolor.is_empty() {
                 let ctx = context(tab, &root, &tools, &self.facade);
-                out.extend(events(note, parsed, facade.recolored(&ctx)));
+                out.extend(events(
+                    note,
+                    parsed,
+                    facade.recolored(&mut tab.edit.facade, &ctx),
+                ));
             }
         }
         tab.facade = Some(facade);
@@ -539,7 +452,7 @@ impl Session {
                 continue;
             };
             let tab = open.tabs.get_mut(index);
-            let rev = tab.editor.revision();
+            let rev = tab.edit.editor.revision();
             let Some(facade) = tab.facade.as_mut() else {
                 continue;
             };
@@ -547,7 +460,7 @@ impl Session {
             if built.rev != rev {
                 continue;
             }
-            if let Some(changes) = facade.commit(built) {
+            if let Some(changes) = facade.commit(&mut tab.edit.facade, built) {
                 out.extend(events(&note, rev, changes));
             }
         }
@@ -584,32 +497,6 @@ impl Session {
     /// As [`Session::asset_plan`] and [`AssetPlan::resolve`].
     pub fn asset(&self, path: &str) -> Result<Asset, AssetError> {
         self.asset_plan(path)?.resolve()
-    }
-}
-
-/// The whole facade of `note` for the window, with `tab`'s cursor.
-fn facade_state(note: &NoteId, tab: &Tab, facade: &Facade) -> FacadeState {
-    let (head, anchor) = tab.editor.selection_web();
-    FacadeState {
-        note: note.as_str().to_owned(),
-        rev: revision(facade.parsed.unwrap_or_else(|| tab.editor.revision())),
-        version: facade.version,
-        format: indicator(tab.format).to_owned(),
-        blocks: facade.views.clone(),
-        anchor: units(anchor),
-        head: units(head),
-        place: tab.editor.cursor_place().label(),
-        gap: (facade.parsed == Some(tab.editor.revision()))
-            .then(|| {
-                underline_editor_core::facade::gap_at(
-                    tab.editor.document().rope(),
-                    tab.editor.cursor(),
-                    &facade.blocks,
-                )
-            })
-            .flatten()
-            .map(input::gap_view),
-        keys: input::keys_status(&tab.keys),
     }
 }
 

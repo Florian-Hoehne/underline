@@ -3,7 +3,8 @@
 //! rules of the source view ([`SourceEditor`]), the Vim and Nano keys behind
 //! the [`Target`] trait ([`Keys`]), the functions of the formatting toolbar
 //! ([`Tool`]), the offsets a webview counts in ([`utf16`]), and the editing
-//! rules of the facade with its blocks ([`facade`], ADR-025).
+//! rules of the facade with its blocks ([`facade`], ADR-025), and the hash
+//! the webview and the backend compare their texts by ([`sync`]).
 //!
 //! It was moved out of the egui widget `underline-editor`, which now builds
 //! on it, so that the same logic can run elsewhere as well
@@ -18,6 +19,7 @@ pub mod facade;
 pub mod input;
 pub mod keys;
 pub mod source;
+pub mod sync;
 pub mod toolbar;
 pub mod utf16;
 

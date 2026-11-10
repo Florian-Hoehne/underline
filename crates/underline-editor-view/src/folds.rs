@@ -1,36 +1,39 @@
 //! M-08.8, UC-004 BR-012: folding the sections of a note, per tab, so both
-//! views share it (the facade follows with feature F5).
+//! views share it.
 //!
 //! Ported from `underline-editor`'s `source_view.rs` (`sections`, `hidden`,
 //! `toggle_fold`, `fold_key`, `unfold_at_cursor`). The sections come from
-//! the facade engine (`underline_facade::sections`) and are kept as lines:
+//! the facade engine (`underline_markup::sections`) and are kept as lines:
 //! the egui widget keeps the bytes of the sections and turns them into
 //! lines when it lays out the text; here the lines are worked out once when
 //! the sections are found.
 //!
 //! The sections are found again after the input that changed the text, off
-//! the keystroke command (ADR-024): by the tick, at most every
-//! [`SECTIONS_EVERY`] while the text changes. While something is folded,
-//! an input that adds or removes lines finds them at once, as the egui
-//! widget does, so Up and Down never step into a folded body.
+//! the keystroke (ADR-024): at most every [`SECTIONS_EVERY_MS`] while the
+//! text changes. While something is folded, an input that adds or removes
+//! lines finds them at once, as the egui widget does, so Up and Down never
+//! step into a folded body.
+//!
+//! Moved here from `underline-session` (`docs/migration/variante-b.md`,
+//! step B3b); the time is the host's clock in milliseconds
+//! ([`EditorTab::set_now`]), as the webview has no `Instant`.
 
 use std::collections::HashSet;
 use std::ops::Range;
-use std::time::{Duration, Instant};
 
 use underline_editor_core::Outcome;
-use underline_facade::sections::{sections, SectionKey};
+use underline_markup::sections::{sections, SectionKey};
 
-use super::tab::Tab;
 use crate::editor_view::{revision, units, SectionView, SectionsView};
+use crate::EditorTab;
 
 /// How often the sections are found again while the text changes and
-/// nothing is folded, as in the egui widget.
-pub(super) const SECTIONS_EVERY: Duration = Duration::from_millis(300);
+/// nothing is folded, as in the egui widget: 300 ms.
+pub const SECTIONS_EVERY_MS: f64 = 300.0;
 
 /// One section of the text, by lines counted from 0.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SectionLines {
+pub(crate) struct SectionLines {
     key: SectionKey,
     level: usize,
     /// The line of the heading.
@@ -40,8 +43,8 @@ pub(super) struct SectionLines {
 }
 
 /// The fold state of one tab.
-#[derive(Debug, Default)]
-pub(super) struct Folds {
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Folds {
     /// The folded sections, by key, so they stay folded while the text
     /// around them changes.
     folded: HashSet<SectionKey>,
@@ -49,15 +52,15 @@ pub(super) struct Folds {
     found: Option<(u64, Vec<SectionLines>)>,
     /// How many lines the text had then.
     found_lines: usize,
-    /// When they were found last.
-    found_at: Option<Instant>,
+    /// When they were found last, in milliseconds of the host's clock.
+    found_at: Option<f64>,
     /// Counts the changes of `folded`.
     version: u64,
     /// The revision and fold version the window was told of last.
-    pub(super) told: Option<(u64, u64)>,
+    pub(crate) told: Option<(u64, u64)>,
 }
 
-impl Tab {
+impl EditorTab {
     /// The sections of the text as it is now, found again when it changed.
     fn fresh_sections(&mut self) -> &[SectionLines] {
         let rev = self.editor.revision();
@@ -86,26 +89,26 @@ impl Tab {
                 .collect();
             self.folds.found = Some((rev, lines));
             self.folds.found_lines = self.editor.document().len_lines();
-            self.folds.found_at = Some(Instant::now());
+            self.folds.found_at = Some(self.now_ms);
         }
-        &self.folds.found.as_ref().expect("found just now").1
+        self.folds.found.as_ref().map_or(&[], |(_, lines)| lines)
     }
 
     /// The sections by line without finding them again while the text has
     /// as many lines as when they were found: typing within a line moves no
-    /// section, and the keystroke command stays small (ADR-024).
+    /// section, and the keystroke stays small (ADR-024).
     fn known_sections(&mut self) -> &[SectionLines] {
         let same = self.folds.found.is_some()
             && self.folds.found_lines == self.editor.document().len_lines();
         if same {
-            return &self.folds.found.as_ref().expect("checked above").1;
+            return self.folds.found.as_ref().map_or(&[], |(_, lines)| lines);
         }
         self.fresh_sections()
     }
 
     /// The lines hidden by folded sections, in order and not overlapping,
     /// for the editor, whose Up and Down step over them.
-    pub(super) fn refold(&mut self) {
+    pub fn refold(&mut self) {
         let hidden = if self.folds.folded.is_empty() {
             Vec::new()
         } else {
@@ -129,7 +132,7 @@ impl Tab {
 
     /// After an input: while something is folded, a change of the lines
     /// finds the sections at once, so the hidden lines stay right.
-    pub(super) fn refold_after(&mut self, outcome: &Outcome) {
+    pub fn refold_after(&mut self, outcome: &Outcome) {
         let lines_moved = outcome
             .changes
             .iter()
@@ -140,7 +143,7 @@ impl Tab {
     }
 
     /// The line of the cursor.
-    fn cursor_line(&self) -> usize {
+    pub fn cursor_line(&self) -> usize {
         self.editor
             .document()
             .rope()
@@ -175,7 +178,7 @@ impl Tab {
     /// Ctrl/Cmd+Shift+[ folds (`fold`), Ctrl/Cmd+Shift+] expands the
     /// innermost section at the cursor (UC-004 BR-012, NFR-011). Returns
     /// whether the cursor moved.
-    pub(super) fn fold_key(&mut self, fold: bool) -> bool {
+    pub fn fold_key(&mut self, fold: bool) -> bool {
         let line = self.cursor_line();
         let section = self
             .fresh_sections()
@@ -193,7 +196,7 @@ impl Tab {
 
     /// M-08.8: the arrow of the section whose heading is `line` was
     /// clicked. Returns whether the cursor moved.
-    pub(super) fn toggle_at_line(&mut self, line: usize) -> bool {
+    pub fn toggle_at_line(&mut self, line: usize) -> bool {
         let section = self
             .fresh_sections()
             .iter()
@@ -203,7 +206,7 @@ impl Tab {
     }
 
     /// UC-004 BR-012: a folded section the cursor is in expands.
-    pub(super) fn unfold_at_cursor(&mut self) {
+    pub fn unfold_at_cursor(&mut self) {
         if self.folds.folded.is_empty() {
             return;
         }
@@ -224,10 +227,12 @@ impl Tab {
         }
     }
 
-    /// M-08.8, M-12.2: the sections for the window, once the text or the
-    /// folds changed since it was told; `None` while the window has them,
-    /// and while typing goes on, until [`SECTIONS_EVERY`] passed.
-    pub(super) fn sections_view(&mut self, note: &str, now: Instant) -> Option<SectionsView> {
+    /// M-08.8, M-12.2: the sections for the window at `now_ms`, once the
+    /// text or the folds changed since it was told; `None` while the window
+    /// has them, and while typing goes on, until [`SECTIONS_EVERY_MS`]
+    /// passed.
+    pub fn sections_view(&mut self, note: &str, now_ms: f64) -> Option<SectionsView> {
+        self.set_now(now_ms);
         let rev = self.editor.revision();
         let key = (rev, self.folds.version);
         if self.folds.told == Some(key) {
@@ -237,7 +242,7 @@ impl Tab {
         let recent = self
             .folds
             .found_at
-            .is_some_and(|at| now.saturating_duration_since(at) < SECTIONS_EVERY);
+            .is_some_and(|at| (now_ms - at).max(0.0) < SECTIONS_EVERY_MS);
         // While typing goes on, at most every 300 ms; a fold or an expand is
         // told at once. Folded lines stay right meanwhile: an input that
         // adds or removes lines finds them at once (`refold_after`).
@@ -275,32 +280,29 @@ impl Tab {
             sections,
         })
     }
+
+    /// The window shows the note anew: it is told the sections again.
+    pub fn forget_sections(&mut self) {
+        self.folds.told = None;
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use underline_core::{EditingView, NoteFormat};
     use underline_editor_core::{Key, Modifiers};
+    use underline_markup::NoteFormat;
 
     use super::*;
 
     const TEXT: &str = "# A\none\ntwo\n## B\nthree\n# C\nfour\n";
 
-    fn tab(text: &str) -> Tab {
-        Tab::new(
-            PathBuf::from("A.md"),
-            "A".into(),
-            NoteFormat::Markdown,
-            EditingView::Source,
-            text.into(),
-        )
+    fn tab(text: &str) -> EditorTab {
+        EditorTab::new(text, NoteFormat::Markdown)
     }
 
-    fn folded_lines(tab: &mut Tab, note: &str) -> Vec<(u32, u32)> {
+    fn folded_lines(tab: &mut EditorTab, note: &str) -> Vec<(u32, u32)> {
         tab.folds.told = None;
-        tab.sections_view(note, Instant::now())
+        tab.sections_view(note, 0.0)
             .unwrap()
             .sections
             .iter()
@@ -313,7 +315,7 @@ mod tests {
     fn uc004_br012_m08_8_sections_by_line_nest_by_level() {
         let mut tab = tab(TEXT);
 
-        let view = tab.sections_view("A", Instant::now()).unwrap();
+        let view = tab.sections_view("A", 0.0).unwrap();
 
         assert_eq!(
             view.sections,
@@ -335,10 +337,7 @@ mod tests {
                 },
             ]
         );
-        assert!(
-            tab.sections_view("A", Instant::now()).is_none(),
-            "told once"
-        );
+        assert!(tab.sections_view("A", 0.0).is_none(), "told once");
     }
 
     #[test]
@@ -405,16 +404,14 @@ mod tests {
     #[test]
     fn m12_2_typing_finds_the_sections_again_at_most_every_300_ms() {
         let mut tab = tab(TEXT);
-        let start = Instant::now();
+        let start = 1000.0;
         assert!(tab.sections_view("A", start).is_some());
 
         tab.editor.set_selection(0, 0);
         tab.editor.type_text("x");
         assert!(tab.sections_view("A", start).is_none(), "too soon");
 
-        let view = tab
-            .sections_view("A", Instant::now() + SECTIONS_EVERY)
-            .unwrap();
+        let view = tab.sections_view("A", start + SECTIONS_EVERY_MS).unwrap();
         assert_eq!(view.rev, revision(tab.editor.revision()));
     }
 

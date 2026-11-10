@@ -6,7 +6,6 @@ mod diagrams;
 pub(crate) use diagrams::SvgDiagrams;
 mod editing;
 mod facade;
-mod folding;
 mod tab;
 mod workspace;
 
@@ -350,7 +349,7 @@ impl Session {
                 .open
                 .as_ref()
                 .and_then(|open| open.tabs.find(&note).map(|i| open.tabs.get(i)))
-                .map(|tab| revision(tab.editor.revision()));
+                .map(|tab| revision(tab.edit.editor.revision()));
             if let Some(rev) = rev {
                 events.push(Event::TextReplaced(TextReplaced {
                     note: note.as_str().to_owned(),

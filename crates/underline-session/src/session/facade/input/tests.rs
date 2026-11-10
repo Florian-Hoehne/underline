@@ -98,7 +98,7 @@ impl Facade {
     fn text(&self) -> String {
         let open = self.session.open.as_ref().unwrap();
         let index = open.tabs.find(&home()).unwrap();
-        open.tabs.get(index).editor.text()
+        open.tabs.get(index).edit.editor.text()
     }
 
     fn at(&self) -> FacadeAt {
@@ -515,7 +515,14 @@ fn m09_14_own_markup_pastes_as_markup_other_text_as_typed() {
     f.take(patch);
     assert!(f.text().contains("Three \\*x\\*"), "{}", f.text());
     // The own markup comes as markup, on lines of its own when it has several.
-    f.session.open.as_mut().unwrap().tabs.get_mut(0).own_markup = Some(multi.to_owned());
+    f.session
+        .open
+        .as_mut()
+        .unwrap()
+        .tabs
+        .get_mut(0)
+        .edit
+        .own_markup = Some(multi.to_owned());
     let (_, patch) = f
         .session
         .facade_clipboard(&home(), f.at(), ClipAction::Paste, false, Some(multi))
@@ -528,7 +535,14 @@ fn m09_14_own_markup_pastes_as_markup_other_text_as_typed() {
         f.text()
     );
     // Ctrl+Shift+V types even the own markup.
-    f.session.open.as_mut().unwrap().tabs.get_mut(0).own_markup = Some("*z*".to_owned());
+    f.session
+        .open
+        .as_mut()
+        .unwrap()
+        .tabs
+        .get_mut(0)
+        .edit
+        .own_markup = Some("*z*".to_owned());
     f.click_after("One");
     let (_, patch) = f
         .session

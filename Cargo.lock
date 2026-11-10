@@ -8357,6 +8357,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "underline-editor-view"
+version = "0.1.0"
+dependencies = [
+ "ropey",
+ "serde",
+ "specta",
+ "underline-editor-core",
+ "underline-markup",
+]
+
+[[package]]
 name = "underline-facade"
 version = "0.1.0"
 dependencies = [
@@ -8409,6 +8420,7 @@ dependencies = [
  "thiserror 1.0.69",
  "underline-core",
  "underline-editor-core",
+ "underline-editor-view",
  "underline-facade",
  "underline-wiki",
 ]

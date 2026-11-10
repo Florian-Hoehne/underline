@@ -4,21 +4,23 @@
 //! their views ([`Built`]); the session takes them in only while they are
 //! still for the text it has (`facade.rs`).
 //!
-//! Ported from `crates/underline-editor/src/facade_view.rs`: what a block
-//! shows (`block_job`, `prefix_text`), the figures (`figure`,
-//! `picture_state`, `image_source`) with their numbering, and the colours
-//! of code blocks.
+//! Ported from `crates/underline-editor/src/facade_view.rs`: the figures
+//! (`figure`, `picture_state`, `image_source`) and the colours of code
+//! blocks. What a block shows otherwise, with the numbers of the captions,
+//! is the editor's (`underline_editor_view::views`, ADR-025), the same in
+//! the webview.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use ropey::Rope;
 use underline_core::{resolve_link, LinkTarget, NoteFormat, Theme};
-use underline_facade::blocks::{Block, BlockKind, CellAlign, ListMarker, Run};
+use underline_editor_view::views::{
+    message_figure, picture_figure, rendering_figure, Enrich, ViewMaker,
+};
+use underline_facade::blocks::Block;
 use underline_facade::diagram::{DiagramError, DiagramLanguage};
 use underline_facade::highlight::{highlight_code, HighlightSet};
 use underline_facade::images::ImageError;
@@ -26,9 +28,7 @@ use underline_facade::images::ImageError;
 use super::super::diagrams::{SvgDiagrams, SvgState};
 use crate::assets::{check_file, file_asset_path, FileProblem};
 use crate::editor_view::{units, SpanStyle};
-use crate::facade_view::{
-    BlockKindView, BlockView, CellAlignName, CodeColors, FigureView, RunView, TableView,
-};
+use crate::facade_view::{BlockView, CodeColors, FigureView};
 
 /// Code blocks whose colours are kept; more are coloured again.
 const CODE_COLORS_KEPT: usize = 4096;
@@ -92,152 +92,6 @@ pub(in crate::session) struct Built {
     pub(super) refs: Option<bool>,
 }
 
-/// Turns byte offsets of the markup into web offsets (`utf16`), walking
-/// forward from the last one asked: the blocks are converted in order, so
-/// the text is walked about once. A `\r` of a `\r\n` pair counts nothing,
-/// so the pair is one unit, as in the window.
-///
-/// The text may be a part of the note, starting at byte `origin`, whose web
-/// offset is `origin_web`; offsets asked are those of the whole note.
-pub(super) struct WebWalker<'a> {
-    text: &'a str,
-    origin: usize,
-    origin_web: usize,
-    /// Where the walk stands in `text`, and its web offset from there.
-    byte: usize,
-    web: usize,
-    /// Where the block being converted starts; going back starts there.
-    mark: (usize, usize),
-}
-
-impl<'a> WebWalker<'a> {
-    pub(super) fn new(text: &'a str) -> Self {
-        Self::part(text, 0, 0)
-    }
-
-    /// A walker over `text`, the part of the note from byte `origin` on,
-    /// whose web offset is `origin_web`.
-    pub(super) fn part(text: &'a str, origin: usize, origin_web: usize) -> Self {
-        Self {
-            text,
-            origin,
-            origin_web,
-            byte: 0,
-            web: 0,
-            mark: (0, 0),
-        }
-    }
-
-    /// The web offset of byte offset `byte`; inside a char, of its start.
-    fn at(&mut self, byte: usize) -> usize {
-        let mut byte = byte.saturating_sub(self.origin).min(self.text.len());
-        while !self.text.is_char_boundary(byte) {
-            byte -= 1;
-        }
-        if byte < self.byte {
-            (self.byte, self.web) = if byte >= self.mark.0 {
-                self.mark
-            } else {
-                (0, 0)
-            };
-        }
-        let bytes = self.text.as_bytes();
-        for (i, c) in self.text[self.byte..byte].char_indices() {
-            let at = self.byte + i;
-            let pair = c == '\r' && bytes.get(at + 1) == Some(&b'\n');
-            if !pair {
-                self.web += c.len_utf16();
-            }
-        }
-        self.byte = byte;
-        self.origin_web + self.web
-    }
-
-    /// Going back from now on starts at `byte`, the start of a block.
-    fn mark(&mut self, byte: usize) -> usize {
-        let web = self.at(byte);
-        self.mark = (self.byte, self.web);
-        web
-    }
-
-    /// Whether the char at `byte` is the `\r` of a `\r\n` pair.
-    fn pair_at(&self, byte: usize) -> bool {
-        let Some(at) = byte.checked_sub(self.origin) else {
-            return false;
-        };
-        let bytes = self.text.as_bytes();
-        bytes.get(at) == Some(&b'\r') && bytes.get(at + 1) == Some(&b'\n')
-    }
-}
-
-/// The view of `run`, whose offsets are relative to `base`, the web offset
-/// of the block's start.
-fn run_view(run: &Run, walker: &mut WebWalker<'_>, base: usize) -> RunView {
-    let mut text = String::with_capacity(run.text.len());
-    let mut offsets = Vec::new();
-    let mut unit = 0;
-    let mut next: Option<usize> = None;
-    for (c, &source) in run.text.chars().zip(&run.offsets) {
-        // The `\r` of a pair is shown with its `\n`.
-        if c == '\r' && walker.pair_at(source) {
-            continue;
-        }
-        let shown = if c == '\r' { '\n' } else { c };
-        let web = walker.at(source).saturating_sub(base);
-        if next != Some(web) {
-            offsets.push((units(unit), units(web)));
-        }
-        let length = shown.len_utf16();
-        text.push(shown);
-        unit += length;
-        next = Some(web + length);
-    }
-    let end = walker.at(run.end).saturating_sub(base);
-    RunView {
-        text,
-        bold: run.style.bold,
-        italic: run.style.italic,
-        strike: run.style.strike,
-        code: run.style.code,
-        link: run.style.link.clone(),
-        offsets,
-        end: units(end),
-    }
-}
-
-/// M-09.2: what stands before the text of a block (`prefix_text` of the
-/// egui facade).
-fn prefix_text(kind: &BlockKind) -> String {
-    let mut prefix = String::new();
-    match kind {
-        BlockKind::ListItem {
-            depth,
-            marker,
-            checked,
-        } => {
-            prefix.push_str(&"    ".repeat(*depth));
-            match marker {
-                Some(ListMarker::Bullet) => prefix.push_str("•  "),
-                Some(ListMarker::Number(n)) => prefix.push_str(&format!("{n}.  ")),
-                None => prefix.push_str("   "),
-            }
-            match checked {
-                Some(true) => prefix.push_str("☑ "),
-                Some(false) => prefix.push_str("☐ "),
-                None => {}
-            }
-        }
-        BlockKind::Quote(depth) => prefix.push_str(&"    ".repeat(*depth)),
-        BlockKind::Admonition(label) => {
-            prefix.push_str("    ");
-            prefix.push_str(label);
-            prefix.push_str("  ");
-        }
-        _ => {}
-    }
-    prefix
-}
-
 /// `#rrggbb` of an RGBA colour.
 fn hex([r, g, b, _]: [u8; 4]) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
@@ -274,31 +128,6 @@ fn code_colors(set: &HighlightSet, language: &str, code: &str) -> CodeColors {
         line_start += underline_editor_core::utf16::len_utf16(line);
     }
     CodeColors { spans, styles }
-}
-
-/// The diagram language of a code block, if it is a diagram.
-pub(super) fn diagram_language(kind: &BlockKind) -> Option<DiagramLanguage> {
-    match kind {
-        BlockKind::Code { language } => DiagramLanguage::from_code_language(language),
-        _ => None,
-    }
-}
-
-/// A figure that only says something.
-pub(super) fn message_figure(message: String, failed: bool) -> FigureView {
-    FigureView {
-        message: Some(message),
-        failed,
-        ..FigureView::default()
-    }
-}
-
-/// A figure showing `picture`.
-fn picture_figure(picture: String) -> FigureView {
-    FigureView {
-        picture: Some(picture),
-        ..FigureView::default()
-    }
 }
 
 /// The protocol path of an image file below `root`, with the time of its
@@ -378,58 +207,36 @@ fn image_figure(ctx: &Context, target: &str, alt: &str) -> FigureView {
     }
 }
 
-/// Makes the views of blocks, in order.
+/// Makes the views of blocks with the session's highlighting, diagrams and
+/// image files (ADR-025: the views themselves are the editor's,
+/// [`ViewMaker`]).
 pub(super) struct Maker<'a> {
     pub(super) ctx: &'a Context,
-    pub(super) blocks: &'a [Block],
     pub(super) last_pictures: HashMap<usize, String>,
     /// Whether code is coloured when its colours are not kept yet; the
     /// keystroke command leaves that to the tick (ADR-024).
     pub(super) colour_now: bool,
-    /// Code blocks made without their colours, which follow.
-    pub(super) uncoloured: bool,
-    /// The figures and tables with a caption so far, for their numbers.
-    figures: usize,
-    tables: usize,
 }
 
 impl<'a> Maker<'a> {
-    pub(super) fn new(
-        ctx: &'a Context,
-        blocks: &'a [Block],
-        last_pictures: HashMap<usize, String>,
-    ) -> Self {
+    pub(super) fn new(ctx: &'a Context, last_pictures: HashMap<usize, String>) -> Self {
         Self {
             ctx,
-            blocks,
             last_pictures,
             colour_now: true,
-            uncoloured: false,
-            figures: 0,
-            tables: 0,
         }
     }
 
-    /// M-09.7, UC-004 A11: the picture of diagram block `index`; while a
-    /// changed source renders, the last picture stays, as long as it is
-    /// still served.
-    fn diagram_figure(
-        &mut self,
-        index: usize,
-        language: DiagramLanguage,
-        source: &str,
-    ) -> FigureView {
-        diagram_figure(
-            self.ctx.diagrams.as_deref(),
-            &mut self.last_pictures,
-            self.blocks.len(),
-            (index, language, source, self.ctx.dark),
-        )
+    /// The views of all `blocks` of `text`, the whole note in `rope`.
+    pub(super) fn views(&mut self, blocks: &[Block], text: &str, rope: &Rope) -> Vec<BlockView> {
+        ViewMaker::new(self, blocks).views(text, rope)
     }
+}
 
+impl Enrich for Maker<'_> {
     /// M-09.4: the colours of a code block, kept by theme, language and
     /// code.
-    fn colors_of(&mut self, language: &str, code: &str) -> Option<CodeColors> {
+    fn colors(&mut self, language: &str, code: &str) -> Option<CodeColors> {
         let set = self.ctx.colors.as_deref()?;
         let key = colors_key(self.ctx.looks.0, language, code);
         if let Some(colors) = self
@@ -442,162 +249,39 @@ impl<'a> Maker<'a> {
             return colors.clone();
         }
         if !self.colour_now {
-            self.uncoloured = true;
             return None;
         }
-        Some(remember_colors(
-            &self.ctx.code_colors,
-            key,
-            set,
-            language,
-            code,
-        ))
-        .flatten()
+        remember_colors(&self.ctx.code_colors, key, set, language, code)
     }
 
-    /// The views of all blocks of `text`, the whole note in `rope`.
-    pub(super) fn views(&mut self, text: &str, rope: &Rope) -> Vec<BlockView> {
-        let mut walker = WebWalker::new(text);
-        (0..self.blocks.len())
-            .map(|index| self.view(index, &mut walker, rope))
-            .collect()
-    }
-
-    /// The views of the blocks `range`; `walker` walks a part of the note
-    /// holding them. Figures and tables are numbered after those before.
-    pub(super) fn views_of_range(
+    /// M-09.7, UC-004 A11: the picture of diagram block `index`; while a
+    /// changed source renders, the last picture stays, as long as it is
+    /// still served.
+    fn diagram(
         &mut self,
-        range: std::ops::Range<usize>,
-        walker: &mut WebWalker<'_>,
-        rope: &Rope,
-    ) -> Vec<BlockView> {
-        for block in &self.blocks[..range.start] {
-            match &block.kind {
-                BlockKind::Table(table) if table.caption.is_some() => self.tables += 1,
-                BlockKind::Image { caption, .. } if caption.is_some() => self.figures += 1,
-                _ => {}
-            }
-        }
-        range.map(|index| self.view(index, walker, rope)).collect()
+        index: usize,
+        count: usize,
+        language: DiagramLanguage,
+        code: &str,
+    ) -> FigureView {
+        diagram_figure(
+            self.ctx.diagrams.as_deref(),
+            &mut self.last_pictures,
+            count,
+            (index, language, code, self.ctx.dark),
+        )
     }
 
-    /// The view of block `index`.
-    fn view(&mut self, index: usize, walker: &mut WebWalker<'_>, rope: &Rope) -> BlockView {
-        let block = &self.blocks[index];
-        let len = rope.len_bytes();
-        let base = walker.mark(block.span.start);
-        let runs: Vec<RunView> = block
-            .runs
-            .iter()
-            .map(|run| run_view(run, walker, base))
-            .collect();
-        let mut figure = None;
-        let mut colors = None;
-        let kind = match &block.kind {
-            BlockKind::Heading(level) => BlockKindView::Heading { level: *level },
-            BlockKind::Paragraph => BlockKindView::Paragraph,
-            BlockKind::ListItem { depth, .. } => BlockKindView::ListItem {
-                depth: units(*depth),
-            },
-            BlockKind::Quote(depth) => BlockKindView::Quote {
-                depth: units(*depth),
-            },
-            BlockKind::Code { language } => {
-                let code: String = runs.iter().map(|r| r.text.as_str()).collect();
-                if let Some(diagram) = diagram_language(&block.kind) {
-                    figure = Some(self.diagram_figure(index, diagram, &code));
-                } else {
-                    colors = self.colors_of(language, &code);
-                }
-                BlockKindView::Code {
-                    language: language.clone(),
-                }
-            }
-            BlockKind::ThematicBreak => BlockKindView::ThematicBreak,
-            BlockKind::Admonition(label) => BlockKindView::Admonition {
-                label: label.clone(),
-            },
-            BlockKind::Markup => BlockKindView::Markup,
-            BlockKind::Table(table) => {
-                // TC-004-02: numbered as Asciidoctor numbers tables.
-                let caption = table.caption.as_ref().map(|caption| {
-                    self.tables += 1;
-                    format!("Table {}. {caption}", self.tables)
-                });
-                BlockKindView::Table {
-                    table: TableView {
-                        header: table.header,
-                        align: table
-                            .align
-                            .iter()
-                            .map(|align| match align {
-                                CellAlign::Left => CellAlignName::Left,
-                                CellAlign::Center => CellAlignName::Center,
-                                CellAlign::Right => CellAlignName::Right,
-                            })
-                            .collect(),
-                        rows: table
-                            .rows
-                            .iter()
-                            .map(|row| {
-                                row.iter()
-                                    .map(|cell| {
-                                        cell.iter().map(|run| run_view(run, walker, base)).collect()
-                                    })
-                                    .collect()
-                            })
-                            .collect(),
-                        caption,
-                    },
-                }
-            }
-            BlockKind::Image {
-                target,
-                alt,
-                caption,
-            } => {
-                let mut image = image_figure(self.ctx, target, alt);
-                // TC-004-02: numbered as Asciidoctor numbers figures.
-                image.caption = caption.as_ref().map(|caption| {
-                    self.figures += 1;
-                    format!("Figure {}. {caption}", self.figures)
-                });
-                figure = Some(image);
-                BlockKindView::Image {
-                    target: target.clone(),
-                    alt: alt.clone(),
-                }
-            }
-        };
-        let end = walker.at(block.span.end);
-        let first = rope.byte_to_line(block.span.start.min(len));
-        let last = rope.byte_to_line(
-            block
-                .span
-                .end
-                .saturating_sub(1)
-                .max(block.span.start)
-                .min(len),
-        );
-        BlockView {
-            kind,
-            start: units(base),
-            line: units(first),
-            length: units(end.saturating_sub(base)),
-            lines: units(last - first + 1),
-            prefix: prefix_text(&block.kind),
-            runs,
-            colors,
-            figure,
-        }
+    fn image(&mut self, target: &str, alt: &str) -> FigureView {
+        image_figure(self.ctx, target, alt)
     }
 }
 
-/// The key the colours of `code` in `language` are kept by, in `theme`.
+/// The key the colours of `code` in `language` are kept by, in `theme`:
+/// FNV-1a, so the webview makes the same key (ADR-025,
+/// `docs/migration/variante-b.md` section 2.3).
 pub(super) fn colors_key(theme: Theme, language: &str, code: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    (theme.label(), language, code).hash(&mut hasher);
-    hasher.finish()
+    underline_editor_view::views::colors_key(theme.label(), language, code)
 }
 
 /// Colours `code` and keeps its colours by `key`; `None` when nothing in it
@@ -653,7 +337,7 @@ pub(super) fn diagram_figure(
                 Some(last) => picture_figure(last),
                 None => {
                     last_pictures.remove(&index);
-                    message_figure(format!("Rendering the {} diagram…", language.name()), false)
+                    rendering_figure(language)
                 }
             }
         }
@@ -680,8 +364,8 @@ pub(in crate::session) fn run(job: Job) -> Built {
             (Arc::new(blocks), Some(refs))
         }
     };
-    let mut maker = Maker::new(&job.ctx, &blocks, job.last_pictures.clone());
-    let views = maker.views(&text, &job.rope);
+    let mut maker = Maker::new(&job.ctx, job.last_pictures.clone());
+    let views = maker.views(&blocks, &text, &job.rope);
     let mut last_pictures = maker.last_pictures;
     last_pictures.retain(|index, _| *index < blocks.len());
     Built {

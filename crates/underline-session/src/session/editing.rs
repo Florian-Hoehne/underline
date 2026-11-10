@@ -4,9 +4,14 @@
 //! (M-10.9), closing a tab or Underline after storing (M-06.3, M-21.4), the
 //! highlighting sent after the input (M-08.2) and the properties of the
 //! tool panel (M-16.2). Feature F4 adds the Nano keys (M-11.3), the
-//! formatting toolbar (M-10.2), folding (M-08.8, `folding.rs`), the status
-//! line's place and keys (M-11.4), the edits of the window's Vim keys
-//! (A-01) and the marked hits of the Nano search (UC-008 BR-008).
+//! formatting toolbar (M-10.2), folding (M-08.8), the status line's place
+//! and keys (M-11.4), the edits of the window's Vim keys (A-01) and the
+//! marked hits of the Nano search (UC-008 BR-008).
+//!
+//! What answers an input is the editor's tab (`underline_editor_view::
+//! EditorTab`, ADR-025), which the window runs itself with variant B; the
+//! session adds what only it knows: the keys of the settings, the autosave
+//! clock, the highlighting and the tab marks.
 //!
 //! Ported from `apps/underline-desktop/src/app.rs`: `flush_tab_now`,
 //! `flush_all`, `close_tab`, `autosave`, `key_command` and the close
@@ -14,25 +19,21 @@
 //! clipboard keys of the source view.
 
 use std::ops::Range;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use underline_core::{InputMode, NoteId, SaveJob, SaveResult, Theme};
 use underline_editor_core::keys::InputMode as KeysInputMode;
-use underline_editor_core::{
-    utf16, EditorCommand, InputStatus, KeyInput, Keys, KeysMode, Modifiers, Outcome, SourceKeys,
-    Tool,
-};
-use underline_facade::formatting::apply_format;
+use underline_editor_core::{utf16, Outcome};
+use underline_editor_view::Handled;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use super::tab::Tab;
 use super::workspace::OpenWorkspace;
 use super::Session;
 use crate::editor_view::{
-    revision, units, CloseQuestion, EditorInput, EditorPatch, EditorState, FoundView,
-    HighlightView, KeyName, KeysStatusView, SpanStyle, TabPropertiesView, TextChange, ToolName,
-    VimChange, VimState,
+    revision, units, CloseQuestion, EditorInput, EditorPatch, EditorState, HighlightView,
+    KeysStatusView, SpanStyle, TabPropertiesView, VimChange, VimState,
 };
 use crate::{Event, Platform, UiError, UiErrorKind};
 
@@ -40,10 +41,6 @@ use crate::{Event, Platform, UiError, UiErrorKind};
 /// spends 4 ms a frame. Lines not done yet are done in the next tick, which
 /// follows at once.
 const COLORING_BUDGET: Duration = Duration::from_millis(4);
-
-/// How often the marked hits of the Nano search are found again while
-/// the text changes.
-const FOUND_EVERY: Duration = Duration::from_millis(300);
 
 /// How long storing at once waits for a background save that runs; the
 /// saver writes one note at a time, atomically, so this is far more than a
@@ -56,153 +53,45 @@ pub(super) struct Colors {
     set: Arc<HighlightSet>,
 }
 
-/// What one input did: the changes and moves, what the keys ask of the
-/// window, and a toolbar function that asks first.
-#[derive(Debug, Default)]
-struct Done {
-    outcome: Outcome,
-    commands: Vec<EditorCommand>,
-    request: Option<ToolName>,
+/// ADR-025: the editor's clock: milliseconds of `at` since a moment well
+/// before the session began (the editor runs in the webview too, which has
+/// no `Instant`).
+pub(super) fn millis(at: Instant) -> f64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = *EPOCH.get_or_init(|| {
+        let now = Instant::now();
+        now.checked_sub(Duration::from_secs(3600)).unwrap_or(now)
+    });
+    at.saturating_duration_since(epoch).as_secs_f64() * 1000.0
 }
 
-impl Done {
-    fn take(&mut self, outcome: Outcome) {
-        self.outcome.moved |= outcome.moved;
-        self.outcome.changes.extend(outcome.changes);
-    }
-}
-
-/// M-08.8: Ctrl/Cmd+Shift+[ folds (`Some(true)`), Ctrl/Cmd+Shift+]
-/// expands (`Some(false)`).
-pub(super) fn fold_key(key: KeyName, modifiers: Modifiers) -> Option<bool> {
-    if !(modifiers.command && modifiers.shift) {
-        return None;
-    }
-    match key {
-        KeyName::BracketLeft => Some(true),
-        KeyName::BracketRight => Some(false),
-        _ => None,
-    }
-}
-
-/// What `input` is to the Nano keys.
-fn key_input(input: &EditorInput, mac: bool) -> Option<KeyInput<'_>> {
-    match input {
-        EditorInput::Text { text } => Some(KeyInput::Text(text)),
-        EditorInput::Key {
-            key,
-            ctrl,
-            alt,
-            shift,
-            meta,
-            ..
-        } => Some(KeyInput::Key {
-            key: (*key).into(),
-            pressed: true,
-            modifiers: Modifiers::from_web(*ctrl, *alt, *shift, *meta, mac),
-        }),
-        EditorInput::Tool { .. } => None,
-    }
-}
-
-/// FR-026: the status of the Nano keys of `keys`; `None` in the other
-/// modes.
-fn nano_status(keys: &Keys) -> Option<KeysStatusView> {
-    (keys.mode == KeysInputMode::Nano)
-        .then(|| keys.status())
-        .flatten()
-        .map(|status| KeysStatusView::of(&status, keys.prompting()))
-}
-
-impl Tab {
-    /// UC-005 A2, BR-005: applies the toolbar function `tool` at the
-    /// selection, in the markup of the note's format; Link and Image ask
-    /// first (feature F6).
-    fn apply_tool(&mut self, tool: Tool, done: &mut Done) {
-        let Some(format) = tool.format() else {
-            done.request = Some(tool.into());
-            return;
-        };
-        let text = self.editor.text();
-        let edit = apply_format(&text, self.format, self.editor.selection_bytes(), &format);
-        done.take(
-            self.editor
-                .replace_bytes(edit.range, &edit.text, edit.selection),
-        );
-    }
-
-    /// An input the keys of the input mode left to the usual keys: typed
-    /// text, the folding keys, the toolbar keys, then the editor's keys
-    /// (`key` of the egui widget).
-    fn plain_input(&mut self, input: EditorInput, mac: bool, done: &mut Done) {
-        match input {
-            EditorInput::Text { text } => done.take(self.editor.type_text(&text)),
-            EditorInput::Tool { tool } => self.apply_tool(tool.into(), done),
-            EditorInput::Key {
-                key,
-                ctrl,
-                alt,
-                shift,
-                meta,
-                page,
-            } => {
-                let modifiers = Modifiers::from_web(ctrl, alt, shift, meta, mac);
-                if let Some(fold) = fold_key(key, modifiers) {
-                    done.outcome.moved |= self.fold_key(fold);
-                } else if let Some(tool) = Tool::for_key(key.into(), modifiers) {
-                    self.apply_tool(tool, done);
-                } else {
-                    done.take(self.editor.key(key.into(), modifiers, page as usize));
-                }
-            }
-        }
-    }
-}
-
-/// The patch for the window after `outcome`, which started at `base`.
-fn patch(tab: &Tab, base: u64, outcome: &Outcome) -> EditorPatch {
-    let (head, anchor) = tab.editor.selection_web();
-    EditorPatch {
-        base: revision(base),
-        rev: revision(tab.editor.revision()),
-        changes: outcome
-            .changes
-            .iter()
-            .map(|change| TextChange {
-                from: units(change.from),
-                to: units(change.to),
-                insert: change.insert.clone(),
-            })
-            .collect(),
-        anchor: units(anchor),
-        head: units(head),
-        scroll: outcome.moved || outcome.edited(),
-        unstored: tab.autosave.is_unstored(),
-        place: tab.editor.cursor_place().label(),
-        keys: nano_status(&tab.keys),
-        commands: Vec::new(),
-        request: None,
-    }
-}
-
-/// The tab of `note` in the open workspace.
+/// The tab of `note` in the open workspace, its editor's clock at now.
 fn tab_in<'a>(open: &'a mut Option<OpenWorkspace>, note: &NoteId) -> Result<&'a mut Tab, UiError> {
     let open = open.as_mut().ok_or_else(|| not_open(note))?;
     let index = open.tabs.find(note).ok_or_else(|| not_open(note))?;
-    Ok(open.tabs.get_mut(index))
+    let tab = open.tabs.get_mut(index);
+    tab.edit.set_now(millis(Instant::now()));
+    Ok(tab)
 }
 
-/// The colours, the folds, the autosave clock and the tab mark follow an
-/// input; the patch for the window, and whether the tab's mark changed.
-pub(super) fn after_input(tab: &mut Tab, base: u64, outcome: &Outcome) -> (EditorPatch, bool) {
-    tab.refold_after(outcome);
-    tab.unfold_at_cursor();
+/// The colours, the autosave clock and the tab mark follow an input the
+/// editor handled (`outcome`); the patch's `unstored` is set, and whether
+/// the tab's mark changed is returned.
+pub(super) fn after_input(tab: &mut Tab, outcome: &Outcome, unstored: &mut bool) -> bool {
     let mut marked = false;
     if outcome.edited() {
         tab.highlight_edited(&outcome.changes);
         marked = tab.changed(Instant::now());
     }
-    (patch(tab, base, outcome), marked)
+    *unstored = tab.autosave.is_unstored();
+    marked
+}
+
+/// The patch of `handled` for the window, after the session took it in.
+fn took(tab: &mut Tab, handled: Handled<EditorPatch>, marked: &mut bool) -> EditorPatch {
+    let mut patch = handled.patch;
+    *marked |= after_input(tab, &handled.outcome, &mut patch.unstored);
+    patch
 }
 
 fn not_open(note: &NoteId) -> UiError {
@@ -215,6 +104,15 @@ fn not_open(note: &NoteId) -> UiError {
 /// `#rrggbb` of an RGBA colour.
 fn hex([r, g, b, _]: [u8; 4]) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// The keys of the input mode `mode` of the settings, for the editor core.
+pub(super) fn keys_mode(mode: InputMode) -> KeysInputMode {
+    match mode {
+        InputMode::Normal => KeysInputMode::Normal,
+        InputMode::Vim => KeysInputMode::Vim,
+        InputMode::Nano => KeysInputMode::Nano,
+    }
 }
 
 impl Session {
@@ -241,21 +139,8 @@ impl Session {
     pub fn editor_state(&mut self, note: &NoteId) -> Result<EditorState, UiError> {
         let mode = self.source_keys_mode();
         let tab = self.tab_mut(note)?;
-        tab.keys.mode = mode;
-        // The view shows the text anew: it gets the sections and the hits
-        // again.
-        tab.folds.told = None;
-        tab.found_told = None;
-        let (head, anchor) = tab.editor.selection_web();
-        Ok(EditorState {
-            note: note.as_str().to_owned(),
-            rev: revision(tab.editor.revision()),
-            text: tab.editor.web_text(),
-            anchor: units(anchor),
-            head: units(head),
-            place: tab.editor.cursor_place().label(),
-            keys: nano_status(&tab.keys),
-        })
+        tab.edit.keys.mode = mode;
+        Ok(tab.edit.state(note.as_str()))
     }
 
     /// M-11.4, FR-026: the left part of the status line in the input mode
@@ -270,26 +155,11 @@ impl Session {
         note: &NoteId,
         vim: Option<VimState>,
     ) -> Result<Option<KeysStatusView>, UiError> {
-        let input_mode = self.settings.effective().input_mode;
+        let setting = keys_mode(self.settings.effective().input_mode);
         let mode = self.source_keys_mode();
         let tab = self.tab_mut(note)?;
-        tab.keys.mode = mode;
-        Ok(match input_mode {
-            InputMode::Normal => None,
-            InputMode::Nano => nano_status(&tab.keys),
-            InputMode::Vim => {
-                let vim = vim.unwrap_or(VimState {
-                    mode: crate::VimModeName::Normal,
-                    pending: String::new(),
-                    marked: false,
-                });
-                let mode: KeysMode = vim.mode.into();
-                Some(KeysStatusView::of(
-                    &InputStatus::vim(mode, vim.pending, vim.marked),
-                    false,
-                ))
-            }
-        })
+        tab.edit.keys.mode = mode;
+        Ok(tab.edit.source_keys_status(setting, vim))
     }
 
     /// UC-005 step 1, M-08.4, M-08.5, M-10.1: one input of the source view
@@ -307,27 +177,10 @@ impl Session {
         let mac = Platform::current() == Platform::MacOs;
         let mode = self.source_keys_mode();
         let tab = self.tab_mut(note)?;
-        tab.keys.mode = mode;
-        let base = tab.editor.revision();
-        let mut done = Done::default();
-        // FR-025: the Nano keys take the input first, in order; what they
-        // leave goes to the usual keys right after (BR-010, BR-015).
-        let through = if mode == KeysInputMode::Nano && !matches!(input, EditorInput::Tool { .. }) {
-            let Tab { keys, editor, .. } = &mut *tab;
-            let mut target = SourceKeys::new(editor);
-            let (through, _) = keys.handle(vec![input], |i| key_input(i, mac), &mut target);
-            done.take(std::mem::take(&mut target.outcome));
-            done.commands = target.commands;
-            through
-        } else {
-            vec![input]
-        };
-        for input in through {
-            tab.plain_input(input, mac, &mut done);
-        }
-        let (mut patch, marked) = after_input(tab, base, &done.outcome);
-        patch.commands = done.commands.into_iter().map(Into::into).collect();
-        patch.request = done.request;
+        tab.edit.keys.mode = mode;
+        let handled = tab.edit.source_input(input, mac);
+        let mut marked = false;
+        let patch = took(tab, handled, &mut marked);
         // M-06.1: the tab is marked " •" now.
         self.views_dirty |= marked;
         Ok(patch)
@@ -335,16 +188,12 @@ impl Session {
 
     /// A-01, ADR-024: the window's Vim keys changed the text of revision
     /// `base` by `changes` (each relative to the text after the ones before
-    /// it) and left the cursor at `head`, the anchor at `anchor`. Each
-    /// change is one edit, undone by the usual rules (M-10.1), and one
-    /// marked `new_step` is not undone with the one before; `new_step`
-    /// marks the start of an insert session without a change of its own.
+    /// it) and left the cursor at `head`, the anchor at `anchor`
+    /// ([`EditorTab::source_apply`](underline_editor_view::EditorTab::source_apply)).
     ///
     /// `None` when the text is no longer of revision `base`, or when a
-    /// change does not fit the text (beyond its end, backwards, inside a
-    /// surrogate pair): nothing is applied then, and the window shows the
-    /// text again (`ed_open`). The patch carries no changes, as the window
-    /// made them already.
+    /// change does not fit the text: nothing is applied then, and the window
+    /// shows the text again (`ed_open`).
     ///
     /// # Errors
     ///
@@ -357,37 +206,12 @@ impl Session {
         selection: (u32, u32),
         new_step: bool,
     ) -> Result<Option<EditorPatch>, UiError> {
-        let (anchor, head) = selection;
         let tab = self.tab_mut(note)?;
-        let start = tab.editor.revision();
-        if revision(start) != base {
+        let Some(handled) = tab.edit.source_apply(base, changes, selection, new_step) else {
             return Ok(None);
-        }
-        let checked: Vec<(usize, usize, &str)> = changes
-            .iter()
-            .map(|c| (c.from as usize, c.to as usize, c.insert.as_str()))
-            .collect();
-        if !tab.editor.web_changes_fit(&checked) {
-            return Ok(None);
-        }
-        if new_step {
-            tab.editor.seal();
-        }
-        let mut done = Done::default();
-        for change in changes {
-            if change.new_step {
-                tab.editor.seal();
-            }
-            done.take(tab.editor.apply_web(
-                change.from as usize,
-                change.to as usize,
-                &change.insert,
-                None,
-            ));
-        }
-        done.outcome.moved |= tab.editor.set_selection_web(head as usize, anchor as usize);
-        let (mut patch, marked) = after_input(tab, start, &done.outcome);
-        patch.changes.clear();
+        };
+        let mut marked = false;
+        let patch = took(tab, handled, &mut marked);
         self.views_dirty |= marked;
         Ok(Some(patch))
     }
@@ -401,13 +225,9 @@ impl Session {
     /// The note has no open tab.
     pub fn editor_fold(&mut self, note: &NoteId, line: u32) -> Result<EditorPatch, UiError> {
         let tab = self.tab_mut(note)?;
-        let base = tab.editor.revision();
-        let moved = tab.toggle_at_line(line as usize);
-        let outcome = Outcome {
-            changes: Vec::new(),
-            moved,
-        };
-        Ok(after_input(tab, base, &outcome).0)
+        let handled = tab.edit.fold_line(line);
+        let mut marked = false;
+        Ok(took(tab, handled, &mut marked))
     }
 
     /// M-08.6, ADR-014: copying gives the selected markup for the clipboard,
@@ -420,9 +240,9 @@ impl Session {
     /// The note has no open tab.
     pub fn editor_copy(&mut self, note: &NoteId) -> Result<(Option<String>, EditorPatch), UiError> {
         let tab = self.tab_mut(note)?;
-        let text = Some(tab.editor.selected_text()).filter(|t| !t.is_empty());
-        let base = tab.editor.revision();
-        Ok((text, patch(tab, base, &Outcome::default())))
+        let (text, mut patch) = tab.edit.copy();
+        patch.unstored = tab.autosave.is_unstored();
+        Ok((text, patch))
     }
 
     /// M-08.6: cutting gives the selected markup for the clipboard and takes
@@ -433,11 +253,11 @@ impl Session {
     /// The note has no open tab.
     pub fn editor_cut(&mut self, note: &NoteId) -> Result<(Option<String>, EditorPatch), UiError> {
         let tab = self.tab_mut(note)?;
-        let base = tab.editor.revision();
-        let (text, outcome) = tab.editor.cut();
-        let (patch, marked) = after_input(tab, base, &outcome);
+        let (text, handled) = tab.edit.cut();
+        let mut marked = false;
+        let patch = took(tab, handled, &mut marked);
         self.views_dirty |= marked;
-        Ok((Some(text).filter(|t| !t.is_empty()), patch))
+        Ok((text, patch))
     }
 
     /// M-08.6: pasting inserts `text`, the plain text the window's backend
@@ -454,22 +274,10 @@ impl Session {
     ) -> Result<EditorPatch, UiError> {
         let mode = self.source_keys_mode();
         let tab = self.tab_mut(note)?;
-        tab.keys.mode = mode;
-        // BR-010: a paste ends a run of Nano cuts, as in egui.
-        let Tab { keys, editor, .. } = &mut *tab;
-        let (through, _) = keys.handle(
-            vec![()],
-            |()| Some(KeyInput::Paste),
-            &mut SourceKeys::new(editor),
-        );
-        let base = tab.editor.revision();
-        // M-11.3: the open search prompt takes the paste; the note keeps it
-        // out, as egui's Nano keys drop it.
-        let outcome = text
-            .filter(|_| !through.is_empty())
-            .map(|text| tab.editor.type_text(text))
-            .unwrap_or_default();
-        let (patch, marked) = after_input(tab, base, &outcome);
+        tab.edit.keys.mode = mode;
+        let handled = tab.edit.paste(text);
+        let mut marked = false;
+        let patch = took(tab, handled, &mut marked);
         self.views_dirty |= marked;
         Ok(patch)
     }
@@ -491,11 +299,7 @@ impl Session {
         head: u32,
     ) -> Result<String, UiError> {
         let tab = self.tab_mut(note)?;
-        if revision(tab.editor.revision()) == rev {
-            tab.editor.set_selection_web(head as usize, anchor as usize);
-            tab.unfold_at_cursor();
-        }
-        Ok(tab.editor.cursor_place().label())
+        Ok(tab.edit.select(rev, anchor, head))
     }
 
     /// M-08.1, M-08.2: the source view shows the lines `from..to` of the
@@ -622,7 +426,7 @@ impl Session {
         };
         for (_, tab) in open.tabs.iter_mut() {
             if !tab.saving && tab.autosave.is_due(now) {
-                let text = tab.editor.text();
+                let text = tab.edit.editor.text();
                 tab.saving_text = Some(text.clone());
                 self.saver.save(SaveJob {
                     path: tab.path.clone(),
@@ -776,7 +580,7 @@ impl Session {
             let open = self.open.as_ref()?;
             let (_, tab) = open.tabs.active()?;
             let wanted = tab.viewport.clone()?;
-            tab.highlight_told.as_ref() == Some(&(tab.editor.revision(), wanted))
+            tab.highlight_told.as_ref() == Some(&(tab.edit.editor.revision(), wanted))
         };
         // The colours of a new theme reset `highlight_told`.
         let set = self.colors()?;
@@ -785,18 +589,18 @@ impl Session {
         if told && tab.highlight_told.is_some() {
             return None;
         }
-        let rev = tab.editor.revision();
-        let lines = tab.editor.document().len_lines();
+        let rev = tab.edit.editor.revision();
+        let lines = tab.edit.editor.document().len_lines();
         let wanted = tab.viewport.clone()?;
         let shown = wanted.start.min(lines)..wanted.end.min(lines);
-        let format = tab.format;
+        let format = tab.edit.format;
         let highlight = tab.highlight.get_or_insert_with(|| {
             let mut highlight = DocumentHighlight::new(set, format);
             highlight.invalidate_from(0, lines);
             highlight
         });
         let (foreground, _) = highlight.colors();
-        let doc = tab.editor.document();
+        let doc = tab.edit.editor.document();
         let deadline = Some(now + COLORING_BUDGET);
         let mut colored: Vec<Arc<Vec<Span>>> = Vec::with_capacity(shown.len());
         for line in shown.clone() {
@@ -843,53 +647,19 @@ impl Session {
             return Vec::new();
         }
         // The keys of the view shown: the facade has the editor core's Vim.
-        tab.keys.mode = if facade_shown {
+        tab.edit.keys.mode = if facade_shown {
             facade_mode
         } else {
             source_mode
         };
         let mut events = Vec::new();
-        events.extend(tab.sections_view(note.as_str(), now).map(Event::Sections));
-        let rev = tab.editor.revision();
-        let search = tab.keys.search().map(str::to_owned);
-        let told = tab.found_told.clone();
-        let key = (rev, search);
-        if told.as_ref() != Some(&key) {
-            // While typing goes on with the same search, at most every
-            // 300 ms, as the sections (ADR-024).
-            let same_search = told.as_ref().is_some_and(|(_, p)| *p == key.1);
-            let recent = tab
-                .found_at
-                .is_some_and(|at| now.saturating_duration_since(at) < FOUND_EVERY);
-            if !(same_search && recent && key.1.is_some()) {
-                let all = key
-                    .1
-                    .as_deref()
-                    .map(|pattern| tab.editor.find_all(pattern))
-                    .unwrap_or_default();
-                let count = units(all.len());
-                let ranges = all
-                    .into_iter()
-                    .take(FoundView::MAX)
-                    .map(|range| {
-                        let web = tab.editor.to_web_range(range);
-                        (units(web.start), units(web.end))
-                    })
-                    .collect();
-                // Nothing to tell when no hits were marked and none are.
-                let was_marked = told.as_ref().is_some_and(|(_, p)| p.is_some());
-                if key.1.is_some() || was_marked {
-                    events.push(Event::Found(FoundView {
-                        note: note.as_str().to_owned(),
-                        rev: revision(rev),
-                        ranges,
-                        count,
-                    }));
-                }
-                tab.found_told = Some(key);
-                tab.found_at = Some(now);
-            }
-        }
+        let now = millis(now);
+        events.extend(
+            tab.edit
+                .sections_view(note.as_str(), now)
+                .map(Event::Sections),
+        );
+        events.extend(tab.edit.found_view(note.as_str(), now).map(Event::Found));
         events
     }
 }

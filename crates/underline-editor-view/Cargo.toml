@@ -1,0 +1,22 @@
+[package]
+name = "underline-editor-view"
+description = "The editor of Underline as the window holds it: the data it exchanges with the window, and the tab that makes it (ADR-025)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# Derives `specta::Type` on the DTOs so the Tauri app can generate TypeScript
+# bindings from them.
+specta = ["dep:specta"]
+
+# Nothing here touches files, threads, or clocks: this crate builds for
+# wasm32-unknown-unknown too (ADR-025, docs/migration/variante-b.md).
+[dependencies]
+underline-editor-core.workspace = true
+underline-markup.workspace = true
+ropey.workspace = true
+serde.workspace = true
+specta = { workspace = true, optional = true }

@@ -461,6 +461,29 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
 - **Am Ende:** Hash des Spiegels = Hash des WASM, 0 Desyncs.
 - **Echte Tasten** über `xdotool` (plan Abschnitt 15), sobald installiert.
 
+### 7.1 Umsetzung B3a und B3b (2026-11-10): Abweichungen vom Entwurf
+
+- **`editor-core::sync` schon in B3a:** Das Modul enthält vorerst nur FNV-1a (`Fnv1a` mit `field()` für
+  längenpräfixierte Felder, `hash()`), weil die Farbschlüssel es brauchen. Changeset, `transform`, `Server` und
+  `Client` folgen wie geplant in B4a.
+- **Schlüssel:** `colors_key(theme, language, code)` und `diagram_key(language, code, dark)` liegen in
+  `underline_editor_view::views` und hashen Felder mit Längenpräfix; das Theme geht als Name (`Theme::label()`) ein.
+  `session/diagrams.rs` nimmt für die SVG-Dateinamen weiter `DefaultHasher`. Das ist kein Farbschlüssel und bleibt im
+  Backend.
+- **Gemeinsamer View-Bau:** Statt `CachedViews` nur neben den Backend-Macher zu stellen, baut beide derselbe
+  `ViewMaker` über den Trait `Enrich` (Farben, Diagramm, Bild). Der Backend-`Maker` ist ein `Enrich` über `Context`.
+  Damit ist die Gleichheit der Views strukturell gesichert; der Äquivalenztest prüft die Anreicherung.
+- **Aufteilung der Facade:** Blöcke, Views, Version, `parsed` und `refs` liegen als `FacadeModel` in
+  `EditorTab.facade`. Die Session-`Facade` behält nur Jobs, Look, Diagramm-Generation, `last_pictures` und `recolor`.
+- **Uhr:** `EditorTab::set_now(ms)` statt `now_ms` als Argument jeder Methode. Die Session rechnet mit
+  `editing::millis(Instant)` (Epoche eine Stunde vor dem ersten Aufruf) und setzt die Uhr vor jedem Editor-Command
+  und vor `reload`.
+- **Facade-Aufrufe** bündeln Notiz, Auswahl, Plattform, vorherige Änderungen und den View-Macher in `FacadeCall`.
+- **Tests:** Die sieben Faltentests sind mit `folds.rs` in die View-Crate umgezogen (Uhr in ms statt `Instant`). In
+  den Session-Tests haben sich nur Zugriffspfade geändert (`tab.edit.editor`, `tab.edit.own_markup`, `commit` mit
+  `FacadeModel`); keine Erwartung wurde geändert.
+- **`Maker.uncoloured`** wurde gesetzt, aber nie gelesen, und ist entfallen.
+
 ## 8. Risiken und offene Fragen (für `offene-fragen.md`)
 
 1. **Agent und ungesendete Tasten (UC-019 BR-004):**
