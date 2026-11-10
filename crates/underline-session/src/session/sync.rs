@@ -204,6 +204,19 @@ impl Session {
         edits: &[(Range<usize>, String)],
         sealed: bool,
     ) -> Result<u32, UiError> {
+        self.change_mirror(note, edits, sealed, true)
+    }
+
+    /// [`Session::backend_edit`]; without `unstored` the tab's text counts
+    /// as stored afterwards, as for the own links of a renamed note, whose
+    /// file was written with them (UC-006 step 7).
+    pub(super) fn change_mirror(
+        &mut self,
+        note: &NoteId,
+        edits: &[(Range<usize>, String)],
+        sealed: bool,
+        unstored: bool,
+    ) -> Result<u32, UiError> {
         let tab = self.sync_tab(note)?;
         let rope = tab.mirror.rope();
         let invalid = |why: String| {
@@ -234,7 +247,7 @@ impl Session {
             .map_err(|error| invalid(error.to_string()))?;
         tab.highlight_touched(&touched);
         tab.follow_mirror(&set, sealed);
-        if tab.changed(Instant::now()) {
+        if unstored && tab.changed(Instant::now()) {
             self.views_dirty = true;
         }
         self.changed.push(note.clone());

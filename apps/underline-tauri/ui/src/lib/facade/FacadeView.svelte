@@ -58,6 +58,7 @@
 
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { DIALOG_OPENED } from '../DialogWindow.svelte';
   import type {
     BlockView,
     BlocksView,
@@ -1344,6 +1345,12 @@
 
   onMount(() => {
     setActiveFacade(controller);
+    // A dialog that shows hides the hint of a link (app-tester F8).
+    const hideTooltip = () => (tooltip = null);
+    // The note this view showed; the prop may name the next tab's by the
+    // time the view goes (a key change, a rename).
+    const shownNote = note;
+    window.addEventListener(DIALOG_OPENED, hideTooltip);
     if (info) {
       info.facade = controller;
       info.minimap = minimap;
@@ -1385,7 +1392,8 @@
     }
     return () => {
       destroyed = true;
-      backend.leave(note, detach && !loading ? { version, blocks } : null);
+      window.removeEventListener(DIALOG_OPENED, hideTooltip);
+      backend.leave(shownNote, detach && !loading ? { version, blocks } : null);
       detach?.();
       document.removeEventListener('selectionchange', onSelectionChange);
       unwatchPointer();

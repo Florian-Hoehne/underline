@@ -272,6 +272,7 @@ fn uc004_a3_m07_3_a_missing_note_is_offered_for_creation() {
             folder: "ideas".into(),
             title: "Big Idea".into(),
             problem: "Big Idea does not exist yet. Create it?".into(),
+            format: crate::FormatName::Markdown,
         })
     );
     assert_eq!(active(&session).as_deref(), Some("Home"));

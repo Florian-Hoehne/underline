@@ -98,11 +98,11 @@ Reihenfolge von links nach rechts:
   Klick öffnet die Notiz, die dabei nach oben wandert.
 - [ ] **M-05.3** Git-Buchstabe hinter dem Titel: N grün, D rot, R blau, C orange, sonst M amber. Tabs mit
   ungespeicherten Änderungen zeigen M, aber nur in Git-Workspaces.
-- [ ] **M-05.4** Kontextmenü: „Rename…“, „Delete…“ und Untermenü „Export“ mit „{kind}…“ für jede Exportart. Das
+- [~] **M-05.4** Kontextmenü: „Rename…“, „Delete…“ und Untermenü „Export“ mit „{kind}…“ für jede Exportart. Das
   Untermenü überspringt die Auswahl der Art.
-- [ ] **M-05.5** Die Taste Delete löscht die zuletzt angeklickte Notiz (UC-007 BR-007). Ein Klick oder Fokus
+- [~] **M-05.5** Die Taste Delete löscht die zuletzt angeklickte Notiz (UC-007 BR-007). Ein Klick oder Fokus
   ausserhalb hebt die Wahl auf. *Keine Pfeiltasten-Navigation und kein Leertext.*
-- [ ] **M-05.6** „Deleted notes (N)“ ist standardmässig zugeklappt. Je Eintrag: Titel (Hover „{folder} · deleted
+- [~] **M-05.6** „Deleted notes (N)“ ist standardmässig zugeklappt. Je Eintrag: Titel (Hover „{folder} · deleted
   {local time}“), Zeit, „Restore“ und „Remove“ (mit Rückfrage). Dazu „Empty the deleted notes“. Beim Öffnen des
   Workspace wird alles gelöscht, was älter als 30 Tage ist.
 
@@ -343,7 +343,7 @@ Reihenfolge von links nach rechts:
 
 ## M-14 Notizen anlegen, umbenennen, löschen (UC-003, UC-006, UC-007)
 
-- [ ] **M-14.1** Dialog New note:
+- [~] **M-14.1** Dialog New note:
   - Vorbefüllt mit dem Ordner der aktiven Notiz und dem Standardformat.
   - Felder: Titel (Autofokus), „Folder (empty for the top folder, new folders are created):“, Format-Radio.
   - Live „File: {name}“.
@@ -352,7 +352,7 @@ Reihenfolge von links nach rechts:
   - Existiert die Notiz: „The note {t} exists. Change the title or the folder, or open it.“ mit „Open the existing
     note“.
   - E/A-Fehler: der Dialog schliesst, Status. Andere Probleme stehen inline.
-- [ ] **M-14.2** Dialog Rename:
+- [~] **M-14.2** Dialog Rename:
   - Öffnen mit F2, Tab- oder Übersichtsmenü.
   - Bei Konflikt verweigert: „{t} is in conflict; resolve it before renaming it“.
   - Titel ganz markiert, Ordner, live „File: …“. Bei der Home-Notiz die Wiki-Warnung.
@@ -362,14 +362,14 @@ Reihenfolge von links nach rechts:
   - Meldung „Renamed A to B; updated N link(s) in M note(s)“ und gegebenenfalls „; these notes could not be updated
     …“.
   - Existiert der Zielname: „A note named {t} exists in that folder. Change the title or the folder.“
-- [ ] **M-14.3** Dialog Delete:
+- [~] **M-14.3** Dialog Delete:
   - Bei Konflikt verweigert.
   - Text „Delete the note {t}?“, dazu die Link-Zählung, die Home-Warnung und „It is kept among the deleted notes for
     30 days.“
   - Delete/Enter, Cancel/Escape. *Beide wirken heute überall (Defekt D-01).*
   - Lässt sich die Notiz nicht aufbewahren, bietet der Dialog „Delete for good“ an.
   - Erfolg: Tab zu, „Deleted {t}“ plus Undo (öffnet den Tab wieder).
-- [ ] **M-14.4** Restore-Dialog, wenn der Platz belegt ist (Titel und Ordner neu, „Restored {t}“). Purge-Dialog
+- [~] **M-14.4** Restore-Dialog, wenn der Platz belegt ist (Titel und Ordner neu, „Restored {t}“). Purge-Dialog
   „Remove N deleted note(s) for good? …“.
 
 ## M-15 Export (UC-009)

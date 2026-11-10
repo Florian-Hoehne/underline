@@ -102,6 +102,7 @@ impl Session {
                 problem: format!("{title} does not exist yet. Create it?"),
                 folder,
                 title,
+                format: open.workspace.default_format().into(),
             }),
             LinkTarget::Web(address) => self.follow_to_web(address),
             LinkTarget::File(path) => self.follow_to_file(&path),

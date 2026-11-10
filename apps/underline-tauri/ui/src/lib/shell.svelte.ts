@@ -1,10 +1,11 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
-// `tabs`, `properties`, `indexes` and `close-question` events (ADR-022); the editor's
+// `deleted`, `tabs`, `properties`, `indexes` and `close-question` events (ADR-022); the editor's
 // `ed-highlight` goes to the source view shown now, `ed-changed`,
 // `ed-flush` and `ed-enrich` to the editor cores (ADR-025, `editor/sync.ts`),
 // plus the UI state that is not stored (M-22.4): the Open and Create
-// dialogs, the question before closing, "Open web address" (M-07.3), the
+// dialogs, the note dialogs (M-14), the question before closing, "Open web
+// address" (M-07.3), the
 // loading state and the panels' widths while they are dragged. The text of the notes is not here: each
 // open note's editor core holds it (ADR-025). No domain logic lives here:
 // every change goes to the backend, which answers with an event or with the
@@ -16,6 +17,11 @@ import {
   events,
   type CloseQuestion,
   type CreateAnswer,
+  type DeletedNoteView,
+  type DeleteQuestion,
+  type NewNoteRequest,
+  type RestoreAnswer,
+  type StatusOffer,
   type EditingViewName,
   type FormatName,
   type IndexesView,
@@ -50,8 +56,12 @@ import {
   dropCoresBefore,
   keepCores,
   takeFlush,
+  holdCore,
+  releaseCore,
+  renameCore,
 } from './editor/sync';
 import { applyPalette } from './theme';
+import { focusNoteEntry } from './focus';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
 export type OpenDialog = {
@@ -81,6 +91,77 @@ export type CreateDialog =
 /** The Open or the Create dialog; opening one closes the other (M-03.4). */
 export type WorkspaceDialog = OpenDialog | CreateDialog;
 
+/**
+ * M-14.1, UC-003: the dialog "New note". `file` is the file name the note
+ * will get, as the backend plans it while the user types (`null` while it
+ * cannot be created so).
+ */
+export type NewNoteDialog = {
+  title: string;
+  folder: string;
+  format: FormatName;
+  /** Why the last "Create" was refused, or the link's "… does not exist yet. Create it?". */
+  problem: string | null;
+  /** A2: the note that exists, for "Open the existing note". */
+  existing: string | null;
+  file: string | null;
+};
+
+/** M-14.2, UC-006: the dialog "Rename note". */
+export type RenameDialog = {
+  /** The note to rename. */
+  note: string;
+  title: string;
+  folder: string;
+  /** BR-009: it is the Home note. */
+  home: boolean;
+  problem: string | null;
+  file: string | null;
+};
+
+/** M-14.3, UC-007: the question "Delete note"; `cannotKeep` is A8's second question. */
+export type DeleteDialog = DeleteQuestion & { cannotKeep: string | null };
+
+/** M-14.4, UC-007 A6: the dialog "Restore note". */
+export type RestoreDialog = { title: string; folder: string; problem: string | null };
+
+/** M-14.4, UC-007 A7: "Remove deleted notes": one by its key, or all (`null`). */
+export type PurgeDialog = { key: string | null; count: number };
+
+/** The note dialogs (M-14); several may be open at once, as in egui. */
+export type NoteDialogs = {
+  newNote: NewNoteDialog | null;
+  rename: RenameDialog | null;
+  delete: DeleteDialog | null;
+  restore: RestoreDialog | null;
+  purge: PurgeDialog | null;
+};
+
+type NoteDialogKind = keyof NoteDialogs;
+
+const NO_NOTE_DIALOGS: NoteDialogs = {
+  newNote: null,
+  rename: null,
+  delete: null,
+  restore: null,
+  purge: null,
+};
+
+/** How long "File: …" waits after the last key before it is planned. */
+const PLAN_DELAY_MS = 150;
+
+type PlanState = { timer: ReturnType<typeof setTimeout> | null; running: boolean; again: boolean };
+
+/** What "New note" sends. */
+function newNoteRequest(dialog: NewNoteDialog): NewNoteRequest {
+  return { title: dialog.title, folder: dialog.folder, format: dialog.format };
+}
+
+/** Whether both hold the same title, folder and format. */
+function sameNewNote(a: NewNoteDialog, b: NewNoteDialog): boolean {
+  return a.title === b.title && a.folder === b.folder && a.format === b.format;
+}
+
 /** M-05.1: the note overview is 100 to 1000 pixels wide. */
 export const OVERVIEW_WIDTH = { min: 100, max: 1000 } as const;
 
@@ -106,6 +187,17 @@ export class Shell {
   settings = $state<SettingsView | null>(null);
   /** M-04.7: the status message. */
   status = $state('');
+  /** UC-007 A4: what the status bar offers with the status message ("Undo"). */
+  statusOffer = $state<StatusOffer | null>(null);
+  /** M-05.6, UC-007 A5: the deleted notes, most recently deleted first. */
+  deleted = $state.raw<DeletedNoteView[]>([]);
+  /**
+   * M-14: the note dialogs, each replaced as a whole on every change
+   * (`editNoteDialog`), like `dialog`.
+   */
+  notes = $state.raw<NoteDialogs>(NO_NOTE_DIALOGS);
+  /** The note dialogs that wait for the backend's answer. */
+  notesBusy = $state.raw<Partial<Record<NoteDialogKind, boolean>>>({});
   /** The open workspace (M-21.3), `null` while none is open. */
   workspace = $state<WorkspaceView | null>(null);
   /** M-05.2: the note overview, recently opened first. */
@@ -213,12 +305,20 @@ export class Shell {
     this.#unlisten = await Promise.all([
       events.status.listen((event) => {
         this.status = event.payload.text;
+        this.statusOffer = event.payload.offer;
+      }),
+      events.deleted.listen((event) => {
+        this.deleted = event.payload;
       }),
       events.settings.listen((event) => {
         this.#takeSettings(event.payload);
       }),
       events.workspace.listen((event) => {
         this.#sentDuringStart?.add('workspace');
+        if (event.payload?.root !== this.workspace?.root) {
+          // The note dialogs were of the workspace left.
+          this.notes = NO_NOTE_DIALOGS;
+        }
         this.workspace = event.payload;
         // A note of the same name in another workspace is another text.
         this.indexes = null;
@@ -483,9 +583,14 @@ export class Shell {
       tabs: this.tabs.tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab)),
     };
     // ADR-025: the other view starts from what the backend has.
-    const result = await this.#serial(() => flushed(() => commands.tabSetView(note, view)));
-    if (result.status === 'error') {
-      this.#fail('tab_set_view', result.error);
+    try {
+      const result = await this.#serial(() => flushed(() => commands.tabSetView(note, view)));
+      if (result.status === 'error') {
+        this.#fail('tab_set_view', result.error);
+      }
+    } catch (error) {
+      // The IPC itself failed, as when the window is going (a test ended).
+      this.#fail('tab_set_view', { kind: 'internal', message: String(error) });
     }
   }
 
@@ -524,12 +629,365 @@ export class Shell {
         this.webQuestion = answer.address;
         break;
       case 'newNote':
-        // Q-56: the dialog "New note" comes with feature F8; until then the
-        // status bar says what egui's dialog says above its fields.
-        this.status = answer.problem;
+        // UC-004 A3: "New note" offers the missing note, with the link's
+        // folder and title and egui's question.
+        this.#showNewNote({
+          title: answer.title,
+          folder: answer.folder,
+          format: answer.format,
+          problem: answer.problem,
+          existing: null,
+          file: null,
+        });
         break;
       case 'done':
         break;
+    }
+  }
+
+  /**
+   * M-14.1, UC-003 step 2: "New note…" shows the dialog, with the folder of
+   * the active note and the default format; one open already starts anew,
+   * as in egui.
+   */
+  async startNewNote(): Promise<void> {
+    const result = await commands.noteNewStart();
+    if (result.status === 'error') {
+      this.#fail('note_new_start', result.error);
+      return;
+    }
+    if (result.data === null) {
+      return;
+    }
+    this.#showNewNote({
+      title: '',
+      folder: result.data.folder,
+      format: result.data.format,
+      problem: null,
+      existing: null,
+      file: null,
+    });
+  }
+
+  #showNewNote(dialog: NewNoteDialog): void {
+    this.notes = { ...this.notes, newNote: dialog };
+    this.#schedulePlan('newNote', 0);
+  }
+
+  /** The planning of "File: …" per dialog: waiting, running, to run again. */
+  #plans: Record<'newNote' | 'rename', PlanState> = {
+    newNote: { timer: null, running: false, again: false },
+    rename: { timer: null, running: false, again: false },
+  };
+
+  /**
+   * "File: …" is planned `delay` ms after the last edit (it may run git in
+   * the backend), never twice at once (review F8).
+   */
+  #schedulePlan(kind: 'newNote' | 'rename', delay = PLAN_DELAY_MS): void {
+    const plan = this.#plans[kind];
+    if (plan.timer !== null) {
+      clearTimeout(plan.timer);
+    }
+    plan.timer = setTimeout(() => {
+      plan.timer = null;
+      void this.#runPlan(kind);
+    }, delay);
+  }
+
+  async #runPlan(kind: 'newNote' | 'rename'): Promise<void> {
+    const plan = this.#plans[kind];
+    if (plan.running) {
+      plan.again = true;
+      return;
+    }
+    plan.running = true;
+    try {
+      await (kind === 'newNote' ? this.#planNewNote() : this.#planRename());
+    } finally {
+      plan.running = false;
+      if (plan.again) {
+        plan.again = false;
+        void this.#runPlan(kind);
+      }
+    }
+  }
+
+  /**
+   * Changes the note dialog `kind` by `change`, as typed by the user; a
+   * dialog that was replaced or closed meanwhile stays as it is. "New note"
+   * and "Rename note" plan their file name again.
+   */
+  editNoteDialog<K extends NoteDialogKind>(
+    kind: K,
+    dialog: NonNullable<NoteDialogs[K]>,
+    change: Partial<NonNullable<NoteDialogs[K]>>,
+  ): void {
+    if (this.notes[kind] !== dialog) {
+      return;
+    }
+    // A problem was about what the fields held; a change of them ends it
+    // (UX review F8).
+    const typed = 'title' in change || 'folder' in change || 'format' in change;
+    const cleared = typed
+      ? { problem: null, ...(kind === 'newNote' ? { existing: null } : {}) }
+      : {};
+    const next = { ...dialog, ...cleared, ...change } as NonNullable<NoteDialogs[K]>;
+    this.notes = { ...this.notes, [kind]: next };
+    if (kind === 'newNote' || kind === 'rename') {
+      this.#schedulePlan(kind);
+    }
+  }
+
+  /** Closes the note dialog `kind`; nothing changes (UC-003 A6, UC-006 A8, UC-007 A1). */
+  closeNoteDialog(kind: NoteDialogKind): void {
+    this.notes = { ...this.notes, [kind]: null };
+  }
+
+  /** The dialog `kind` waits for the backend. */
+  noteBusy(kind: NoteDialogKind): boolean {
+    return this.notesBusy[kind] === true;
+  }
+
+  /** UC-003 step 2: "File: {name}" for what the dialog holds now. */
+  async #planNewNote(): Promise<void> {
+    const dialog = this.notes.newNote;
+    if (dialog === null) {
+      return;
+    }
+    const result = await commands.notePlan(newNoteRequest(dialog));
+    const file = result.status === 'ok' ? result.data : null;
+    const now = this.notes.newNote;
+    if (now !== null && sameNewNote(now, dialog)) {
+      this.notes = { ...this.notes, newNote: { ...now, file } };
+    }
+  }
+
+  /**
+   * M-14.1, UC-003 steps 4–6: "Create": the note opens with the cursor at
+   * its end and the keyboard in it; a problem keeps the dialog.
+   */
+  async createNote(): Promise<void> {
+    const dialog = this.notes.newNote;
+    if (dialog === null) {
+      return;
+    }
+    const answer = await this.#askNote('newNote', 'note_create', () =>
+      commands.noteCreate(newNoteRequest(dialog)),
+    );
+    if (answer === null) {
+      return;
+    }
+    if (answer.kind === 'problem') {
+      this.editNoteDialog('newNote', dialog, {
+        problem: answer.problem,
+        existing: answer.existing,
+      });
+      return;
+    }
+    this.closeNoteDialog('newNote');
+    if (answer.kind === 'created') {
+      jumpTo(answer.note, answer.rev, answer.offset);
+    }
+  }
+
+  /** M-14.1, UC-003 A3: "Open the existing note" opens it unchanged. */
+  async openExistingNote(note: string): Promise<void> {
+    this.closeNoteDialog('newNote');
+    await this.openNote(note);
+  }
+
+  /**
+   * M-14.2, UC-006 step 1: "Rename…" or F2 shows "Rename note" for `note`,
+   * its title selected; refused in the status bar for a note in conflict.
+   * While one is open, another is not started (egui).
+   */
+  async startRename(note: string): Promise<void> {
+    if (this.notes.rename !== null) {
+      return;
+    }
+    const result = await this.#serial(() => commands.noteRenameStart(note));
+    if (result.status === 'error') {
+      this.#fail('note_rename_start', result.error);
+      return;
+    }
+    if (result.data === null || this.notes.rename !== null) {
+      return;
+    }
+    const dialog: RenameDialog = { ...result.data, problem: null, file: null };
+    this.notes = { ...this.notes, rename: dialog };
+    this.#schedulePlan('rename', 0);
+  }
+
+  /** UC-006 step 2: "File: …" for what the dialog holds now. */
+  async #planRename(): Promise<void> {
+    const dialog = this.notes.rename;
+    if (dialog === null) {
+      return;
+    }
+    const result = await commands.notePlanRename(dialog.note, dialog.title, dialog.folder);
+    const file = result.status === 'ok' ? result.data : null;
+    const now = this.notes.rename;
+    if (
+      now !== null &&
+      now.note === dialog.note &&
+      now.title === dialog.title &&
+      now.folder === dialog.folder
+    ) {
+      this.notes = { ...this.notes, rename: { ...now, file } };
+    }
+  }
+
+  /**
+   * M-14.2, UC-006 steps 4–7: "Rename", once the window's edits reached the
+   * backend (ADR-025). The tab's editor core goes on under the new name.
+   */
+  async renameNote(): Promise<void> {
+    const dialog = this.notes.rename;
+    if (dialog === null) {
+      return;
+    }
+    holdCore(dialog.note);
+    try {
+      const answer = await this.#askNote('rename', 'note_rename', () =>
+        flushed(() => commands.noteRename(dialog.note, dialog.title, dialog.folder)),
+      );
+      if (answer?.kind === 'problem') {
+        this.editNoteDialog('rename', dialog, { problem: answer.problem });
+        return;
+      }
+      if (answer?.kind === 'renamed') {
+        renameCore(answer.from, answer.to);
+      }
+      if (answer !== null) {
+        this.closeNoteDialog('rename');
+      }
+    } finally {
+      releaseCore(dialog.note);
+    }
+  }
+
+  /**
+   * M-14.3, UC-007 steps 1–2: "Delete…" or the Delete key asks first;
+   * refused in the status bar for a note in conflict. While the question
+   * is open, another is not asked (egui).
+   */
+  async startDelete(note: string): Promise<void> {
+    if (this.notes.delete !== null) {
+      return;
+    }
+    const result = await this.#serial(() => commands.noteDeleteStart(note));
+    if (result.status === 'error') {
+      this.#fail('note_delete_start', result.error);
+      return;
+    }
+    if (result.data === null || this.notes.delete !== null) {
+      return;
+    }
+    this.notes = { ...this.notes, delete: { ...result.data, cannotKeep: null } };
+  }
+
+  /**
+   * M-14.3, UC-007 steps 3–5, A8: "Delete" (or "Delete for good"), once the
+   * window's edits reached the backend (ADR-025).
+   */
+  async deleteNote(): Promise<void> {
+    const dialog = this.notes.delete;
+    if (dialog === null) {
+      return;
+    }
+    const answer = await this.#askNote('delete', 'note_delete', () =>
+      flushed(() => commands.noteDelete(dialog.note, dialog.cannotKeep !== null)),
+    );
+    if (answer?.kind === 'cannotKeep') {
+      this.editNoteDialog('delete', dialog, { cannotKeep: answer.question });
+    } else if (answer !== null) {
+      this.closeNoteDialog('delete');
+    }
+  }
+
+  /** M-14.3, UC-007 A4: "Undo" in the status bar. */
+  async undoDelete(): Promise<void> {
+    const answer = await this.#askNote('restore', 'note_undo_delete', () =>
+      commands.noteUndoDelete(),
+    );
+    const restored = this.#takeRestoreAnswer(answer);
+    if (restored !== null) {
+      // UX review F8: the keyboard goes to the note that came back.
+      await focusNoteEntry(restored);
+    }
+  }
+
+  /** M-05.6, UC-007 A5: "Restore" of a deleted note. */
+  async restoreDeleted(key: string): Promise<void> {
+    const answer = await this.#askNote('restore', 'ws_restore', () => commands.wsRestore(key));
+    this.#takeRestoreAnswer(answer);
+  }
+
+  /** M-14.4, UC-007 A6: "Restore" in "Restore note". */
+  async restoreAs(): Promise<void> {
+    const dialog = this.notes.restore;
+    if (dialog === null) {
+      return;
+    }
+    const answer = await this.#askNote('restore', 'ws_restore_as', () =>
+      commands.wsRestoreAs(dialog.title, dialog.folder),
+    );
+    this.#takeRestoreAnswer(answer);
+  }
+
+  /** Shows "Restore note" or closes it; the note restored, if one was. */
+  #takeRestoreAnswer(answer: RestoreAnswer | null): string | null {
+    if (answer?.kind === 'ask') {
+      this.notes = {
+        ...this.notes,
+        restore: { title: answer.title, folder: answer.folder, problem: answer.problem },
+      };
+    } else if (answer !== null) {
+      this.closeNoteDialog('restore');
+    }
+    return answer?.kind === 'restored' ? answer.note : null;
+  }
+
+  /** M-05.6, UC-007 A7: "Remove" of one deleted note, or "Empty the deleted notes" (`null`). */
+  askPurge(key: string | null): void {
+    // UX review F8: the number asked about stays while the question shows.
+    const count = key === null ? this.deleted.length : 1;
+    this.notes = { ...this.notes, purge: { key, count } };
+  }
+
+  /** M-14.4, UC-007 A7: "Remove" in "Remove deleted notes". */
+  async purge(): Promise<void> {
+    const dialog = this.notes.purge;
+    if (dialog === null) {
+      return;
+    }
+    // The question closes in any case, as in egui; a failure is in the status.
+    await this.#askNote('purge', 'ws_purge', () => commands.wsPurge(dialog.key));
+    if (this.notes.purge === dialog) {
+      this.closeNoteDialog('purge');
+    }
+  }
+
+  /** Asks the backend for a note dialog's next step, marking the dialog busy. */
+  async #askNote<T>(
+    kind: NoteDialogKind,
+    command: string,
+    call: () => Promise<{ status: 'ok'; data: T } | { status: 'error'; error: UiError }>,
+  ): Promise<T | null> {
+    this.notesBusy = { ...this.notesBusy, [kind]: true };
+    try {
+      const result = await this.#serial(call);
+      if (result.status === 'error') {
+        this.#fail(command, result.error);
+        return null;
+      }
+      return result.data;
+    } catch (error) {
+      this.#fail(command, { kind: 'internal', message: String(error) });
+      return null;
+    } finally {
+      this.notesBusy = { ...this.notesBusy, [kind]: false };
     }
   }
 

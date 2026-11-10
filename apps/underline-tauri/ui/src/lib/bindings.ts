@@ -201,11 +201,74 @@ export const commands = {
 	 *  more, and the app state is written, when the app exits.
 	 */
 	appCloseAnyway: () => typedError<null, UiError>(__TAURI_INVOKE("app_close_anyway")),
+	/**
+	 *  M-14.1, UC-003 step 2: what "New note" starts with: the folder of the
+	 *  active note and the default format; `null` without a workspace.
+	 */
+	noteNewStart: () => typedError<NewNoteStart | null, UiError>(__TAURI_INVOKE("note_new_start")),
+	/**
+	 *  M-14.1, UC-003 step 2: the file name the note will get ("File: …"),
+	 *  while the user types; `null` while it cannot be created so. Checking a
+	 *  folder may run git, so it runs on the blocking pool.
+	 */
+	notePlan: (request: NewNoteRequest) => typedError<string | null, UiError>(__TAURI_INVOKE("note_plan", { request })),
+	/**
+	 *  M-14.1, UC-003 steps 4–6: creates the note and opens it; the answer puts
+	 *  the cursor at its end, keeps the dialog with a problem, or closes it
+	 *  (a failure is in the status bar).
+	 */
+	noteCreate: (request: NewNoteRequest) => typedError<CreateNoteAnswer, UiError>(__TAURI_INVOKE("note_create", { request })),
+	/**
+	 *  M-14.2, UC-006 step 1: what "Rename note" starts with for `note`;
+	 *  `null` when it is refused (the status bar says why).
+	 */
+	noteRenameStart: (note: string) => typedError<RenameStart | null, UiError>(__TAURI_INVOKE("note_rename_start", { note })),
+	/**
+	 *  M-14.2, UC-006 step 2: the file the note will be in ("File: …"), while
+	 *  the user types; `null` while it cannot be renamed so.
+	 */
+	notePlanRename: (note: string, title: string, folder: string) => typedError<string | null, UiError>(__TAURI_INVOKE("note_plan_rename", { note, title, folder })),
+	/**
+	 *  M-14.2, UC-006 steps 4–7: renames the note, after the window sent its
+	 *  edits (`flushed`); the links follow, in open tabs too. What copy on
+	 *  select kept for the tab goes with it.
+	 */
+	noteRename: (note: string, title: string, folder: string) => typedError<RenameAnswer, UiError>(__TAURI_INVOKE("note_rename", { note, title, folder })),
+	/**
+	 *  M-14.3, UC-007 steps 1–2: the question before deleting `note`, with the
+	 *  links that lead to it; `null` when it is refused (the status bar says
+	 *  why). Counting the links reads the notes.
+	 */
+	noteDeleteStart: (note: string) => typedError<DeleteQuestion | null, UiError>(__TAURI_INVOKE("note_delete_start", { note })),
+	/**
+	 *  M-14.3, UC-007 steps 4–5, A8: deletes `note`, after the window sent its
+	 *  edits (`flushed`); with `for_good` it is not kept. Its tab closes, and
+	 *  what copy on select kept for it goes.
+	 */
+	noteDelete: (note: string, forGood: boolean) => typedError<DeleteAnswer, UiError>(__TAURI_INVOKE("note_delete", { note, forGood })),
+	/**
+	 *  M-14.3, UC-007 A4: "Undo" of the report "Deleted {t}"; the answer asks
+	 *  for another place when the note's is taken (A6).
+	 */
+	noteUndoDelete: () => typedError<RestoreAnswer, UiError>(__TAURI_INVOKE("note_undo_delete")),
+	/**
+	 *  M-05.6, UC-007 A5: "Restore" of the deleted note `key`; the answer asks
+	 *  for another place when its own is taken (A6).
+	 */
+	wsRestore: (key: string) => typedError<RestoreAnswer, UiError>(__TAURI_INVOKE("ws_restore", { key })),
+	/**  M-14.4, UC-007 A6: "Restore" in "Restore note", as `title` in `folder`. */
+	wsRestoreAs: (title: string, folder: string) => typedError<RestoreAnswer, UiError>(__TAURI_INVOKE("ws_restore_as", { title, folder })),
+	/**
+	 *  M-14.4, UC-007 A7: removes the deleted note `key` for good, or all of
+	 *  them with `null`.
+	 */
+	wsPurge: (key: string | null) => typedError<null, UiError>(__TAURI_INVOKE("ws_purge", { key })),
 };
 
 /** Events */
 export const events = {
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
+	deleted: makeEvent<DeletedEvent, DeletedEvent>("deleted"),
 	edChanged: makeEvent<ChangedEvent, ChangedEvent>("ed-changed"),
 	edEnrich: makeEvent<EnrichEvent, EnrichEvent>("ed-enrich"),
 	edFlush: makeEvent<FlushEvent, FlushEvent>("ed-flush"),
@@ -469,6 +532,90 @@ path: string;
 problem: string; 
 /**  A1, A2: the directory that holds files, to open it instead. */
 offer: string | null };
+
+/**  The answer to "Create" in "New note" (UC-003 steps 4–6). */
+export type CreateNoteAnswer = 
+/**  The dialog closes; why nothing was created is in the status (A5). */
+{ kind: "done" } | 
+/**
+ *  Step 6: the note is created and open in the active tab; its cursor
+ *  goes to the end of its text, which the view shows with the keyboard.
+ */
+{ kind: "created"; 
+/**  The new note. */
+note: string; 
+/**  The revision of the backend's text `offset` is in. */
+rev: number; 
+/**  The end of the text, in web units. */
+offset: number } | 
+/**
+ *  The dialog stays with what the user entered and says why (A1, A2,
+ *  A4).
+ */
+{ kind: "problem"; 
+/**  Why, as the egui app says it. */
+problem: string; 
+/**  A2, A3: the note that exists, for "Open the existing note". */
+existing: string | null };
+
+/**  The answer to "Delete" (UC-007 steps 4–5, A3, A8). */
+export type DeleteAnswer = 
+/**
+ *  The question closes: the note is deleted, or the status says why
+ *  not (A2, A3).
+ */
+{ kind: "done" } | 
+/**
+ *  A8: the note cannot be kept among the deleted notes; the question
+ *  asks to delete it for good.
+ */
+{ kind: "cannotKeep"; 
+/**
+ *  "The note cannot be kept among the deleted notes ({reason}), so
+ *  it cannot be restored. Delete it for good?"
+ */
+question: string };
+
+/**  UC-007 step 2: the question "Delete note". */
+export type DeleteQuestion = {
+	/**  The note to delete. */
+	note: string,
+	/**  Its title: "Delete the note {title}?". */
+	title: string,
+	/**
+	 *  BR-001: "No links in other notes lead to it." or "{n} link(s) in
+	 *  {m} note(s) lead to it and will lead nowhere.".
+	 */
+	links: string,
+	/**  BR-010: it is the Home note, the start page of a GitHub wiki. */
+	home: boolean,
+};
+
+/**
+ *  M-05.6, UC-007 A5: the deleted notes of the workspace, most recently
+ *  deleted first.
+ */
+export type DeletedEvent = DeletedNoteView[];
+
+/**
+ *  UC-007 A5 step 1, M-05.6: a note among the deleted notes, most recently
+ *  deleted first.
+ */
+export type DeletedNoteView = {
+	/**  Names the deleted note for `deleted_restore` and `deleted_purge`. */
+	key: string,
+	/**  The note's title. */
+	title: string,
+	/**  The note's folder, "top folder" for the top one. */
+	folder: string,
+	/**
+	 *  What resting the pointer on the title shows: "{folder} · deleted
+	 *  {local time}", the folder "top folder" for the top one.
+	 */
+	hover: string,
+	/**  When it was deleted, local time to the minute. */
+	deleted: string,
+};
 
 /**  M-10.5, UC-005 A9: files dragged over the window. */
 export type DragName = 
@@ -1092,6 +1239,8 @@ address: string } |
 folder: string; 
 /**  The title of the link. */
 title: string; 
+/**  The default format of new notes, preselected (UC-003 step 2). */
+format: FormatName; 
 /**  "{title} does not exist yet. Create it?" */
 problem: string };
 
@@ -1113,6 +1262,27 @@ export type MirrorView = {
 	anchor: number,
 	/**  The cursor, in web units. */
 	head: number,
+};
+
+/**  UC-003 steps 2–3: what the user entered in "New note". */
+export type NewNoteRequest = {
+	/**  "Title:". */
+	title: string,
+	/**  "Folder (empty for the top folder, new folders are created):". */
+	folder: string,
+	/**  "Note format:". */
+	format: FormatName,
+};
+
+/**
+ *  UC-003 step 2: what the dialog "New note" starts with: the folder of the
+ *  active note and the default format of the workspace.
+ */
+export type NewNoteStart = {
+	/**  The folder of the active note, `""` for the top folder. */
+	folder: string,
+	/**  The default format of new notes (UC-001 BR-001). */
+	format: FormatName,
 };
 
 /**  What the user chose in the Create dialog (UC-001 steps 1–4, A3). */
@@ -1311,6 +1481,59 @@ export type RemoteOp = {
 	/**  The change. */
 	change: RemoteChange,
 };
+
+/**  The answer to "Rename" (UC-006 steps 4–7). */
+export type RenameAnswer = 
+/**
+ *  The dialog closes; nothing changed (A4), or the status says why the
+ *  note could not be renamed (A5).
+ */
+{ kind: "done" } | 
+/**
+ *  Step 7: the note `from` is `to` now; its tab shows it under the new
+ *  name, so the window's editor core of `from` goes on as `to`.
+ */
+{ kind: "renamed"; 
+/**  The note before. */
+from: string; 
+/**  The note now. */
+to: string } | 
+/**  The dialog stays with what the user entered and says why (A1–A3). */
+{ kind: "problem"; 
+/**  Why, as the egui app says it. */
+problem: string };
+
+/**  UC-006 step 2: what the dialog "Rename note" starts with. */
+export type RenameStart = {
+	/**  The note to rename. */
+	note: string,
+	/**  Its title, selected when the dialog shows. */
+	title: string,
+	/**  Its folder, `""` for the top folder. */
+	folder: string,
+	/**  BR-009: it is the Home note, the start page of a GitHub wiki. */
+	home: boolean,
+};
+
+/**  The answer to restoring a deleted note (UC-007 A4–A6). */
+export type RestoreAnswer = 
+/**  Nothing was restored; the status says why, if anything happened. */
+{ kind: "done" } | 
+/**  "Restored {t}": the note is back, as `note`. */
+{ kind: "restored"; 
+/**  The restored note. */
+note: string } | 
+/**
+ *  A6: its place is taken; "Restore note" asks for another title or
+ *  folder, or again after a problem.
+ */
+{ kind: "ask"; 
+/**  "Title:". */
+title: string; 
+/**  "Folder (empty for the top folder, new folders are created):". */
+folder: string; 
+/**  Why, as the egui app says it. */
+problem: string };
 
 /**
  *  M-09.13: where the cursor goes one row up or down, or to the start or
@@ -1515,10 +1738,26 @@ export type StartOpened = {
 /**  M-04.7: the status message changed. */
 export type StatusEvent = StatusView;
 
+/**
+ *  What the status bar offers beside the status message, while it shows
+ *  the report the offer belongs to (M-04.7).
+ */
+export type StatusOffer = 
+/**
+ *  UC-007 A4, M-14.3: "Undo" right after deleting a note
+ *  (`note_undo_delete`).
+ */
+"undoDelete";
+
 /**  The status message of the status bar (M-04.7). */
 export type StatusView = {
 	/**  The text, as the egui app shows it; empty when there is none. */
 	text: string,
+	/**
+	 *  What the status bar offers beside the text, such as "Undo" after
+	 *  deleting a note (UC-007 A4); it belongs to this text.
+	 */
+	offer: StatusOffer | null,
 };
 
 /**  The backend's answer to `ed_sync` and `ed_resync`. */

@@ -9,6 +9,7 @@ mod embed;
 mod facade;
 mod indexes;
 mod links;
+mod notes;
 mod sync;
 mod tab;
 #[cfg(test)]
@@ -33,7 +34,7 @@ use underline_wiki::WikiRemote;
 use crate::editor_view::TabPropertiesView;
 use crate::settings::theme_names;
 use crate::workspace_view::{TabsView, WorkspaceView};
-use crate::{Event, Platform, SettingName, SettingsState, StartInfo, StatusView};
+use crate::{Event, Platform, SettingName, SettingsState, StartInfo, StatusOffer, StatusView};
 
 use self::editing::Colors;
 use self::workspace::OpenWorkspace;
@@ -113,6 +114,11 @@ pub struct Session {
     web_allowed: bool,
     /// UC-004 A4: the web address "Open web address" asks about.
     web_asked: Option<String>,
+    /// UC-007 A4: the undo offered right after deleting, while the status
+    /// shows the report of the deletion.
+    undo_delete: Option<notes::UndoDelete>,
+    /// UC-007 A6: the deleted note "Restore note" asks a new place for.
+    restoring: Option<notes::Restoring>,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -134,12 +140,16 @@ impl std::fmt::Debug for Session {
 #[derive(Debug)]
 struct Told {
     status: String,
+    /// What the status bar offered with it.
+    offer: Option<StatusOffer>,
     /// The settings in effect; the view is built only when they changed.
     settings: Effective,
     width_generation: u32,
     workspace: Option<WorkspaceView>,
     /// The overview by the generation of the workspace it was taken from.
     overview: Option<(PathBuf, u64)>,
+    /// The deleted notes, likewise (M-05.6).
+    deleted: Option<(PathBuf, u64)>,
     tabs: TabsView,
     /// The properties section of the tool panel (M-16.2).
     properties: Option<TabPropertiesView>,
@@ -172,10 +182,12 @@ impl Session {
     ) -> Self {
         let told = Told {
             status: String::new(),
+            offer: None,
             settings: settings.effective().clone(),
             width_generation: settings.width_generation(),
             workspace: None,
             overview: None,
+            deleted: None,
             tabs: TabsView::default(),
             properties: None,
             indexes: None,
@@ -202,6 +214,8 @@ impl Session {
             index_jobs: indexes::IndexJobs::default(),
             web_allowed: false,
             web_asked: None,
+            undo_delete: None,
+            restoring: None,
             views_dirty: false,
             told,
         };
@@ -369,11 +383,31 @@ impl Session {
                 events.push(Event::Properties(properties));
             }
         }
+        let deleted = self
+            .open
+            .as_ref()
+            .map(|open| (open.root().to_owned(), open.deleted_generation));
+        if deleted != self.told.deleted {
+            self.told.deleted = deleted;
+            events.push(Event::Deleted(self.deleted_view()));
+        }
         events.extend(self.sync_events());
-        if self.status != self.told.status {
+        // UC-007 A4: the undo is offered while the report of the deletion
+        // shows; another report ends it.
+        if self
+            .undo_delete
+            .as_ref()
+            .is_some_and(|offer| offer.status != self.status)
+        {
+            self.undo_delete = None;
+        }
+        let offer = self.undo_delete.as_ref().map(|_| StatusOffer::UndoDelete);
+        if self.status != self.told.status || offer != self.told.offer {
             self.told.status.clone_from(&self.status);
+            self.told.offer = offer;
             events.push(Event::Status(StatusView {
                 text: self.status.clone(),
+                offer,
             }));
         }
         events
@@ -686,7 +720,8 @@ mod tests {
         assert_eq!(
             events,
             [Event::Status(StatusView {
-                text: session.status().to_owned()
+                text: session.status().to_owned(),
+                offer: None,
             })]
         );
     }

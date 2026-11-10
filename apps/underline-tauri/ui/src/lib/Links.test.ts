@@ -132,14 +132,28 @@ describe('M-07.3 following links (UC-004 A2 to A4)', () => {
     await waitFor(() => expect(document.querySelector('.place')).toHaveTextContent('Ln 1, Col 3'));
   });
 
-  it('UC-004 A3 a note that does not exist is said (Q-56: the dialog comes with F8)', async () => {
+  it('UC-004 A3 M-14.1 a note that does not exist is offered in "New note"', async () => {
     const shell = await workbench();
     await shell.openNote(LINK_TOUR_NOTE);
 
     await fireEvent.click(await linkRun('Ideas/Someday.md'), { ctrlKey: true });
 
-    await waitFor(() => expect(shell.status).toBe('Someday does not exist yet. Create it?'));
+    const dialog = await screen.findByRole('dialog', { name: 'New note' });
+    expect(within(dialog).getByLabelText('Title:')).toHaveValue('Someday');
+    expect(
+      within(dialog).getByLabelText('Folder (empty for the top folder, new folders are created):'),
+    ).toHaveValue('Ideas');
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'Someday does not exist yet. Create it?',
+    );
+    await waitFor(() => expect(within(dialog).getByText('File: Ideas/Someday.md')).toBeTruthy());
     expect(shell.tabs.active).toBe(LINK_TOUR_NOTE);
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(shell.tabs.active).toBe('Ideas/Someday'));
+    await waitFor(() => expect(shell.status).toBe('Created the note Someday'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New note' })).toBeNull());
   });
 
   it('UC-004 BR-005 a link leading outside the workspace is not followed', async () => {

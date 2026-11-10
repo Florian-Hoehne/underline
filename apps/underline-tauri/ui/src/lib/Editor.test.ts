@@ -490,7 +490,7 @@ describe('review F3: keyboard and screen readers', () => {
     });
 
     await waitFor(() => expect(tab('Home •')).toHaveAccessibleDescription('unsaved changes'));
-    expect(tab('Home •')).toHaveAttribute('aria-keyshortcuts', 'Delete');
+    expect(tab('Home •')).toHaveAttribute('aria-keyshortcuts', 'Delete Shift+F10');
   });
 
   it('M-06.3 after "Close anyway" the keyboard goes on to the neighbouring tab', async () => {

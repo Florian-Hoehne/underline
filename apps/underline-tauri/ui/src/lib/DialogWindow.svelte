@@ -10,9 +10,14 @@
   keyboard inside, the keyboard goes back to where it was before, or, when
   that is gone, to the note overview (`focusFallback`).
 -->
+<script lang="ts" module>
+  /** The event on `window` when a dialog shows. */
+  export const DIALOG_OPENED = 'ul-dialog-opened';
+</script>
+
 <script lang="ts">
   import { onMount, tick, type Snippet } from 'svelte';
-  import { focusFallback } from './focus';
+  import { focusFallback, setFocusHint } from './focus';
 
   type Props = {
     /** The window's title, such as "Open workspace". */
@@ -42,19 +47,35 @@
     }
   }
 
+  // Only a new step takes the focus anew: `step` is a getter over the
+  // caller's state, which every edit of a field replaces, so it is read
+  // through a derived (equal values stop there) and compared with the last
+  // one (app-tester F8: the rename's title was selected again on every key).
+  const current = $derived(step);
+  let lastStep: string | null = null;
+
   $effect(() => {
-    void step;
+    const now = current;
+    if (now === lastStep) {
+      return;
+    }
+    lastStep = now;
     void takeFocus();
   });
 
   onMount(() => {
     const before = document.activeElement as HTMLElement | null;
+    // Hints shown at the pointer go (app-tester F8: a link's hint stayed
+    // above "New note").
+    window.dispatchEvent(new Event(DIALOG_OPENED));
     return () => {
       const inside = frame?.contains(document.activeElement) ?? false;
       if (!inside && document.activeElement !== document.body) {
         return;
       }
       if (before?.isConnected && before !== document.body) {
+        // A place asked for after the dialog is not needed any more.
+        setFocusHint(null);
         before.focus();
       } else {
         // After the dialog the window behind is new, such as an opened

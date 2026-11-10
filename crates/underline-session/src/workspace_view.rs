@@ -216,6 +216,15 @@ impl From<FormatName> for NoteFormat {
     }
 }
 
+impl From<NoteFormat> for FormatName {
+    fn from(format: NoteFormat) -> Self {
+        match format {
+            NoteFormat::Markdown => Self::Markdown,
+            NoteFormat::AsciiDoc => Self::AsciiDoc,
+        }
+    }
+}
+
 /// What the user chose in the Create dialog (UC-001 steps 1–4, A3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]

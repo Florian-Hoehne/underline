@@ -5,8 +5,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    ChangedView, CloseQuestion, EnrichView, Event, FlushView, HighlightView, IndexesView,
-    OverviewItem, SettingsView, StatusView, TabPropertiesView, TabsView, WorkspaceView,
+    ChangedView, CloseQuestion, DeletedNoteView, EnrichView, Event, FlushView, HighlightView,
+    IndexesView, OverviewItem, SettingsView, StatusView, TabPropertiesView, TabsView,
+    WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -73,6 +74,12 @@ pub struct EnrichEvent(pub EnrichView);
 #[tauri_specta(event_name = "indexes")]
 pub struct IndexesEvent(pub IndexesView);
 
+/// M-05.6, UC-007 A5: the deleted notes of the workspace, most recently
+/// deleted first.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "deleted")]
+pub struct DeletedEvent(pub Vec<DeletedNoteView>);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -89,6 +96,7 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Flush(flush) => FlushEvent(flush).emit(app),
             Event::Enrich(enrich) => EnrichEvent(*enrich).emit(app),
             Event::Indexes(indexes) => IndexesEvent(indexes).emit(app),
+            Event::Deleted(deleted) => DeletedEvent(deleted).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

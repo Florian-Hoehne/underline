@@ -50,6 +50,10 @@ pub(super) struct Tab {
     pub(super) error: Option<String>,
     /// The note was deleted outside while open (UC-004 A8).
     pub(super) deleted: bool,
+    /// UC-006 A7: a rename changed the links of this tab, which held no
+    /// unstored change; its next save keeps the rename's report instead of
+    /// saying "Saved {t}". Any later change of its own ends that.
+    pub(super) quiet_save: bool,
     /// The version from outside last kept as a copy (UC-004 A9), so one
     /// change is kept once, however many events report it.
     pub(super) kept_outside: Option<String>,
@@ -110,6 +114,7 @@ impl Tab {
             saving_text: None,
             error: None,
             deleted: false,
+            quiet_save: false,
             kept_outside: None,
             on_disk: body,
             properties: None,
@@ -123,12 +128,13 @@ impl Tab {
 
     /// M-06.1: the title, marked " ⚠" when the last save failed, else " •"
     /// with changes not stored, and " (deleted)" when the note was deleted
-    /// outside.
+    /// outside. Links a rename changed in a tab that held no change of its
+    /// own are no change of the user's: they get no " •" (M-14.2, A-82).
     pub(super) fn label(&self) -> String {
         let mut label = self.title.clone();
         if self.error.is_some() {
             label.push_str(" ⚠");
-        } else if self.autosave.is_unstored() {
+        } else if self.autosave.is_unstored() && !self.quiet_save {
             label.push_str(" •");
         }
         if self.deleted {
@@ -182,11 +188,13 @@ impl Tab {
     }
 
     /// The text changed at `now` (UC-005 step 4); returns whether the tab
-    /// held no unstored change before, so its mark changes.
+    /// showed no unstored change before, so its mark changes.
     pub(super) fn changed(&mut self, now: Instant) -> bool {
-        let was_unstored = self.autosave.is_unstored();
+        // A tab whose only change were a rename's links had no mark.
+        let was_marked = self.autosave.is_unstored() && !self.quiet_save;
+        self.quiet_save = false;
         self.autosave.changed(now);
-        !was_unstored
+        !was_marked
     }
 
     /// The highlighting follows the changes of the mirror (ADR-010): each

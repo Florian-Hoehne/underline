@@ -121,6 +121,12 @@ impl Core {
         })
     }
 
+    /// UC-006 step 7: the note is `note` now; what the tab reports names
+    /// it so (the window's views take only their note's blocks).
+    pub fn rename(&mut self, note: &str) {
+        note.clone_into(&mut self.note);
+    }
+
     /// M-11: the input mode of the settings, by name.
     ///
     /// # Errors
@@ -640,5 +646,17 @@ mod tests {
         core.start_sync(7);
 
         assert_eq!(core.synced_rev().expect("syncing"), 7);
+    }
+
+    /// UC-006 step 7, M-14.2: a renamed note's tab reports its views under
+    /// the new name, so the facade of the new tab takes them.
+    #[test]
+    fn uc006_m14_2_a_renamed_tab_names_its_new_note() {
+        let mut core = Core::open("Plan", "# Plan\n", "Markdown", false).expect("a format");
+
+        core.rename("work/Roadmap");
+
+        let state = parsed(&core.facade_state().expect("the state"));
+        assert_eq!(state["note"], "work/Roadmap");
     }
 }

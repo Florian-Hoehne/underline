@@ -114,7 +114,7 @@ impl Session {
         };
         let root = open.workspace.root().to_owned();
         let tab = open.tabs.get_mut(index);
-        tab.autosave.changed(Instant::now());
+        tab.changed(Instant::now());
         self.status = match tab.flush(&self.saver) {
             Ok(()) => format!("Stored {}", tab.title),
             Err(err) => format!("{} could not be stored: {err}", tab.title),
@@ -228,6 +228,8 @@ impl Session {
 
     /// Takes in the outcomes of background saves (UC-005 A14, A15).
     fn take_save_results(&mut self, results: Vec<SaveResult>) {
+        // D-04 (fixed, paritaet.md A-83): the report an offer belongs to.
+        let offered = self.undo_delete.as_ref().map(|offer| offer.status.clone());
         let Some(open) = &mut self.open else {
             return;
         };
@@ -246,13 +248,20 @@ impl Session {
                         tab.on_disk = text;
                     }
                     tab.read_properties(&root);
-                    // F8: a save of links a rename changed keeps the
-                    // rename's report (UC-006 A7, `quiet_save`).
-                    if std::mem::take(&mut tab.deleted) {
+                    if std::mem::take(&mut tab.quiet_save) {
+                        // UC-006 A7: the rename's report stays. The note is
+                        // at its place again, also when it was deleted
+                        // outside (egui keeps the mark here; review F8).
+                        tab.deleted = false;
+                    } else if std::mem::take(&mut tab.deleted) {
                         // UC-005 A15: a note deleted outside is stored again.
                         self.status = format!("Stored {} again at its place", tab.title);
                     } else {
-                        self.status = format!("Saved {}", tab.title);
+                        // D-04 (fixed, paritaet.md A-83): "Saved {t}" does
+                        // not take the place of a report with an offer.
+                        if offered.as_deref() != Some(self.status.as_str()) {
+                            self.status = format!("Saved {}", tab.title);
+                        }
                         // F12: the git changes are asked again here
                         // (`refresh_changes`).
                     }

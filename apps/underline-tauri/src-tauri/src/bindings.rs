@@ -20,8 +20,9 @@ use underline_session::{
 
 use crate::commands;
 use crate::events::{
-    ChangedEvent, CloseQuestionEvent, EnrichEvent, FlushEvent, HighlightEvent, IndexesEvent,
-    OverviewEvent, PropertiesEvent, SettingsEvent, StatusEvent, TabsEvent, WorkspaceEvent,
+    ChangedEvent, CloseQuestionEvent, DeletedEvent, EnrichEvent, FlushEvent, HighlightEvent,
+    IndexesEvent, OverviewEvent, PropertiesEvent, SettingsEvent, StatusEvent, TabsEvent,
+    WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -73,7 +74,19 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ed_note_link,
             commands::ed_follow_link,
             commands::link_open_web,
-            commands::app_close_anyway
+            commands::app_close_anyway,
+            commands::note_new_start,
+            commands::note_plan,
+            commands::note_create,
+            commands::note_rename_start,
+            commands::note_plan_rename,
+            commands::note_rename,
+            commands::note_delete_start,
+            commands::note_delete,
+            commands::note_undo_delete,
+            commands::ws_restore,
+            commands::ws_restore_as,
+            commands::ws_purge
         ])
         .events(collect_events![
             StatusEvent,
@@ -87,7 +100,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             ChangedEvent,
             FlushEvent,
             EnrichEvent,
-            IndexesEvent
+            IndexesEvent,
+            DeletedEvent
         ])
         // ADR-025: what crosses only between the window and the editor's
         // WASM (`ui/src/lib/editor/core.ts`).

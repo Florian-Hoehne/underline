@@ -35,7 +35,9 @@
 //! (`ed_sync`), stores it, and sends what only it can make: the colours of
 //! the source view (`ed-highlight`) and the facade's colours and figures
 //! (`ed-enrich`). Feature F7 adds following links (UC-004 A2 to A4, M-07.3)
-//! and the outline, code and figures of the tool panel (M-16.5).
+//! and the outline, code and figures of the tool panel (M-16.5). Feature F8
+//! adds creating, renaming, deleting and restoring notes (UC-003, UC-006,
+//! UC-007, M-05.4 to M-05.6, M-14) with the undo offer of the status bar.
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -46,6 +48,7 @@ mod editor_view;
 mod error;
 mod event;
 mod facade_view;
+mod notes_view;
 mod palette;
 mod session;
 mod settings;
@@ -66,6 +69,10 @@ pub use event::{Event, StatusView};
 pub use facade_view::{
     BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeAt, FacadeInput,
     FacadePatch, FacadeState, FigureView, GapView, RowsView, RunView, TableView,
+};
+pub use notes_view::{
+    CreateNoteAnswer, DeleteAnswer, DeleteQuestion, DeletedNoteView, NewNoteRequest, NewNoteStart,
+    RenameAnswer, RenameStart, RestoreAnswer, StatusOffer,
 };
 pub use palette::PaletteView;
 pub use session::{

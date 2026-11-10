@@ -21,10 +21,11 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_specta::Event as _;
 use underline_core::NoteId;
 use underline_session::{
-    clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, DragName, EditingViewName,
-    EmbedAnswer, FormatName, Insertion, LinkAnswer, MirrorView, NewWorkspaceRequest, OpenAnswer,
-    Session, SettingName, StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError,
-    UiErrorKind,
+    clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, CreateNoteAnswer, DeleteAnswer,
+    DeleteQuestion, DragName, EditingViewName, EmbedAnswer, FormatName, Insertion, LinkAnswer,
+    MirrorView, NewNoteRequest, NewNoteStart, NewWorkspaceRequest, OpenAnswer, RenameAnswer,
+    RenameStart, RestoreAnswer, Session, SettingName, StartInfo, StartOpened, SyncAnswer,
+    SyncBatch, Synced, UiError, UiErrorKind,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -755,6 +756,194 @@ pub fn wiki_check(
     Ok(())
 }
 
+/// M-14.1, UC-003 step 2: what "New note" starts with: the folder of the
+/// active note and the default format; `null` without a workspace.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_new_start(
+    session: State<'_, SharedSession>,
+) -> Result<Option<NewNoteStart>, UiError> {
+    read_session(&session, Session::new_note_start).await
+}
+
+/// M-14.1, UC-003 step 2: the file name the note will get ("File: …"),
+/// while the user types; `null` while it cannot be created so. Checking a
+/// folder may run git, so it runs on the blocking pool.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_plan(
+    session: State<'_, SharedSession>,
+    request: NewNoteRequest,
+) -> Result<Option<String>, UiError> {
+    read_session(&session, move |session| session.plan_new_note(&request)).await
+}
+
+/// M-14.1, UC-003 steps 4–6: creates the note and opens it; the answer puts
+/// the cursor at its end, keeps the dialog with a problem, or closes it
+/// (a failure is in the status bar).
+#[tauri::command]
+#[specta::specta]
+pub async fn note_create(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    request: NewNoteRequest,
+) -> Result<CreateNoteAnswer, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.create_note(&request)
+    })
+    .await
+}
+
+/// M-14.2, UC-006 step 1: what "Rename note" starts with for `note`;
+/// `null` when it is refused (the status bar says why).
+#[tauri::command]
+#[specta::specta]
+pub async fn note_rename_start(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+) -> Result<Option<RenameStart>, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.rename_start(&NoteId::from_relative(&note))
+    })
+    .await
+}
+
+/// M-14.2, UC-006 step 2: the file the note will be in ("File: …"), while
+/// the user types; `null` while it cannot be renamed so.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_plan_rename(
+    session: State<'_, SharedSession>,
+    note: String,
+    title: String,
+    folder: String,
+) -> Result<Option<String>, UiError> {
+    read_session(&session, move |session| {
+        session.plan_rename(&NoteId::from_relative(&note), &title, &folder)
+    })
+    .await
+}
+
+/// M-14.2, UC-006 steps 4–7: renames the note, after the window sent its
+/// edits (`flushed`); the links follow, in open tabs too. What copy on
+/// select kept for the tab goes with it.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_rename(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    clipboard: State<'_, SharedClipboard>,
+    note: String,
+    title: String,
+    folder: String,
+) -> Result<RenameAnswer, UiError> {
+    let answer = on_session(&session, &waker, move |session| {
+        session.rename_note(&NoteId::from_relative(&note), &title, &folder)
+    })
+    .await?;
+    if let RenameAnswer::Renamed { from, to } = &answer {
+        clipboard.lock().rename(from, to);
+    }
+    Ok(answer)
+}
+
+/// M-14.3, UC-007 steps 1–2: the question before deleting `note`, with the
+/// links that lead to it; `null` when it is refused (the status bar says
+/// why). Counting the links reads the notes.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_delete_start(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+) -> Result<Option<DeleteQuestion>, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.delete_start(&NoteId::from_relative(&note))
+    })
+    .await
+}
+
+/// M-14.3, UC-007 steps 4–5, A8: deletes `note`, after the window sent its
+/// edits (`flushed`); with `for_good` it is not kept. Its tab closes, and
+/// what copy on select kept for it goes.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_delete(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    clipboard: State<'_, SharedClipboard>,
+    note: String,
+    for_good: bool,
+) -> Result<DeleteAnswer, UiError> {
+    let id = NoteId::from_relative(&note);
+    let (answer, still_open) = on_session(&session, &waker, move |session| {
+        let answer = session.delete_note(&id, for_good);
+        (answer, session.has_tab(&id))
+    })
+    .await?;
+    if !still_open {
+        clipboard.lock().forget(&note);
+    }
+    Ok(answer)
+}
+
+/// M-14.3, UC-007 A4: "Undo" of the report "Deleted {t}"; the answer asks
+/// for another place when the note's is taken (A6).
+#[tauri::command]
+#[specta::specta]
+pub async fn note_undo_delete(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<RestoreAnswer, UiError> {
+    on_session(&session, &waker, Session::undo_delete).await
+}
+
+/// M-05.6, UC-007 A5: "Restore" of the deleted note `key`; the answer asks
+/// for another place when its own is taken (A6).
+#[tauri::command]
+#[specta::specta]
+pub async fn ws_restore(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    key: String,
+) -> Result<RestoreAnswer, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.restore_deleted(&key)
+    })
+    .await
+}
+
+/// M-14.4, UC-007 A6: "Restore" in "Restore note", as `title` in `folder`.
+#[tauri::command]
+#[specta::specta]
+pub async fn ws_restore_as(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    title: String,
+    folder: String,
+) -> Result<RestoreAnswer, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.restore_deleted_as(&title, &folder)
+    })
+    .await
+}
+
+/// M-14.4, UC-007 A7: removes the deleted note `key` for good, or all of
+/// them with `null`.
+#[tauri::command]
+#[specta::specta]
+pub async fn ws_purge(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    key: Option<String>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.purge_deleted(key.as_deref());
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -810,6 +999,20 @@ mod tests {
         "ed_resync",
         "ed_mirror",
         "app_request_close",
+        "ed_follow_link",
+        "link_open_web",
+        "note_new_start",
+        "note_plan",
+        "note_create",
+        "note_rename_start",
+        "note_plan_rename",
+        "note_rename",
+        "note_delete_start",
+        "note_delete",
+        "note_undo_delete",
+        "ws_restore",
+        "ws_restore_as",
+        "ws_purge",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user
@@ -1056,6 +1259,68 @@ mod tests {
         let tabs: Vec<_> = snapshot.tabs.tabs.iter().map(|t| t.note.as_str()).collect();
         assert_eq!(tabs, ["Home"]);
         assert_eq!(snapshot.tabs.active.as_deref(), Some("Home"));
+    }
+
+    /// UC-003, UC-006, UC-007, M-14: a note is created, renamed, deleted,
+    /// put back by the undo, deleted again and removed for good, with the
+    /// commands' arguments in camelCase as the window sends them.
+    #[test]
+    fn uc003_uc006_uc007_m14_note_commands_create_rename_delete_and_restore() {
+        let dir = temp_dir("notes");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        let request = json!({ "request": { "title": "Plan", "folder": "", "format": "Markdown" } });
+
+        let start = mock.invoke("note_new_start", json!({})).unwrap();
+        assert_eq!(start, json!({ "folder": "", "format": "Markdown" }));
+        assert_eq!(
+            mock.invoke("note_plan", request.clone()).unwrap(),
+            json!("Plan.md")
+        );
+        let created = mock.invoke("note_create", request).unwrap();
+        assert_eq!(created["kind"], json!("created"));
+        assert_eq!(created["note"], json!("Plan"));
+
+        let renamed = mock
+            .invoke(
+                "note_rename",
+                json!({ "note": "Plan", "title": "Roadmap", "folder": "" }),
+            )
+            .unwrap();
+        assert_eq!(
+            renamed,
+            json!({ "kind": "renamed", "from": "Plan", "to": "Roadmap" })
+        );
+
+        let question = mock
+            .invoke("note_delete_start", json!({ "note": "Roadmap" }))
+            .unwrap();
+        assert_eq!(
+            question["links"],
+            json!("No links in other notes lead to it.")
+        );
+        let deleted = mock
+            .invoke(
+                "note_delete",
+                json!({ "note": "Roadmap", "forGood": false }),
+            )
+            .unwrap();
+        assert_eq!(deleted, json!({ "kind": "done" }));
+        assert_eq!(mock.status(), "Deleted Roadmap");
+        assert_eq!(
+            mock.invoke("note_undo_delete", json!({})).unwrap(),
+            json!({ "kind": "restored", "note": "Roadmap" })
+        );
+        assert!(root.join("Roadmap.md").is_file());
+
+        mock.invoke(
+            "note_delete",
+            json!({ "note": "Roadmap", "forGood": false }),
+        )
+        .unwrap();
+        mock.invoke("ws_purge", json!({ "key": null })).unwrap();
+        assert_eq!(mock.status(), "Removed 1 deleted note for good");
     }
 
     /// ADR-025, UC-005, M-10.9: the window's core starts from the mirror

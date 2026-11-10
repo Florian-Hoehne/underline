@@ -139,7 +139,8 @@ const FLUSH_AT_MOST = 3000;
 
 /** One note's core and its sync. */
 export class TabCore {
-  readonly note: string;
+  /** The note; a rename gives it the new one (UC-006 step 7). */
+  note: string;
   readonly core: EditorCore;
   /** The note's format (M-09.14: pasted HTML becomes its markup). */
   readonly format: FormatName;
@@ -455,10 +456,13 @@ class Cores {
     core.select(core.state().rev, mirror.anchor, mirror.head);
     core.onDead = () => {
       // Q-40: opened anew from the backend's text; the edits not confirmed
-      // are lost, and the status line says so.
-      console.error(`The editor's core of ${note} failed; it is opened again from the stored text`);
-      reporter?.dead(note);
-      this.#forget(note, tab);
+      // are lost, and the status line says so. The note may have been
+      // renamed since (`tab.note`).
+      console.error(
+        `The editor's core of ${tab.note} failed; it is opened again from the stored text`,
+      );
+      reporter?.dead(tab.note);
+      this.#forget(tab.note, tab);
       tab.listener?.reopened();
     };
     this.#ready.set(note, tab);
@@ -478,6 +482,26 @@ class Cores {
     this.#made.delete(note);
     this.#ready.delete(note);
     tab?.close();
+  }
+
+  /**
+   * UC-006 step 7: the note `from` is `to` now; its core, with its text,
+   * cursor and history, goes on under the new name.
+   */
+  rename(from: string, to: string): void {
+    const made = this.#made.get(from);
+    const tab = this.#ready.get(from);
+    if (made) {
+      this.#made.delete(from);
+      this.#made.set(to, made);
+    }
+    if (tab) {
+      this.#ready.delete(from);
+      this.#ready.set(to, tab);
+      tab.note = to;
+      // The views the core reports name the note (`BlocksView.note`).
+      tab.core.rename(to);
+    }
   }
 
   /** Cores opened from now on belong to a new generation, which `dropBefore` keeps. */
@@ -514,6 +538,14 @@ class Cores {
 }
 
 const cores = new Cores();
+
+/**
+ * UC-006: notes being renamed: their cores stay while the rename runs,
+ * though a tab bar without them may come first.
+ */
+const renaming = new Map<string, { done: Promise<void>; end: () => void }>();
+/** UC-006 step 7: renamed cores that wait for a tab bar with their new name. */
+const renamed = new Set<string>();
 
 /** The core of `note` once it is ready. */
 export function coreOf(note: string): TabCore | undefined {
@@ -554,12 +586,19 @@ export function coreInStep(note: string, rev: number): boolean {
  * The core of `note`: opened from the backend's text (`ed_mirror`) the
  * first time, then kept while the tab is open.
  */
-export function openCore(note: string, mac: boolean): Promise<TabCore> {
+export async function openCore(note: string, mac: boolean): Promise<TabCore> {
+  // UC-006: a view of the new name may show before the rename's answer
+  // came (the tab bar can come first); it waits, so it gets the renamed
+  // core instead of opening a second one (app-tester F8).
+  if (!cores.get(note) && renaming.size > 0) {
+    await Promise.all([...renaming.values()].map((held) => held.done));
+  }
   return cores.open(note, mac);
 }
 
 /** The tab of `note` closed: its core goes. */
 export function dropCore(note: string): void {
+  renamed.delete(note);
   cores.drop(note);
 }
 
@@ -579,6 +618,11 @@ export function dropCoresBefore(mark: number): void {
 
 /** Every core goes (the tests start anew). */
 export function dropAllCores(): void {
+  for (const held of renaming.values()) {
+    held.end();
+  }
+  renaming.clear();
+  renamed.clear();
   cores.dropBefore(cores.mark());
 }
 
@@ -587,14 +631,45 @@ export function keepCores(): void {
   cores.adopt();
 }
 
+/** UC-006: the note `note` is being renamed; its core stays meanwhile. */
+export function holdCore(note: string): void {
+  let end = () => {};
+  const done = new Promise<void>((resolve) => {
+    end = resolve;
+  });
+  renaming.set(note, { done, end });
+}
+
+/** UC-006: the rename of `note` ended, done or not. */
+export function releaseCore(note: string): void {
+  renaming.get(note)?.end();
+  renaming.delete(note);
+}
+
+/**
+ * UC-006 step 7: the note `from` is `to` now (`RenameAnswer.renamed`): its
+ * core, with its text, cursor and history, goes on under the new name, as
+ * egui's tab keeps its widget; it stays until a tab bar names it.
+ */
+export function renameCore(from: string, to: string): void {
+  cores.rename(from, to);
+  renamed.add(to);
+}
+
 /**
  * ADR-025: only notes that are open keep their cores; one the backend
- * closed (renamed, deleted) never sends its old text over the file.
+ * closed (deleted) never sends its old text over the file. A core being
+ * renamed, or renamed and not yet in a tab bar, stays (`renameCore`).
  */
 export function keepCoresOf(open: Iterable<string>): void {
   const keep = new Set(open);
+  for (const note of [...renamed]) {
+    if (keep.has(note)) {
+      renamed.delete(note);
+    }
+  }
   for (const tab of cores.all()) {
-    if (!keep.has(tab.note)) {
+    if (!keep.has(tab.note) && !renaming.has(tab.note) && !renamed.has(tab.note)) {
       cores.drop(tab.note);
     }
   }

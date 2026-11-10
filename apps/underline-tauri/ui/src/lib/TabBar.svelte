@@ -12,8 +12,11 @@
   among the tabs, Enter and Space activate one, and Delete closes it (Q-08:
   "×" is no longer in the Tab sequence).
 
-  Later features add the context menu (M-06.4, F8) and the tab "Todos (N)"
-  (M-06.5, F15). Until then a tab "Todos" that was active is remembered,
+  M-06.4 (feature F8): the context menu of a tab, "Rename…  F2" and
+  "Delete…" ("Export…" comes with feature F11, paritaet.md A-79); it also
+  opens with Shift+F10 or the context menu key (A-80).
+
+  A later feature adds the tab "Todos (N)" (M-06.5, F15). Until then a tab "Todos" that was active is remembered,
   but no note tab shows as active.
 
   The active tab scrolls into view. After a tab closed with the keyboard,
@@ -22,6 +25,7 @@
 -->
 <script lang="ts">
   import { tick } from 'svelte';
+  import ContextMenu, { asksForMenu, menuPlace, type MenuEntry } from './ContextMenu.svelte';
   import type { Shell } from './shell.svelte';
   import { focusTabAt, markDescription, NOTE_PANEL_ID, tabId } from './tabs';
 
@@ -74,8 +78,40 @@
     }
   }
 
+  /** M-06.4: the context menu of a tab, with the element it opened on. */
+  let menu = $state<{ note: string; label: string; x: number; y: number } | null>(null);
+  let menuOpener: HTMLElement | null = null;
+
+  function openMenu(event: MouseEvent | KeyboardEvent, note: string, label: string) {
+    event.preventDefault();
+    menuOpener = event.currentTarget as HTMLElement;
+    menu = { note, label, ...menuPlace(event) };
+  }
+
+  /** The entries of the menu of `note`; they act on it after the menu closed. */
+  function entriesFor(note: string): MenuEntry[] {
+    return [
+      { label: 'Rename…', shortcut: 'F2', action: () => void shell.startRename(note) },
+      { label: 'Delete…', action: () => void shell.startDelete(note) },
+    ];
+  }
+
+  const menuEntries = $derived(menu ? entriesFor(menu.note) : []);
+
+  function closeMenu(back: boolean) {
+    menu = null;
+    if (back) {
+      menuOpener?.focus();
+    }
+  }
+
   /** Arrow keys, Home and End move among the tabs; Delete closes one. */
   function onKey(event: KeyboardEvent, note: string) {
+    if (asksForMenu(event)) {
+      const tab = shell.tabs.tabs.find((t) => t.note === note);
+      openMenu(event, note, tab?.title ?? note);
+      return;
+    }
     const tabs = tabButtons();
     const at = tabs.indexOf(event.currentTarget as HTMLElement);
     const to = {
@@ -110,10 +146,11 @@
           aria-describedby={markDescription(tab.label, tab.title)
             ? `${tabId(tab.note)}-marks`
             : undefined}
-          aria-keyshortcuts="Delete"
+          aria-keyshortcuts="Delete Shift+F10"
           onclick={() => shell.activateTab(tab.note)}
           onkeydown={(event) => onKey(event, tab.note)}
           onmousedown={onMouseDown}
+          oncontextmenu={(event) => openMenu(event, tab.note, tab.title)}
           onauxclick={(event) => onAuxClick(event, tab.note)}>{tab.label}</button
         >
         {#if markDescription(tab.label, tab.title)}
@@ -132,6 +169,15 @@
     {/each}
   </div>
 </div>
+{#if menu}
+  <ContextMenu
+    label="Tab {menu?.label ?? ''}"
+    x={menu?.x ?? 0}
+    y={menu?.y ?? 0}
+    onClose={closeMenu}
+    entries={menuEntries}
+  />
+{/if}
 
 <style>
   .tab-bar {

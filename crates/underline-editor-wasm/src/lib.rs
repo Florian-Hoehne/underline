@@ -78,6 +78,12 @@ impl WasmTab {
         Ok(self.0.set_mode(mode)?)
     }
 
+    /// UC-006 step 7: the note was renamed to `note`; what the tab reports
+    /// names it so from now on.
+    pub fn rename(&mut self, note: &str) {
+        self.0.rename(note);
+    }
+
     /// The facade (`true`) or the source view is shown.
     #[wasm_bindgen(js_name = setView)]
     pub fn set_view(&mut self, facade: bool) {

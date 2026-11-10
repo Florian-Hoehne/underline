@@ -170,6 +170,14 @@ impl SystemClipboard {
         self.before.remove(note);
     }
 
+    /// UC-006 step 7: the note `from` is `to` now; what was kept for its
+    /// copied selection goes with it.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        if let Some(before) = self.before.remove(from) {
+            self.before.insert(to.to_owned(), before);
+        }
+    }
+
     /// What a paste in `note` finds (see [`Self::content`]); an image is
     /// kept for [`Self::take_pasted_image`] instead of being returned.
     pub fn read_for_paste(&mut self, note: &str, over_copied: bool) -> PasteRead {

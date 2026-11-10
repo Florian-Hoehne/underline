@@ -271,7 +271,7 @@
               aria-disabled={!workspaceOpen}
               onclick={() => {
                 if (workspaceOpen) {
-                  close(true);
+                  choose(() => void shell.startNewNote());
                 }
               }}
             >

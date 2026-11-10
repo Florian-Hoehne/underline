@@ -119,6 +119,8 @@ pub enum LinkAnswer {
         folder: String,
         /// The title of the link.
         title: String,
+        /// The default format of new notes, preselected (UC-003 step 2).
+        format: crate::workspace_view::FormatName,
         /// "{title} does not exist yet. Create it?"
         problem: String,
     },

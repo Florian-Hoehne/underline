@@ -25,6 +25,13 @@
 // small fake world outside the workspace (`FAKE_OUTSIDE`), and
 // `dragEnter`/`drop` deliver dragged files as Tauri would.
 //
+// Feature F8: notes are created, renamed (the links to them in the other
+// notes follow, roughly), deleted with the undo of the status bar, and
+// restored or removed from the deleted notes; `/home/user/Notes` starts
+// with three deleted notes, one of which ("Ideas") finds its place taken.
+// `cannotKeep(true)` makes the deleted notes unable to keep a note (UC-007
+// A8); a note in the folder `locked` cannot be written (UC-003 A5).
+//
 // Feature F7: following a link (`ed_follow_link`) finds it at the place
 // clicked in the mirror's text and resolves it roughly as `resolve_link`
 // does, over the fake notes; what the system would open is
@@ -37,6 +44,12 @@ import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
   commands,
+  CreateNoteAnswer,
+  DeletedNoteView,
+  NewNoteRequest,
+  RenameAnswer,
+  RestoreAnswer,
+  StatusOffer,
   CreateAnswer,
   DragName,
   EditingViewName,
@@ -142,6 +155,32 @@ export type MockHandlers = {
     rev: number;
   }) => Promise<Ok<typeof commands.edFollowLink>>;
   link_open_web: (args: { open: boolean }) => Promise<Ok<typeof commands.linkOpenWeb>>;
+  note_new_start: () => Ok<typeof commands.noteNewStart>;
+  note_plan: (args: { request: NewNoteRequest }) => Ok<typeof commands.notePlan>;
+  note_create: (args: { request: NewNoteRequest }) => Promise<Ok<typeof commands.noteCreate>>;
+  note_rename_start: (args: { note: string }) => Ok<typeof commands.noteRenameStart>;
+  note_plan_rename: (args: {
+    note: string;
+    title: string;
+    folder: string;
+  }) => Ok<typeof commands.notePlanRename>;
+  note_rename: (args: {
+    note: string;
+    title: string;
+    folder: string;
+  }) => Promise<Ok<typeof commands.noteRename>>;
+  note_delete_start: (args: { note: string }) => Ok<typeof commands.noteDeleteStart>;
+  note_delete: (args: {
+    note: string;
+    forGood: boolean;
+  }) => Promise<Ok<typeof commands.noteDelete>>;
+  note_undo_delete: () => Promise<Ok<typeof commands.noteUndoDelete>>;
+  ws_restore: (args: { key: string }) => Promise<Ok<typeof commands.wsRestore>>;
+  ws_restore_as: (args: {
+    title: string;
+    folder: string;
+  }) => Promise<Ok<typeof commands.wsRestoreAs>>;
+  ws_purge: (args: { key: string | null }) => Promise<Ok<typeof commands.wsPurge>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
@@ -211,6 +250,38 @@ export const FAKE_OUTSIDE: Readonly<Record<string, number>> = {
   '/home/user/Pictures/banner.png': 11 * 1024 * 1024,
   '/home/user/Documents/report.pdf': 120_000,
 };
+
+/** F8: a note among the deleted notes of the mock (UC-007 A5). */
+export type MockDeleted = { key: string; note: string; text: string; at: number };
+
+/**
+ * F8, M-05.6: the deleted notes each workspace starts with. `Ideas` is in
+ * the workspace again, so restoring it asks for another place (UC-007 A6).
+ */
+export const FAKE_DELETED: Readonly<Record<string, readonly MockDeleted[]>> = {
+  '/home/user/Notes': [
+    {
+      key: '1794000000000:0:Old-Plan',
+      note: 'Old-Plan',
+      text: '# Old Plan\n',
+      at: 1794000000000,
+    },
+    {
+      key: '1793900000000:0:guide/Draft',
+      note: 'guide/Draft',
+      text: '# Draft\n',
+      at: 1793900000000,
+    },
+    { key: '1793800000000:0:Ideas', note: 'Ideas', text: '# Ideas, older\n', at: 1793800000000 },
+  ],
+};
+
+/** `ms` since 1970 as local time to the minute, as `format_local_time` gives it. */
+function localTime(ms: number): string {
+  const d = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
 
 /** What the fake system clipboard holds (F6). */
 export type MockClipboard = { text: string | null; html: string | null; image: boolean };
@@ -404,9 +475,9 @@ export function mockIndexes(note: string, rev: number, text: string): IndexesVie
 export function mockHandlers(start: MockStart = {}): MockHandlers {
   let settings: SettingsView = { ...defaultSettings(), ...start.settings };
   let status = start.status ?? '';
-  const setStatus = async (text: string) => {
+  const setStatus = async (text: string, offer: StatusOffer | null = null) => {
     status = text;
-    await emit('status', { text });
+    await emit('status', { text, offer });
   };
   return {
     app_start: () => {
@@ -474,7 +545,7 @@ type FakeTab = { note: string; view: EditingViewName };
 /** The workspace commands over the fake file system. */
 function workspaceHandlers(
   start: MockStart,
-  setStatus: (text: string) => Promise<void>,
+  setStatus: (text: string, offer?: StatusOffer | null) => Promise<void>,
   settings: () => SettingsView,
   status: () => string = () => '',
 ): Pick<
@@ -507,6 +578,18 @@ function workspaceHandlers(
   | 'app_request_close'
   | 'ed_follow_link'
   | 'link_open_web'
+  | 'note_new_start'
+  | 'note_plan'
+  | 'note_create'
+  | 'note_rename_start'
+  | 'note_plan_rename'
+  | 'note_rename'
+  | 'note_delete_start'
+  | 'note_delete'
+  | 'note_undo_delete'
+  | 'ws_restore'
+  | 'ws_restore_as'
+  | 'ws_purge'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -610,6 +693,124 @@ function workspaceHandlers(
     return { kind: 'insert', insertion: { kind: 'file', place, image } };
   };
   const textOf = (note: string): string => texts.get(note) ?? fakeNoteText(note);
+  /** F8, UC-007: the deleted notes of each workspace, most recently deleted first. */
+  const deletedNotes: Record<string, MockDeleted[]> = Object.fromEntries(
+    Object.entries(FAKE_DELETED).map(([dir, notes]) => [dir, notes.map((d) => ({ ...d }))]),
+  );
+  /** UC-007 A4: the undo of the last deletion, while its report shows. */
+  let undo: { status: string; deleted: MockDeleted; reopen: boolean } | null = null;
+  /** UC-007 A6: the deleted note "Restore note" asks a place for. */
+  let restoring: { deleted: MockDeleted; reopen: boolean } | null = null;
+  /** UC-007 A8: the deleted notes cannot keep a note (`cannotKeep`). */
+  let keepFails = false;
+  /** UC-006 A7: open notes whose links a rename changed; their save keeps its report. */
+  const quiet = new Set<string>();
+  const deletedView = (): DeletedNoteView[] =>
+    (root ? (deletedNotes[root] ?? []) : []).map((d) => ({
+      key: d.key,
+      title: title(d.note),
+      folder: folder(d.note) ?? 'top folder',
+      hover: `${folder(d.note) ?? 'top folder'} · deleted ${localTime(d.at)}`,
+      deleted: localTime(d.at),
+    }));
+  const extension = (format: FormatName) => (format === 'AsciiDoc' ? 'adoc' : 'md');
+  /** UC-003 BR-001, BR-002, roughly: the note's id, or why it cannot be. */
+  const planNote = (
+    noteTitle: string,
+    noteFolder: string,
+    except: string | null = null,
+  ): { id: string } | { problem: string; existing?: string } => {
+    const name = noteTitle.trim();
+    if (name === '') {
+      return { problem: 'The title is empty.' };
+    }
+    const bad = [...name].find((c) => '/\\:*?"<>|'.includes(c));
+    if (bad !== undefined) {
+      return { problem: `The title cannot hold the character \`${bad}\`.` };
+    }
+    const levels = noteFolder.split('/').filter((level) => level.trim() !== '');
+    const hidden = levels.find((level) => level.startsWith('.'));
+    if (hidden !== undefined) {
+      return { problem: `The folder \`${hidden}\` is hidden.` };
+    }
+    const id = [...levels, name.split(/\s+/).join('-')].join('/');
+    const existing = (root ? (files[root] ?? []) : []).find(
+      (n) => n.toLowerCase() === id.toLowerCase() && n !== except,
+    );
+    return existing === undefined ? { id } : { problem: '', existing };
+  };
+  /** The note text the backend's format module writes for a new note. */
+  const newNoteText = (noteTitle: string) => `# ${noteTitle.trim().split(/\s+/).join(' ')}\n`;
+  /** UC-006 BR-003, roughly: the links to `from` in `text`, as written from `note`. */
+  const linkTo = (note: string, target: string) => `](${relativeTo(note, `${target}.md`)}`;
+  const countLinks = (text: string, needle: string) => text.split(needle).length - 1;
+  /** M-22.2: the remembered tabs and "last opened" follow a renamed note. */
+  const renameEverywhere = (from: string, to: string) => {
+    if (!root) {
+      return;
+    }
+    files[root] = (files[root] ?? []).map((n) => (n === from ? to : n));
+    tabs = tabs.map((tab) => (tab.note === from ? { ...tab, note: to } : tab));
+    if (active === from) {
+      active = to;
+    }
+    const opened = lastOpened[root] ?? {};
+    if (from in opened) {
+      opened[to] = opened[from];
+      delete opened[from];
+    }
+    for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
+      if (map.has(from)) {
+        map.set(to, map.get(from));
+        map.delete(from);
+      }
+    }
+    for (const set of [unstored, quiet]) {
+      if (set.delete(from)) {
+        set.add(to);
+      }
+    }
+    remember();
+  };
+  /** UC-007 A4, A5: puts `deleted` back, or asks for another place (A6). */
+  const restore = async (
+    deleted: MockDeleted,
+    reopen: boolean,
+    place: { title: string; folder: string } | null,
+  ): Promise<RestoreAnswer> => {
+    if (!root) {
+      return { kind: 'done' };
+    }
+    const wanted = place ?? { title: title(deleted.note), folder: folder(deleted.note) ?? '' };
+    const planned = planNote(wanted.title, wanted.folder);
+    if (!('id' in planned)) {
+      if (planned.existing === undefined && place === null) {
+        await setStatus(`The note could not be restored: ${planned.problem}`);
+        return { kind: 'done' };
+      }
+      restoring = { deleted, reopen };
+      return {
+        kind: 'ask',
+        title: wanted.title,
+        folder: wanted.folder,
+        problem:
+          planned.existing === undefined
+            ? planned.problem
+            : `A note named ${title(planned.existing)} exists in that folder. Choose another title or folder.`,
+      };
+    }
+    files[root] = [...(files[root] ?? []), planned.id];
+    texts.set(planned.id, deleted.text);
+    deletedNotes[root] = (deletedNotes[root] ?? []).filter((d) => d !== deleted);
+    restoring = null;
+    undo = null;
+    if (reopen) {
+      openTab(planned.id);
+    }
+    await sendAll();
+    await setStatus(`Restored ${title(planned.id)}`);
+    return { kind: 'restored', note: planned.id };
+  };
   /** ADR-025: the backend's mirror of each note a window's core holds. */
   const mirrors = new Map<string, MirrorCore>();
   /** The mirror's text is the note's now. */
@@ -658,7 +859,8 @@ function workspaceHandlers(
     }
   };
   const label = (note: string) =>
-    title(note) + (saveErrors.has(note) ? ' ⚠' : unstored.has(note) ? ' •' : '');
+    title(note) +
+    (saveErrors.has(note) ? ' ⚠' : unstored.has(note) && !quiet.has(note) ? ' •' : '');
   const tabsView = (): TabsView => ({
     tabs: tabs.map((tab) => ({
       note: tab.note,
@@ -709,6 +911,13 @@ function workspaceHandlers(
           return;
         }
         const failure = store(note);
+        // UC-006 A7: a save of a rename's links keeps its report; D-04
+        // (fixed): "Saved" does not end an offer.
+        const quietly = quiet.delete(note) || (undo !== null && status() === undo.status);
+        if (!failure && quietly) {
+          void sendAll();
+          return;
+        }
         void setStatus(
           failure
             ? `${title(note)} could not be stored: ${MOCK_SAVE_ERROR}`
@@ -741,12 +950,20 @@ function workspaceHandlers(
     }
   };
   const sendAll = async () => {
+    if (disposed) {
+      return;
+    }
     const now = snapshot();
-    await emit('workspace', now.workspace);
-    await emit('overview', now.overview);
-    await emit('tabs', now.tabs);
-    await emit('properties', properties());
-    await sendIndexes();
+    try {
+      await emit('workspace', now.workspace);
+      await emit('overview', now.overview);
+      await emit('deleted', deletedView());
+      await emit('tabs', now.tabs);
+      await emit('properties', properties());
+      await sendIndexes();
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
   };
   /** UC-004 A2: the jump to the heading `anchor` of `note`, or why there is none. */
   const jumpToHeading = async (note: string, anchor: string): Promise<LinkAnswer> => {
@@ -824,6 +1041,7 @@ function workspaceHandlers(
         kind: 'newNote',
         folder: at < 0 ? '' : id.slice(0, at),
         title: noteTitle,
+        format: 'Markdown',
         problem: `${noteTitle} does not exist yet. Create it?`,
       };
     }
@@ -1138,6 +1356,10 @@ function workspaceHandlers(
       const before = mirror.text();
       const { answer, reverted } = mirror.receive(batch);
       if (mirror.text() !== before) {
+        if (quiet.delete(note)) {
+          // The user's own change: the tab shows its mark now.
+          unstored.delete(note);
+        }
         followMirror(note, mirror);
         await changed(note);
         setTimeout(() => void sendEnrich(note), 0);
@@ -1170,6 +1392,210 @@ function workspaceHandlers(
       // As the backend: a place of another revision follows nothing.
       const link = mirror.rev === rev ? mockLinkAt(mirror.text(), at) : null;
       return link === null ? { kind: 'done' } : followLink(note, link);
+    },
+    note_new_start: () =>
+      root === null ? null : { folder: (active && folder(active)) ?? '', format: 'Markdown' },
+    note_plan: ({ request }) => {
+      const planned = planNote(request.title, request.folder);
+      return 'id' in planned ? `${planned.id}.${extension(request.format)}` : null;
+    },
+    note_create: async ({ request }): Promise<CreateNoteAnswer> => {
+      const planned = planNote(request.title, request.folder);
+      if (!('id' in planned)) {
+        return planned.existing === undefined
+          ? { kind: 'problem', problem: planned.problem, existing: null }
+          : {
+              kind: 'problem',
+              problem: `The note ${title(planned.existing)} exists. Change the title or the folder, or open it.`,
+              existing: planned.existing,
+            };
+      }
+      if (!root || request.folder.split('/').includes('locked')) {
+        await setStatus(`The note could not be created: cannot write the note: ${MOCK_SAVE_ERROR}`);
+        return { kind: 'done' };
+      }
+      const id = planned.id;
+      const text = newNoteText(request.title);
+      files[root] = [...(files[root] ?? []), id];
+      texts.set(id, text);
+      await loadEditorCore();
+      const mirror = new MirrorCore(text);
+      mirrors.set(id, mirror);
+      openTab(id);
+      await sendAll();
+      await setStatus(`Created the note ${title(id)}`);
+      return { kind: 'created', note: id, rev: mirror.rev, offset: text.length };
+    },
+    note_rename_start: ({ note }) => ({
+      note,
+      title: title(note),
+      folder: folder(note) ?? '',
+      home: note === 'Home',
+    }),
+    note_plan_rename: ({ note, title: newTitle, folder: newFolder }) => {
+      const planned = planNote(newTitle, newFolder, note);
+      return 'id' in planned && planned.id !== note ? `${planned.id}.md` : null;
+    },
+    note_rename: async ({ note, title: newTitle, folder: newFolder }): Promise<RenameAnswer> => {
+      const planned = planNote(newTitle, newFolder, note);
+      if (!('id' in planned)) {
+        return {
+          kind: 'problem',
+          problem:
+            planned.existing === undefined
+              ? planned.problem
+              : `A note named ${title(planned.existing)} exists in that folder. Change the title or the folder.`,
+        };
+      }
+      const to = planned.id;
+      if (to === note || !root) {
+        return { kind: 'done' };
+      }
+      // Step 5: the tab is stored first; its pending autosave goes.
+      clearTimeout(saveTimers.get(note));
+      saveTimers.delete(note);
+      const failure = store(note);
+      if (failure) {
+        await setStatus(`The note could not be renamed, because ${failure}`);
+        return { kind: 'done' };
+      }
+      renameEverywhere(note, to);
+      let links = 0;
+      let notes = 0;
+      for (const other of files[root] ?? []) {
+        if (other === to) {
+          continue;
+        }
+        const needle = linkTo(other, note);
+        const mirror = mirrors.get(other);
+        const text = mirror?.text() ?? textOf(other);
+        const found = countLinks(text, needle);
+        if (found === 0) {
+          continue;
+        }
+        links += found;
+        notes += 1;
+        if (!mirror) {
+          texts.set(other, text.split(needle).join(linkTo(other, to)));
+          continue;
+        }
+        // UC-006 A7: the open note changes in its text, saved quietly.
+        let at = text.lastIndexOf(needle);
+        let rev = mirror.rev;
+        while (at >= 0) {
+          rev = mirror.backendEdit(at, needle.length, linkTo(other, to), false) ?? rev;
+          at = at === 0 ? -1 : text.lastIndexOf(needle, at - 1);
+        }
+        followMirror(other, mirror);
+        // M-14.2: no mark for the rename's links of a tab without changes.
+        if (!unstored.has(other)) {
+          quiet.add(other);
+        }
+        await changed(other);
+        await emit('ed-changed', { note: other, rev });
+      }
+      await sendAll();
+      await setStatus(
+        `Renamed ${title(note)} to ${title(to)}; updated ${links === 1 ? '1 link' : `${links} links`} in ${notes === 1 ? '1 note' : `${notes} notes`}`,
+      );
+      return { kind: 'renamed', from: note, to };
+    },
+    note_delete_start: ({ note }) => {
+      let links = 0;
+      let notes = 0;
+      for (const other of root ? (files[root] ?? []) : []) {
+        const found =
+          other === note
+            ? 0
+            : countLinks(mirrors.get(other)?.text() ?? textOf(other), linkTo(other, note));
+        links += found;
+        notes += found > 0 ? 1 : 0;
+      }
+      return {
+        note,
+        title: title(note),
+        links:
+          links === 0
+            ? 'No links in other notes lead to it.'
+            : `${links === 1 ? '1 link' : `${links} links`} in ${notes === 1 ? '1 note' : `${notes} notes`} lead to it and will lead nowhere.`,
+        home: note === 'Home',
+      };
+    },
+    note_delete: async ({ note, forGood }) => {
+      if (!root) {
+        return { kind: 'done' };
+      }
+      if (keepFails && !forGood) {
+        return {
+          kind: 'cannotKeep',
+          question: `The note cannot be kept among the deleted notes (${MOCK_SAVE_ERROR}), so it cannot be restored. Delete it for good?`,
+        };
+      }
+      const text = mirrors.get(note)?.text() ?? textOf(note);
+      const reopen = tabs.some((tab) => tab.note === note);
+      files[root] = (files[root] ?? []).filter((n) => n !== note);
+      const at = tabs.findIndex((tab) => tab.note === note);
+      if (at >= 0) {
+        clearTimeout(saveTimers.get(note));
+        tabs.splice(at, 1);
+        if (active === note) {
+          active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
+        }
+      }
+      for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
+        map.delete(note);
+      }
+      unstored.delete(note);
+      delete lastOpened[root]?.[note];
+      remember();
+      const report = `Deleted ${title(note)}`;
+      undo = null;
+      if (!forGood) {
+        clock += 1;
+        const deleted: MockDeleted = {
+          key: `${Date.now()}:${clock}:${note}`,
+          note,
+          text,
+          at: Date.now(),
+        };
+        deletedNotes[root] = [deleted, ...(deletedNotes[root] ?? [])];
+        undo = { status: report, deleted, reopen };
+      }
+      await sendAll();
+      await setStatus(report, forGood ? null : 'undoDelete');
+      return { kind: 'done' };
+    },
+    note_undo_delete: async () => {
+      const offer = undo;
+      undo = null;
+      if (offer === null || status() !== offer.status) {
+        return { kind: 'done' };
+      }
+      return restore(offer.deleted, offer.reopen, null);
+    },
+    ws_restore: async ({ key }) => {
+      const deleted = (root ? (deletedNotes[root] ?? []) : []).find((d) => d.key === key);
+      return deleted ? restore(deleted, false, null) : { kind: 'done' };
+    },
+    ws_restore_as: async ({ title: newTitle, folder: newFolder }) =>
+      restoring
+        ? restore(restoring.deleted, restoring.reopen, { title: newTitle, folder: newFolder })
+        : { kind: 'done' },
+    ws_purge: async ({ key }) => {
+      if (!root) {
+        return null;
+      }
+      const all = deletedNotes[root] ?? [];
+      const targets = key === null ? all : all.filter((d) => d.key === key);
+      deletedNotes[root] = all.filter((d) => !targets.includes(d));
+      if (undo && targets.includes(undo.deleted)) {
+        undo = null;
+      }
+      await sendAll();
+      await setStatus(
+        `Removed ${targets.length === 1 ? '1 deleted note' : `${targets.length} deleted notes`} for good`,
+      );
+      return null;
     },
     link_open_web: async ({ open: answer }) => {
       const address = webAsked;
@@ -1206,6 +1632,9 @@ function workspaceHandlers(
       return rev;
     },
     mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    cannotKeep: (on) => {
+      keepFails = on;
+    },
     openedWithSystem: () => [...opened],
     setClipboard: (content) => {
       clipboard = { text: null, html: null, image: false, ...content };
@@ -1239,6 +1668,8 @@ export type MockHooks = {
   outsideChange(note: string, text: string): Promise<number | null>;
   /** The backend's text of `note`, if a window's core holds it. */
   mirrorText(note: string): string | null;
+  /** F8, UC-007 A8: the deleted notes cannot keep a note (`true`) or can again. */
+  cannotKeep(on: boolean): void;
   /** F7, UC-004 BR-007: what the system's program would have opened, in order. */
   openedWithSystem(): string[];
   /** F6: the system clipboard holds `content` now (unset parts are empty). */

@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
+use crate::notes_view::{DeletedNoteView, StatusOffer};
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
@@ -15,6 +16,9 @@ use crate::SettingsView;
 pub struct StatusView {
     /// The text, as the egui app shows it; empty when there is none.
     pub text: String,
+    /// What the status bar offers beside the text, such as "Undo" after
+    /// deleting a note (UC-007 A4); it belongs to this text.
+    pub offer: Option<StatusOffer>,
 }
 
 /// A change the window has to show.
@@ -44,4 +48,6 @@ pub enum Event {
     Enrich(Box<EnrichView>),
     /// M-16.5: the outline, code and figures of the active tab's note.
     Indexes(IndexesView),
+    /// M-05.6, UC-007 A5: the deleted notes of the workspace changed.
+    Deleted(Vec<DeletedNoteView>),
 }

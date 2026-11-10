@@ -34,6 +34,18 @@ fn main() {
         "ed_follow_link",
         "link_open_web",
         "app_close_anyway",
+        "note_new_start",
+        "note_plan",
+        "note_create",
+        "note_rename_start",
+        "note_plan_rename",
+        "note_rename",
+        "note_delete_start",
+        "note_delete",
+        "note_undo_delete",
+        "ws_restore",
+        "ws_restore_as",
+        "ws_purge",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

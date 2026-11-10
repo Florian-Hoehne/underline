@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ws-restore-as"
+description = "Enables the ws_restore_as command without any pre-configured scope."
+commands.allow = ["ws_restore_as"]
+
+[[permission]]
+identifier = "deny-ws-restore-as"
+description = "Denies the ws_restore_as command without any pre-configured scope."
+commands.deny = ["ws_restore_as"]

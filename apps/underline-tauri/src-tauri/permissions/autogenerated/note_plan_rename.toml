@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-note-plan-rename"
+description = "Enables the note_plan_rename command without any pre-configured scope."
+commands.allow = ["note_plan_rename"]
+
+[[permission]]
+identifier = "deny-note-plan-rename"
+description = "Denies the note_plan_rename command without any pre-configured scope."
+commands.deny = ["note_plan_rename"]

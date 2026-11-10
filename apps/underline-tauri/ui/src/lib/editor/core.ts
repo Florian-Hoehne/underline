@@ -64,6 +64,7 @@ export function loadEditorCoreSync(module: BufferSource | WebAssembly.Module): v
 /** What `EditorCore` calls of a tab of the WASM (a `WasmTab`). */
 type Tab = Pick<
   WasmTab,
+  | 'rename'
   | 'setMode'
   | 'setView'
   | 'setLooks'
@@ -146,7 +147,8 @@ function broken(error: unknown): boolean {
 export class EditorCore {
   #tab: Tab | null;
   #dead: EditorCoreDead | null = null;
-  readonly note: string;
+  /** The note; a rename gives it the new one (UC-006 step 7). */
+  note: string;
   /** Told once when the core of this tab failed; the owner opens it anew. */
   onDead: ((dead: EditorCoreDead) => void) | null = null;
 
@@ -163,6 +165,12 @@ export class EditorCore {
   /** For the tests: an `EditorCore` over `tab`. */
   static over(tab: Tab, note: string): EditorCore {
     return new EditorCore(tab, note);
+  }
+
+  /** UC-006 step 7: the note is `note` now; the views it reports name it so. */
+  rename(note: string): void {
+    this.#call((tab) => tab.rename(note));
+    this.note = note;
   }
 
   /** Whether the core of this tab failed and was let go. */

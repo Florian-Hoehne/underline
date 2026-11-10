@@ -11,8 +11,8 @@
 //! Feature F3 adds storing the tabs' changes before a switch or a close
 //! and the open tabs' text in the changes from outside. Left for later
 //! features, with a hook where they go: the syncer (F13), the searcher
-//! (F9), the change tracker (F12), the deleted notes (F8) and the window
-//! presence (F14).
+//! (F9), the change tracker (F12) and the window presence (F14). Feature F8
+//! reads the deleted notes when the workspace opens (M-05.6).
 //!
 //! Opening and creating a workspace read the directory, list its notes and
 //! may run git while the session is locked, as the egui app does them in
@@ -24,10 +24,10 @@ use std::path::{Path, PathBuf};
 
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace, now,
-    outside_copy_path, user_settings_dir, CreateError, CreateProblem, DirectoryProblem,
-    EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, OpenProblem, OverviewEntry,
-    Surroundings, TabList, TabState, TodoListState, Workspace, WorkspaceEvent, WorkspaceWatcher,
-    HOME_TITLE,
+    outside_copy_path, user_settings_dir, CreateError, CreateProblem, DeletedNote,
+    DirectoryProblem, EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, OpenProblem,
+    OverviewEntry, Surroundings, TabList, TabState, TodoListState, Workspace, WorkspaceEvent,
+    WorkspaceWatcher, HOME_TITLE,
 };
 
 use super::tab::Tab;
@@ -52,6 +52,10 @@ pub(super) struct OpenWorkspace {
     pub(super) overview_generation: u64,
     /// UC-021 BR-005: the tab "Todos", its sort and filter.
     todo_list: TodoListState,
+    /// M-05.6, UC-007 A5: the deleted notes, most recently deleted first.
+    pub(super) deleted: Vec<DeletedNote>,
+    /// Grows with every change of `deleted`, so only a change is sent.
+    pub(super) deleted_generation: u64,
 }
 
 impl OpenWorkspace {
@@ -519,6 +523,8 @@ impl Session {
             overview: Vec::new(),
             overview_generation: 0,
             todo_list,
+            deleted: Vec::new(),
+            deleted_generation: 0,
         });
         // UC-004: the remembered tabs come back in their order; restoring
         // them does not change the order of the note overview.
@@ -553,7 +559,11 @@ impl Session {
         if let Some(open) = &self.open {
             open.workspace.purge_deleted(now());
         }
-        // F8: the deleted notes of the overview are read here (M-05.6).
+        // M-05.6: the deleted notes at the end of the overview; the undo of
+        // a deletion in the workspace left is not offered any more.
+        self.undo_delete = None;
+        self.restoring = None;
+        self.refresh_deleted();
         self.note_polling(polling);
     }
 

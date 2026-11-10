@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ws-purge"
+description = "Enables the ws_purge command without any pre-configured scope."
+commands.allow = ["ws_purge"]
+
+[[permission]]
+identifier = "deny-ws-purge"
+description = "Denies the ws_purge command without any pre-configured scope."
+commands.deny = ["ws_purge"]

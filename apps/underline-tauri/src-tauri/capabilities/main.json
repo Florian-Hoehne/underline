@@ -36,6 +36,18 @@
     "allow-ed-note-link",
     "allow-ed-follow-link",
     "allow-link-open-web",
-    "allow-app-close-anyway"
+    "allow-app-close-anyway",
+    "allow-note-new-start",
+    "allow-note-plan",
+    "allow-note-create",
+    "allow-note-rename-start",
+    "allow-note-plan-rename",
+    "allow-note-rename",
+    "allow-note-delete-start",
+    "allow-note-delete",
+    "allow-note-undo-delete",
+    "allow-ws-restore",
+    "allow-ws-restore-as",
+    "allow-ws-purge"
   ]
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-note-new-start"
+description = "Enables the note_new_start command without any pre-configured scope."
+commands.allow = ["note_new_start"]
+
+[[permission]]
+identifier = "deny-note-new-start"
+description = "Denies the note_new_start command without any pre-configured scope."
+commands.deny = ["note_new_start"]
