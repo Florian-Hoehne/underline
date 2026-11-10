@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use underline_core::{Autosave, EditingView, NoteFormat, NoteProperties, NoteSaver};
-use underline_editor_core::sync::{apply_remote, Change, ChangeSet, Server, Touched};
+use underline_editor_core::sync::{apply_remote, ChangeSet, Server, Touched};
 use underline_editor_view::EditorTab;
 use underline_facade::highlight::DocumentHighlight;
 
@@ -36,10 +36,6 @@ pub(super) struct Tab {
     /// A window synced its edits with `ed_sync`; a reload then waits for it
     /// to confirm (`docs/migration/variante-b.md` section 3.6).
     pub(super) window_synced: bool,
-    /// ADR-025: the window's editor core makes the facade's blocks
-    /// (`ed_mirror`); the tick sends only their colours and figures
-    /// (`ed-enrich`), not the blocks (`ed-blocks`), until `fa_open`.
-    pub(super) window_facade: bool,
     /// The mirror's revision the window was last told of or answered with;
     /// a later one rings it (`ed-changed`).
     pub(super) told_rev: u32,
@@ -105,7 +101,6 @@ impl Tab {
             },
             mirror: Server::new(&body),
             window_synced: false,
-            window_facade: false,
             told_rev: 1,
             autosave: Autosave::default(),
             saving: false,
@@ -202,33 +197,6 @@ impl Tab {
         }
     }
 
-    /// ADR-025: the edits the session's own editor made (variant A) go to
-    /// the mirror as the window's; the highlighting follows. Whether there
-    /// were any.
-    pub(super) fn sync_local(&mut self) -> bool {
-        let changes: Vec<Change> = self
-            .edit
-            .editor
-            .take_edits()
-            .iter()
-            .map(Change::from)
-            .collect();
-        if changes.is_empty() {
-            return false;
-        }
-        match self.mirror.local_edit(&changes) {
-            Ok(touched) => self.highlight_touched(&touched),
-            Err(error) => {
-                // Never expected: the two copies are alike. The editor's text
-                // wins, as the window's does (section 3.10).
-                eprintln!("ADR-025: the mirror of {} went apart ({error})", self.title);
-                let resynced = self.mirror.resync(&self.edit.editor.text());
-                self.highlight_touched(&resynced.touched);
-            }
-        }
-        true
-    }
-
     /// ADR-025: a change of the mirror (`set`, in chars of the text both
     /// had) goes to the session's own editor too, as egui applies a change
     /// of the backend; `sealed` makes it an undo step of its own. Should the
@@ -255,7 +223,7 @@ impl Tab {
         self.edit.reload(&text);
         self.mirror.reload(&text);
         if !self.window_synced {
-            // Variant A: the session's editor has the text at once.
+            // No window holds the text: nobody is to confirm it.
             self.mirror.confirm_reload();
         }
         self.on_disk = text;

@@ -8,9 +8,8 @@
 // The workspaces are a small fake file system (`FAKE_FILES`), so the Open
 // and Create dialogs, the note overview and the tabs can be tried in a
 // browser. Its rules are rough stand-ins for underline-core; the real rules
-// are tested in Rust. The open notes are fake documents
-// (`editor/fakeEditor.ts`): the source view can be typed in, the autosave
-// marks and clears the tab after a second, and notes listed in
+// are tested in Rust. The text of an open note is the mirror's: the autosave
+// marks and clears the tab a second after a change, and notes listed in
 // `MockStart.failingSaves` cannot be stored, to try the failure paths.
 //
 // ADR-025: the source view's text lives in the window's editor core; the
@@ -23,11 +22,8 @@
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
-  BlocksView,
-  ClipAction,
   commands,
   CreateAnswer,
-  EditorInput,
   EditingViewName,
   NewWorkspaceRequest,
   OpenAnswer,
@@ -36,22 +32,15 @@ import type {
   SettingName,
   SettingsView,
   StartInfo,
-  EditorPatch,
-  FacadeAt,
-  FacadeInput,
-  FacadePatch,
   FigureView,
   TabPropertiesView,
   TabsView,
   ToolView,
   UiError,
-  VimChange,
-  VimState,
   WorkspaceSnapshot,
   SyncBatch,
 } from './bindings';
 import { loadEditorCore, MirrorCore } from './editor/core';
-import { FakeEditor, fakeVimStatus, type FakeMode } from './editor/fakeEditor';
 import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
 import palettes from './palettes.generated.json';
 
@@ -89,54 +78,11 @@ export type MockHandlers = {
     note: string;
     view: EditingViewName;
   }) => Promise<Ok<typeof commands.tabSetView>>;
-  fa_open: (args: { note: string }) => Ok<typeof commands.faOpen>;
-  fa_input: (args: {
-    note: string;
-    at: FacadeAt;
-    input: FacadeInput;
-    rows: unknown;
-    clipboard: string | null;
-  }) => Promise<Ok<typeof commands.faInput>>;
-  fa_clipboard: (args: {
-    note: string;
-    at: FacadeAt;
-    action: ClipAction;
-    plain: boolean;
-  }) => Promise<Ok<typeof commands.faClipboard>>;
-  fa_keys_status: (args: { note: string }) => Ok<typeof commands.faKeysStatus>;
-  ed_open: (args: { note: string }) => Ok<typeof commands.edOpen>;
-  ed_input: (args: {
-    note: string;
-    input: EditorInput;
-  }) => Ok<typeof commands.edInput> | Promise<Ok<typeof commands.edInput>>;
-  ed_select: (args: {
-    note: string;
-    rev: number;
-    anchor: number;
-    head: number;
-  }) => Ok<typeof commands.edSelect>;
   ed_viewport: (args: {
     note: string;
     from: number;
     to: number;
   }) => Promise<Ok<typeof commands.edViewport>>;
-  ed_clipboard: (args: {
-    note: string;
-    action: ClipAction;
-  }) => Promise<Ok<typeof commands.edClipboard>>;
-  ed_apply: (args: {
-    note: string;
-    base: number;
-    changes: VimChange[];
-    anchor: number;
-    head: number;
-    newStep: boolean;
-  }) => Promise<Ok<typeof commands.edApply>>;
-  ed_fold: (args: { note: string; line: number }) => Promise<Ok<typeof commands.edFold>>;
-  ed_keys_status: (args: {
-    note: string;
-    vim: VimState | null;
-  }) => Ok<typeof commands.edKeysStatus>;
   clip_read_text: () => Ok<typeof commands.clipReadText>;
   clip_write_text: (args: { text: string }) => Ok<typeof commands.clipWriteText>;
   app_close_anyway: () => Ok<typeof commands.appCloseAnyway>;
@@ -320,18 +266,7 @@ function workspaceHandlers(
   | 'tab_close'
   | 'tab_store'
   | 'tab_set_view'
-  | 'fa_open'
-  | 'fa_input'
-  | 'fa_clipboard'
-  | 'fa_keys_status'
-  | 'ed_open'
-  | 'ed_input'
-  | 'ed_select'
   | 'ed_viewport'
-  | 'ed_clipboard'
-  | 'ed_apply'
-  | 'ed_fold'
-  | 'ed_keys_status'
   | 'clip_read_text'
   | 'clip_write_text'
   | 'app_close_anyway'
@@ -385,29 +320,20 @@ function workspaceHandlers(
             : title(note),
       }));
   };
-  /** The fake documents of the open notes, and their save state. */
-  const docs = new Map<string, FakeEditor>();
+  /** The texts of the open notes, and their save state. */
+  const texts = new Map<string, string>();
   const unstored = new Set<string>();
   const saveErrors = new Map<string, string>();
   const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** The test that made the mock ended (`dispose`). */
   let disposed = false;
   let clipboard: string | null = null;
-  const docOf = (note: string): FakeEditor => {
-    let doc = docs.get(note);
-    if (!doc) {
-      doc = new FakeEditor(note, fakeNoteText(note));
-      docs.set(note, doc);
-    }
-    doc.mode = settings().inputMode as FakeMode;
-    return doc;
-  };
+  const textOf = (note: string): string => texts.get(note) ?? fakeNoteText(note);
   /** ADR-025: the backend's mirror of each note a window's core holds. */
   const mirrors = new Map<string, MirrorCore>();
-  /** The mirror's text is the note's now: the fake document follows it. */
+  /** The mirror's text is the note's now. */
   const followMirror = (note: string, mirror: MirrorCore) => {
-    const doc = new FakeEditor(note, mirror.text());
-    docs.set(note, doc);
+    texts.set(note, mirror.text());
   };
   /**
    * ADR-025: the backend's colours and figures of the facade's blocks
@@ -450,94 +376,6 @@ function workspaceHandlers(
       // The mock was taken down meanwhile (a test ended).
     }
   };
-  /** The fake document changed (the facade): a window's core fetches it. */
-  const mirrorFollows = async (note: string) => {
-    const mirror = mirrors.get(note);
-    const doc = docs.get(note);
-    if (mirror && doc && mirror.text() !== doc.text) {
-      mirror.reload(doc.text);
-      await emit('ed-changed', { note, rev: mirror.rev });
-    }
-  };
-  /** M-09: the version of the blocks of each note whose facade is shown. */
-  const facades = new Map<string, { version: number; count: number; rev: number }>();
-  /** ADR-024: the facade's blocks follow a change of the text, all at once in the mock. */
-  const blockEvents = async (note: string) => {
-    const shown = facades.get(note);
-    const doc = docOf(note);
-    if (!shown || shown.rev === doc.rev) {
-      return;
-    }
-    const blocks = fakeBlocks(doc.text);
-    const base = shown.version;
-    facades.set(note, { version: base + 1, count: blocks.length, rev: doc.rev });
-    await emit('ed-blocks', {
-      note,
-      rev: doc.rev,
-      base,
-      version: base + 1,
-      from: 0,
-      removed: shown.count,
-      blocks,
-      shift: 0,
-      lineShift: 0,
-    });
-  };
-  /**
-   * ADR-024: the answer to an input of the facade: in the mock the blocks
-   * are made anew whole and sent with it, in the chain of versions.
-   */
-  const facadePatch = (note: string, base: number, patch: EditorPatch): FacadePatch => {
-    const doc = docOf(note);
-    const shown = facades.get(note);
-    const blocks: BlocksView[] = [];
-    if (shown && shown.rev !== doc.rev) {
-      const fresh = fakeBlocks(doc.text);
-      blocks.push({
-        note,
-        rev: doc.rev,
-        base: shown.version,
-        version: shown.version + 1,
-        from: 0,
-        removed: shown.count,
-        blocks: fresh,
-        shift: 0,
-        lineShift: 0,
-      });
-      facades.set(note, { version: shown.version + 1, count: fresh.length, rev: doc.rev });
-    }
-    return {
-      base,
-      rev: patch.rev,
-      blocks,
-      anchor: patch.anchor,
-      head: patch.head,
-      gap: null,
-      scroll: patch.scroll,
-      unstored: patch.unstored,
-      place: patch.place,
-      keys: patch.keys,
-      commands: patch.commands,
-      request: patch.request,
-      copied: null,
-      wantsClipboard: false,
-    };
-  };
-  /** M-08.8, M-11.3: the sections and the Nano hits follow each input, as events. */
-  const editorEvents = async (note: string) => {
-    if (disposed) {
-      return;
-    }
-    const doc = docOf(note);
-    try {
-      await blockEvents(note);
-      await emit('ed-sections', { note, rev: doc.rev, sections: doc.sections() });
-      const ranges = doc.found();
-      await emit('ed-found', { note, rev: doc.rev, ranges, count: ranges.length });
-    } catch {
-      // The mock was taken down meanwhile (a test ended).
-    }
-  };
   const label = (note: string) =>
     title(note) + (saveErrors.has(note) ? ' ⚠' : unstored.has(note) ? ' •' : '');
   const tabsView = (): TabsView => ({
@@ -560,7 +398,7 @@ function workspaceHandlers(
           properties: {
             place: `${active}.md`,
             format: 'Markdown',
-            size: `${new TextEncoder().encode(docOf(active).text).length} bytes`,
+            size: `${new TextEncoder().encode(textOf(active)).length} bytes`,
             lastChange: '2026-11-09 10:00',
           },
         };
@@ -601,10 +439,6 @@ function workspaceHandlers(
       await emit('tabs', tabsView());
     }
   };
-  const marked = (patch: EditorPatch, note: string): EditorPatch => ({
-    ...patch,
-    unstored: unstored.has(note),
-  });
   const snapshot = (): WorkspaceSnapshot => ({
     workspace: root ? { root, name: root.split('/').at(-1) ?? root } : null,
     overview: overview(),
@@ -774,7 +608,8 @@ function workspaceHandlers(
         return { tab: note, what: `the tab ${title(note)}`, error: failure };
       }
       clearTimeout(saveTimers.get(note));
-      docs.delete(note);
+      texts.delete(note);
+      mirrors.delete(note);
       unstored.delete(note);
       saveErrors.delete(note);
       tabs.splice(at, 1);
@@ -798,115 +633,9 @@ function workspaceHandlers(
     },
     tab_set_view: async ({ note, view }) => {
       tabs = tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab));
-      if (view === 'source') {
-        facades.delete(note);
-      }
       remember();
       await emit('tabs', tabsView());
       return null;
-    },
-    fa_open: ({ note }) => {
-      if (!tabs.some((tab) => tab.note === note)) {
-        throw notOpen(note);
-      }
-      const doc = docOf(note);
-      const state = doc.state();
-      const blocks = fakeBlocks(doc.text);
-      const version = (facades.get(note)?.version ?? 0) + 1;
-      facades.set(note, { version, count: blocks.length, rev: doc.rev });
-      setTimeout(() => void editorEvents(note), 0);
-      return {
-        note,
-        rev: doc.rev,
-        version,
-        format: 'Markdown',
-        blocks,
-        anchor: state.anchor,
-        head: state.head,
-        place: state.place,
-        gap: null,
-        keys: doc.mode === 'Vim' ? fakeVimStatus(null) : doc.keys(),
-      };
-    },
-    fa_input: async ({ note, at, input }) => {
-      const doc = docOf(note);
-      doc.select(at.rev, at.anchor, at.head);
-      const base = doc.rev;
-      const patch = doc.input(
-        input.kind === 'key' ? { ...input, page: 1 } : (input as EditorInput),
-      );
-      if (patch.changes.length > 0) {
-        await changed(note);
-        await mirrorFollows(note);
-      }
-      setTimeout(() => void editorEvents(note), 0);
-      return facadePatch(note, base, marked(patch, note));
-    },
-    fa_clipboard: async ({ note, at, action }) => {
-      const doc = docOf(note);
-      doc.select(at.rev, at.anchor, at.head);
-      const base = doc.rev;
-      let patch: EditorPatch;
-      if (action === 'copy') {
-        clipboard = doc.selected() || clipboard;
-        patch = doc.unchanged();
-      } else if (action === 'cut') {
-        const cut = doc.cut();
-        clipboard = cut.text || clipboard;
-        patch = cut.patch;
-      } else {
-        patch = clipboard === null ? doc.unchanged() : doc.paste(clipboard);
-      }
-      if (patch.changes.length > 0) {
-        await changed(note);
-      }
-      return facadePatch(note, base, marked(patch, note));
-    },
-    fa_keys_status: ({ note }) => {
-      const doc = docOf(note);
-      return doc.mode === 'Vim' ? fakeVimStatus(null) : doc.keys();
-    },
-    ed_open: ({ note }) => {
-      if (!tabs.some((tab) => tab.note === note)) {
-        throw notOpen(note);
-      }
-      facades.delete(note);
-      return docOf(note).state();
-    },
-    ed_input: async ({ note, input }) => {
-      const doc = docOf(note);
-      const patch = doc.input(input);
-      if (patch.changes.length > 0) {
-        await changed(note);
-      }
-      setTimeout(() => void editorEvents(note), 0);
-      return marked(patch, note);
-    },
-    ed_select: ({ note, rev, anchor, head }) => {
-      const place = docOf(note).select(rev, anchor, head);
-      setTimeout(() => void editorEvents(note), 0);
-      return place;
-    },
-    ed_apply: async ({ note, base, changes, anchor, head }) => {
-      const doc = docOf(note);
-      const patch = doc.apply(base, changes, anchor, head);
-      if (patch && changes.length > 0) {
-        await changed(note);
-      }
-      setTimeout(() => void editorEvents(note), 0);
-      return patch && marked(patch, note);
-    },
-    ed_fold: async ({ note, line }) => {
-      const patch = docOf(note).fold(line);
-      setTimeout(() => void editorEvents(note), 0);
-      return marked(patch, note);
-    },
-    ed_keys_status: ({ note, vim }) => {
-      const doc = docOf(note);
-      if (doc.mode === 'Vim') {
-        return fakeVimStatus(vim);
-      }
-      return doc.keys();
     },
     clip_read_text: () => clipboard,
     clip_write_text: ({ text }) => {
@@ -914,13 +643,12 @@ function workspaceHandlers(
       return null;
     },
     ed_viewport: async ({ note, from, to }) => {
-      const doc = docOf(note);
-      setTimeout(() => void editorEvents(note), 0);
-      const lines = doc.text.split('\n').slice(from, to);
+      const mirror = mirrors.get(note);
+      const lines = (mirror?.text() ?? textOf(note)).split('\n').slice(from, to);
       await emit('ed-highlight', {
         note,
         // ADR-025: the colours carry the mirror's revision.
-        rev: mirrors.get(note)?.rev ?? doc.rev,
+        rev: mirror?.rev ?? 0,
         from,
         lines: lines.map((line) =>
           line.startsWith('#') ? [[0, line.length, 0] as [number, number, number]] : [],
@@ -928,24 +656,6 @@ function workspaceHandlers(
         styles: [{ color: settings().palette.heading, bold: true, italic: false }],
       });
       return null;
-    },
-    ed_clipboard: async ({ note, action }) => {
-      const doc = docOf(note);
-      let patch: EditorPatch;
-      if (action === 'copy') {
-        clipboard = doc.selected() || clipboard;
-        patch = doc.unchanged();
-      } else if (action === 'cut') {
-        const cut = doc.cut();
-        clipboard = cut.text || clipboard;
-        patch = cut.patch;
-      } else {
-        patch = clipboard === null ? doc.unchanged() : doc.paste(clipboard);
-      }
-      if (patch.changes.length > 0) {
-        await changed(note);
-      }
-      return marked(patch, note);
     },
     app_close_anyway: () => null,
     ed_mirror: async ({ note }) => {
@@ -955,7 +665,7 @@ function workspaceHandlers(
       await loadEditorCore();
       let mirror = mirrors.get(note);
       if (!mirror) {
-        mirror = new MirrorCore(docOf(note).text);
+        mirror = new MirrorCore(textOf(note));
         mirrors.set(note, mirror);
       }
       // The colours and figures follow, as the backend's tick sends them.

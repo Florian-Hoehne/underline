@@ -1,5 +1,5 @@
 // M-08.8 (UC-004 BR-012): the folded sections of the source view, as the
-// backend reports them (`ed-sections`, ADR-024). The backend owns what is
+// editor core reports them (`views`, ADR-025). The core owns what is
 // folded; this module only shows it:
 //
 // - a folded section hides its body, and its heading ends on "…" in the

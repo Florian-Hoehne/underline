@@ -839,6 +839,32 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
     gleich: 44, 85, 87 gegen 17, 88, 21, 85 ms. WebKitGTK legt für die App keinen Cache des kompilierten WASM an, und
     die Streuung kommt vom gleichzeitigen Start der App.
 
+### 7.6 Umsetzung B5c (2026-11-10): Variante A entfernt
+
+- **Entfernt (Tauri-App und Sitzung):**
+  - die Befehle `fa_open`, `fa_input`, `fa_clipboard`, `fa_keys_status`, `ed_open`, `ed_input`, `ed_select`,
+    `ed_apply`, `ed_fold`, `ed_keys_status` und `ed_clipboard`, samt Berechtigungen und Capability-Einträgen;
+  - die Events `ed-blocks`, `ed-sections`, `ed-found` und `ed-replaced` (`Event::Blocks`, `Sections`, `Found`,
+    `TextReplaced`);
+  - in der Sitzung die Eingabe-Methoden (`editor_*`, `facade_input`, `facade_clipboard`, `facade_prepare` und
+    `facade_finish` mit `FacadePrep`/`FacadeBuilt`), `Tab::sync_local`, `Tab::window_facade` und `replaced`;
+  - im Fenster `tauriBackend`, `tauriFacadeBackend`, die Fälle ohne Kern in Quellansicht und Facade (`attach`,
+    `inStep`, `setMode`, `refresh` und `leave` sind jetzt Pflicht), `editor/fakeEditor.ts` und die Mock-Befehle der
+    Variante A.
+- **Bleibt in der Sitzung:** Spiegel, Speichern, Änderungen von aussen, Hervorhebung (`ed_viewport`,
+  `ed-highlight`) und die Facade-Views nur noch für `ed-enrich` (`facade/recolor.rs` färbt Code nach).
+- **Die DTOs**, die nur noch zwischen Fenster und WASM gehen (`EditorInput`, `EditorState`, `FacadeInput`,
+  `FacadeAt`, `FacadeState`, `RowsView`, `VimChange`, `VimState`, `ClipAction`), exportiert `bindings.rs` mit
+  `.typ`.
+- **Tests:** Die Regeltests der entfernten Befehle laufen jetzt auf dem `EditorTab`, den das WASM fährt:
+  `underline-editor-view/src/tab/source_tests.rs` (21, vorher 20 Sitzungstests) und `tab/facade_tests.rs` (19 und
+  ein Messlauf, vorher dieselben 20 in der Sitzung). Die Sitzungstests ändern den Text wie ein Fenster mit `ed_sync`
+  (`Session::window_edit`, nur in Tests). Wegfallen ohne Ersatz, weil ihr Gegenstand fehlt: der Wettlauf `fa_open`
+  gegen den Tick, `fa_open` gibt die Blöcke zurück, Edits der Sitzung erreichen ein Fenster, keine `ed-blocks` für
+  ein Fenster.
+- **Q-46** gegen egui geprüft: gleiches Verhalten (gleicher Code), festgehalten im Test
+  `q46_nano_ctrl_k_on_the_last_block_as_in_egui`.
+
 ## 8. Risiken und offene Fragen (für `offene-fragen.md`)
 
 1. **Agent und ungesendete Tasten (UC-019 BR-004):**

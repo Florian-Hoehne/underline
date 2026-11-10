@@ -205,20 +205,20 @@ Reihenfolge von links nach rechts:
   - Zoomen mit Rad, Pinch, `+`, `=` und `-` um den Zeiger. Ziehen verschiebt, `0` passt ein.
   - Schliessen mit Escape, Klick daneben oder „×“.
   - Beim Hineinzoomen wird schärfer nachgerendert.
-- [ ] **M-09.10** Bearbeiten ändert die Bytes an Ort und Stelle; kein Block wird neu serialisiert (NFR-007,
+- [x] **M-09.10** Bearbeiten ändert die Bytes an Ort und Stelle; kein Block wird neu serialisiert (NFR-007,
   `fv:1561-1600`). Beim Tippen escapt Markdown `\ * _ \` [ ] < > ~`, am Blockanfang auch `# - + |`. Code-, Markup-,
   Bild- und Tabellen-Blöcke nehmen rohen Text.
-- [ ] **M-09.11** Enter:
+- [~] **M-09.11** Enter:
   - Code und Markup: `\n`.
   - Liste: `\n` plus der nächste Marker (gleiche Einrückung, nächste Nummer, offene Checkbox).
   - Markdown-Zitat: `\n\n> `.
   - Sonst: `\n\n`. Danach steht der Cursor in einer leeren Lücke: Enter fügt eine Zeile hinzu, Backspace nimmt eine
     weg.
-- [ ] **M-09.12** Backspace/Delete:
+- [~] **M-09.12** Backspace/Delete:
   - Löschen ein sichtbares Zeichen samt Escape-Backslash.
   - Am Blockrand wird mit dem Nachbarblock verbunden.
   - Eine Trennlinie wird als Ganzes entfernt.
-- [ ] **M-09.13** Tasten:
+- [~] **M-09.13** Tasten:
   - Left/Right gehen je sichtbares Zeichen, auch über Blockgrenzen.
   - Up/Down gehen je Zeile, dann in den Nachbarblock. Home/End gehen an Zeilenanfang/-ende.
   - *Kein PageUp/PageDown, kein Ctrl+Home/End, Tab tut nichts.*
@@ -281,7 +281,7 @@ Reihenfolge von links nach rechts:
 ## M-11 Eingabemodi (FR-024/025/026)
 
 - [x] **M-11.1** Normal: siehe M-08.4 und M-09.13.
-- [ ] **M-11.2** Vim (`keys:175-1060`), heute in beiden Ansichten gleich (in der Facade ist eine „Zeile“ ein
+- [~] **M-11.2** Vim (`keys:175-1060`), heute in beiden Ansichten gleich (in der Facade ist eine „Zeile“ ein
   Block). *Laut Entscheidung F-2 übernimmt `codemirror-vim` den Vim-Modus der Quellansicht. Das ist eine gewollte
   Abweichung: Dort ist die Liste unten eine Untergrenze, in der Facade gilt sie genau.*
   - Modi: NORMAL, INSERT, VISUAL, VISUAL LINE, COMMAND.
@@ -296,7 +296,7 @@ Reihenfolge von links nach rechts:
   - Befehle: `:w`, `:q`/`:q!`, `:wq`/`:x`.
   - Ctrl+C wird durchgereicht.
   - *Bewusst fehlend: `. f t % ? * J ~`, Marks, Makros, `:s`.*
-- [ ] **M-11.3** Nano (`keys:1064-1232`):
+- [x] **M-11.3** Nano (`keys:1064-1232`):
   - Ctrl+K schneidet die Zeile aus (aufeinanderfolgende sammeln sich), Ctrl+U fügt ein.
   - Ctrl+W öffnet den Such-Prompt: Enter sucht vorwärts mit Umlauf, Escape oder Ctrl+C bricht ab.
   - Undo Alt+U, Redo Alt+E.

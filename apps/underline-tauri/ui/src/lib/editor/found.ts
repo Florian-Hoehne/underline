@@ -1,5 +1,5 @@
-// UC-008 BR-008, M-11.3: the marked hits of the Nano search, as the backend
-// reports them (`ed-found`): behind the text in the theme's colour for hits
+// UC-008 BR-008, M-11.3: the marked hits of the Nano search, as the editor
+// core reports them (`views`, ADR-025): behind the text in the theme's colour for hits
 // and underlined 2 px in its colour for a hit, as egui marks them. The Vim
 // search marks its hits by itself (`.cm-searchMatch`), in the same look.
 // The search of feature F9 will use the same marks.

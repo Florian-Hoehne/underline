@@ -1,21 +1,19 @@
-//! UC-004, M-09, ADR-021, ADR-024: the facade of an open note in the
-//! session. The blocks of the facade engine (`underline_facade::blocks`) are
-//! kept per tab and sent to the window as [`BlockView`]s: the whole facade
-//! when it opens (`fa_open`), afterwards only the blocks that changed
-//! (`ed-blocks`).
+//! UC-004, M-09, ADR-021, ADR-024, ADR-025: the facade of an open note in
+//! the session. The window's editor core makes the facade's blocks itself;
+//! the session makes them too, with its highlighting, diagrams and images,
+//! only for what the core cannot make: the colours of code and the pictures
+//! of diagrams and images, which go to the window by their content
+//! (`ed-enrich`, `docs/migration/variante-b.md` section 2.3).
 //!
-//! Parsing and making the views never run while the session is held, so a
-//! keystroke never waits for them (ADR-024): the tick hands a snapshot of
-//! the text (a rope, copied in no time) to a thread of its own
-//! (`build.rs`) and takes the result in with a later tick, but only while
-//! it is still for the text the tab has, and only if no later result was
-//! taken in already. `fa_open` makes its views the same way, outside the
-//! session (`facade_prepare`, `FacadePrep::build`, `facade_finish`). Only a
-//! diagram that became ready is worked in under the session, as it changes
-//! one figure.
+//! Parsing and making the views never run while the session is held
+//! (ADR-024): the tick hands a snapshot of the text (a rope, copied in no
+//! time) to a thread of its own (`build.rs`) and takes the result in with a
+//! later tick, but only while it is still for the text the tab has, and
+//! only if no later result was taken in already. Only a diagram that became
+//! ready is worked in under the session, as it changes one figure.
 
 mod build;
-mod input;
+mod recolor;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -24,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use underline_core::{EditingView, NoteId};
 use underline_editor_core::facade::splices;
 use underline_editor_view::views::{colors_key, diagram_key, diagram_language};
-use underline_editor_view::{blocks_views, FacadeModel, Versioned, CODE_COLORS_KEPT};
+use underline_editor_view::{FacadeModel, Versioned, CODE_COLORS_KEPT};
 use underline_facade::blocks::BlockKind;
 use underline_facade::highlight::HighlightSet;
 
@@ -34,7 +32,7 @@ use super::diagrams::SvgDiagrams;
 use super::tab::Tab;
 use super::Session;
 use crate::assets::{percent_decode, request_path, Asset, AssetError, AssetPlan};
-use crate::facade_view::{BlockView, CodeColors, FacadeState, FigureView};
+use crate::facade_view::{BlockView, CodeColors, FigureView};
 use crate::sync_view::EnrichView;
 use crate::workspace_view::EditingViewName;
 use crate::{Event, UiError, UiErrorKind};
@@ -42,7 +40,8 @@ use crate::{Event, UiError, UiErrorKind};
 #[cfg(test)]
 use self::build::views_of;
 
-/// ADR-024: one change of the window's blocks (`ed-blocks`).
+/// ADR-024: one change of the views, in the chain of versions `ed-enrich`
+/// follows.
 type Splice = underline_editor_core::facade::Splice<BlockView>;
 
 /// How the backend makes the facade of one tab: its jobs, the look and the
@@ -324,66 +323,6 @@ impl std::fmt::Debug for Shared {
     }
 }
 
-/// The `ed-blocks` events of `changes` of the facade of `note`, whose
-/// blocks are of revision `rev`.
-///
-/// `window` is true when the window's editor core makes the blocks itself
-/// (ADR-025, `Tab::window_facade`): then there are none, since a long
-/// note's first facade would be megabytes the window throws away.
-fn events(note: &NoteId, rev: u64, changes: Vec<Versioned>, window: bool) -> Vec<Event> {
-    if window {
-        return Vec::new();
-    }
-    blocks_views(note.as_str(), rev, changes)
-        .into_iter()
-        .map(Event::Blocks)
-        .collect()
-}
-
-fn not_open(note: &NoteId) -> UiError {
-    UiError::new(
-        UiErrorKind::Invalid,
-        format!("The tab {} is not open", note.title()),
-    )
-}
-
-/// `fa_open`, first step: the facade as it is, or the job that makes it.
-#[derive(Debug)]
-pub struct FacadePrep(Prep);
-
-#[derive(Debug)]
-enum Prep {
-    Ready(FacadeState),
-    Build(NoteId, Box<Job>),
-}
-
-impl std::fmt::Debug for Job {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Job")
-            .field("seq", &self.seq)
-            .finish_non_exhaustive()
-    }
-}
-
-/// `fa_open`, second step: what was made, to take in.
-pub struct FacadeBuilt(Done);
-
-enum Done {
-    Ready(FacadeState),
-    Built(NoteId, Box<Built>),
-}
-
-impl FacadePrep {
-    /// Makes the views if they must be made; runs without the session.
-    #[must_use]
-    pub fn build(self) -> FacadeBuilt {
-        FacadeBuilt(match self.0 {
-            Prep::Ready(state) => Done::Ready(state),
-            Prep::Build(note, job) => Done::Built(note, Box::new(build::run(*job))),
-        })
-    }
-}
-
 impl Session {
     /// The diagrams of the facade (ADR-009), started with the first facade.
     /// Should they not start, every diagram says it cannot be rendered.
@@ -410,86 +349,25 @@ impl Session {
         }
     }
 
-    /// M-09, ADR-024, first step of `fa_open`: the facade of the tab of
-    /// `note` is shown from now on; its views as they are, or the job that
-    /// makes them, which [`FacadePrep::build`] runs without the session.
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn facade_prepare(&mut self, note: &NoteId) -> Result<FacadePrep, UiError> {
-        let tools = self.facade_tools();
-        let open = self.open.as_mut().ok_or_else(|| not_open(note))?;
-        let root = open.root().to_owned();
-        let index = open.tabs.find(note).ok_or_else(|| not_open(note))?;
-        let tab = open.tabs.get_mut(index);
-        // The backend makes the window's facade (ADR-024).
-        tab.window_facade = false;
-        // The source view is not shown; the sections are sent again.
-        tab.viewport = None;
-        tab.highlight_told = None;
-        tab.edit.forget_sections();
-        let mut facade = tab.facade.take().unwrap_or_default();
-        facade.shown = true;
-        let prep = if facade.stale(&tab.edit.facade, tab.edit.editor.revision(), tools.looks) {
-            // The tick starts no job of its own meanwhile.
-            facade.building = true;
-            Prep::Build(
-                note.clone(),
-                Box::new(facade.job(tab, &root, &tools, &self.facade)),
-            )
-        } else {
-            // The window gets all blocks; the changed figures need no event.
-            facade.figures(&mut tab.edit.facade, &tools);
-            Prep::Ready(tab.edit.facade_state(note.as_str()))
-        };
-        tab.facade = Some(facade);
-        Ok(FacadePrep(prep))
-    }
-
-    /// M-09, ADR-024, last step of `fa_open`: takes in what was made, unless
-    /// a later result was taken in meanwhile, and gives the whole facade
-    /// with the cursor. From now on the tick sends the blocks that change
-    /// (`ed-blocks`), and the sections for the fold arrows.
-    ///
-    /// # Errors
-    ///
-    /// The note's tab was closed meanwhile.
-    pub fn facade_finish(&mut self, built: FacadeBuilt) -> Result<FacadeState, UiError> {
-        let (note, built) = match built.0 {
-            Done::Ready(state) => return Ok(state),
-            Done::Built(note, built) => (note, built),
-        };
-        let open = self.open.as_mut().ok_or_else(|| not_open(&note))?;
-        let index = open.tabs.find(&note).ok_or_else(|| not_open(&note))?;
-        let tab = open.tabs.get_mut(index);
-        let facade = tab.facade.get_or_insert_with(Facade::default);
-        facade.building = false;
-        // The window takes all blocks; a stale text is followed up by the
-        // tick, with its changes.
-        let _ = facade.commit(&mut tab.edit.facade, *built);
-        Ok(tab.edit.facade_state(note.as_str()))
-    }
-
-    /// M-09, ADR-024: `fa_open` in one go (holding the session throughout).
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn facade_state(&mut self, note: &NoteId) -> Result<FacadeState, UiError> {
-        let prep = self.facade_prepare(note)?;
-        self.facade_finish(prep.build())
-    }
-
     /// M-07.2, UC-004 BR-003: the tab of `note` shows `view` from now on; it
     /// is remembered with the tabs (M-22.2).
-    pub fn set_editing_view(&mut self, note: &NoteId, view: EditingViewName) {
-        let Some(open) = &mut self.open else {
-            return;
+    ///
+    /// # Errors
+    ///
+    /// The note has no open tab.
+    pub fn set_editing_view(
+        &mut self,
+        note: &NoteId,
+        view: EditingViewName,
+    ) -> Result<(), UiError> {
+        let not_open = || {
+            UiError::new(
+                UiErrorKind::Invalid,
+                format!("The tab {} is not open", note.title()),
+            )
         };
-        let Some(index) = open.tabs.find(note) else {
-            return;
-        };
+        let open = self.open.as_mut().ok_or_else(not_open)?;
+        let index = open.tabs.find(note).ok_or_else(not_open)?;
         let tab = open.tabs.get_mut(index);
         let view = EditingView::from(view);
         if view == EditingView::Facade {
@@ -499,7 +377,7 @@ impl Session {
             self.wake.wake();
         }
         if tab.editing_view == view {
-            return;
+            return Ok(());
         }
         tab.editing_view = view;
         if let (EditingView::Source, Some(facade)) = (view, tab.facade.as_mut()) {
@@ -507,14 +385,18 @@ impl Session {
             facade.shown = false;
         }
         self.persist_tabs();
+        Ok(())
     }
 
-    /// ADR-024: the tick's part of the facade: the results of the jobs are
-    /// taken in where they are still for the tab's text, a new job starts
-    /// when the active tab's text or look changed, and a diagram that became
-    /// ready changes its figure. Gives the blocks that changed.
+    /// ADR-024, ADR-025: the tick's part of the facade: the results of the
+    /// jobs are taken in where they are still for the tab's text, a new job
+    /// starts when the active tab's text or look changed, a diagram that
+    /// became ready changes its figure, and code gets its colours. The
+    /// window's editor core makes the blocks itself; what it gets is their
+    /// colours and figures (`ed-enrich`).
     pub(super) fn facade_events(&mut self) -> Vec<Event> {
-        let mut out = self.take_built();
+        self.take_built();
+        let mut out = Vec::new();
         let shows_facade = self
             .open
             .as_ref()
@@ -554,17 +436,12 @@ impl Session {
                 facade.building = false;
                 self.status = format!("The facade could not be made: {error}");
             }
-        } else if let Some(parsed) = tab.edit.facade.parsed {
-            out.extend(events(
-                note,
-                parsed,
-                facade.figures(&mut tab.edit.facade, &tools),
-                tab.window_facade,
-            ));
+        } else if tab.edit.facade.parsed.is_some() {
+            // The changes count the views' versions, which `enrich` follows.
+            facade.figures(&mut tab.edit.facade, &tools);
             if !facade.recolor.is_empty() {
                 let ctx = context(tab, &root, &tools, &self.facade);
-                let recolored = facade.recolored(&mut tab.edit.facade, &ctx);
-                out.extend(events(note, parsed, recolored, tab.window_facade));
+                facade.recolored(&mut tab.edit.facade, &ctx);
             }
             if let Some(found) = facade.enrich(&tab.edit.facade, tools.looks, tools.dark) {
                 out.push(Event::Enrich(Box::new(EnrichView {
@@ -585,8 +462,7 @@ impl Session {
 
     /// Takes in the results of the tick's jobs that are still for the text
     /// of their tab; the others are dropped, and the next tick starts anew.
-    fn take_built(&mut self) -> Vec<Event> {
-        let mut out = Vec::new();
+    fn take_built(&mut self) {
         while let Ok((note, built)) = self.facade.built.try_recv() {
             let Some(open) = self.open.as_mut() else {
                 continue;
@@ -603,11 +479,8 @@ impl Session {
             if built.rev != rev {
                 continue;
             }
-            if let Some(changes) = facade.commit(&mut tab.edit.facade, built) {
-                out.extend(events(&note, rev, changes, tab.window_facade));
-            }
+            let _ = facade.commit(&mut tab.edit.facade, built);
         }
-        out
     }
 
     /// ADR-023: what the app's own protocol serves for the request path

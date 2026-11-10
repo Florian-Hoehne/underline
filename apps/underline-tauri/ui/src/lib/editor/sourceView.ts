@@ -1,28 +1,32 @@
 // The source view (M-08, UC-005): CodeMirror 6 as a view only (ADR-021,
-// ADR-024). The backend owns the text: every input goes to it as one
-// command, one after the other, and its patch is dispatched to CodeMirror
-// afterwards. CodeMirror has no keymap and no history of its own.
+// ADR-025). The window's editor core holds the text (`wasmBackend.ts`):
+// every input goes to it, one after the other, in the same task as the key,
+// and its patch is dispatched to CodeMirror; the edits reach the backend
+// after the frame (`sync.ts`). CodeMirror has no keymap and no history of
+// its own.
 //
-// - Keys of the editor (`keys.ts`) and typed text go to the backend, which
+// - Keys of the editor (`keys.ts`) and typed text go to the core, which
 //   applies the egui editor's rules (no moving or deleting by words), the
 //   Nano keys (M-11.3), the toolbar keys (M-10.2) and the folding keys
 //   (M-08.8).
-// - Copy, cut and paste go through the backend's clipboard (M-08.6).
+// - Copy, cut and paste go through the core and the backend's clipboard
+//   (M-08.6).
 // - A click places the cursor, a drag or Shift+click extends the selection,
 //   as CodeMirror does it; a double or triple click is a single click, as in
-//   egui (M-08.3). The selection is then sent to the backend.
+//   egui (M-08.3). The selection is then given to the core.
 // - An input method composes in CodeMirror's DOM; at its end the
 //   composition is taken back and the finished text sent (M-08.5).
-// - The colours come as `ed-highlight` events for the lines shown
-//   (M-08.2), the sections as `ed-sections` (M-08.8) and the marked hits of
-//   the Nano search as `ed-found` (M-11.3), never with the keystroke.
+// - The colours come as `ed-highlight` events of the backend for the lines
+//   shown (M-08.2), applied once the core is in step with their revision;
+//   the sections (M-08.8) and the marked hits of the Nano search (M-11.3)
+//   come from the core (`views`), never with the keystroke.
 // - The Vim keys are `codemirror-vim` (A-01, `vim.ts`). They change the
-//   text in CodeMirror first; each change is sent to the backend
-//   (`ed_apply`) for the revision it was made on. A patch of the backend
-//   that comes meanwhile (an undo, say) is moved over the changes not yet
-//   sent, and they over it, as CodeMirror's collaborative editing does, so
-//   no key is lost. When the backend's text is no longer the one a change
-//   was made on, the view shows the backend's text again.
+//   text in CodeMirror first; each change goes to the core (`apply`) for
+//   the revision it was made on. A patch of the core that comes meanwhile
+//   (an undo, say) is moved over the changes not yet given, and they over
+//   it, as CodeMirror's collaborative editing does, so no key is lost. When
+//   the core's text is no longer the one a change was made on, the view
+//   shows the core's text again.
 // - Line numbers (M-08.7, `numbers.ts`), the fold arrows (`folding.ts`) and
 //   the marked hits (`found.ts`) are further extensions.
 
@@ -41,7 +45,6 @@ import {
 } from '@codemirror/state';
 import { EditorView, drawSelection, type ViewUpdate } from '@codemirror/view';
 import {
-  commands,
   type ClipAction,
   type EditorCommandName,
   type EditorInput,
@@ -105,44 +108,14 @@ export interface EditorBackend {
   writeClipboard(text: string): Promise<void>;
   /**
    * ADR-025: the text lives in the window's editor core (`wasmBackend.ts`).
-   * Its changes, sections and hits come from `attach`, not from the
-   * backend's events; the backend's colours apply when the core is in step
-   * with their revision (`inStep`).
+   * Its changes, sections and hits come from `attach`; the backend's
+   * colours apply when the core is in step with their revision (`inStep`).
    */
-  attach?(note: string, listener: CoreListener): () => void;
-  inStep?(note: string, rev: number): boolean;
+  attach(note: string, listener: CoreListener): () => void;
+  inStep(note: string, rev: number): boolean;
   /** M-11: the input mode of the settings, for the core's keys. */
-  setMode?(note: string, mode: InputModeName): void;
+  setMode(note: string, mode: InputModeName): void;
 }
-
-type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };
-
-async function unwrap<T>(result: Promise<Result<T>>): Promise<T> {
-  const answer = await result;
-  if (answer.status === 'error') {
-    throw answer.error;
-  }
-  return answer.data;
-}
-
-/** The editor commands of the backend. */
-export const tauriBackend: EditorBackend = {
-  open: (note) => unwrap(commands.edOpen(note)),
-  input: (note, input) => unwrap(commands.edInput(note, input)),
-  clipboard: (note, action) => unwrap(commands.edClipboard(note, action)),
-  select: (note, rev, anchor, head) => unwrap(commands.edSelect(note, rev, anchor, head)),
-  viewport: async (note, from, to) => {
-    await unwrap(commands.edViewport(note, from, to));
-  },
-  apply: (note, base, changes, anchor, head, newStep) =>
-    unwrap(commands.edApply(note, base, changes, anchor, head, newStep)),
-  fold: (note, line) => unwrap(commands.edFold(note, line)),
-  keysStatus: (note, vim) => unwrap(commands.edKeysStatus(note, vim)),
-  readClipboard: () => unwrap(commands.clipReadText()),
-  writeClipboard: async (text) => {
-    await unwrap(commands.clipWriteText(text));
-  },
-};
 
 /** Marks the transactions that bring the backend's text. */
 const fromBackend = Annotation.define<boolean>();
@@ -466,20 +439,19 @@ export class SourceView {
   /** ADR-025: the core's changes, sections and hits reach the view here. */
   #attach(): void {
     this.#detach?.();
-    this.#detach =
-      this.#backend.attach?.(this.note, {
-        patch: (patch) => this.#enqueue(async () => patch),
-        views: (views) => {
-          if (views.sections) {
-            this.#ownSections(views.sections);
-          }
-          if (views.found) {
-            this.#ownFound(views.found);
-          }
-        },
-        synced: () => this.#takePending(),
-        reopened: () => this.#enqueue(() => this.#reload()),
-      }) ?? null;
+    this.#detach = this.#backend.attach(this.note, {
+      patch: (patch) => this.#enqueue(async () => patch),
+      views: (views) => {
+        if (views.sections) {
+          this.#ownSections(views.sections);
+        }
+        if (views.found) {
+          this.#ownFound(views.found);
+        }
+      },
+      synced: () => this.#takePending(),
+      reopened: () => this.#enqueue(() => this.#reload()),
+    });
   }
 
   /** M-08.2: colours from the backend; kept for a later revision. */
@@ -495,25 +467,14 @@ export class SourceView {
   }
 
   /**
-   * Whether colours of the backend's revision `rev` fit the text shown: in
-   * the window's core (ADR-025) when it is in step with `rev`, else when the
-   * view shows that revision.
+   * Whether colours of the backend's revision `rev` fit the text shown: the
+   * window's core (ADR-025) is in step with `rev`, and no Vim change waits.
    */
   #colorsInStep(rev: number): boolean {
-    if (this.#backend.inStep) {
-      return this.#local.length === 0 && this.#backend.inStep(this.note, rev);
-    }
-    return this.#inStep(rev);
+    return this.#local.length === 0 && this.#backend.inStep(this.note, rev);
   }
 
-  /** M-08.8: the sections from the backend; kept for a later revision. */
-  takeSections(sections: SectionsView): void {
-    // ADR-025: with the text in the window, its core finds them.
-    if (!this.#backend.attach) {
-      this.#ownSections(sections);
-    }
-  }
-
+  /** M-08.8: the sections the core found; kept for a later revision. */
   #ownSections(sections: SectionsView): void {
     if (sections.note !== this.note) {
       return;
@@ -526,12 +487,6 @@ export class SourceView {
   }
 
   /** M-11.3: the marked hits of the Nano search; kept for a later revision. */
-  takeFound(found: FoundView): void {
-    if (!this.#backend.attach) {
-      this.#ownFound(found);
-    }
-  }
-
   #ownFound(found: FoundView): void {
     if (found.note !== this.note) {
       return;
@@ -540,14 +495,6 @@ export class SourceView {
       this.view.dispatch({ effects: setFound.of(found.ranges) });
     } else {
       this.#pendingFound = found;
-    }
-  }
-
-  /** UC-004 A7: the backend replaced the text; shown again unless it is this one. */
-  replaced(rev: number): void {
-    // ADR-025: with the text in the window, its core brings the change.
-    if (!this.#backend.attach && rev !== this.#rev) {
-      this.#enqueue(() => this.#reload());
     }
   }
 
@@ -581,7 +528,7 @@ export class SourceView {
 
   /** The view now follows `#mode`: the Vim keys are tied, the status line told. */
   #modeStarted(): void {
-    this.#backend.setMode?.(this.note, this.#mode);
+    this.#backend.setMode(this.note, this.#mode);
     if (this.#mode === 'Vim' && vimModule) {
       const { onVimChange, vimKeys } = vimModule;
       this.#stepStart = true;

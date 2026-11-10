@@ -1,41 +1,29 @@
-//! UC-005 Edit Note in the session: the text of every open tab lives here
-//! (ADR-024), and the window's source view sends each input as one command
-//! and gets a patch back. Around it: the autosave (M-10.8), storing at once
-//! (M-10.9), closing a tab or Underline after storing (M-06.3, M-21.4), the
-//! highlighting sent after the input (M-08.2) and the properties of the
-//! tool panel (M-16.2). Feature F4 adds the Nano keys (M-11.3), the
-//! formatting toolbar (M-10.2), folding (M-08.8), the status line's place
-//! and keys (M-11.4), the edits of the window's Vim keys (A-01) and the
-//! marked hits of the Nano search (UC-008 BR-008).
-//!
-//! What answers an input is the editor's tab (`underline_editor_view::
-//! EditorTab`, ADR-025), which the window runs itself with variant B; the
-//! session adds what only it knows: the keys of the settings, the autosave
-//! clock, the highlighting and the tab marks.
+//! UC-005 Edit Note in the session: the window's editor core holds the text
+//! and answers every input (ADR-025, `underline_editor_view::EditorTab` in
+//! the WASM); its edits reach the mirror with `ed_sync` (`sync.rs`). Around
+//! them: the autosave (M-10.8), storing at once (M-10.9), closing a tab or
+//! Underline after storing (M-06.3, M-21.4), the highlighting of the lines
+//! the source view shows (M-08.2) and the properties of the tool panel
+//! (M-16.2).
 //!
 //! Ported from `apps/underline-desktop/src/app.rs`: `flush_tab_now`,
-//! `flush_all`, `close_tab`, `autosave`, `key_command` and the close
-//! confirmation, and from `crates/underline-editor/src/source_view.rs` the
-//! clipboard keys of the source view.
+//! `flush_all`, `close_tab`, `autosave` and the close confirmation.
 
 use std::ops::Range;
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use underline_core::{InputMode, NoteId, SaveJob, SaveResult, Theme};
-use underline_editor_core::keys::InputMode as KeysInputMode;
-use underline_editor_core::{utf16, Outcome};
-use underline_editor_view::Handled;
+use underline_core::{NoteId, SaveJob, SaveResult, Theme};
+use underline_editor_core::utf16;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use super::tab::Tab;
 use super::workspace::OpenWorkspace;
 use super::Session;
 use crate::editor_view::{
-    revision, units, CloseQuestion, EditorInput, EditorPatch, EditorState, HighlightView,
-    KeysStatusView, SpanStyle, TabPropertiesView, VimChange, VimState,
+    revision, units, CloseQuestion, HighlightView, SpanStyle, TabPropertiesView,
 };
-use crate::{Event, Platform, UiError, UiErrorKind};
+use crate::{Event, UiError, UiErrorKind};
 
 /// How long one tick may spend on colouring lines (ADR-010); the egui app
 /// spends 4 ms a frame. Lines not done yet are done in the next tick, which
@@ -74,27 +62,6 @@ fn tab_in<'a>(open: &'a mut Option<OpenWorkspace>, note: &NoteId) -> Result<&'a 
     Ok(tab)
 }
 
-/// The colours, the autosave clock and the tab mark follow an input the
-/// editor handled (`outcome`); the patch's `unstored` is set, and whether
-/// the tab's mark changed is returned.
-pub(super) fn after_input(tab: &mut Tab, outcome: &Outcome, unstored: &mut bool) -> bool {
-    let mut marked = false;
-    // ADR-025: the mirror takes the edits, and the highlighting follows it.
-    let edited = tab.sync_local();
-    if outcome.edited() || edited {
-        marked = tab.changed(Instant::now());
-    }
-    *unstored = tab.autosave.is_unstored();
-    marked
-}
-
-/// The patch of `handled` for the window, after the session took it in.
-fn took(tab: &mut Tab, handled: Handled<EditorPatch>, marked: &mut bool) -> EditorPatch {
-    let mut patch = handled.patch;
-    *marked |= after_input(tab, &handled.outcome, &mut patch.unstored);
-    patch
-}
-
 fn not_open(note: &NoteId) -> UiError {
     UiError::new(
         UiErrorKind::Invalid,
@@ -116,200 +83,9 @@ fn hex([r, g, b, _]: [u8; 4]) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// The keys of the input mode `mode` of the settings, for the editor core.
-pub(super) fn keys_mode(mode: InputMode) -> KeysInputMode {
-    match mode {
-        InputMode::Normal => KeysInputMode::Normal,
-        InputMode::Vim => KeysInputMode::Vim,
-        InputMode::Nano => KeysInputMode::Nano,
-    }
-}
-
 impl Session {
     fn tab_mut(&mut self, note: &NoteId) -> Result<&mut Tab, UiError> {
         tab_in(&mut self.open, note)
-    }
-
-    /// The keys of the source view in the session: the Nano keys in the
-    /// Nano mode, else the usual keys; the Vim keys of the source view are
-    /// the window's (A-01), which send what they leave as usual inputs.
-    fn source_keys_mode(&self) -> KeysInputMode {
-        match self.settings.effective().input_mode {
-            InputMode::Nano => KeysInputMode::Nano,
-            InputMode::Normal | InputMode::Vim => KeysInputMode::Normal,
-        }
-    }
-
-    /// ADR-024: the text of the tab of `note`, with its cursor, as the
-    /// window starts showing it or shows it again.
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_state(&mut self, note: &NoteId) -> Result<EditorState, UiError> {
-        let mode = self.source_keys_mode();
-        let tab = self.tab_mut(note)?;
-        tab.edit.keys.mode = mode;
-        Ok(tab.edit.state(note.as_str()))
-    }
-
-    /// M-11.4, FR-026: the left part of the status line in the input mode
-    /// of the settings: the Nano keys of the tab of `note`, or the window's
-    /// Vim keys in the state `vim` (A-01); `None` with the usual keys.
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_keys_status(
-        &mut self,
-        note: &NoteId,
-        vim: Option<VimState>,
-    ) -> Result<Option<KeysStatusView>, UiError> {
-        let setting = keys_mode(self.settings.effective().input_mode);
-        let mode = self.source_keys_mode();
-        let tab = self.tab_mut(note)?;
-        tab.edit.keys.mode = mode;
-        Ok(tab.edit.source_keys_status(setting, vim))
-    }
-
-    /// UC-005 step 1, M-08.4, M-08.5, M-10.1: one input of the source view
-    /// in the Normal input mode. Only the edit and the patch are worked out
-    /// here; the colours follow with the next tick (ADR-024).
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_input(
-        &mut self,
-        note: &NoteId,
-        input: EditorInput,
-    ) -> Result<EditorPatch, UiError> {
-        let mac = Platform::current() == Platform::MacOs;
-        let mode = self.source_keys_mode();
-        let tab = self.tab_mut(note)?;
-        tab.edit.keys.mode = mode;
-        let handled = tab.edit.source_input(input, mac);
-        let mut marked = false;
-        let patch = took(tab, handled, &mut marked);
-        // M-06.1: the tab is marked " •" now.
-        self.views_dirty |= marked;
-        Ok(patch)
-    }
-
-    /// A-01, ADR-024: the window's Vim keys changed the text of revision
-    /// `base` by `changes` (each relative to the text after the ones before
-    /// it) and left the cursor at `head`, the anchor at `anchor`
-    /// ([`EditorTab::source_apply`](underline_editor_view::EditorTab::source_apply)).
-    ///
-    /// `None` when the text is no longer of revision `base`, or when a
-    /// change does not fit the text: nothing is applied then, and the window
-    /// shows the text again (`ed_open`).
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_apply(
-        &mut self,
-        note: &NoteId,
-        base: u32,
-        changes: &[VimChange],
-        selection: (u32, u32),
-        new_step: bool,
-    ) -> Result<Option<EditorPatch>, UiError> {
-        let tab = self.tab_mut(note)?;
-        let Some(handled) = tab.edit.source_apply(base, changes, selection, new_step) else {
-            return Ok(None);
-        };
-        let mut marked = false;
-        let patch = took(tab, handled, &mut marked);
-        self.views_dirty |= marked;
-        Ok(Some(patch))
-    }
-
-    /// M-08.8: the arrow of the section whose heading is `line` (from 0)
-    /// folds or expands it; a cursor in the hidden part moves to the
-    /// heading.
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_fold(&mut self, note: &NoteId, line: u32) -> Result<EditorPatch, UiError> {
-        let tab = self.tab_mut(note)?;
-        let handled = tab.edit.fold_line(line);
-        let mut marked = false;
-        Ok(took(tab, handled, &mut marked))
-    }
-
-    /// M-08.6, ADR-014: copying gives the selected markup for the clipboard,
-    /// `None` with nothing selected. The window's backend writes it to the
-    /// clipboard after the session is let go, so the clipboard never holds
-    /// the session up.
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_copy(&mut self, note: &NoteId) -> Result<(Option<String>, EditorPatch), UiError> {
-        let tab = self.tab_mut(note)?;
-        let (text, mut patch) = tab.edit.copy();
-        patch.unstored = tab.autosave.is_unstored();
-        Ok((text, patch))
-    }
-
-    /// M-08.6: cutting gives the selected markup for the clipboard and takes
-    /// it out of the text.
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_cut(&mut self, note: &NoteId) -> Result<(Option<String>, EditorPatch), UiError> {
-        let tab = self.tab_mut(note)?;
-        let (text, handled) = tab.edit.cut();
-        let mut marked = false;
-        let patch = took(tab, handled, &mut marked);
-        self.views_dirty |= marked;
-        Ok((text, patch))
-    }
-
-    /// M-08.6: pasting inserts `text`, the plain text the window's backend
-    /// read from the clipboard before it took the session; nothing without
-    /// one. An image on the clipboard comes with feature F6 (M-10.6).
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_paste(
-        &mut self,
-        note: &NoteId,
-        text: Option<&str>,
-    ) -> Result<EditorPatch, UiError> {
-        let mode = self.source_keys_mode();
-        let tab = self.tab_mut(note)?;
-        tab.edit.keys.mode = mode;
-        let handled = tab.edit.paste(text);
-        let mut marked = false;
-        let patch = took(tab, handled, &mut marked);
-        self.views_dirty |= marked;
-        Ok(patch)
-    }
-
-    /// M-08.3: the mouse (or the window's Vim keys) put the cursor and the
-    /// selection at these UTF-16 offsets of the revision `rev`. A selection
-    /// made in an older revision is dropped, as its offsets no longer fit.
-    /// A cursor in a folded section expands it (M-08.8). Gives the place
-    /// for the status line (M-11.4).
-    ///
-    /// # Errors
-    ///
-    /// The note has no open tab.
-    pub fn editor_select(
-        &mut self,
-        note: &NoteId,
-        rev: u32,
-        anchor: u32,
-        head: u32,
-    ) -> Result<String, UiError> {
-        let tab = self.tab_mut(note)?;
-        Ok(tab.edit.select(rev, anchor, head))
     }
 
     /// M-08.1, M-08.2: the source view shows the lines `from..to` of the
@@ -634,45 +410,6 @@ impl Session {
         );
         tab.highlight_told = Some((rev, wanted));
         Some(Event::Highlight(view))
-    }
-}
-
-impl Session {
-    /// M-08.8, M-12.2, UC-008 BR-008: after the inputs, the sections of the
-    /// active tab's note and the marked hits of its Nano search, once they
-    /// changed (ADR-024: never within the keystroke command).
-    pub(super) fn editor_events(&mut self, now: Instant) -> Vec<Event> {
-        let source_mode = self.source_keys_mode();
-        let facade_mode = self.facade_keys_mode();
-        let Some(open) = self.open.as_mut() else {
-            return Vec::new();
-        };
-        let Some((note, tab)) = open.tabs.active_mut() else {
-            return Vec::new();
-        };
-        let facade_shown = tab
-            .facade
-            .as_ref()
-            .is_some_and(super::facade::Facade::shown);
-        if tab.viewport.is_none() && !facade_shown {
-            // Neither the source view nor the facade shows the note.
-            return Vec::new();
-        }
-        // The keys of the view shown: the facade has the editor core's Vim.
-        tab.edit.keys.mode = if facade_shown {
-            facade_mode
-        } else {
-            source_mode
-        };
-        let mut events = Vec::new();
-        let now = millis(now);
-        events.extend(
-            tab.edit
-                .sections_view(note.as_str(), now)
-                .map(Event::Sections),
-        );
-        events.extend(tab.edit.found_view(note.as_str(), now).map(Event::Found));
-        events
     }
 }
 

@@ -80,95 +80,16 @@ export const commands = {
 	 */
 	tabSetView: (note: string, view: EditingViewName) => typedError<null, UiError>(__TAURI_INVOKE("tab_set_view", { note, view })),
 	/**
-	 *  M-09, ADR-024: the facade of the tab of `note`, with its cursor, when the
-	 *  facade starts showing it or after its blocks got out of step. The blocks
-	 *  that change afterwards come as the event `ed-blocks`.
-	 * 
-	 *  Parsing a long note takes a while, so it runs on the blocking pool and
-	 *  without the session (ADR-024): the session is held only to take a
-	 *  snapshot of the text and to take the result in.
-	 */
-	faOpen: (note: string) => typedError<FacadeState, UiError>(__TAURI_INVOKE("fa_open", { note })),
-	/**
-	 *  ADR-024, UC-005, M-09.10 to M-09.13, M-11.2, M-11.3: one input of the
-	 *  facade at the selection `at` the window shows; the answer carries the
-	 *  blocks that changed and the cursor. `rows` are the rows the window
-	 *  measured around the cursor (Up, Down, Home, End); `clipboard` is the
-	 *  system clipboard's text when the Vim keys asked for it
-	 *  (`wantsClipboard`). Synchronous, like `ed_input`.
-	 */
-	faInput: (note: string, at: FacadeAt, input: FacadeInput, rows: RowsView | null, clipboard: string | null) => typedError<FacadePatch, UiError>(__TAURI_INVOKE("fa_input", { note, at, input, rows, clipboard })),
-	/**
-	 *  M-09.14, M-08.6, ADR-014: copy, cut or paste in the facade at the
-	 *  selection `at`; `plain` pastes the text as typed (Ctrl+Shift+V). The
-	 *  clipboard is read before the session is taken and written after it is
-	 *  let go, never on the main thread (see `ed_clipboard`).
-	 */
-	faClipboard: (note: string, at: FacadeAt, action: ClipAction, plain: boolean) => typedError<FacadePatch, UiError>(__TAURI_INVOKE("fa_clipboard", { note, at, action, plain })),
-	/**
-	 *  M-11.4, FR-026: the left part of the status line while the facade shows
-	 *  the note of `note`, in the input mode of the settings.
-	 */
-	faKeysStatus: (note: string) => typedError<KeysStatusView | null, UiError>(__TAURI_INVOKE("fa_keys_status", { note })),
-	/**
-	 *  ADR-024: the text of the tab of `note` with its cursor, when the source
-	 *  view starts showing it or after its text was replaced.
-	 * 
-	 *  Like the other editor commands it is synchronous: it runs on the main
-	 *  thread in the order the window sent it, which the spike F0 measured as
-	 *  the fastest way (`spikes/f0-editor/RESULTS.md`).
-	 */
-	edOpen: (note: string) => typedError<EditorState, UiError>(__TAURI_INVOKE("ed_open", { note })),
-	/**
-	 *  ADR-024, UC-005 step 1, M-08.4, M-10.1: one input of the source view; the
-	 *  answer is the patch. The colours follow as the event `ed-highlight`.
-	 */
-	edInput: (note: string, input: EditorInput) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_input", { note, input })),
-	/**
-	 *  M-08.3: the mouse (or the window's Vim keys) set the cursor and the
-	 *  selection, in UTF-16 units of the revision `rev`; the answer is the
-	 *  place for the status line (M-11.4). A cursor in a folded section expands
-	 *  it (M-08.8), which the tick sends as `ed-sections`.
-	 */
-	edSelect: (note: string, rev: number, anchor: number, head: number) => typedError<string, UiError>(__TAURI_INVOKE("ed_select", { note, rev, anchor, head })),
-	/**
 	 *  M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the
 	 *  end not included); their colours come as the event `ed-highlight`.
 	 */
 	edViewport: (note: string, from: number, to: number) => typedError<null, UiError>(__TAURI_INVOKE("ed_viewport", { note, from, to })),
 	/**
-	 *  M-08.6, ADR-014: copy, cut or paste in the source view, as plain text
-	 *  through the system clipboard.
-	 * 
-	 *  The clipboard is read before the session is taken and written after it
-	 *  is let go, and never on the main thread: on Linux, reading it waits for
-	 *  the program that owns it, which may be this window.
-	 */
-	edClipboard: (note: string, action: ClipAction) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_clipboard", { note, action })),
-	/**
-	 *  A-01, ADR-024: the window's Vim keys changed the text of revision
-	 *  `base`; `new_step` marks the start of an insert session (M-10.1). The
-	 *  answer is `null` when the text has another revision by now or a change
-	 *  does not fit it; nothing is applied then, and the window shows the text
-	 *  again.
-	 */
-	edApply: (note: string, base: number, changes: VimChange[], anchor: number, head: number, newStep: boolean) => typedError<EditorPatch | null, UiError>(__TAURI_INVOKE("ed_apply", { note, base, changes, anchor, head, newStep })),
-	/**
-	 *  M-08.8: the fold arrow of the section whose heading is `line` (from 0)
-	 *  was clicked; the sections follow as `ed-sections`.
-	 */
-	edFold: (note: string, line: number) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_fold", { note, line })),
-	/**
-	 *  M-11.4, FR-026: the left part of the editor's status line in the input
-	 *  mode of the settings; `vim` is what the window's Vim keys are doing.
-	 */
-	edKeysStatus: (note: string, vim: VimState | null) => typedError<KeysStatusView | null, UiError>(__TAURI_INVOKE("ed_keys_status", { note, vim })),
-	/**
 	 *  ADR-025: the window's edits made on revision `batch.base` (none to
 	 *  fetch the backend's changes); the answer carries the backend's changes
 	 *  since, the new revision and its hash.
 	 * 
-	 *  Synchronous like `ed_input`: it runs on the main thread in the order the
+	 *  Synchronous: it runs on the main thread in the order the
 	 *  window sent it. The window has at most one batch of a note on its way
 	 *  (`docs/migration/variante-b.md` section 3.3), so order would hold as an
 	 *  async command too; synchronous keeps it simple, and the work under the
@@ -216,14 +137,10 @@ export const commands = {
 /** Events */
 export const events = {
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
-	edBlocks: makeEvent<BlocksEvent, BlocksEvent>("ed-blocks"),
 	edChanged: makeEvent<ChangedEvent, ChangedEvent>("ed-changed"),
 	edEnrich: makeEvent<EnrichEvent, EnrichEvent>("ed-enrich"),
 	edFlush: makeEvent<FlushEvent, FlushEvent>("ed-flush"),
-	edFound: makeEvent<FoundEvent, FoundEvent>("ed-found"),
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
-	edReplaced: makeEvent<TextReplacedEvent, TextReplacedEvent>("ed-replaced"),
-	edSections: makeEvent<SectionsEvent, SectionsEvent>("ed-sections"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
@@ -307,9 +224,6 @@ export type BlockView = {
 	figure: FigureView | null,
 };
 
-/**  M-09, ADR-024: blocks of the active tab's facade changed. */
-export type BlocksEvent = BlocksView;
-
 /**
  *  ADR-024: the blocks changed after an input, a change from outside, a
  *  picture that became ready or another theme: `removed` blocks from `from`
@@ -322,8 +236,8 @@ export type BlocksView = {
 	/**  The revision of the text the blocks are of now. */
 	rev: number,
 	/**
-	 *  The version of the blocks this change applies to; a window that has
-	 *  another asks for the whole facade again (`fa_open`).
+	 *  The version of the blocks this change applies to; a facade that has
+	 *  another asks for the whole facade again (`open`).
 	 */
 	base: number,
 	/**  The version after the change. */
@@ -500,8 +414,8 @@ tool: ToolName };
  */
 export type EditorPatch = {
 	/**
-	 *  The revision the changes apply to. When the window's text has
-	 *  another revision, it asks for the whole text again (`ed_open`).
+	 *  The revision the changes apply to. When the view's text has
+	 *  another revision, it asks for the whole text again (`state`).
 	 */
 	base: number,
 	/**  The revision after the changes. */
@@ -636,10 +550,7 @@ export type FacadePatch = {
 	base: number,
 	/**  The revision after it. */
 	rev: number,
-	/**
-	 *  The changes of the blocks, in order, each in the chain of versions
-	 *  of `ed-blocks`.
-	 */
+	/**  The changes of the blocks, in order, each in the chain of versions. */
 	blocks: BlocksView[],
 	/**  The other end of the selection, in web units. */
 	anchor: number,
@@ -681,8 +592,8 @@ export type FacadeState = {
 	/**  The revision of the text the blocks are of. */
 	rev: number,
 	/**
-	 *  Counts the changes of the blocks; each `ed-blocks` event names the
-	 *  version it applies to.
+	 *  Counts the changes of the blocks; each change names the version it
+	 *  applies to.
 	 */
 	version: number,
 	/**  M-09.3: "Markdown" or "AsciiDoc", shown at the top right. */
@@ -755,12 +666,6 @@ export type FormatName =
 "Markdown" | 
 /**  AsciiDoc. */
 "AsciiDoc";
-
-/**
- *  M-11.3, UC-008 BR-008: the marked hits of the Nano search in the active
- *  tab's note.
- */
-export type FoundEvent = FoundView;
 
 /**
  *  UC-008 BR-008, M-11.3: the hits of the search of the Nano keys while
@@ -1208,12 +1113,6 @@ export type SectionView = {
 };
 
 /**
- *  M-08.8, M-12.2: the sections of the active tab's note, with what is
- *  folded, after the input that changed them.
- */
-export type SectionsEvent = SectionsView;
-
-/**
  *  M-08.8, M-12.2: the sections of the note shown, sent after the input
  *  that changed them (ADR-024), and when a section was folded or expanded.
  */
@@ -1420,8 +1319,7 @@ export type TabView = {
 
 /**
  *  M-08.8, M-12.2, ADR-025: what the webview's editor tells its view after
- *  the inputs, as the backend's tick did (`ed-sections`, `ed-found`); each
- *  only once it changed.
+ *  the inputs (`views`); each only once it changed.
  */
 export type TabViews = {
 	/**  The sections for the fold arrows. */
@@ -1465,7 +1363,7 @@ export type TabsView = {
 /**
  *  One change of the text: the UTF-16 range `from..to` of the text before it
  *  was replaced by `insert`. The window sends such changes too, for the
- *  edits its own Vim keys make (`ed_apply`, A-01).
+ *  edits its own Vim keys make (`apply`, A-01).
  */
 export type TextChange = {
 	/**  Where the replaced text starts. */
@@ -1475,24 +1373,6 @@ export type TextChange = {
 	/**  The text put in its place. */
 	insert: string,
 };
-
-/**
- *  The session replaced the text of an open tab by itself, such as after a
- *  change from outside (UC-004 A7); the window asks for it again
- *  (`ed_open`) unless it shows this revision already.
- */
-export type TextReplaced = {
-	/**  The note of the tab. */
-	note: string,
-	/**  The revision of the new text. */
-	rev: number,
-};
-
-/**
- *  UC-004 A7: the text of an open tab was replaced, such as after a change
- *  from outside; the window asks for it again.
- */
-export type TextReplacedEvent = TextReplaced;
 
 /**  The tab "Todos" (M-06.5, UC-021 BR-005), as it is remembered. */
 export type TodoTabView = {

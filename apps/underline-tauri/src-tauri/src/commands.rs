@@ -20,10 +20,9 @@ use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_specta::Event as _;
 use underline_core::NoteId;
 use underline_session::{
-    ClipAction, CloseQuestion, CreateAnswer, EditingViewName, EditorInput, EditorPatch,
-    EditorState, FacadeAt, FacadeInput, FacadePatch, FacadeState, KeysStatusView, MirrorView,
-    NewWorkspaceRequest, OpenAnswer, RowsView, Session, SettingName, StartInfo, StartOpened,
-    SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind, VimChange, VimState,
+    CloseQuestion, CreateAnswer, EditingViewName, MirrorView, NewWorkspaceRequest, OpenAnswer,
+    Session, SettingName, StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError,
+    UiErrorKind,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -270,141 +269,9 @@ pub async fn tab_set_view(
     view: EditingViewName,
 ) -> Result<(), UiError> {
     on_session(&session, &waker, move |session| {
-        session.set_editing_view(&NoteId::from_relative(&note), view);
-    })
-    .await
-}
-
-/// M-09, ADR-024: the facade of the tab of `note`, with its cursor, when the
-/// facade starts showing it or after its blocks got out of step. The blocks
-/// that change afterwards come as the event `ed-blocks`.
-///
-/// Parsing a long note takes a while, so it runs on the blocking pool and
-/// without the session (ADR-024): the session is held only to take a
-/// snapshot of the text and to take the result in.
-#[tauri::command]
-#[specta::specta]
-pub async fn fa_open(
-    session: State<'_, SharedSession>,
-    waker: State<'_, Waker>,
-    note: String,
-) -> Result<FacadeState, UiError> {
-    let note = NoteId::from_relative(&note);
-    let shared = Arc::clone(&session);
-    let waker = waker.inner().clone();
-    blocking(move || {
-        let prep = shared.lock().facade_prepare(&note)?;
-        let built = prep.build();
-        let state = shared.lock().facade_finish(built);
-        waker.wake();
-        state
+        session.set_editing_view(&NoteId::from_relative(&note), view)
     })
     .await?
-}
-
-/// ADR-024, UC-005, M-09.10 to M-09.13, M-11.2, M-11.3: one input of the
-/// facade at the selection `at` the window shows; the answer carries the
-/// blocks that changed and the cursor. `rows` are the rows the window
-/// measured around the cursor (Up, Down, Home, End); `clipboard` is the
-/// system clipboard's text when the Vim keys asked for it
-/// (`wantsClipboard`). Synchronous, like `ed_input`.
-#[tauri::command]
-#[specta::specta]
-pub fn fa_input(
-    session: State<'_, SharedSession>,
-    waker: State<'_, Waker>,
-    note: String,
-    at: FacadeAt,
-    input: FacadeInput,
-    rows: Option<RowsView>,
-    clipboard: Option<String>,
-) -> Result<FacadePatch, UiError> {
-    let patch =
-        session
-            .lock()
-            .facade_input(&NoteId::from_relative(&note), at, input, rows, clipboard);
-    waker.wake();
-    patch
-}
-
-/// M-09.14, M-08.6, ADR-014: copy, cut or paste in the facade at the
-/// selection `at`; `plain` pastes the text as typed (Ctrl+Shift+V). The
-/// clipboard is read before the session is taken and written after it is
-/// let go, never on the main thread (see `ed_clipboard`).
-#[tauri::command]
-#[specta::specta]
-pub async fn fa_clipboard(
-    session: State<'_, SharedSession>,
-    clipboard: State<'_, SharedClipboard>,
-    waker: State<'_, Waker>,
-    note: String,
-    at: FacadeAt,
-    action: ClipAction,
-    plain: bool,
-) -> Result<FacadePatch, UiError> {
-    let session = Arc::clone(&session);
-    let clipboard = Arc::clone(&clipboard);
-    let waker = waker.inner().clone();
-    blocking(move || {
-        let note = NoteId::from_relative(&note);
-        let text = (action == ClipAction::Paste)
-            .then(|| clipboard.lock().read_text())
-            .flatten();
-        let answer = session
-            .lock()
-            .facade_clipboard(&note, at, action, plain, text.as_deref());
-        let patch = answer.map(|(copied, patch)| {
-            if let Some(copied) = copied {
-                clipboard.lock().write_text(&copied);
-            }
-            patch
-        });
-        waker.wake();
-        patch
-    })
-    .await?
-}
-
-/// M-11.4, FR-026: the left part of the status line while the facade shows
-/// the note of `note`, in the input mode of the settings.
-#[tauri::command]
-#[specta::specta]
-pub fn fa_keys_status(
-    session: State<'_, SharedSession>,
-    note: String,
-) -> Result<Option<KeysStatusView>, UiError> {
-    session
-        .lock()
-        .facade_keys_status(&NoteId::from_relative(&note))
-}
-
-/// ADR-024: the text of the tab of `note` with its cursor, when the source
-/// view starts showing it or after its text was replaced.
-///
-/// Like the other editor commands it is synchronous: it runs on the main
-/// thread in the order the window sent it, which the spike F0 measured as
-/// the fastest way (`spikes/f0-editor/RESULTS.md`).
-#[tauri::command]
-#[specta::specta]
-pub fn ed_open(session: State<'_, SharedSession>, note: String) -> Result<EditorState, UiError> {
-    session.lock().editor_state(&NoteId::from_relative(&note))
-}
-
-/// ADR-024, UC-005 step 1, M-08.4, M-10.1: one input of the source view; the
-/// answer is the patch. The colours follow as the event `ed-highlight`.
-#[tauri::command]
-#[specta::specta]
-pub fn ed_input(
-    session: State<'_, SharedSession>,
-    waker: State<'_, Waker>,
-    note: String,
-    input: EditorInput,
-) -> Result<EditorPatch, UiError> {
-    let patch = session
-        .lock()
-        .editor_input(&NoteId::from_relative(&note), input);
-    waker.wake();
-    patch
 }
 
 /// UC-004 A9: writes the copy a sync asked for, after the session was let
@@ -421,7 +288,7 @@ fn keep_copy(session: &SharedSession, synced: Synced) -> SyncAnswer {
 /// fetch the backend's changes); the answer carries the backend's changes
 /// since, the new revision and its hash.
 ///
-/// Synchronous like `ed_input`: it runs on the main thread in the order the
+/// Synchronous: it runs on the main thread in the order the
 /// window sent it. The window has at most one batch of a note on its way
 /// (`docs/migration/variante-b.md` section 3.3), so order would hold as an
 /// async command too; synchronous keeps it simple, and the work under the
@@ -458,87 +325,6 @@ pub fn ed_resync(
         .editor_resync(&NoteId::from_relative(&note), &text);
     waker.wake();
     Ok(keep_copy(&session, synced?))
-}
-
-/// M-08.3: the mouse (or the window's Vim keys) set the cursor and the
-/// selection, in UTF-16 units of the revision `rev`; the answer is the
-/// place for the status line (M-11.4). A cursor in a folded section expands
-/// it (M-08.8), which the tick sends as `ed-sections`.
-#[tauri::command]
-#[specta::specta]
-pub fn ed_select(
-    session: State<'_, SharedSession>,
-    waker: State<'_, Waker>,
-    note: String,
-    rev: u32,
-    anchor: u32,
-    head: u32,
-) -> Result<String, UiError> {
-    let place = session
-        .lock()
-        .editor_select(&NoteId::from_relative(&note), rev, anchor, head);
-    waker.wake();
-    place
-}
-
-/// A-01, ADR-024: the window's Vim keys changed the text of revision
-/// `base`; `new_step` marks the start of an insert session (M-10.1). The
-/// answer is `null` when the text has another revision by now or a change
-/// does not fit it; nothing is applied then, and the window shows the text
-/// again.
-#[tauri::command]
-#[specta::specta]
-#[allow(clippy::too_many_arguments)]
-pub fn ed_apply(
-    session: State<'_, SharedSession>,
-    waker: State<'_, Waker>,
-    note: String,
-    base: u32,
-    changes: Vec<VimChange>,
-    anchor: u32,
-    head: u32,
-    new_step: bool,
-) -> Result<Option<EditorPatch>, UiError> {
-    let patch = session.lock().editor_apply(
-        &NoteId::from_relative(&note),
-        base,
-        &changes,
-        (anchor, head),
-        new_step,
-    );
-    waker.wake();
-    patch
-}
-
-/// M-08.8: the fold arrow of the section whose heading is `line` (from 0)
-/// was clicked; the sections follow as `ed-sections`.
-#[tauri::command]
-#[specta::specta]
-pub fn ed_fold(
-    session: State<'_, SharedSession>,
-    waker: State<'_, Waker>,
-    note: String,
-    line: u32,
-) -> Result<EditorPatch, UiError> {
-    let patch = session
-        .lock()
-        .editor_fold(&NoteId::from_relative(&note), line);
-    waker.wake();
-    patch
-}
-
-/// M-11.4, FR-026: the left part of the editor's status line in the input
-/// mode of the settings; `vim` is what the window's Vim keys are doing.
-#[tauri::command]
-#[specta::specta]
-pub fn ed_keys_status(
-    session: State<'_, SharedSession>,
-    note: String,
-    vim: Option<VimState>,
-) -> Result<Option<KeysStatusView>, UiError> {
-    session
-        .lock()
-        .editor_keys_status(&NoteId::from_relative(&note), vim)
 }
 
 /// M-11.2, A-01: the registers `"+` and `"*` of the window's Vim keys read
@@ -580,51 +366,6 @@ pub fn ed_viewport(
         .editor_viewport(&NoteId::from_relative(&note), from, to);
     waker.wake();
     set
-}
-
-/// M-08.6, ADR-014: copy, cut or paste in the source view, as plain text
-/// through the system clipboard.
-///
-/// The clipboard is read before the session is taken and written after it
-/// is let go, and never on the main thread: on Linux, reading it waits for
-/// the program that owns it, which may be this window.
-#[tauri::command]
-#[specta::specta]
-pub async fn ed_clipboard(
-    session: State<'_, SharedSession>,
-    clipboard: State<'_, SharedClipboard>,
-    waker: State<'_, Waker>,
-    note: String,
-    action: ClipAction,
-) -> Result<EditorPatch, UiError> {
-    let session = Arc::clone(&session);
-    let clipboard = Arc::clone(&clipboard);
-    let waker = waker.inner().clone();
-    blocking(move || {
-        let note = NoteId::from_relative(&note);
-        let patch = match action {
-            ClipAction::Paste => {
-                let text = clipboard.lock().read_text();
-                session.lock().editor_paste(&note, text.as_deref())
-            }
-            ClipAction::Copy | ClipAction::Cut => {
-                let taken = if action == ClipAction::Copy {
-                    session.lock().editor_copy(&note)
-                } else {
-                    session.lock().editor_cut(&note)
-                };
-                taken.map(|(text, patch)| {
-                    if let Some(text) = text {
-                        clipboard.lock().write_text(&text);
-                    }
-                    patch
-                })
-            }
-        };
-        waker.wake();
-        patch
-    })
-    .await?
 }
 
 /// M-21.4, UC-005 A14 step 3: "Close anyway": Underline ends without the
@@ -820,21 +561,10 @@ mod tests {
         "tab_close",
         "tab_store",
         "tab_set_view",
-        "fa_open",
-        "ed_open",
-        "ed_input",
-        "ed_select",
         "ed_viewport",
-        "ed_clipboard",
-        "ed_apply",
-        "ed_fold",
-        "ed_keys_status",
         "clip_read_text",
         "clip_write_text",
         "app_close_anyway",
-        "fa_input",
-        "fa_clipboard",
-        "fa_keys_status",
         "ed_sync",
         "ed_resync",
         "ed_mirror",
@@ -1087,45 +817,29 @@ mod tests {
         assert_eq!(snapshot.tabs.active.as_deref(), Some("Home"));
     }
 
+    /// ADR-025, UC-005, M-10.9: the window's core starts from the mirror
+    /// (`ed_mirror`), its edits arrive with `ed_sync`, and the note is stored
+    /// and closed; a closed tab has no mirror.
     #[test]
-    fn adr024_uc005_m10_9_editor_commands_patch_store_and_close() {
+    fn adr025_uc005_m10_9_editor_commands_sync_store_and_close() {
         let dir = temp_dir("editor");
         let root = workspace_with(&dir, "notes", &["Home"]);
         let mock = Mock::new(Some(root.clone()), &dir);
         mock.invoke("ws_start", json!({})).unwrap();
 
-        let opened = mock.invoke("ed_open", json!({ "note": "Home" })).unwrap();
-        assert_eq!(opened["text"], json!("# Home\n"));
-        let patch = mock
+        let mirror = mock.invoke("ed_mirror", json!({ "note": "Home" })).unwrap();
+        assert_eq!(mirror["text"], json!("# Home\n"));
+        let answer = mock
             .invoke(
-                "ed_input",
-                json!({ "note": "Home", "input": { "kind": "text", "text": "🙂" } }),
-            )
-            .unwrap();
-        assert_eq!(patch["base"], opened["rev"]);
-        assert_eq!(
-            patch["changes"],
-            json!([{ "from": 0, "to": 0, "insert": "🙂" }])
-        );
-        assert_eq!(patch["head"], json!(2));
-        let moved = mock
-            .invoke(
-                "ed_input",
-                json!({ "note": "Home", "input": {
-                    "kind": "key", "key": "End", "ctrl": false, "alt": false,
-                    "shift": true, "meta": false, "page": 10
+                "ed_sync",
+                json!({ "note": "Home", "batch": {
+                    "base": mirror["rev"], "seq": 1,
+                    "edits": [{ "at": 0, "remove": 0, "insert": "🙂" }]
                 } }),
             )
             .unwrap();
-        assert_eq!(
-            (moved["anchor"].clone(), moved["head"].clone()),
-            (json!(2), json!(8))
-        );
-        mock.invoke(
-            "ed_select",
-            json!({ "note": "Home", "rev": moved["rev"], "anchor": 0, "head": 0 }),
-        )
-        .unwrap();
+        assert_eq!(answer["resync"], json!(false));
+        assert_eq!(answer["remote"], json!([]));
         mock.invoke("ed_viewport", json!({ "note": "Home", "from": 0, "to": 5 }))
             .unwrap();
 
@@ -1140,119 +854,56 @@ mod tests {
             .invoke("tab_close", json!({ "note": "Home", "force": false }))
             .unwrap();
         assert_eq!(closed, Value::Null);
-        assert!(mock.invoke("ed_open", json!({ "note": "Home" })).is_err());
+        assert!(mock.invoke("ed_mirror", json!({ "note": "Home" })).is_err());
     }
 
+    /// M-11.2, M-08.6, ADR-014: the window's Vim registers and its clipboard
+    /// keys read and write the system clipboard through the backend.
     #[test]
-    fn m08_6_ed_clipboard_copies_and_pastes_through_the_clipboard() {
+    fn m11_2_m08_6_the_clipboard_commands_read_and_write_it() {
         let dir = temp_dir("clipboard");
         let root = workspace_with(&dir, "notes", &["Home"]);
         let mock = Mock::new(Some(root), &dir);
         mock.invoke("ws_start", json!({})).unwrap();
-        let rev = mock.invoke("ed_open", json!({ "note": "Home" })).unwrap()["rev"].clone();
-        mock.invoke(
-            "ed_select",
-            json!({ "note": "Home", "rev": rev, "anchor": 0, "head": 6 }),
-        )
-        .unwrap();
 
-        let cut = mock
-            .invoke("ed_clipboard", json!({ "note": "Home", "action": "cut" }))
+        mock.invoke("clip_write_text", json!({ "text": "yanked" }))
             .unwrap();
-        assert_eq!(cut["changes"][0]["to"], json!(6));
+
+        assert_eq!(
+            mock.invoke("clip_read_text", json!({})).unwrap(),
+            json!("yanked")
+        );
         assert_eq!(
             mock.app
                 .state::<SharedClipboard>()
                 .lock()
                 .read_text()
                 .as_deref(),
-            Some("# Home")
-        );
-        mock.invoke("ed_clipboard", json!({ "note": "Home", "action": "paste" }))
-            .unwrap();
-
-        let state = mock.invoke("ed_open", json!({ "note": "Home" })).unwrap();
-        assert_eq!(state["text"], json!("# Home\n"));
-    }
-
-    #[test]
-    fn a01_m08_8_m11_4_vim_changes_folding_keys_status_and_the_clipboard() {
-        let dir = temp_dir("f4");
-        let root = workspace_with(&dir, "notes", &["Home"]);
-        let mock = Mock::new(Some(root), &dir);
-        mock.invoke("ws_start", json!({})).unwrap();
-        let rev = mock.invoke("ed_open", json!({ "note": "Home" })).unwrap()["rev"].clone();
-
-        let applied = mock
-            .invoke(
-                "ed_apply",
-                json!({ "note": "Home", "base": rev, "anchor": 0, "head": 0, "newStep": false,
-                        "changes": [{ "from": 0, "to": 2, "insert": "", "newStep": true }] }),
-            )
-            .unwrap();
-        assert_eq!(applied["changes"], json!([]));
-        assert_eq!(applied["place"], json!("Ln 1, Col 1"));
-        let refused = mock
-            .invoke(
-                "ed_apply",
-                json!({ "note": "Home", "base": rev, "anchor": 0, "head": 0, "changes": [],
-                        "newStep": false }),
-            )
-            .unwrap();
-        assert_eq!(refused, Value::Null);
-
-        let place = mock
-            .invoke(
-                "ed_select",
-                json!({ "note": "Home", "rev": applied["rev"], "anchor": 0, "head": 4 }),
-            )
-            .unwrap();
-        assert_eq!(place, json!("Ln 1, Col 5 · 4 chars"));
-        let folded = mock
-            .invoke("ed_fold", json!({ "note": "Home", "line": 0 }))
-            .unwrap();
-        assert_eq!(folded["changes"], json!([]));
-
-        let status = mock
-            .invoke("ed_keys_status", json!({ "note": "Home", "vim": null }))
-            .unwrap();
-        assert_eq!(status, Value::Null, "the usual keys have no status");
-
-        mock.invoke("clip_write_text", json!({ "text": "yanked" }))
-            .unwrap();
-        assert_eq!(
-            mock.invoke("clip_read_text", json!({})).unwrap(),
-            json!("yanked")
+            Some("yanked")
         );
     }
 
+    /// M-07.2: `tab_set_view` switches the view of a tab and remembers it
+    /// (the snapshot); a note without an open tab is an error.
     #[test]
-    fn m07_2_m09_fa_open_gives_the_facade_and_tab_set_view_switches() {
+    fn m07_2_tab_set_view_switches_the_view() {
         let dir = temp_dir("facade");
         let root = workspace_with(&dir, "notes", &["Home"]);
-        std::fs::write(root.join("Home.md"), "# Home 🙂\r\n\r\n- item\r\n").unwrap();
         let mock = Mock::new(Some(root), &dir);
         mock.invoke("ws_start", json!({})).unwrap();
-
-        let facade = mock.invoke("fa_open", json!({ "note": "Home" })).unwrap();
-
-        assert_eq!(facade["format"], json!("Markdown"));
-        let blocks = facade["blocks"].as_array().unwrap();
-        assert_eq!(blocks[0]["kind"], json!({ "type": "heading", "level": 1 }));
-        assert_eq!(blocks[0]["runs"][0]["text"], json!("Home 🙂"));
-        assert_eq!(blocks[0]["runs"][0]["offsets"], json!([[0, 2]]));
-        // The `\r\n` pairs count one unit each.
-        assert_eq!(blocks[1]["start"], json!(11));
-        assert_eq!(blocks[1]["prefix"], json!("•  "));
 
         mock.invoke("tab_set_view", json!({ "note": "Home", "view": "source" }))
             .unwrap();
+
         let snapshot = mock.app.state::<SharedSession>().lock().snapshot();
         assert_eq!(
             snapshot.tabs.tabs[0].view,
             underline_session::EditingViewName::Source
         );
-        assert!(mock.invoke("fa_open", json!({ "note": "Gone" })).is_err());
+        let unknown = mock
+            .invoke("tab_set_view", json!({ "note": "Gone", "view": "facade" }))
+            .unwrap_err();
+        assert!(unknown.to_string().contains("not open"), "{unknown}");
     }
 
     #[test]

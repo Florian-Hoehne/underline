@@ -6,6 +6,7 @@ import App from '../../App.svelte';
 import { connectedShell } from '../../test/shell';
 import type { BlockView, EditorPatch, FacadePatch, FacadeState } from '../bindings';
 import { EditorInfo } from '../editor/info.svelte';
+import type { CoreListener } from '../editor/sync';
 import { activeFacade } from './active';
 import type { FacadeBackend } from './backend';
 import { assetUrl } from './backend';
@@ -162,6 +163,7 @@ function backendWith(opened: FacadeState): FacadeBackend & {
   keys: ReturnType<typeof vi.fn>;
   readClipboard: ReturnType<typeof vi.fn>;
   writeClipboard: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
 } {
   return {
     open: vi.fn(async () => opened),
@@ -172,7 +174,25 @@ function backendWith(opened: FacadeState): FacadeBackend & {
     keys: vi.fn(async () => null),
     readClipboard: vi.fn(async () => 'from the clipboard'),
     writeClipboard: vi.fn(async () => {}),
+    // ADR-025: the window's editor core, which the test speaks for (`core()`).
+    attach: (_note: string, listener: CoreListener) => {
+      attached = listener;
+      return () => {
+        if (attached === listener) attached = null;
+      };
+    },
+    refresh: vi.fn(async () => FACADE_PATCH),
+    setMode: () => {},
+    leave: () => {},
   };
+}
+
+/** The editor core's side of the facade shown (ADR-025). */
+let attached: CoreListener | null = null;
+
+function core(): CoreListener {
+  if (!attached) throw new Error('No facade is attached');
+  return attached;
 }
 
 async function show(opened: FacadeState, info = new EditorInfo()) {
@@ -396,13 +416,16 @@ describe('M-07.4, M-08.8 links and folding', () => {
     const blocks = fakeBlocks('# A\n\ntext\n\n## B\n\nmore\n');
     const { backend, info } = await show(state(blocks));
 
-    activeFacade()!.takeSections({
-      note: 'Home',
-      rev: 1,
-      sections: [
-        { line: 0, last: 6, folded: false },
-        { line: 4, last: 6, folded: true },
-      ],
+    core().views({
+      sections: {
+        note: 'Home',
+        rev: 1,
+        sections: [
+          { line: 0, last: 6, folded: false },
+          { line: 4, last: 6, folded: true },
+        ],
+      },
+      found: null,
     });
     await tick();
 
@@ -460,32 +483,36 @@ describe('ADR-024 the facade is virtualized', () => {
     const { backend } = await show(state(blocks));
     const changed = fakeBlocks('Paragraph 1 and more\n')[0];
 
-    activeFacade()!.takeBlocks({
-      note: 'Home',
-      rev: 2,
-      base: 1,
-      version: 2,
-      from: 1,
-      removed: 1,
-      blocks: [{ ...changed, start: blocks[1].start, line: 2 }],
-      shift: 9,
-      lineShift: 0,
-    });
+    core().blocks!([
+      {
+        note: 'Home',
+        rev: 2,
+        base: 1,
+        version: 2,
+        from: 1,
+        removed: 1,
+        blocks: [{ ...changed, start: blocks[1].start, line: 2 }],
+        shift: 9,
+        lineShift: 0,
+      },
+    ]);
     await tick();
 
     expect(block(1)).toHaveTextContent('Paragraph 1 and more');
     expect(block(2)).toHaveTextContent('Paragraph 2');
-    activeFacade()!.takeBlocks({
-      note: 'Home',
-      rev: 3,
-      base: 7,
-      version: 8,
-      from: 0,
-      removed: 0,
-      blocks: [],
-      shift: 0,
-      lineShift: 0,
-    });
+    core().blocks!([
+      {
+        note: 'Home',
+        rev: 3,
+        base: 7,
+        version: 8,
+        from: 0,
+        removed: 0,
+        blocks: [],
+        shift: 0,
+        lineShift: 0,
+      },
+    ]);
     await waitFor(() => expect(backend.open).toHaveBeenCalledTimes(2));
   });
 });
@@ -715,10 +742,10 @@ describe('F5b editing in the facade (ADR-024, UC-005)', () => {
       lineShift: 0,
     });
 
-    activeFacade()!.takeBlocks(change(2, 'Second change'));
+    core().blocks!([change(2, 'Second change')]);
     await tick();
     expect(block(0)).not.toHaveTextContent('Second change');
-    activeFacade()!.takeBlocks(change(1, 'First change'));
+    core().blocks!([change(1, 'First change')]);
     await tick();
 
     expect(block(0)).toHaveTextContent('Second change');

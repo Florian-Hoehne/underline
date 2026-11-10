@@ -1,6 +1,5 @@
-// M-09 (UC-004 step 3, ADR-021, ADR-024): what the facade works out of the
-// backend's blocks, without the DOM: applying a change of the blocks
-// (`ed-blocks`), the place in the markup a shown character stands for and
+// M-09 (UC-004 step 3, ADR-021, ADR-025): what the facade works out of the
+// editor core's blocks, without the DOM: applying a change of the blocks, the place in the markup a shown character stands for and
 // back, the folded sections (M-08.8), the figures (M-09.5 to M-09.8) and the
 // colours of a code block (M-09.4). Offsets are web units, as everywhere at
 // the boundary (`underline_editor_core::utf16`).
@@ -141,7 +140,7 @@ export type Folding = {
 
 /**
  * M-08.8, UC-004 BR-012: the sections `sections` (by lines, from the
- * backend's `ed-sections`) over `blocks`: a heading block whose line starts
+ * editor core's `views`) over `blocks`: a heading block whose line starts
  * a section gets its arrow, and a block whose first line is in a folded
  * body is hidden (`update_folds` of the egui facade).
  */

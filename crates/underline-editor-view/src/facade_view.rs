@@ -198,8 +198,8 @@ pub struct FacadeState {
     pub note: String,
     /// The revision of the text the blocks are of.
     pub rev: u32,
-    /// Counts the changes of the blocks; each `ed-blocks` event names the
-    /// version it applies to.
+    /// Counts the changes of the blocks; each change names the version it
+    /// applies to.
     pub version: u32,
     /// M-09.3: "Markdown" or "AsciiDoc", shown at the top right.
     pub format: String,
@@ -307,8 +307,7 @@ pub struct FacadePatch {
     pub base: u32,
     /// The revision after it.
     pub rev: u32,
-    /// The changes of the blocks, in order, each in the chain of versions
-    /// of `ed-blocks`.
+    /// The changes of the blocks, in order, each in the chain of versions.
     pub blocks: Vec<BlocksView>,
     /// The other end of the selection, in web units.
     pub anchor: u32,
@@ -348,8 +347,8 @@ pub struct BlocksView {
     pub note: String,
     /// The revision of the text the blocks are of now.
     pub rev: u32,
-    /// The version of the blocks this change applies to; a window that has
-    /// another asks for the whole facade again (`fa_open`).
+    /// The version of the blocks this change applies to; a facade that has
+    /// another asks for the whole facade again (`open`).
     pub base: u32,
     /// The version after the change.
     pub version: u32,

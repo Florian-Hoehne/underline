@@ -1,13 +1,14 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
 // `tabs`, `properties` and `close-question` events (ADR-022); the editor's
-// `ed-highlight`, `ed-sections`, `ed-found` and `ed-replaced` go to the source view shown now and
-// `ed-blocks`, `ed-sections` and `ed-replaced` to the facade shown now (feature F5), plus the UI
-// state that is not stored (M-22.4): the Open and Create dialogs, the
-// question before closing, the loading state and the panels' widths while
-// they are dragged. The text of the notes is not here: the source view asks
-// the backend for it (ADR-024). No domain logic lives here: every change goes to the
-// backend, which answers with an event or with the dialog's next stage.
+// `ed-highlight` goes to the source view shown now, `ed-changed`,
+// `ed-flush` and `ed-enrich` to the editor cores (ADR-025, `editor/sync.ts`),
+// plus the UI state that is not stored (M-22.4): the Open and Create
+// dialogs, the question before closing, the loading state and the panels'
+// widths while they are dragged. The text of the notes is not here: each
+// open note's editor core holds it (ADR-025). No domain logic lives here:
+// every change goes to the backend, which answers with an event or with the
+// dialog's next stage.
 
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
@@ -46,7 +47,6 @@ import {
   keepCores,
   takeFlush,
 } from './editor/sync';
-import { activeFacade } from './facade/active';
 import { applyPalette } from './theme';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
@@ -232,16 +232,6 @@ export class Shell {
       events.edHighlight.listen((event) => {
         activeSourceView()?.takeColors(event.payload);
       }),
-      events.edSections.listen((event) => {
-        activeSourceView()?.takeSections(event.payload);
-        activeFacade()?.takeSections(event.payload);
-      }),
-      events.edBlocks.listen((event) => {
-        activeFacade()?.takeBlocks(event.payload);
-      }),
-      events.edFound.listen((event) => {
-        activeSourceView()?.takeFound(event.payload);
-      }),
       // ADR-025: the backend changed a text a window's core holds, or asks
       // for the window's edits (before an agent's change, before closing).
       events.edChanged.listen((event) => {
@@ -254,16 +244,6 @@ export class Shell {
         void takeFlush(event.payload).catch((error: unknown) =>
           this.#fail('ed_sync', { kind: 'internal', message: String(error) }),
         );
-      }),
-      events.edReplaced.listen((event) => {
-        const view = activeSourceView();
-        if (view?.note === event.payload.note) {
-          view.replaced(event.payload.rev);
-        }
-        const facade = activeFacade();
-        if (facade?.note === event.payload.note) {
-          facade.replaced(event.payload.rev);
-        }
       }),
     ]);
     try {

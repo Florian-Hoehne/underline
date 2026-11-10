@@ -230,7 +230,7 @@ fn signed(n: i64) -> i32 {
 }
 
 /// The changes `changes` of the facade of `note`, whose blocks are of
-/// revision `rev`, as the window takes them (`ed-blocks`).
+/// revision `rev`, as the facade takes them.
 #[must_use]
 pub fn blocks_views(note: &str, rev: u64, changes: Vec<Versioned>) -> Vec<BlocksView> {
     changes
@@ -1053,6 +1053,11 @@ impl EditorTab {
         )
     }
 }
+
+#[cfg(test)]
+mod facade_tests;
+#[cfg(test)]
+mod source_tests;
 
 #[cfg(test)]
 mod tests {

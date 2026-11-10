@@ -12,13 +12,15 @@ use std::path::Path;
 use specta_typescript::Typescript;
 use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
-use underline_session::{Clipped, EditorPatch, FacadePatch, PaletteView, RemoteApplied, TabViews};
+use underline_session::{
+    ClipAction, Clipped, EditorInput, EditorPatch, EditorState, FacadeAt, FacadeInput, FacadePatch,
+    FacadeState, PaletteView, RemoteApplied, RowsView, TabViews, VimChange, VimState,
+};
 
 use crate::commands;
 use crate::events::{
-    BlocksEvent, ChangedEvent, CloseQuestionEvent, EnrichEvent, FlushEvent, FoundEvent,
-    HighlightEvent, OverviewEvent, PropertiesEvent, SectionsEvent, SettingsEvent, StatusEvent,
-    TabsEvent, TextReplacedEvent, WorkspaceEvent,
+    ChangedEvent, CloseQuestionEvent, EnrichEvent, FlushEvent, HighlightEvent, OverviewEvent,
+    PropertiesEvent, SettingsEvent, StatusEvent, TabsEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -53,18 +55,7 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::tab_close,
             commands::tab_store,
             commands::tab_set_view,
-            commands::fa_open,
-            commands::fa_input,
-            commands::fa_clipboard,
-            commands::fa_keys_status,
-            commands::ed_open,
-            commands::ed_input,
-            commands::ed_select,
             commands::ed_viewport,
-            commands::ed_clipboard,
-            commands::ed_apply,
-            commands::ed_fold,
-            commands::ed_keys_status,
             commands::ed_sync,
             commands::ed_resync,
             commands::ed_mirror,
@@ -79,11 +70,7 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             WorkspaceEvent,
             OverviewEvent,
             TabsEvent,
-            TextReplacedEvent,
             HighlightEvent,
-            SectionsEvent,
-            FoundEvent,
-            BlocksEvent,
             PropertiesEvent,
             CloseQuestionEvent,
             ChangedEvent,
@@ -92,6 +79,15 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         ])
         // ADR-025: what crosses only between the window and the editor's
         // WASM (`ui/src/lib/editor/core.ts`).
+        .typ::<EditorState>()
+        .typ::<EditorInput>()
+        .typ::<VimChange>()
+        .typ::<VimState>()
+        .typ::<ClipAction>()
+        .typ::<FacadeState>()
+        .typ::<FacadeAt>()
+        .typ::<FacadeInput>()
+        .typ::<RowsView>()
         .typ::<Clipped<EditorPatch>>()
         .typ::<Clipped<FacadePatch>>()
         .typ::<TabViews>()

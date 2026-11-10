@@ -1,55 +1,23 @@
-//! Tests of editing in the facade (UC-005, M-09.10 to M-09.14, M-11.2,
-//! M-11.3, ADR-024): the rules of each kind of block, the empty lines after
-//! Enter, joining blocks, the defects D-17 and D-18, CRLF and emoji, the
-//! one history of both views, the Vim and Nano keys with a block as a line,
-//! and that the window, applying the patches, always holds the blocks a
-//! full parse gives.
+//! Tests of editing in the facade on the editor's tab (UC-005, M-09.10 to
+//! M-09.14, M-11.2, M-11.3, ADR-025): the rules of each kind of block, the
+//! empty lines after Enter, joining blocks, the defects D-17 and D-18, CRLF
+//! and emoji, the one history of both views, the Vim and Nano keys with a
+//! block as a line, and that the window, applying the patches, always holds
+//! the blocks a full parse gives. They were the session's tests of
+//! `fa_input` and `fa_clipboard` (variant A, removed in step B5c): the same
+//! rules, now where the window's editor core runs them.
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
+use ropey::Rope;
+use underline_editor_core::facade::{parse_all, MakeViews};
+use underline_editor_core::keys::InputMode as KeysInputMode;
+use underline_markup::NoteFormat;
 
-use super::super::build::views_of;
+use super::*;
 use crate::editor_view::{ClipAction, KeyName};
 use crate::facade_view::{BlockView, FacadeAt, FacadeInput, FacadePatch, GapView, RowsView};
-use crate::{Session, SettingName, SettingsState};
-
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "underline-session-facade-input-{name}-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-/// A session on a workspace whose only note `Home.md` (or `Home.adoc`)
-/// holds `text`, opened in a tab.
-fn session_with(dir: &Path, file: &str, text: &str) -> Session {
-    let root = dir.join("notes");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(root.join(file), text).unwrap();
-    fs::create_dir_all(dir.join("home")).unwrap();
-    let mut session = Session::new(
-        Some(root),
-        StateStore::in_memory(),
-        None,
-        SettingsState::with_user_file(
-            Some(dir.join("home").join(SETTINGS_FILE_NAME)),
-            Instant::now(),
-        ),
-    );
-    session.start_workspace();
-    session.take_events();
-    session
-}
-
-fn home() -> NoteId {
-    NoteId::from_relative("Home")
-}
+use crate::CachedViews;
 
 /// What the window holds of the facade, as `FacadeView.svelte` keeps it.
 struct Window {
@@ -61,27 +29,37 @@ struct Window {
     gap: Option<GapView>,
 }
 
-/// The facade of a note, opened in the window.
+/// The facade of a note on the editor's tab, opened in the window.
 struct Facade {
-    session: Session,
+    tab: EditorTab,
+    views: CachedViews,
     window: Window,
-    adoc: bool,
+    format: NoteFormat,
+}
+
+/// The views of a full parse of `text` (no colours or pictures sent).
+fn views_of(text: &str, format: NoteFormat) -> Vec<BlockView> {
+    let (blocks, _) = parse_all(text, format);
+    CachedViews::new("Light", false).all(&blocks, text, &Rope::from_str(text))
 }
 
 impl Facade {
-    fn new(name: &str, text: &str) -> Self {
-        Self::with_file(name, "Home.md", text)
+    fn new(_name: &str, text: &str) -> Self {
+        Self::with(text, NoteFormat::Markdown)
     }
 
-    fn adoc(name: &str, text: &str) -> Self {
-        Self::with_file(name, "Home.adoc", text)
+    fn adoc(_name: &str, text: &str) -> Self {
+        Self::with(text, NoteFormat::AsciiDoc)
     }
 
-    fn with_file(name: &str, file: &str, text: &str) -> Self {
-        let mut session = session_with(&temp_dir(name), file, text);
-        let state = session.facade_state(&home()).unwrap();
+    fn with(text: &str, format: NoteFormat) -> Self {
+        let mut tab = EditorTab::new(text, format);
+        let mut views = CachedViews::new("Light", false);
+        tab.bring_facade_up_to_date(&mut views);
+        let state = tab.facade_state("Home");
         Self {
-            session,
+            tab,
+            views,
             window: Window {
                 rev: state.rev,
                 version: state.version,
@@ -90,15 +68,13 @@ impl Facade {
                 head: state.head,
                 gap: state.gap,
             },
-            adoc: file.ends_with(".adoc"),
+            format,
         }
     }
 
-    /// The note's text as it is in the backend, its line breaks kept.
+    /// The note's text, its line breaks kept.
     fn text(&self) -> String {
-        let open = self.session.open.as_ref().unwrap();
-        let index = open.tabs.find(&home()).unwrap();
-        open.tabs.get(index).edit.editor.text()
+        self.tab.editor.text()
     }
 
     fn at(&self) -> FacadeAt {
@@ -140,11 +116,6 @@ impl Facade {
     /// The window's blocks are those of a full parse of the text, as far
     /// as the text goes (colours and pictures aside).
     fn assert_in_step(&self) {
-        let format = if self.adoc {
-            underline_core::NoteFormat::AsciiDoc
-        } else {
-            underline_core::NoteFormat::Markdown
-        };
         let strip = |views: &[BlockView]| -> Vec<BlockView> {
             views
                 .iter()
@@ -159,9 +130,42 @@ impl Facade {
         let text = self.text();
         assert_eq!(
             strip(&self.window.blocks),
-            strip(&views_of(&text, format)),
+            strip(&views_of(&text, self.format)),
             "the window's blocks of {text:?}"
         );
+    }
+
+    /// One input at the selection `at`, as the window's core runs it.
+    fn call(&mut self, at: FacadeAt, input: FacadeInput, rows: Option<RowsView>) -> FacadePatch {
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: "Home",
+            at,
+            mac: false,
+            earlier,
+            views: &mut self.views,
+        };
+        self.tab.facade_input(call, input, rows, None).patch
+    }
+
+    /// Copy, cut or paste at the selection `at`; the patch is taken in.
+    fn clipboard(
+        &mut self,
+        at: FacadeAt,
+        action: ClipAction,
+        plain: bool,
+        text: Option<&str>,
+    ) -> (Option<String>, FacadePatch) {
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: "Home",
+            at,
+            mac: false,
+            earlier,
+            views: &mut self.views,
+        };
+        let (copied, handled) = self.tab.facade_clipboard(call, action, plain, text);
+        (copied, handled.patch)
     }
 
     fn input(&mut self, input: FacadeInput) -> FacadePatch {
@@ -170,10 +174,7 @@ impl Facade {
 
     fn input_with(&mut self, input: FacadeInput, rows: Option<RowsView>) -> FacadePatch {
         let at = self.at();
-        let patch = self
-            .session
-            .facade_input(&home(), at, input, rows, None)
-            .unwrap();
+        let patch = self.call(at, input, rows);
         self.take(patch)
     }
 
@@ -200,7 +201,7 @@ impl Facade {
     /// Puts the cursor at the web offset `at`, as a click does.
     fn click(&mut self, at: u32) {
         let rev = self.window.rev;
-        self.session.editor_select(&home(), rev, at, at).unwrap();
+        self.tab.select(rev, at, at);
         self.window.anchor = at;
         self.window.head = at;
         self.window.gap = None;
@@ -222,9 +223,13 @@ impl Facade {
         self.click(u32::try_from(at).unwrap());
     }
 
+    /// The input mode of the settings (the facade has the core's Vim).
     fn mode(&mut self, mode: &str) {
-        self.session
-            .quick_setting(SettingName::InputMode, mode.to_owned());
+        self.tab.keys.mode = match mode {
+            "Vim" => KeysInputMode::Vim,
+            "Nano" => KeysInputMode::Nano,
+            _ => KeysInputMode::Normal,
+        };
     }
 }
 
@@ -374,10 +379,9 @@ fn uc005_m10_1_undo_and_redo_are_the_notes_one_history() {
     assert_eq!(f.text(), "Hello there\n\nWorld\n");
     // The source view undoes the facade's edits too (same document).
     let patch = f
-        .session
-        .editor_input(
-            &home(),
-            crate::EditorInput::Key {
+        .tab
+        .source_input(
+            crate::editor_view::EditorInput::Key {
                 key: KeyName::Z,
                 ctrl: true,
                 alt: false,
@@ -385,8 +389,9 @@ fn uc005_m10_1_undo_and_redo_are_the_notes_one_history() {
                 meta: false,
                 page: 1,
             },
+            false,
         )
-        .unwrap();
+        .patch;
     assert!(!patch.changes.is_empty());
     assert_eq!(f.text(), "Hello\n\nWorld\n");
 }
@@ -499,34 +504,18 @@ fn m09_14_own_markup_pastes_as_markup_other_text_as_typed() {
         anchor: 0,
         head: 11,
     };
-    let (copied, patch) = f
-        .session
-        .facade_clipboard(&home(), at, ClipAction::Copy, false, None)
-        .unwrap();
+    let (copied, patch) = f.clipboard(at, ClipAction::Copy, false, None);
     f.take(patch);
     assert_eq!(copied.as_deref(), Some("One **two**"));
     f.click_after("Three");
     let multi = "- a\n- b";
     // Plain text is typed: escaped.
-    let (_, patch) = f
-        .session
-        .facade_clipboard(&home(), f.at(), ClipAction::Paste, false, Some(" *x*"))
-        .unwrap();
+    let (_, patch) = f.clipboard(f.at(), ClipAction::Paste, false, Some(" *x*"));
     f.take(patch);
     assert!(f.text().contains("Three \\*x\\*"), "{}", f.text());
     // The own markup comes as markup, on lines of its own when it has several.
-    f.session
-        .open
-        .as_mut()
-        .unwrap()
-        .tabs
-        .get_mut(0)
-        .edit
-        .own_markup = Some(multi.to_owned());
-    let (_, patch) = f
-        .session
-        .facade_clipboard(&home(), f.at(), ClipAction::Paste, false, Some(multi))
-        .unwrap();
+    f.tab.own_markup = Some(multi.to_owned());
+    let (_, patch) = f.clipboard(f.at(), ClipAction::Paste, false, Some(multi));
     f.take(patch);
     // A blank line before and after it, as in egui.
     assert!(
@@ -535,19 +524,9 @@ fn m09_14_own_markup_pastes_as_markup_other_text_as_typed() {
         f.text()
     );
     // Ctrl+Shift+V types even the own markup.
-    f.session
-        .open
-        .as_mut()
-        .unwrap()
-        .tabs
-        .get_mut(0)
-        .edit
-        .own_markup = Some("*z*".to_owned());
+    f.tab.own_markup = Some("*z*".to_owned());
     f.click_after("One");
-    let (_, patch) = f
-        .session
-        .facade_clipboard(&home(), f.at(), ClipAction::Paste, true, Some("*z*"))
-        .unwrap();
+    let (_, patch) = f.clipboard(f.at(), ClipAction::Paste, true, Some("*z*"));
     f.take(patch);
     assert!(f.text().starts_with("One\\*z\\* **two**"), "{:?}", f.text());
     // Cutting takes the selection away.
@@ -556,10 +535,7 @@ fn m09_14_own_markup_pastes_as_markup_other_text_as_typed() {
         anchor: 0,
         head: 3,
     };
-    let (cut, patch) = f
-        .session
-        .facade_clipboard(&home(), at, ClipAction::Cut, false, None)
-        .unwrap();
+    let (cut, patch) = f.clipboard(at, ClipAction::Cut, false, None);
     f.take(patch);
     assert_eq!(cut.as_deref(), Some("One"));
     assert!(f.text().starts_with("\\*z\\* **two**"), "{:?}", f.text());
@@ -644,18 +620,13 @@ fn adr024_a_stale_selection_is_dropped() {
         head: 0,
     };
     assert_ne!(at.rev, f.window.rev);
-    let patch = f
-        .session
-        .facade_input(
-            &home(),
-            at,
-            FacadeInput::Text {
-                text: "Y".to_owned(),
-            },
-            None,
-            None,
-        )
-        .unwrap();
+    let patch = f.call(
+        at,
+        FacadeInput::Text {
+            text: "Y".to_owned(),
+        },
+        None,
+    );
     f.take(patch);
     assert_eq!(f.text(), "HelloXY world.\n");
     // With the revision the window has, its selection is taken in.
@@ -738,10 +709,10 @@ fn m09_12_asciidoc_backspace_and_enter_keep_the_window_in_step() {
     assert!(f.text().contains("Tex\n\n *b* here."), "{:?}", f.text());
 }
 
-/// ADR-024 measuring point, the backend's part: the time of `facade_input`
-/// alone for typing, Enter and Backspace at the ends of paragraphs at 2 %,
+/// ADR-024 measuring point, the editor core's part (ADR-025: what the
+/// window's WASM runs, natively here): the time of `facade_input` alone for typing, Enter and Backspace at the ends of paragraphs at 2 %,
 /// 50 % and 98 % of a long note. Run with the spike's 10,000-line note:
-/// `UL_NOTE=/path/Home.md cargo test -p underline-session --release
+/// `UL_NOTE=/path/Home.md cargo test -p underline-editor-view --release
 /// facade_input_timing -- --ignored --nocapture`.
 #[test]
 #[ignore = "a measurement, run by hand"]
@@ -749,14 +720,14 @@ fn adr024_facade_input_timing() {
     let Ok(path) = std::env::var("UL_NOTE") else {
         return;
     };
-    let note = fs::read_to_string(path).unwrap();
+    let note = std::fs::read_to_string(path).unwrap();
     let mut f = Facade::new("timing", &note);
     let paragraphs: Vec<usize> = f
         .window
         .blocks
         .iter()
         .enumerate()
-        .filter(|(_, b)| matches!(b.kind, crate::BlockKindView::Paragraph))
+        .filter(|(_, b)| matches!(b.kind, crate::facade_view::BlockKindView::Paragraph))
         .map(|(i, _)| i)
         .collect();
     let n = f.window.blocks.len();
@@ -774,10 +745,7 @@ fn adr024_facade_input_timing() {
         let times = |f: &mut Facade, input: FacadeInput| {
             let at = f.at();
             let start = Instant::now();
-            let patch = f
-                .session
-                .facade_input(&home(), at, input, None, None)
-                .unwrap();
+            let patch = f.call(at, input, None);
             let took = start.elapsed().as_secs_f64() * 1000.0;
             let json = serde_json::to_string(&patch).unwrap().len();
             // The window's side, without the check against a full parse.
@@ -851,4 +819,22 @@ fn adr024_facade_input_timing() {
             q(&mut back, 0.99),
         );
     }
+}
+
+/// Q-46, M-11.3: Nano's Ctrl+K on the last block cuts it to the end of the
+/// text and leaves the cursor at the start of the block before; Ctrl+U
+/// pastes there. The egui facade does the same: its Nano keys are the
+/// editor core's (`underline_editor_core::keys`) and its `whole_line` is
+/// this one, so this is parity, kept until Q-46 is decided.
+#[test]
+fn q46_nano_ctrl_k_on_the_last_block_as_in_egui() {
+    let mut f = Facade::new("q46", "One.\n\nTwo.\n\nThree.\n");
+    f.mode("Nano");
+    f.click_after("Thr");
+
+    let cut = f.key_with(KeyName::K, true, false);
+    assert_eq!(f.text(), "One.\n\nTwo.\n\n");
+    assert_eq!(cut.place, "Ln 3, Col 1");
+    f.key_with(KeyName::U, true, false);
+    assert_eq!(f.text(), "One.\n\nThree.\nTwo.\n\n");
 }

@@ -205,8 +205,8 @@ impl Server {
         self.unconfirmed.is_some()
     }
 
-    /// The webview runs in the same process and has every change at once
-    /// (the session's own editor, variant A): a reload needs no confirmation.
+    /// No webview holds the text (none synced yet): a reload needs no
+    /// confirmation.
     pub fn confirm_reload(&mut self) {
         self.unconfirmed = None;
     }
@@ -405,13 +405,14 @@ impl Server {
         })
     }
 
-    /// Edits the session's own editor made (variant A), on the text as it
-    /// is: logged so a webview's late batch moves over them. The lines
-    /// touched.
+    /// Test helper: edits made on the backend's side as if a webview had
+    /// sent them, logged so a webview's late batch moves over them; the
+    /// lines touched.
     ///
     /// # Errors
     ///
     /// An edit reaches past the end of the text.
+    #[cfg(test)]
     pub fn local_edit(&mut self, changes: &[Change]) -> Result<Vec<Touched>, OutOfRange> {
         let set = ChangeSet::of_changes(self.rope.len_chars(), changes)?;
         if set.is_identity() {

@@ -6,8 +6,8 @@
 //! (`ed-flush`), and gets what the backend made of the facade's blocks
 //! (`ed-enrich`).
 //!
-//! Until the window holds the text (step B5), the session's own editor
-//! (variant A) follows the mirror: both always have the same text.
+//! The session's own editor follows the mirror: both always have the same
+//! text, from which the session makes the facade's colours and figures.
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -88,7 +88,6 @@ impl Session {
             text,
             writer,
         };
-        self.replaced.push(note.clone());
         Ok(copy)
     }
 
@@ -137,7 +136,6 @@ impl Session {
             tab.highlight_touched(&received.touched);
             if !received.applied.is_identity() {
                 tab.follow_mirror(&received.applied, false);
-                self.replaced.push(note.clone());
             }
             None
         };
@@ -175,7 +173,6 @@ impl Session {
                     tab.edit.set_now(millis(Instant::now()));
                     tab.edit.reload(text);
                     tab.edit.editor.take_edits();
-                    self.replaced.push(note.clone());
                 }
                 None
             }
@@ -241,7 +238,6 @@ impl Session {
             self.views_dirty = true;
         }
         self.changed.push(note.clone());
-        self.replaced.push(note.clone());
         Ok(rev)
     }
 
@@ -268,8 +264,6 @@ impl Session {
         // The window's core counts as holding the text with its first
         // `ed_sync` (so a core that failed to load blocks nothing).
         let tab = self.sync_tab(note)?;
-        // The window's core makes the facade's blocks from now on.
-        tab.window_facade = true;
         // A new core in the window has none of the facade's colours yet.
         if let Some(facade) = tab.facade.as_mut() {
             facade.forget_sent();
@@ -309,21 +303,18 @@ impl Session {
                 }));
             }
         }
-        // ADR-025: the session's own editor (the facade, variant A) changed a
-        // text a window's core holds: the window fetches it.
+        // ADR-025, safety net: every change of a mirror the backend makes
+        // itself goes through `changed` above, which also moves `told_rev`.
+        // Should one ever bypass it, a window that synced still hears of it
+        // here rather than never (the notes rung above are in step already).
         if let Some(open) = &mut self.open {
             for (note, tab) in open.tabs.iter_mut() {
                 if tab.window_synced && tab.mirror.rev() != tab.told_rev {
                     tab.told_rev = tab.mirror.rev();
-                    if !events
-                        .iter()
-                        .any(|e| matches!(e, Event::Changed(c) if c.note == note.as_str()))
-                    {
-                        events.push(Event::Changed(ChangedView {
-                            note: note.as_str().to_owned(),
-                            rev: tab.mirror.rev(),
-                        }));
-                    }
+                    events.push(Event::Changed(ChangedView {
+                        note: note.as_str().to_owned(),
+                        rev: tab.mirror.rev(),
+                    }));
                 }
             }
         }

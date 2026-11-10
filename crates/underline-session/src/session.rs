@@ -8,9 +8,10 @@ mod editing;
 mod facade;
 mod sync;
 mod tab;
+#[cfg(test)]
+mod window;
 mod workspace;
 
-pub use self::facade::{FacadeBuilt, FacadePrep};
 pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
@@ -24,8 +25,7 @@ use underline_core::{
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
-use crate::editor_view::{revision, TabPropertiesView};
-use crate::event::TextReplaced;
+use crate::editor_view::TabPropertiesView;
 use crate::settings::theme_names;
 use crate::workspace_view::{TabsView, WorkspaceView};
 use crate::{Event, Platform, SettingName, SettingsState, StartInfo, StatusView};
@@ -85,9 +85,6 @@ pub struct Session {
     colors: Option<Colors>,
     /// The highlighting being made on a thread of its own, for this theme.
     colors_coming: Option<(underline_core::Theme, std::sync::mpsc::Receiver<Colors>)>,
-    /// Tabs whose text was replaced by the session itself, such as after a
-    /// change from outside (UC-004 A7); the window asks for it again.
-    replaced: Vec<NoteId>,
     /// ADR-025: tabs whose mirror the backend changed; the window is told
     /// to fetch the change (`ed-changed`).
     changed: Vec<NoteId>,
@@ -181,7 +178,6 @@ impl Session {
             own_writes,
             colors: None,
             colors_coming: None,
-            replaced: Vec::new(),
             changed: Vec::new(),
             flushes: Vec::new(),
             wake: Wake::default(),
@@ -271,10 +267,10 @@ impl Session {
     /// the workspace watcher reports are taken in (ADR-011), the user
     /// settings file is looked at every 500 ms (M-20.6), due notes are
     /// stored in the background (M-10.8), the app state is written once a
-    /// change is due (M-22.1), and the colours of the lines the source view
-    /// shows are worked out (M-08.2), then its sections and the marked hits
-    /// of the Nano search (M-08.8, M-11.3), and the blocks of the facade
-    /// that changed (M-09). Returns what changed for the window.
+    /// change is due (M-22.1), the colours of the lines the source view
+    /// shows are worked out (M-08.2), and the facade's colours and figures
+    /// for the window's editor core (M-09, `ed-enrich`). Returns what
+    /// changed for the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
         self.settings.poll(now);
@@ -286,7 +282,6 @@ impl Session {
         self.show_state_notices();
         let mut events = self.take_events();
         events.extend(self.highlight_event(now));
-        events.extend(self.editor_events(now));
         events.extend(self.facade_events());
         events
     }
@@ -355,19 +350,6 @@ impl Session {
             }
         }
         events.extend(self.sync_events());
-        for note in std::mem::take(&mut self.replaced) {
-            let rev = self
-                .open
-                .as_ref()
-                .and_then(|open| open.tabs.find(&note).map(|i| open.tabs.get(i)))
-                .map(|tab| revision(tab.edit.editor.revision()));
-            if let Some(rev) = rev {
-                events.push(Event::TextReplaced(TextReplaced {
-                    note: note.as_str().to_owned(),
-                    rev,
-                }));
-            }
-        }
         if self.status != self.told.status {
             self.told.status.clone_from(&self.status);
             events.push(Event::Status(StatusView {

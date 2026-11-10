@@ -303,16 +303,15 @@ describe('M-10.1, A-01 undo steps of the Vim keys', () => {
 
 describe('Q-14, NFR-011 Link and Image wait for F6; F6 goes from region to region', () => {
   it('Link and Image are disabled, and Ctrl+K does nothing', async () => {
-    const handlers = mockHandlers(NOTES);
-    const input = vi.fn(handlers.ed_input);
-    await workbench(NOTES, { ...handlers, ed_input: input });
+    await workbench(NOTES);
     const field = await textField();
+    const before = activeSourceView()!.view.state.doc.toString();
 
     expect(screen.getByRole('button', { name: 'Link (Ctrl+K)' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Image (Ctrl+Shift+I)' })).toBeDisabled();
     expect(press(field, 'k', { ctrlKey: true }).defaultPrevented).toBe(true);
     await activeSourceView()!.settled();
-    expect(input).not.toHaveBeenCalled();
+    expect(activeSourceView()!.view.state.doc.toString()).toBe(before);
   });
 
   it('F6 and Shift+F6 cycle tab bar, toolbar, text and status line, also from Vim', async () => {

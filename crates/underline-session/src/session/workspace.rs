@@ -892,7 +892,6 @@ impl Session {
             return true;
         }
         tab.reload(content);
-        self.replaced.push(note.clone());
         self.changed.push(note.clone());
         self.status = format!("{} was changed outside", tab.title);
         was_deleted

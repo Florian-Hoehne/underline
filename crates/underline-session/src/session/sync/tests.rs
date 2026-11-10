@@ -1,7 +1,8 @@
 //! Tests of the session's side of the sync (ADR-025,
 //! `docs/migration/variante-b.md` section 6, step B4b): a window's batches
 //! against the mirror, the backend's own changes, the reload barrier, the
-//! session's own editor following the mirror, storing, and the events.
+//! session's own editor (for the facade's colours and figures) following
+//! the mirror, storing, and the events.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,6 @@ use std::time::{Duration, Instant};
 use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
 use underline_editor_core::sync::{Change, Client};
 
-use crate::editor_view::{EditorInput, KeyName};
 use crate::sync_view::{SyncAnswer, SyncBatch};
 use crate::workspace_view::EditingViewName;
 use crate::{Event, Session, SettingsState};
@@ -119,48 +119,19 @@ fn uc019_adr025_an_agents_change_while_the_user_types() {
     );
 }
 
-/// ADR-025: the session's own editor (variant A) and the mirror stay alike:
-/// typing, undo and the facade's edits reach the mirror, and the autosave
+/// ADR-025: the session's own editor (which makes the facade's views for
+/// the colours and figures) follows the window's edits, and the autosave
 /// stores the mirror's text.
 #[test]
-fn adr025_the_mirror_follows_the_sessions_editor() {
+fn adr025_the_sessions_editor_follows_the_windows_edits() {
     let dir = temp_dir("follow");
     let (mut session, root) = session_with(&dir, "# A\n\nText 😀\r\nend\n");
-    session.editor_state(&a()).unwrap();
-    session
-        .editor_input(&a(), EditorInput::Text { text: "x".into() })
-        .unwrap();
-    let mac = cfg!(target_os = "macos");
-    session
-        .editor_input(
-            &a(),
-            EditorInput::Key {
-                key: KeyName::End,
-                ctrl: !mac,
-                alt: false,
-                shift: false,
-                meta: mac,
-                page: 1,
-            },
-        )
-        .unwrap();
-    session
-        .editor_input(&a(), EditorInput::Text { text: "\nz".into() })
-        .unwrap();
-    session
-        .editor_input(
-            &a(),
-            EditorInput::Key {
-                key: KeyName::Z,
-                ctrl: !mac,
-                alt: false,
-                shift: false,
-                meta: mac,
-                page: 1,
-            },
-        )
-        .unwrap();
-    assert_eq!(texts(&session), "x# A\n\nText 😀\r\nend\n");
+    let mut client = window(&session);
+    client.local(&edit(0, 0, "x")).unwrap();
+    client.local(&edit(13, 0, "\nz")).unwrap();
+    client.local(&edit(14, 1, "")).unwrap();
+    sync(&mut session, &mut client);
+    assert_eq!(texts(&session), "x# A\n\nText 😀\r\n\nend\n");
 
     let later = Instant::now() + Duration::from_secs(10);
     let start = Instant::now();
@@ -239,7 +210,7 @@ fn uc004_a9_edits_made_before_a_reload_keep_the_users_text() {
     assert_eq!(fs::read_to_string(root.join("A.md")).unwrap(), "mine!\n");
 }
 
-/// ADR-025, UC-004 A7: without a window of its own (variant A), a reload
+/// ADR-025, UC-004 A7: without a window that synced its edits, a reload
 /// needs no confirmation.
 #[test]
 fn uc004_a7_the_sessions_editor_takes_a_reload_at_once() {
@@ -253,12 +224,13 @@ fn uc004_a7_the_sessions_editor_takes_a_reload_at_once() {
 }
 
 /// ADR-025, UC-006 A7, UC-019 BR-007: the backend's changes are byte
-/// ranges; an agent's change is an undo step of its own in the session's
-/// editor, a rename's rewrite is not; the window is told (`ed-changed`).
+/// ranges; the window is told (`ed-changed`) and gets them as edits, an
+/// agent's sealed as an undo step of its own, a rename's rewrite not.
 #[test]
 fn uc006_uc019_backend_changes_by_bytes_with_their_undo_steps() {
     let dir = temp_dir("backend");
     let (mut session, _) = session_with(&dir, "😀 [a](old.md)\n");
+    let mut client = window(&session);
     // "😀 [a](" is nine bytes.
     let rev = session
         .backend_edit(&a(), &[(9..12, "new".to_owned())], false)
@@ -294,19 +266,17 @@ fn uc006_uc019_backend_changes_by_bytes_with_their_undo_steps() {
         .collect();
     assert_eq!(changed, [rev + 1, rev + 1], "told with the revision now");
 
-    let mac = cfg!(target_os = "macos");
-    let undo = EditorInput::Key {
-        key: KeyName::Z,
-        ctrl: !mac,
-        alt: false,
-        shift: false,
-        meta: mac,
-        page: 1,
-    };
-    session.editor_input(&a(), undo.clone()).unwrap();
-    assert_eq!(texts(&session), "😀 [a](new.md)\n", "the agent's step");
-    session.editor_input(&a(), undo).unwrap();
-    assert_eq!(texts(&session), "😀 [a](old.md)\n", "the rename's");
+    client.ring();
+    let answer = sync(&mut session, &mut client);
+    let sealed: Vec<bool> = answer
+        .remote
+        .iter()
+        .map(|op| match &op.change {
+            crate::sync_view::RemoteChange::Edits { sealed, .. } => *sealed,
+            crate::sync_view::RemoteChange::Reload { .. } => panic!("no reload"),
+        })
+        .collect();
+    assert_eq!(sealed, [false, true], "the rename's, then the agent's step");
 }
 
 /// ADR-025 section 3.10: the window's text wins after the copies went
@@ -365,8 +335,9 @@ fn adr025_the_tick_sends_the_facades_colours_and_figures() {
         "# A\n\n```rust\nfn main() {}\n```\n\n![Plan](plan.png)\n",
     );
     fs::write(root.join("plan.png"), b"\x89PNG").unwrap();
-    session.set_editing_view(&a(), EditingViewName::Facade);
-    session.facade_state(&a()).unwrap();
+    session
+        .set_editing_view(&a(), EditingViewName::Facade)
+        .unwrap();
 
     let mut enriched = Vec::new();
     let start = Instant::now();
@@ -404,26 +375,6 @@ fn adr025_the_tick_sends_the_facades_colours_and_figures() {
     assert!(again.is_empty(), "sent once");
 }
 
-/// ADR-025: what the session's own editor did (variant A) is logged as a
-/// batch; a window that fetches gets it like any change of the backend.
-#[test]
-fn adr025_the_sessions_edits_reach_a_window() {
-    let dir = temp_dir("local");
-    let (mut session, _) = session_with(&dir, "a\n");
-    let mut client = window(&session);
-    session.editor_state(&a()).unwrap();
-    session
-        .editor_input(&a(), EditorInput::Text { text: "x".into() })
-        .unwrap();
-    client.ring();
-
-    let answer = sync(&mut session, &mut client);
-
-    assert_eq!(answer.remote.len(), 1);
-    assert_eq!(answer.hash, underline_editor_core::sync::hash("xa\n"));
-    assert_eq!(texts(&session), "xa\n");
-}
-
 /// UC-004 A9, section 3.10: a resync over a reload the window never took
 /// keeps the version from outside as a copy.
 #[test]
@@ -454,47 +405,29 @@ fn uc004_a9_a_resync_over_an_unconfirmed_reload_keeps_a_copy() {
     assert!(kept);
 }
 
-/// ADR-025, M-09.4: colours of code the facade sent without them (an edit
-/// in a code block, coloured by a later tick) still reach the window
-/// through `ed-enrich`.
+/// ADR-025, M-09.4: colours of code the facade's views were made without
+/// (a window's edit in a code block, coloured by a later tick) still reach
+/// the window through `ed-enrich`.
 #[test]
 fn adr025_m09_4_colours_made_later_reach_the_window() {
-    use crate::facade_view::{FacadeAt, FacadeInput};
-
     let dir = temp_dir("recolor");
     let (mut session, _) = session_with(&dir, "# A\n\n```rust\nfn main() {}\n```\n");
-    session.set_editing_view(&a(), EditingViewName::Facade);
+    session
+        .set_editing_view(&a(), EditingViewName::Facade)
+        .unwrap();
     let start = Instant::now();
     // Until the colours are ready and sent.
     let mut sent = false;
     while !sent && start.elapsed() < Duration::from_secs(10) {
-        let state = session.facade_state(&a()).unwrap();
         sent = session.tick(Instant::now()).iter().any(
             |e| matches!(e, Event::Enrich(view) if view.colors.iter().any(|(_, c)| c.is_some())),
-        ) && state.blocks.iter().any(|b| b.colors.is_some());
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(sent, "the first colours");
-    let state = session.facade_state(&a()).unwrap();
-    let code = state.blocks.iter().find(|b| b.colors.is_some()).unwrap();
-    // Before the first char of the code (after its fence).
-    let at = code.start + code.runs[0].offsets[0].1;
 
-    session
-        .facade_input(
-            &a(),
-            FacadeAt {
-                rev: state.rev,
-                anchor: at,
-                head: at,
-            },
-            FacadeInput::Text {
-                text: "let x = 1; ".into(),
-            },
-            None,
-            None,
-        )
-        .unwrap();
+    // Before the first char of the code, after its fence.
+    session.window_type(&a(), 13, "let x = 1; ");
 
     let mut keys = Vec::new();
     let start = Instant::now();
@@ -515,8 +448,7 @@ fn adr025_m09_4_colours_made_later_reach_the_window() {
 
 /// ADR-025: the window's core starts from the backend's text as the file
 /// has it (line breaks kept), with its revision; once it synced (its first
-/// `ed_sync`), a change of the session's own editor (the facade, variant A)
-/// rings it.
+/// `ed_sync`), a change of the backend (an agent's) rings it, once.
 #[test]
 fn adr025_the_window_starts_from_the_mirror_and_hears_of_changes() {
     let dir = temp_dir("mirror");
@@ -530,9 +462,8 @@ fn adr025_the_window_starts_from_the_mirror_and_hears_of_changes() {
     client.ring();
     sync(&mut session, &mut client);
     session.take_events();
-    session.editor_state(&a()).unwrap();
     session
-        .editor_input(&a(), EditorInput::Text { text: "x".into() })
+        .backend_edit(&a(), &[(0..0, "x".to_owned())], true)
         .unwrap();
     let rang: Vec<u32> = session
         .take_events()
@@ -589,25 +520,24 @@ fn adr025_a_batch_sent_again_is_applied_once() {
     assert_eq!(texts(&session), "abc\n");
 }
 
-/// ADR-025: the session's own editor (the facade, variant A) changes a text
-/// whose window core holds edits not sent yet: the late batch moves over
-/// the change, and both texts end alike.
+/// ADR-025: the backend (an agent) changes the start of a text whose
+/// window core holds edits at its end not sent yet: the late batch moves
+/// over the change, and both texts end alike.
 #[test]
-fn adr025_a_session_edit_meets_unsent_window_edits() {
+fn adr025_a_backend_edit_meets_unsent_window_edits() {
     let dir = temp_dir("meet");
     let (mut session, _) = session_with(&dir, "one\ntwo\n");
     let mut client = window(&session);
     client.ring();
     sync(&mut session, &mut client);
     client.local(&edit(8, 0, "!")).unwrap();
-    session.editor_state(&a()).unwrap();
     session
-        .editor_input(&a(), EditorInput::Text { text: "> ".into() })
+        .backend_edit(&a(), &[(0..0, "> ".to_owned())], true)
         .unwrap();
 
     let answer = sync(&mut session, &mut client);
 
-    assert_eq!(answer.remote.len(), 1, "the session's edit");
+    assert_eq!(answer.remote.len(), 1, "the backend's edit");
     assert_eq!(texts(&session), "> one\ntwo\n!");
     assert_eq!(
         answer.hash,
@@ -622,8 +552,12 @@ fn adr025_a_session_edit_meets_unsent_window_edits() {
 fn adr025_the_windows_facade_gets_the_enrichment() {
     let dir = temp_dir("enrich-window");
     let (mut session, _) = session_with(&dir, "# A\n\n```rust\nfn main() {}\n```\n");
-    session.set_editing_view(&a(), EditingViewName::Facade);
-    session.set_editing_view(&a(), EditingViewName::Facade);
+    session
+        .set_editing_view(&a(), EditingViewName::Facade)
+        .unwrap();
+    session
+        .set_editing_view(&a(), EditingViewName::Facade)
+        .unwrap();
 
     let mut sent = None;
     let start = Instant::now();
@@ -641,34 +575,4 @@ fn adr025_the_windows_facade_gets_the_enrichment() {
     let sent = sent.expect("an ed-enrich with colours");
     assert_eq!(sent.theme, "Light");
     assert!(!sent.dark);
-}
-
-/// ADR-025, M-07.2: once the window's core makes the facade (`ed_mirror`),
-/// the tick sends its colours (`ed-enrich`) but not its blocks: the first
-/// facade of a long note would be megabytes the window throws away.
-#[test]
-fn adr025_a_window_facade_gets_no_blocks_from_the_tick() {
-    let dir = temp_dir("enrich-no-blocks");
-    let (mut session, _) = session_with(&dir, "# A\n\n```rust\nfn main() {}\n```\n");
-    session.editor_mirror(&a()).expect("the mirror");
-    session.set_editing_view(&a(), EditingViewName::Facade);
-
-    let mut blocks = 0;
-    let mut enriched = false;
-    let start = Instant::now();
-    while !enriched && start.elapsed() < Duration::from_secs(10) {
-        for event in session.tick(Instant::now()) {
-            match event {
-                Event::Blocks(_) => blocks += 1,
-                Event::Enrich(view) if view.colors.iter().any(|(_, c)| c.is_some()) => {
-                    enriched = true;
-                }
-                _ => {}
-            }
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    assert!(enriched, "an ed-enrich with colours");
-    assert_eq!(blocks, 0);
 }

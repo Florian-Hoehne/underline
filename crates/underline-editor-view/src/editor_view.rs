@@ -44,7 +44,7 @@ pub struct EditorState {
 
 /// One change of the text: the UTF-16 range `from..to` of the text before it
 /// was replaced by `insert`. The window sends such changes too, for the
-/// edits its own Vim keys make (`ed_apply`, A-01).
+/// edits its own Vim keys make (`apply`, A-01).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
@@ -80,8 +80,8 @@ pub struct VimChange {
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct EditorPatch {
-    /// The revision the changes apply to. When the window's text has
-    /// another revision, it asks for the whole text again (`ed_open`).
+    /// The revision the changes apply to. When the view's text has
+    /// another revision, it asks for the whole text again (`state`).
     pub base: u32,
     /// The revision after the changes.
     pub rev: u32,
@@ -586,8 +586,7 @@ pub struct Clipped<P> {
 }
 
 /// M-08.8, M-12.2, ADR-025: what the webview's editor tells its view after
-/// the inputs, as the backend's tick did (`ed-sections`, `ed-found`); each
-/// only once it changed.
+/// the inputs (`views`); each only once it changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]

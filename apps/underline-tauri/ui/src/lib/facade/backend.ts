@@ -1,5 +1,6 @@
-// What the facade needs of the backend (ADR-024), and where its pictures
-// come from (ADR-023): only through the app's own protocol `ul-asset`.
+// What the facade needs of its backend, the window's editor core
+// (ADR-025, `wasmBackend.ts`), and where its pictures come from (ADR-023):
+// only through the app's own protocol `ul-asset`.
 
 import {
   commands,
@@ -19,12 +20,12 @@ import {
 import type { CoreListener } from '../editor/sync';
 import type { InputModeName } from '../editor/keys';
 
-/** The facade's commands. */
+/** The facade's backend. */
 export interface FacadeBackend {
-  /** The facade of `note` with its cursor (`fa_open`), its keys those of `mode` when given. */
+  /** The facade of `note` with its cursor, its keys those of `mode` when given. */
   open(note: string, mode?: InputModeName): Promise<FacadeState>;
   /** M-11: the keys of the facade follow the input mode `mode` of the settings. */
-  setMode?(note: string, mode: InputModeName): void;
+  setMode(note: string, mode: InputModeName): void;
   /** Sets the selection in web units of revision `rev`; gives the place for the status line. */
   select(note: string, rev: number, anchor: number, head: number): Promise<string>;
   /** M-08.8: folds or expands the section of the heading on `line`. */
@@ -32,7 +33,7 @@ export interface FacadeBackend {
   /**
    * UC-005, M-09.10 to M-09.13: one input at the selection `at`, with the
    * rows measured around the cursor and, when the Vim keys asked, the
-   * clipboard's text (`fa_input`).
+   * clipboard's text.
    */
   input(
     note: string,
@@ -52,16 +53,16 @@ export interface FacadeBackend {
   /**
    * ADR-025: the text lives in the window's editor core
    * (`wasmBackend.ts`): its changes, sections and the backend's colours and
-   * figures come from `attach`, not from the backend's events.
+   * figures come from `attach`.
    */
-  attach?(note: string, listener: CoreListener): () => void;
+  attach(note: string, listener: CoreListener): () => void;
   /** ADR-025: the facade after a change of the backend. */
-  refresh?(note: string): Promise<FacadePatch>;
+  refresh(note: string): Promise<FacadePatch>;
   /**
    * ADR-025: the facade of `note` is no longer shown; `kept` are the blocks
    * it drew, of their version, which `open` may take again.
    */
-  leave?(note: string, kept: { version: number; blocks: BlockView[] } | null): void;
+  leave(note: string, kept: { version: number; blocks: BlockView[] } | null): void;
 }
 
 type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };
@@ -73,21 +74,6 @@ async function unwrap<T>(result: Promise<Result<T>>): Promise<T> {
   }
   return answer.data;
 }
-
-/** The facade's commands of the backend. */
-export const tauriFacadeBackend: FacadeBackend = {
-  open: (note) => unwrap(commands.faOpen(note)),
-  select: (note, rev, anchor, head) => unwrap(commands.edSelect(note, rev, anchor, head)),
-  fold: (note, line) => unwrap(commands.edFold(note, line)),
-  input: (note, at, input, rows, clipboard) =>
-    unwrap(commands.faInput(note, at, input, rows, clipboard)),
-  clipboard: (note, at, action, plain) => unwrap(commands.faClipboard(note, at, action, plain)),
-  keys: (note) => unwrap(commands.faKeysStatus(note)),
-  readClipboard: () => unwrap(commands.clipReadText()),
-  writeClipboard: async (text) => {
-    await unwrap(commands.clipWriteText(text));
-  },
-};
 
 /** M-07.2: the tab of `note` shows `view` from now on. */
 export async function setEditingView(note: string, view: EditingViewName): Promise<void> {

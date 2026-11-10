@@ -1,8 +1,9 @@
-//! Tests of the facade in the session (M-09, ADR-024): the conversion of
-//! the blocks for the window with their offsets (CRLF, emoji), the
-//! changes sent after an edit (`ed-blocks`), the figures (M-09.5 to
-//! M-09.7), the switch of the editing view (M-07.2) and what the own
-//! protocol serves (ADR-023).
+//! Tests of the facade in the session (M-09, ADR-024, ADR-025): the
+//! conversion of the blocks with their offsets (CRLF, emoji), the changes
+//! of the views after an edit, the figures (M-09.5 to M-09.7) and their
+//! colours and pictures for the window's editor core (`ed-enrich`), the
+//! switch of the editing view (M-07.2) and what the own protocol serves
+//! (ADR-023).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,8 +14,7 @@ use underline_core::{NoteFormat, NoteId, StateStore, SETTINGS_FILE_NAME};
 use super::build::{run, Job};
 use super::{splices, views_of, Facade, Splice};
 use crate::assets::{Asset, AssetError};
-use crate::editor_view::EditorInput;
-use crate::facade_view::{BlockKindView, BlockView, CellAlignName};
+use crate::facade_view::{BlockKindView, BlockView, CellAlignName, FacadeState};
 use crate::workspace_view::EditingViewName;
 use crate::{Event, Session, SettingsState};
 
@@ -273,19 +273,25 @@ fn figures_session(name: &str) -> (Session, PathBuf, PathBuf) {
     (session, root, dir)
 }
 
-/// Ticks until the facade's jobs are done; the blocks events meanwhile.
-fn settle(session: &mut Session) -> Vec<crate::BlocksView> {
+/// Ticks until the facade's jobs are done and its views are of the text;
+/// the `ed-enrich` events meanwhile.
+fn settle(session: &mut Session) -> Vec<crate::EnrichView> {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut out = Vec::new();
     loop {
-        let events = session.tick(Instant::now());
-        out.extend(blocks_events(&events).into_iter().cloned());
-        let building = session.open.as_ref().is_some_and(|open| {
-            open.tabs
-                .iter()
-                .any(|(_, tab)| tab.facade.as_ref().is_some_and(|f| f.building))
+        for event in session.tick(Instant::now()) {
+            if let Event::Enrich(view) = event {
+                out.push(*view);
+            }
+        }
+        let done = session.open.as_ref().is_some_and(|open| {
+            open.tabs.iter().all(|(_, tab)| {
+                tab.facade.as_ref().is_none_or(|f| {
+                    !f.building && tab.edit.facade.parsed == Some(tab.edit.editor.revision())
+                })
+            })
         });
-        if !building {
+        if done {
             return out;
         }
         assert!(Instant::now() < deadline, "the facade's job did not end");
@@ -293,14 +299,16 @@ fn settle(session: &mut Session) -> Vec<crate::BlocksView> {
     }
 }
 
-fn blocks_events(events: &[Event]) -> Vec<&crate::BlocksView> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            Event::Blocks(view) => Some(view),
-            _ => None,
-        })
-        .collect()
+/// The facade of Home as the session made it for the window's colours and
+/// figures: shown, its job done (what `fa_open` gave in variant A).
+fn facade_of(session: &mut Session) -> FacadeState {
+    session
+        .set_editing_view(&home(), EditingViewName::Facade)
+        .unwrap();
+    settle(session);
+    let open = session.open.as_ref().unwrap();
+    let tab = open.tabs.get(open.tabs.find(&home()).unwrap());
+    tab.edit.facade_state("Home")
 }
 
 /// M-09.6, M-09.7, ADR-023: the figures say where their pictures are, or
@@ -309,7 +317,7 @@ fn blocks_events(events: &[Event]) -> Vec<&crate::BlocksView> {
 fn m09_6_m09_7_figures_of_the_facade() {
     let (mut session, root, _dir) = figures_session("figures");
 
-    let state = session.facade_state(&home()).unwrap();
+    let state = facade_of(&mut session);
 
     assert_eq!(state.format, "Markdown");
     let figure = |i: usize| state.blocks[i].figure.clone().unwrap();
@@ -356,23 +364,26 @@ fn m09_6_m09_7_figures_of_the_facade() {
     );
 }
 
-/// M-09.7, ADR-009: the diagram renders in the background; the tick sends
-/// its block with the picture, which the protocol serves as SVG.
+/// M-09.7, ADR-009, ADR-025: the diagram renders in the background; the
+/// tick sends its picture (`ed-enrich`), which the protocol serves as SVG.
 #[test]
 fn m09_7_a_rendered_diagram_is_sent_and_served() {
     let (mut session, _root, _dir) = figures_session("diagram");
-    session.facade_state(&home()).unwrap();
+    facade_of(&mut session);
 
     let deadline = Instant::now() + Duration::from_secs(60);
     let picture = loop {
-        let events = session.tick(Instant::now());
-        let found = blocks_events(&events).into_iter().find_map(|b| {
-            b.blocks
-                .iter()
-                .find_map(|block| block.figure.as_ref()?.picture.clone())
-                .filter(|p| p.starts_with("diagram/"))
-                .map(|p| (b.from, b.removed, p))
-        });
+        let found = session
+            .tick(Instant::now())
+            .into_iter()
+            .find_map(|e| match e {
+                Event::Enrich(view) => view
+                    .diagrams
+                    .iter()
+                    .find_map(|(_, figure)| figure.picture.clone())
+                    .filter(|p| p.starts_with("diagram/")),
+                _ => None,
+            });
         if let Some(found) = found {
             break found;
         }
@@ -380,38 +391,27 @@ fn m09_7_a_rendered_diagram_is_sent_and_served() {
         std::thread::sleep(Duration::from_millis(20));
     };
 
-    assert_eq!((picture.0, picture.1), (5, 1));
-    let Ok(Asset::Svg(svg)) = session.asset(&format!("/{}", picture.2)) else {
+    let Ok(Asset::Svg(svg)) = session.asset(&format!("/{picture}")) else {
         panic!("the SVG is not served");
     };
     assert!(svg.contains("<svg"), "{svg}");
 }
 
-/// ADR-024: an input sends the changed blocks with the next tick, in a
-/// chain of versions.
+/// ADR-024, ADR-025: the views follow a window's edit with the next jobs,
+/// as one change of the chain of versions that `ed-enrich` follows.
 #[test]
-fn m09_1_the_tick_sends_the_blocks_an_input_changed() {
+fn m09_1_the_views_follow_a_windows_edit() {
     let dir = temp_dir("input");
     let (mut session, _root) = session_with(&dir, "# Home\n\nOne\n\nTwo\n");
-    let state = session.facade_state(&home()).unwrap();
+    let state = facade_of(&mut session);
     assert_eq!(state.blocks.len(), 3);
-    session.editor_select(&home(), state.rev, 11, 11).unwrap();
 
-    session
-        .editor_input(&home(), EditorInput::Text { text: "!".into() })
-        .unwrap();
-    // ADR-024: the tick only starts the job; a later tick takes it in.
-    let first = session.tick(Instant::now());
-    assert!(blocks_events(&first).is_empty());
-    let blocks = settle(&mut session);
+    session.window_type(&home(), 11, "!");
+    let after = facade_of(&mut session);
 
-    assert_eq!(blocks.len(), 1);
-    let change = &blocks[0];
-    assert_eq!(change.base, state.version);
-    assert_eq!(change.version, state.version + 1);
-    assert_eq!((change.from, change.removed, change.shift), (1, 1, 1));
-    assert_eq!(change.blocks[0].runs[0].text, "One!");
-    assert!(settle(&mut session).is_empty());
+    assert_eq!(after.version, state.version + 1);
+    assert_eq!(after.blocks[1].runs[0].text, "One!");
+    assert_eq!(after.blocks[2].start, state.blocks[2].start + 1);
 }
 
 /// RUST 5: a job's result for a text that changed meanwhile is dropped;
@@ -420,50 +420,15 @@ fn m09_1_the_tick_sends_the_blocks_an_input_changed() {
 fn adr024_a_stale_result_is_dropped() {
     let dir = temp_dir("stale");
     let (mut session, _root) = session_with(&dir, "# Home\n\nOne\n");
-    let state = session.facade_state(&home()).unwrap();
-    session.editor_select(&home(), state.rev, 11, 11).unwrap();
-    session
-        .editor_input(&home(), EditorInput::Text { text: "a".into() })
-        .unwrap();
+    facade_of(&mut session);
+    session.window_type(&home(), 11, "a");
     session.tick(Instant::now());
     // Typed while the job runs: its result is for an older text.
-    session
-        .editor_input(&home(), EditorInput::Text { text: "b".into() })
-        .unwrap();
+    session.window_type(&home(), 12, "b");
 
-    let blocks = settle(&mut session);
-    let blocks = [blocks, settle(&mut session)].concat();
+    let after = facade_of(&mut session);
 
-    let last = blocks.last().unwrap();
-    assert_eq!(last.blocks[0].runs[0].text, "Oneab");
-    // Every change applies to the one before it.
-    for pair in blocks.windows(2) {
-        assert_eq!(pair[1].base, pair[0].version);
-    }
-}
-
-/// RUST 9: `fa_open` racing a tick: whichever result comes last, the
-/// later job's wins, and the window's chain of versions holds.
-#[test]
-fn adr024_fa_open_racing_a_tick() {
-    let dir = temp_dir("race");
-    let (mut session, _root) = session_with(&dir, "# Home\n\nOne\n");
-    let state = session.facade_state(&home()).unwrap();
-    session.editor_select(&home(), state.rev, 11, 11).unwrap();
-    session
-        .editor_input(&home(), EditorInput::Text { text: "!".into() })
-        .unwrap();
-    // The tick's job runs while the window opens the facade again.
-    session.tick(Instant::now());
-    let opened = session.facade_state(&home()).unwrap();
-    assert_eq!(opened.blocks[1].runs[0].text, "One!");
-
-    let after = settle(&mut session);
-
-    // A result older than the one `fa_open` took in brings nothing.
-    assert!(after.iter().all(|b| b.base >= opened.version), "{after:?}");
-    let again = session.facade_state(&home()).unwrap();
-    assert_eq!(again.blocks, opened.blocks);
+    assert_eq!(after.blocks[1].runs[0].text, "Oneab");
 }
 
 /// RUST 9: results are taken in in the order their jobs started.
@@ -505,9 +470,11 @@ fn adr024_an_older_job_never_overwrites_a_newer_one() {
 fn m07_2_the_editing_view_is_remembered_per_tab() {
     let dir = temp_dir("switch");
     let (mut session, _root) = session_with(&dir, "# Home\n");
-    let first = session.facade_state(&home()).unwrap();
+    let first = facade_of(&mut session);
 
-    session.set_editing_view(&home(), EditingViewName::Source);
+    session
+        .set_editing_view(&home(), EditingViewName::Source)
+        .unwrap();
 
     let events = session.take_events();
     let view = events.iter().find_map(|e| match e {
@@ -515,12 +482,13 @@ fn m07_2_the_editing_view_is_remembered_per_tab() {
         _ => None,
     });
     assert_eq!(view, Some(EditingViewName::Source));
-    assert!(blocks_events(&session.tick(Instant::now())).is_empty());
-    session.set_editing_view(&home(), EditingViewName::Facade);
+    session
+        .set_editing_view(&home(), EditingViewName::Facade)
+        .unwrap();
     let snapshot = session.snapshot();
     assert_eq!(snapshot.tabs.tabs[0].view, EditingViewName::Facade);
     // The blocks were kept: shown again, they are not made anew.
-    let again = session.facade_state(&home()).unwrap();
+    let again = facade_of(&mut session);
     assert_eq!(again.version, first.version);
     assert_eq!(again.blocks, first.blocks);
 }
@@ -632,7 +600,7 @@ fn m09_6_targets_that_are_no_images() {
     fs::create_dir_all(root.join(".underline")).unwrap();
     fs::write(root.join(".underline/c.png"), b"png").unwrap();
 
-    let state = session.facade_state(&home()).unwrap();
+    let state = facade_of(&mut session);
 
     let message = |i: usize| state.blocks[i].figure.as_ref().unwrap().message.clone();
     assert_eq!(
@@ -859,26 +827,6 @@ fn next_enrich(session: &mut Session) -> Option<crate::EnrichView> {
 
 const CODE: &str = "# Home\n\n```rust\nfn main() {}\n```\n";
 
-/// ADR-025 (review B5b): `fa_open` (variant A) gives the window's blocks
-/// back to the backend: its tick sends `ed-blocks` again.
-#[test]
-fn adr025_fa_open_gives_the_blocks_back_to_the_backend() {
-    let dir = temp_dir("fa-open-window");
-    let (mut session, _root) = session_with(&dir, CODE);
-    session.editor_mirror(&home()).unwrap();
-    let window = |session: &Session| {
-        let open = session.open.as_ref().unwrap();
-        open.tabs
-            .get(open.tabs.find(&home()).unwrap())
-            .window_facade
-    };
-    assert!(window(&session));
-
-    session.facade_state(&home()).unwrap();
-
-    assert!(!window(&session));
-}
-
 /// ADR-025 (review B5b): a new core in the window (`ed_mirror`) gets all
 /// colours again, starting anew (`clear`).
 #[test]
@@ -886,13 +834,17 @@ fn adr025_a_new_core_gets_everything_again() {
     let dir = temp_dir("forget-sent");
     let (mut session, _root) = session_with(&dir, CODE);
     session.editor_mirror(&home()).unwrap();
-    session.set_editing_view(&home(), EditingViewName::Facade);
+    session
+        .set_editing_view(&home(), EditingViewName::Facade)
+        .unwrap();
     let first = next_enrich(&mut session).expect("the first ed-enrich with colours");
     // Nothing new: nothing sent.
     assert!(next_enrich_soon(&mut session).is_none());
 
     session.editor_mirror(&home()).unwrap();
-    session.set_editing_view(&home(), EditingViewName::Facade);
+    session
+        .set_editing_view(&home(), EditingViewName::Facade)
+        .unwrap();
 
     let again = next_enrich(&mut session).expect("everything again");
     assert!(again.clear);
@@ -927,18 +879,16 @@ fn adr025_what_was_sent_stays_bounded() {
     let dir = temp_dir("sent-bound");
     let (mut session, _root) = session_with(&dir, CODE);
     session.editor_mirror(&home()).unwrap();
-    session.set_editing_view(&home(), EditingViewName::Facade);
+    session
+        .set_editing_view(&home(), EditingViewName::Facade)
+        .unwrap();
     next_enrich(&mut session).expect("the first ed-enrich");
     for i in 0..underline_editor_view::CODE_COLORS_KEPT {
         sent(&mut session).colors.insert(format!("old {i}"), None);
     }
 
-    let state = session.facade_state(&home()).unwrap();
-    session.editor_mirror(&home()).unwrap();
-    session.editor_select(&home(), state.rev, 30, 30).unwrap();
-    session
-        .editor_input(&home(), EditorInput::Text { text: "x".into() })
-        .unwrap();
+    // In the code block: its colours are made anew.
+    session.window_type(&home(), 30, "x");
     let start = Instant::now();
     let mut cleared = false;
     while !cleared && start.elapsed() < Duration::from_secs(10) {

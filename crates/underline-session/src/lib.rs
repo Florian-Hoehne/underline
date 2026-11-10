@@ -28,9 +28,13 @@
 //! F4 adds the Nano keys (M-11.3), the status of the input modes for the
 //! status line (M-11.4), the formatting toolbar (M-10.2) and folding
 //! (M-08.8); the window's Vim keys send their edits as changes (A-01).
-//! Feature F5a adds the facade's blocks for the window (M-09, `ed-blocks`),
-//! its diagrams as SVG (ADR-009) and what the app's own protocol `ul-asset`
-//! serves (ADR-023, [`assets`]).
+//! Feature F5a adds the facade's blocks (M-09), its diagrams as SVG
+//! (ADR-009) and what the app's own protocol `ul-asset` serves (ADR-023,
+//! [`assets`]). Since ADR-025 (variant B) the window's editor core holds the
+//! text and answers every input; the session keeps the mirror it syncs with
+//! (`ed_sync`), stores it, and sends what only it can make: the colours of
+//! the source view (`ed-highlight`) and the facade's colours and figures
+//! (`ed-enrich`).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -54,16 +58,13 @@ pub use editor_view::{
     ToolView, VimChange, VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
-pub use event::{Event, StatusView, TextReplaced};
+pub use event::{Event, StatusView};
 pub use facade_view::{
     BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeAt, FacadeInput,
     FacadePatch, FacadeState, FigureView, GapView, RowsView, RunView, TableView,
 };
 pub use palette::PaletteView;
-pub use session::{
-    CreatePlan, FacadeBuilt, FacadePrep, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session,
-    Synced,
-};
+pub use session::{CreatePlan, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session, Synced};
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,
     USER_SETTINGS_POLL,

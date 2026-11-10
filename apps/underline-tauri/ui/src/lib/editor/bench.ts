@@ -366,8 +366,6 @@ async function measureF4(
       : null;
     const unlisten = await Promise.all([
       events.edHighlight.listen((event) => view.takeColors(event.payload)),
-      events.edSections.listen((event) => view.takeSections(event.payload)),
-      events.edFound.listen((event) => view.takeFound(event.payload)),
     ]);
     // A folded section near the start: the heading of line 3 % of the note
     // or the next one.

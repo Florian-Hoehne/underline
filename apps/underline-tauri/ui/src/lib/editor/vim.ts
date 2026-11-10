@@ -13,7 +13,7 @@
 //   marking, as `codemirror-vim` does by itself.
 //
 // The changes `codemirror-vim` makes to the text are sent to the backend by
-// the source view (`sourceView.ts`, `ed_apply`).
+// the source view to the editor core (`sourceView.ts`, `apply`).
 
 import { CodeMirror, Vim, getCM, vim } from '@replit/codemirror-vim';
 import type { EditorView } from '@codemirror/view';

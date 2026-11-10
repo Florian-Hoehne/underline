@@ -4,11 +4,12 @@
 // a build made with `VITE_UL_BENCH=1 VITE_UL_BENCH_F5=1`
 // (`editor/bench.ts` runs it and writes the results into the note).
 //
-// - fa_open: the command alone (parse, conversion, IPC, JSON), the first
-//   time after the facade was let go, then once more with the blocks kept.
+// - open (`faOpenColdMs`, `faOpenWarmMs`, named as in F5a to compare): the
+//   facade's `open` alone, cold with a new editor core, then once more with
+//   the core and the drawn blocks kept (ADR-025).
 // - open: the facade mounted until its first blocks are painted.
 // - switch: as the switch "Facade"/"Source" does it: the view is set in
-//   the backend (`tab_set_view`, which lets the facade's blocks go), the old
+//   the backend (`tab_set_view`), the old
 //   view is taken down and the new one shown, until it is painted.
 // - scroll: one screen down at a time through the whole note, from setting
 //   the scroll position until it is painted with its blocks.
@@ -22,8 +23,8 @@ import { wasmBackend } from '../editor/wasmBackend';
 import { wasmFacadeBackend } from './wasmBackend';
 
 /** ADR-025 (step B5b): both views on the window's editor core. */
-const tauriBackend = wasmBackend(false);
-const tauriFacadeBackend = wasmFacadeBackend(false);
+const sourceBackend = wasmBackend(false);
+const facadeBackend = wasmFacadeBackend(false);
 import type { BlockView, EnrichView } from '../bindings';
 import { activeFacade } from './active';
 import { applyBlocks, foldingOf } from './model';
@@ -74,7 +75,7 @@ async function showFacade(host: HTMLElement, note: string) {
       label: note,
       platform: 'linux',
       onError: (message: string) => console.error(message),
-      backend: tauriFacadeBackend,
+      backend: facadeBackend,
     },
   });
   await until(() => host.querySelector('[data-b]') !== null);
@@ -88,10 +89,10 @@ export async function measureF5(host: HTMLElement, note: string): Promise<F5Resu
   // and the blocks made, warm with the core kept.
   dropCore(note);
   let start = performance.now();
-  const state = await tauriFacadeBackend.open(note);
+  const state = await facadeBackend.open(note);
   const faOpenColdMs = performance.now() - start;
   start = performance.now();
-  await tauriFacadeBackend.open(note);
+  await facadeBackend.open(note);
   const faOpenWarmMs = performance.now() - start;
   const payloadKb = state ? JSON.stringify(state).length / 1024 : NaN;
 
@@ -110,7 +111,7 @@ export async function measureF5(host: HTMLElement, note: string): Promise<F5Resu
     start = performance.now();
     await commands.tabSetView(note, 'source');
     await unmount(facade);
-    const source = await SourceView.open(host, note, tauriBackend, {
+    const source = await SourceView.open(host, note, sourceBackend, {
       mac: false,
       label: note,
       onError: (message) => console.error(message),
@@ -241,10 +242,10 @@ async function mountMeasured(host: HTMLElement, note: string, mode: string): Pro
   const probe: Probe = { value: null, ipc: NaN };
   // The command alone, timed around the call.
   const backend = {
-    ...tauriFacadeBackend,
-    input: async (...args: Parameters<typeof tauriFacadeBackend.input>) => {
+    ...facadeBackend,
+    input: async (...args: Parameters<typeof facadeBackend.input>) => {
       const start = performance.now();
-      const patch = await tauriFacadeBackend.input(...args);
+      const patch = await facadeBackend.input(...args);
       probe.ipc = performance.now() - start;
       return patch;
     },
@@ -427,7 +428,7 @@ export async function measureF5b(
   for (const mode of modes) {
     setBenchPhase(`${mode} open`);
     await commands.settingsQuick('input_mode', mode);
-    const state = { status: 'ok' as const, data: await tauriFacadeBackend.open(note) };
+    const state = { status: 'ok' as const, data: await facadeBackend.open(note) };
     setBenchPhase(`${mode} mount`);
     const m = await mountMeasured(host, note, mode);
     await benchSleep(500);
@@ -478,7 +479,7 @@ export async function measureF5b(
     }
     setBenchPhase(`${mode} enrich`);
     if (mode === 'Normal' && import.meta.env.VITE_UL_BENCH_NO_ENRICH !== '1') {
-      enrich = await measureEnrich(m, note, () => tauriFacadeBackend.open(note));
+      enrich = await measureEnrich(m, note, () => facadeBackend.open(note));
     }
     setBenchPhase(`${mode} unmount`);
     await unmount(m.component);

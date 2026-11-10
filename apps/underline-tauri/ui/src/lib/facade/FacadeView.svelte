@@ -1,11 +1,12 @@
 <!--
   M-09 (FR-009, UC-004 step 3, UC-005): the facade of one note: the note
-  formatted, block by block, from the backend's blocks (`fa_open`, then
-  `ed-blocks`), and edited there (feature F5b). The backend owns the text
-  (ADR-024): every input of the one `contenteditable` root is cancelled and
-  sent as one command (`fa_input`); the answer carries the blocks that
-  changed and the cursor, which the facade puts in place before the next
-  frame.
+  formatted, block by block, and edited there (feature F5b). The text lives
+  in the window's editor core (ADR-025, `wasmBackend.ts`): every input of
+  the one `contenteditable` root is cancelled and given to the core in the
+  same task; the answer carries the blocks that changed and the cursor,
+  which the facade puts in place before the next frame. The core's later
+  changes (the backend's, the colours and figures of `ed-enrich`) come
+  through `attach`.
 
   - Input (M-09.10 to M-09.13): `beforeinput` becomes text, Enter,
     Backspace, Delete, undo and redo; keys come from `keydown`
@@ -15,8 +16,8 @@
     drawn anew and the finished text is sent (M-08.5). Spellcheck,
     autocorrect and autocapitalisation are off.
   - M-09.11: after Enter the cursor may stand on empty lines before a block
-    (the backend's "gap"); they are drawn as such.
-  - M-09.14: copy and cut give the markup, paste goes through the backend;
+    (the core's "gap"); they are drawn as such.
+  - M-09.14: copy and cut give the markup, paste goes through the core;
     Ctrl/Cmd+Shift+V pastes plain text. HTML comes with feature F6.
   - M-11.2, M-11.3: Vim and Nano are the editor core's (A-01: not
     `codemirror-vim`); a line is a block.
@@ -28,8 +29,8 @@
   - M-09.3: "Markdown"/"AsciiDoc" at the top right.
   - M-07.4: pointing at a link shows its address and "Ctrl+click to follow"
     (following it comes with F7).
-  - M-08.8: fold arrows and "…" on headings, from the sections the backend
-    sends (`ed-sections`), shared with the source view.
+  - M-08.8: fold arrows and "…" on headings, from the sections the core
+    finds, shared with the source view.
   - M-09.8: while the cursor is in a figure, its markup shows below it and
     is edited there.
   - M-09.9: a picture enlarged over the window.
@@ -63,7 +64,6 @@
     KeysStatusView,
     Platform,
     RowsView,
-    SectionsView,
     SectionView,
     ToolName,
   } from '../bindings';
@@ -330,23 +330,17 @@
    */
   function attach() {
     detach?.();
-    detach =
-      backend.attach?.(note, {
-        patch: () => {
-          const refresh = backend.refresh;
-          if (refresh) {
-            enqueue(performance.now(), () => refresh(note));
-          }
-        },
-        views: (views) => {
-          if (views.sections?.note === note) {
-            sections = views.sections.sections;
-          }
-        },
-        synced: () => {},
-        reopened: () => void open(),
-        blocks: (changes) => takeBlocks(changes),
-      }) ?? null;
+    detach = backend.attach(note, {
+      patch: () => enqueue(performance.now(), () => backend.refresh(note)),
+      views: (views) => {
+        if (views.sections?.note === note) {
+          sections = views.sections.sections;
+        }
+      },
+      synced: () => {},
+      reopened: () => void open(),
+      blocks: (changes) => takeBlocks(changes),
+    });
   }
 
   /** The first block in view and how far into it the view starts. */
@@ -449,12 +443,6 @@
     }
   }
 
-  function takeSections(view: SectionsView) {
-    if (view.note === note) {
-      sections = view.sections;
-    }
-  }
-
   /** Scrolls to `into` pixels into block `index`, and keeps it there while heights settle. */
   function holdAt(index: number, into: number, time = 500) {
     if (!scroller) {
@@ -506,7 +494,7 @@
   });
 
   // M-11.4: the status of the keys follows the input mode; the first comes
-  // with the facade (`fa_open`).
+  // with the facade (`open`).
   let modeSeen: string | null = null;
   $effect(() => {
     const now = mode;
@@ -515,7 +503,7 @@
       return;
     }
     modeSeen = now;
-    backend.setMode?.(note, now);
+    backend.setMode(note, now);
     backend
       .keys(note)
       .then((status) => {
@@ -1198,15 +1186,6 @@
     get note() {
       return note;
     },
-    // ADR-025: with the text in the window, the core brings these.
-    takeBlocks: (change: BlocksView) => {
-      if (!backend.attach) takeBlocks([change]);
-    },
-    takeSections: (view: SectionsView) => {
-      if (!backend.attach) takeSections(view);
-    },
-    // UC-004 A7: a text replaced from outside comes as `ed-blocks`.
-    replaced: () => {},
     reveal,
     focus: () => void focusCursor(),
     tool,
@@ -1241,7 +1220,7 @@
     });
     return () => {
       destroyed = true;
-      backend.leave?.(note, detach && !loading ? { version, blocks } : null);
+      backend.leave(note, detach && !loading ? { version, blocks } : null);
       detach?.();
       document.removeEventListener('selectionchange', onSelectionChange);
       resizes?.disconnect();
