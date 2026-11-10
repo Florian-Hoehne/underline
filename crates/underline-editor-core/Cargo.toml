@@ -1,6 +1,6 @@
 [package]
 name = "underline-editor-core"
-description = "Editor logic of Underline without a UI: rope and undo, Vim and Nano keys, toolbar functions (ADR-012)"
+description = "Editor logic of Underline without a UI: rope and undo, Vim and Nano keys, toolbar functions, facade editing (ADR-012, ADR-025)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 # No egui, eframe, or arboard here: this crate builds for wasm32-unknown-unknown
-# too (docs/migration/plan.md, section 3 and 6).
+# too (docs/migration/plan.md, section 3, 6 and 17; ADR-025).
 [dependencies]
 ropey.workspace = true
+underline-markup.workspace = true

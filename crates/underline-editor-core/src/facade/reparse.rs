@@ -12,10 +12,10 @@
 //! reference definitions is parsed whole, as only that sees them all.
 
 use ropey::Rope;
-use underline_core::NoteFormat;
-use underline_facade::blocks::{parse_blocks, Block, BlockKind};
+use underline_markup::blocks::{parse_blocks, Block, BlockKind};
+use underline_markup::NoteFormat;
 
-use super::rules::{ext_end, has_reference_definitions, shift_block};
+use super::rules::{byte_text, ext_end, has_reference_definitions, shift_block};
 
 /// The most blocks a region may span before the whole note is parsed.
 const MOST_BLOCKS: usize = 512;
@@ -207,7 +207,9 @@ pub(super) fn reparse(
             blocks[hi].span.start
         };
         let r1 = r1_old.saturating_add_signed(delta).min(new_len);
-        let text = rope.byte_slice(r0..r1).to_string();
+        // Block starts are char boundaries; `byte_text` keeps it so even
+        // if a parser's span were not.
+        let text = byte_text(rope, r0..r1);
         if markdown && has_reference_definitions(&text) {
             *refs = true;
             return parse_whole(blocks, rope, format, refs);
@@ -288,7 +290,7 @@ fn parse_whole(
 
 /// The blocks of `text` and whether a Markdown note may hold link
 /// reference definitions.
-pub(super) fn parse_all(text: &str, format: NoteFormat) -> (Vec<Block>, bool) {
+pub fn parse_all(text: &str, format: NoteFormat) -> (Vec<Block>, bool) {
     let refs = format == NoteFormat::Markdown && has_reference_definitions(text);
     (parse_blocks(text, format), refs)
 }

@@ -595,6 +595,61 @@ fn m11_3_nano_in_the_facade_cuts_and_pastes_blocks() {
     assert_eq!(f.text(), "One\\_.\n\nTwo.\n\nThree.\n");
 }
 
+/// ADR-024, ADR-025: an edit of a heading or indented code right before a
+/// line that starts with a non-ASCII char keeps the window in step: the
+/// part of the note made anew ends on a char boundary (no panic in ropey).
+#[test]
+fn adr025_editing_right_before_a_non_ascii_line() {
+    for (name, text, after, edited) in [
+        ("wide-head", "# H\néx\n", "# H", "# Hy\néx\n"),
+        ("wide-crlf", "# H\r\néx\r\n", "# H", "# Hy\r\néx\r\n"),
+        ("wide-code", "    code\né\n", "    co", "    coyde\né\n"),
+        ("wide-emoji", "# H\n🙂x\n", "# H", "# Hy\n🙂x\n"),
+    ] {
+        let mut f = Facade::new(name, text);
+        f.click_after(after);
+        f.type_text("y");
+        assert_eq!(f.text(), edited);
+    }
+}
+
+/// ADR-024: an input whose selection is of an older revision (the window
+/// had not taken in the patch of the input before) drops that selection:
+/// it applies at the backend's cursor, where the input before left it.
+#[test]
+fn adr024_a_stale_selection_is_dropped() {
+    let mut f = Facade::new("stale-at", "Hello world.\n");
+    f.click_after("Hello");
+    let stale = f.at();
+    f.type_text("X");
+    assert_eq!(f.text(), "HelloX world.\n");
+    // The window still sends the old revision, with the cursor at the start.
+    let at = FacadeAt {
+        rev: stale.rev,
+        anchor: 0,
+        head: 0,
+    };
+    assert_ne!(at.rev, f.window.rev);
+    let patch = f
+        .session
+        .facade_input(
+            &home(),
+            at,
+            FacadeInput::Text {
+                text: "Y".to_owned(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    f.take(patch);
+    assert_eq!(f.text(), "HelloXY world.\n");
+    // With the revision the window has, its selection is taken in.
+    f.click(0);
+    f.type_text("Z");
+    assert_eq!(f.text(), "ZHelloXY world.\n");
+}
+
 /// ADR-024: many edits in a row keep the window in step (checked in `take`).
 #[test]
 fn adr024_a_run_of_edits_keeps_the_window_in_step() {

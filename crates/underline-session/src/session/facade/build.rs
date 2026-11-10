@@ -676,7 +676,7 @@ pub(in crate::session) fn run(job: Job) -> Built {
     let (blocks, refs) = match job.blocks.clone() {
         Some(blocks) => (blocks, None),
         None => {
-            let (blocks, refs) = super::reparse::parse_all(&text, job.format);
+            let (blocks, refs) = underline_editor_core::facade::parse_all(&text, job.format);
             (Arc::new(blocks), Some(refs))
         }
     };

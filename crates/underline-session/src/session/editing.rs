@@ -23,7 +23,7 @@ use underline_editor_core::{
     utf16, EditorCommand, InputStatus, KeyInput, Keys, KeysMode, Modifiers, Outcome, SourceKeys,
     Tool,
 };
-use underline_facade::formatting::{apply_format, Format};
+use underline_facade::formatting::apply_format;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
 use super::tab::Tab;
@@ -70,21 +70,6 @@ impl Done {
         self.outcome.moved |= outcome.moved;
         self.outcome.changes.extend(outcome.changes);
     }
-}
-
-/// M-10.2: the formatting `tool` applies at once, or `None` when it asks
-/// first (as `toolbar::format` of the egui widget).
-pub(super) fn format_of(tool: Tool) -> Option<Format> {
-    Some(match tool {
-        Tool::Heading => Format::Heading,
-        Tool::Bold => Format::Bold,
-        Tool::Italic => Format::Italic,
-        Tool::Code => Format::Code,
-        Tool::List => Format::List,
-        Tool::Quote => Format::Quote,
-        Tool::Table => Format::Table,
-        Tool::Link | Tool::Image => return None,
-    })
 }
 
 /// M-08.8: Ctrl/Cmd+Shift+[ folds (`Some(true)`), Ctrl/Cmd+Shift+]
@@ -134,7 +119,7 @@ impl Tab {
     /// selection, in the markup of the note's format; Link and Image ask
     /// first (feature F6).
     fn apply_tool(&mut self, tool: Tool, done: &mut Done) {
-        let Some(format) = format_of(tool) else {
+        let Some(format) = tool.format() else {
             done.request = Some(tool.into());
             return;
         };

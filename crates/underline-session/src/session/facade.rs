@@ -15,34 +15,84 @@
 //! one figure.
 
 mod build;
-mod edit;
 mod input;
-mod reparse;
-mod rules;
-mod splice;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use underline_core::{EditingView, NoteFormat, NoteId};
+use underline_editor_core::facade::{splices, ShownBlock};
 use underline_facade::blocks::Block;
 use underline_facade::highlight::HighlightSet;
 
 use self::build::{diagram_figure, diagram_language, Built, Context, Job, Looks};
 pub(super) use self::build::{CodeColorCache, ImageCache};
-use self::splice::{splices, Splice};
 use super::diagrams::SvgDiagrams;
 use super::tab::Tab;
 use super::Session;
 use crate::assets::{percent_decode, request_path, Asset, AssetError, AssetPlan};
 use crate::editor_view::{revision, units};
-use crate::facade_view::{BlockView, BlocksView, FacadeState};
+use crate::facade_view::{BlockKindView, BlockView, BlocksView, FacadeState};
 use crate::workspace_view::EditingViewName;
 use crate::{Event, UiError, UiErrorKind};
 
 #[cfg(test)]
 use self::build::views_of;
+
+/// ADR-024: one change of the window's blocks (`ed-blocks`).
+type Splice = underline_editor_core::facade::Splice<BlockView>;
+
+/// ADR-025: the editor core's facade rules move the window's views of the
+/// blocks; the views themselves are made here (`build.rs`).
+impl ShownBlock for BlockView {
+    fn start(&self) -> u32 {
+        self.start
+    }
+
+    fn line(&self) -> u32 {
+        self.line
+    }
+
+    fn is_moved(&self, old: &Self, shift: i64, line_shift: i64) -> bool {
+        let BlockView {
+            kind,
+            start,
+            line,
+            length,
+            lines,
+            prefix,
+            runs,
+            colors,
+            figure,
+        } = old;
+        i64::from(*start) + shift == i64::from(self.start)
+            && i64::from(*line) + line_shift == i64::from(self.line)
+            && *kind == self.kind
+            && *length == self.length
+            && *lines == self.lines
+            && *prefix == self.prefix
+            && *runs == self.runs
+            && *colors == self.colors
+            && *figure == self.figure
+    }
+
+    fn shift(&mut self, shift: i64, line_shift: i64) {
+        let start = i64::from(self.start) + shift;
+        let line = i64::from(self.line) + line_shift;
+        // A view after an edit never moves before the start of the note.
+        debug_assert!(start >= 0 && line >= 0, "view moved before the note");
+        self.start = u32::try_from(start).unwrap_or(0);
+        self.line = u32::try_from(line).unwrap_or(0);
+    }
+
+    fn captioned(&self) -> bool {
+        match &self.kind {
+            BlockKindView::Table { table } => table.caption.is_some(),
+            _ => self.figure.as_ref().is_some_and(|f| f.caption.is_some()),
+        }
+    }
+}
 
 /// The facade of one tab: the blocks of the text and what the window was
 /// told of them.
@@ -551,14 +601,14 @@ fn facade_state(note: &NoteId, tab: &Tab, facade: &Facade) -> FacadeState {
         place: tab.editor.cursor_place().label(),
         gap: (facade.parsed == Some(tab.editor.revision()))
             .then(|| {
-                edit::gap_at(
+                underline_editor_core::facade::gap_at(
                     tab.editor.document().rope(),
                     tab.editor.cursor(),
                     &facade.blocks,
                 )
             })
             .flatten()
-            .map(edit::Gap::view),
+            .map(input::gap_view),
         keys: input::keys_status(&tab.keys),
     }
 }

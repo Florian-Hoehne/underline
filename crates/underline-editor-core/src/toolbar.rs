@@ -1,6 +1,8 @@
 //! The formatting toolbar's functions and their keys (FR-023, UC-005 A2,
 //! NFR-011), the same in both editing views. What each function does to the
-//! markup is the facade engine's; the egui widget maps a [`Tool`] to it.
+//! markup is the facade engine's; [`Tool::format`] maps a [`Tool`] to it.
+
+use underline_markup::formatting::Format;
 
 use crate::input::{Key, Modifiers};
 
@@ -28,6 +30,23 @@ pub enum Tool {
 }
 
 impl Tool {
+    /// M-10.2: the formatting the function applies at once, or `None` when
+    /// it asks first (Link and Image, UC-005 A2), as `toolbar::format` of
+    /// the egui widget.
+    #[must_use]
+    pub fn format(self) -> Option<Format> {
+        Some(match self {
+            Tool::Heading => Format::Heading,
+            Tool::Bold => Format::Bold,
+            Tool::Italic => Format::Italic,
+            Tool::Code => Format::Code,
+            Tool::List => Format::List,
+            Tool::Quote => Format::Quote,
+            Tool::Table => Format::Table,
+            Tool::Link | Tool::Image => return None,
+        })
+    }
+
     /// All functions, in the order of the toolbar.
     pub const ALL: [Tool; 9] = [
         Tool::Heading,

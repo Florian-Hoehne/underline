@@ -1,27 +1,35 @@
 //! UC-005, ADR-024: the inputs of the facade in the session. Each input is
 //! one command: the selection the window shows is taken first, the input
 //! goes to the Vim or Nano keys and what they leave to the facade's rules
-//! (`edit.rs`), and the answer carries only the blocks that changed, with
-//! the cursor. Highlighting code and the sections follow from the tick
-//! (ADR-024).
+//! (`underline_editor_core::facade`), and the answer carries only the blocks
+//! that changed, with the cursor. Highlighting code and the sections follow
+//! from the tick (ADR-024).
+//!
+//! The rules, the reparse and which views are made anew after an input are
+//! the editor core's (ADR-025); this is their adapter to the session: it
+//! maps the window's inputs, makes the views ([`Making`]) and answers with
+//! the patch.
 
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
+use ropey::Rope;
 use underline_core::{InputMode, NoteId};
+use underline_editor_core::facade::{
+    carry_spans, gap_at, moved_indices, parse_all, refresh, splices, Before, FacadeEdit,
+    FacadeTarget, Gap, Gathered, MakeViews, Part, Rows,
+};
 use underline_editor_core::keys::InputMode as KeysInputMode;
-use underline_editor_core::{KeyInput, Keys, Modifiers, Outcome, SourceEditor};
+use underline_editor_core::{KeyInput, Keys, Modifiers, SourceEditor};
+use underline_facade::blocks::Block;
 
 use super::build::{colors_key, diagram_language, remember_colors, Context, Maker, WebWalker};
-use super::edit::{gap_at, Dirty, FacadeEdit, FacadeTarget, Rows};
-use super::reparse::parse_all;
-use super::rules::ext_end;
-use super::splice::{splices, Splice};
-use super::{context, events, not_open, Facade, Tools};
+use super::{context, events, not_open, Facade, Splice, Tools};
 use crate::editor_view::{revision, units, ClipAction, KeysStatusView};
 use crate::facade_view::{
-    BlockKindView, BlockView, BlocksView, CodeColors, FacadeAt, FacadeInput, FacadePatch, RowsView,
+    BlockKindView, BlockView, BlocksView, CodeColors, FacadeAt, FacadeInput, FacadePatch, GapView,
+    RowsView,
 };
 use crate::session::editing::{after_input, fold_key};
 use crate::session::tab::Tab;
@@ -54,53 +62,21 @@ fn key_input(input: &FacadeInput, mac: bool) -> Option<KeyInput<'_>> {
     }
 }
 
-/// What one input of the facade gathers on its way.
-#[derive(Default)]
-struct Gathered {
-    dirty: Dirty,
-    outcome: Outcome,
-    commands: Vec<underline_editor_core::EditorCommand>,
-    request: Option<crate::editor_view::ToolName>,
-    copied: Option<String>,
-}
-
-impl Gathered {
-    fn moved(&mut self, moved: bool) {
-        self.outcome.moved |= moved;
-    }
-}
-
-/// Runs `work` on the facade's text and blocks, with what the input
-/// gathered so far.
+/// Runs `work` on the facade's text and blocks, gathering into `gathered`
+/// (ADR-025: the edit borrows the one [`Gathered`] of the input).
 fn with_edit<R>(
     editor: &mut SourceEditor,
     facade: &mut Facade,
     format: underline_core::NoteFormat,
     gathered: &mut Gathered,
-    extra: (Option<Rows>, Option<String>),
+    extra: (Option<Rows>, Option<&str>),
     work: impl FnOnce(&mut FacadeEdit<'_>) -> R,
 ) -> R {
     let blocks = Arc::make_mut(&mut facade.blocks);
-    let mut edit = FacadeEdit {
-        editor,
-        blocks,
-        format,
-        refs: &mut facade.refs,
-        dirty: gathered.dirty,
-        outcome: std::mem::take(&mut gathered.outcome),
-        rows: extra.0,
-        commands: std::mem::take(&mut gathered.commands),
-        request: gathered.request.take(),
-        clipboard: extra.1,
-        copied: gathered.copied.take(),
-    };
-    let result = work(&mut edit);
-    gathered.dirty = edit.dirty;
-    gathered.outcome = edit.outcome;
-    gathered.commands = edit.commands;
-    gathered.request = edit.request;
-    gathered.copied = edit.copied;
-    result
+    let mut edit = FacadeEdit::new(editor, blocks, format, &mut facade.refs, gathered)
+        .with_rows(extra.0)
+        .with_clipboard(extra.1);
+    work(&mut edit)
 }
 
 /// An input the keys of the input mode left to the facade's own rules.
@@ -128,80 +104,80 @@ fn units_of(view: &BlockView) -> Vec<u16> {
 
 /// M-09.4, ADR-024: the colours of a code block whose text changed from
 /// `old` to `new`, carried over until the tick colours it anew: the colours
-/// before the change stay, those after it move with the text.
+/// before the change stay, those after it move with the text
+/// ([`carry_spans`]).
 fn carry_colors(old: &BlockView, new: &BlockView) -> Option<CodeColors> {
     let colors = old.colors.as_ref()?;
-    let (a, b) = (units_of(old), units_of(new));
-    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
-    let most = a.len().min(b.len()) - prefix;
-    let suffix = a
-        .iter()
-        .rev()
-        .zip(b.iter().rev())
-        .take(most)
-        .take_while(|(x, y)| x == y)
-        .count();
-    let (a_end, b_end) = (a.len() - suffix, b.len() - suffix);
-    let moved = |at: u32| -> u32 {
-        let at = at as usize;
-        let new = if at <= prefix {
-            at
-        } else if at >= a_end {
-            at - a_end + b_end
-        } else {
-            b_end
-        };
-        units(new)
-    };
-    let spans = colors
-        .spans
-        .iter()
-        .map(|&(start, end, style)| (moved(start), moved(end), style))
-        .filter(|(start, end, _)| start < end)
-        .collect();
     Some(CodeColors {
-        spans,
+        spans: carry_spans(&units_of(old), &units_of(new), &colors.spans),
         styles: colors.styles.clone(),
     })
 }
 
-/// How many figures and tables of `views` carry a caption, which numbers
-/// those after them.
-fn captions(views: &[BlockView]) -> usize {
-    views
-        .iter()
-        .filter(|view| match &view.kind {
-            BlockKindView::Table { table } => table.caption.is_some(),
-            _ => view.figure.as_ref().is_some_and(|f| f.caption.is_some()),
-        })
-        .count()
+/// M-09.11: the gap for the window.
+pub(super) fn gap_view(gap: Gap) -> GapView {
+    GapView {
+        before: units(gap.before),
+        lines: units(gap.lines),
+    }
+}
+
+/// ADR-025: makes the views of the blocks the editor core's [`refresh`]
+/// asks for, with the session's highlighting, diagrams and images.
+struct Making<'a> {
+    ctx: &'a Context,
+    /// M-09.7: the last picture of each diagram block.
+    last_pictures: &'a mut HashMap<usize, String>,
+    /// Code blocks sent without their colours, which the tick makes.
+    recolor: &'a mut Vec<usize>,
+}
+
+impl MakeViews for Making<'_> {
+    type View = BlockView;
+
+    fn all(&mut self, blocks: &[Block], text: &str, rope: &Rope) -> Vec<BlockView> {
+        let mut maker = Maker::new(self.ctx, blocks, self.last_pictures.clone());
+        let views = maker.views(text, rope);
+        *self.last_pictures = maker.last_pictures;
+        views
+    }
+
+    fn some(
+        &mut self,
+        blocks: &[Block],
+        range: Range<usize>,
+        part: Part<'_>,
+        rope: &Rope,
+    ) -> Vec<BlockView> {
+        let mut walker = WebWalker::part(part.text, part.from, part.origin);
+        let mut maker = Maker::new(self.ctx, blocks, std::mem::take(self.last_pictures));
+        maker.colour_now = false;
+        let views = maker.views_of_range(range, &mut walker, rope);
+        *self.last_pictures = maker.last_pictures;
+        views
+    }
+
+    fn blocks_moved(&mut self, replaced: Range<usize>, grown: isize) {
+        let last = std::mem::take(self.last_pictures);
+        *self.last_pictures = moved_indices(last, replaced, grown);
+    }
+
+    fn made(&mut self, index: usize, view: &mut BlockView, old: Option<&BlockView>) {
+        let code = matches!(view.kind, BlockKindView::Code { .. }) && view.figure.is_none();
+        if !code || view.colors.is_some() || self.ctx.colors.is_none() {
+            return;
+        }
+        self.recolor.push(index);
+        if let Some(old) = old.filter(|old| old.kind == view.kind) {
+            view.colors = carry_colors(old, view);
+        }
+    }
 }
 
 /// What an input of the facade starts from: the tab, its facade brought up
 /// to date, what views are made with, and the changes that brought it up to
 /// date.
 type Begun<'a> = (&'a mut Tab, Facade, Context, Vec<(u32, Splice)>);
-
-/// The text and blocks before an input, to tell what it changed.
-#[derive(Clone, Copy)]
-struct Before {
-    rev: u64,
-    blocks: usize,
-    web: usize,
-    lines: usize,
-}
-
-impl Before {
-    fn of(editor: &SourceEditor, facade: &Facade) -> Self {
-        let doc = editor.document();
-        Self {
-            rev: editor.revision(),
-            blocks: facade.blocks.len(),
-            web: editor.web_at_char(doc.len_chars()),
-            lines: doc.len_lines(),
-        }
-    }
-}
 
 impl Facade {
     /// Makes the blocks of `editor`'s text and their views anew, when they
@@ -235,7 +211,8 @@ impl Facade {
     }
 
     /// ADR-024: the views of the blocks `dirty` made anew after an input,
-    /// the others moved; the change for the window.
+    /// the others moved (the editor core's [`refresh`]); the change for the
+    /// window.
     fn refresh(
         &mut self,
         editor: &SourceEditor,
@@ -243,96 +220,24 @@ impl Facade {
         dirty: Range<usize>,
         before: Before,
     ) -> Vec<(u32, Splice)> {
-        let count = self.blocks.len();
-        let lo = dirty.start.min(count);
-        if self.views.len() != before.blocks || lo > self.views.len() {
-            // Out of step with the blocks, or a dirty range past the old
-            // views: all views are made anew.
-            let text = editor.text();
-            let mut maker = Maker::new(ctx, &self.blocks, self.last_pictures.clone());
-            let views = maker.views(&text, editor.document().rope());
-            self.last_pictures = maker.last_pictures;
-            let changes = splices(&self.views, &views);
-            self.views = views;
-            return self.versioned(changes);
-        }
-        let hi = dirty.end.min(count).max(lo);
-        let hi_old = (hi + before.blocks)
-            .saturating_sub(count)
-            .clamp(lo, self.views.len());
-        let rope = editor.document().rope();
-        let doc = editor.document();
-        let shift = i64::try_from(editor.web_at_char(doc.len_chars())).unwrap_or(i64::MAX)
-            - i64::try_from(before.web).unwrap_or(i64::MAX);
-        let line_shift = i64::try_from(doc.len_lines()).unwrap_or(i64::MAX)
-            - i64::try_from(before.lines).unwrap_or(i64::MAX);
-        if count != before.blocks {
-            // M-09.7: the last pictures stay with their blocks.
-            let grown = count.wrapping_sub(before.blocks);
-            let last: HashMap<usize, String> = std::mem::take(&mut self.last_pictures)
-                .into_iter()
-                .filter(|(index, _)| *index < lo || *index >= hi_old)
-                .map(|(index, picture)| {
-                    let index = if index >= hi_old {
-                        index.wrapping_add(grown)
-                    } else {
-                        index
-                    };
-                    (index, picture)
-                })
-                .collect();
-            self.last_pictures = last;
-        }
-        let mut views = Vec::new();
-        if lo < hi {
-            let len = rope.len_bytes();
-            let from = self.blocks[lo].span.start.min(len);
-            let to = self.blocks[lo..hi]
-                .iter()
-                .map(ext_end)
-                .max()
-                .unwrap_or(from)
-                .saturating_add(1)
-                .min(len)
-                .max(from);
-            let part = rope.byte_slice(from..to).to_string();
-            let origin = editor.web_at_char(rope.byte_to_char(from));
-            let mut walker = WebWalker::part(&part, from, origin);
-            let mut maker = Maker::new(ctx, &self.blocks, std::mem::take(&mut self.last_pictures));
-            maker.colour_now = false;
-            views = maker.views_of_range(lo..hi, &mut walker, rope);
-            self.last_pictures = maker.last_pictures;
-            for (k, view) in views.iter_mut().enumerate() {
-                let code = matches!(view.kind, BlockKindView::Code { .. }) && view.figure.is_none();
-                if !code || view.colors.is_some() || ctx.colors.is_none() {
-                    continue;
-                }
-                self.recolor.push(lo + k);
-                if let Some(old) = self.views.get(lo + k).filter(|_| lo + k < hi_old) {
-                    if old.kind == view.kind {
-                        view.colors = carry_colors(old, view);
-                    }
-                }
-            }
-        }
-        if captions(&self.views[lo..hi_old]) != captions(&views) {
+        let mut making = Making {
+            ctx,
+            last_pictures: &mut self.last_pictures,
+            recolor: &mut self.recolor,
+        };
+        let refreshed = refresh(
+            &mut self.views,
+            &self.blocks,
+            editor,
+            &mut making,
+            dirty,
+            before,
+        );
+        if refreshed.recaptioned {
             // The figures and tables after them are numbered anew.
             self.looks = None;
         }
-        if shift != 0 || line_shift != 0 {
-            for view in &mut self.views[hi_old..] {
-                view.start = u32::try_from(i64::from(view.start) + shift).unwrap_or(0);
-                view.line = u32::try_from(i64::from(view.line) + line_shift).unwrap_or(0);
-            }
-        }
-        self.views.splice(lo..hi_old, views.iter().cloned());
-        self.versioned(vec![Splice {
-            from: lo,
-            removed: hi_old - lo,
-            blocks: views,
-            shift,
-            line_shift,
-        }])
+        self.versioned(refreshed.splices)
     }
 
     /// M-09.4, ADR-024: the code blocks sent without their colours get
@@ -426,6 +331,12 @@ impl Session {
     /// The tab of `note` with what its facade's views are made with, the
     /// facade brought up to date with its text, and the selection `at` the
     /// window showed taken in.
+    ///
+    /// ADR-024: the selection is taken in only when `at.rev` is the
+    /// revision of the text. A stale `at.rev` (the window has not taken in
+    /// the patch of an earlier input yet) drops the window's selection: its
+    /// web units would point into another text, so the input applies at the
+    /// backend's own cursor, where the earlier input left it.
     fn facade_begin(&mut self, note: &NoteId, at: FacadeAt) -> Result<Begun<'_>, UiError> {
         let mode = self.facade_keys_mode();
         let tools: Tools = self.facade_tools();
@@ -470,7 +381,7 @@ impl Session {
             tab.editor.cursor(),
             &facade.blocks,
         )
-        .map(super::edit::Gap::view);
+        .map(gap_view);
         let patch = FacadePatch {
             base: revision(before.rev),
             rev: revision(rev),
@@ -483,7 +394,7 @@ impl Session {
             place: patch.place,
             keys: keys_status(&tab.keys),
             commands: gathered.commands.into_iter().map(Into::into).collect(),
-            request: gathered.request,
+            request: gathered.request.map(Into::into),
             copied: gathered.copied,
             wants_clipboard: tab.keys.wants_clipboard(),
         };
@@ -510,7 +421,7 @@ impl Session {
     ) -> Result<FacadePatch, UiError> {
         let mac = Platform::current() == Platform::MacOs;
         let (tab, mut facade, ctx, changes) = self.facade_begin(note, at)?;
-        let before = Before::of(&tab.editor, &facade);
+        let before = Before::of(&tab.editor, facade.blocks.len());
         let rows = rows.map(|rows| Rows {
             at: tab.editor.char_at_web(rows.at as usize),
             up: rows.up.map(|up| tab.editor.char_at_web(up as usize)),
@@ -531,7 +442,7 @@ impl Session {
                 &mut facade,
                 format,
                 &mut gathered,
-                (rows, clipboard.clone()),
+                (rows, clipboard.as_deref()),
                 |edit| {
                     let mut target = FacadeTarget { edit };
                     keys.handle(vec![input], |i| key_input(i, mac), &mut target)
@@ -563,7 +474,7 @@ impl Session {
                 &mut facade,
                 format,
                 &mut gathered,
-                (rows, clipboard.clone()),
+                (rows, clipboard.as_deref()),
                 |edit| plain_input(edit, input, mac),
             );
         }
@@ -594,7 +505,7 @@ impl Session {
         text: Option<&str>,
     ) -> Result<(Option<String>, FacadePatch), UiError> {
         let (tab, mut facade, ctx, changes) = self.facade_begin(note, at)?;
-        let before = Before::of(&tab.editor, &facade);
+        let before = Before::of(&tab.editor, facade.blocks.len());
         let format = tab.format;
         let mut gathered = Gathered::default();
         let mut copied = None;

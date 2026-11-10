@@ -17,27 +17,29 @@
 //! that indent the joined block's first line, so Enter and Backspace give
 //! the text back; a `\r\n` pair is one step for Left, Right, Backspace and
 //! Delete, as in the source view (A-26).
+//!
+//! Moved here from `underline-session` (ADR-025, plan section 17, B2), so
+//! the same rules run in the webview; what one input gathers on its way is
+//! one [`Gathered`], which a [`FacadeEdit`] borrows.
 
 use std::ops::Range;
 
 use ropey::Rope;
-use underline_core::NoteFormat;
-use underline_editor_core::{EditorCommand, Key, Modifiers, Outcome, SourceEditor, Target, Tool};
-use underline_facade::blocks::{link_at, Block, BlockKind};
-use underline_facade::formatting::apply_format;
+use underline_markup::blocks::{link_at, Block, BlockKind};
+use underline_markup::formatting::apply_format;
+use underline_markup::NoteFormat;
 
 use super::reparse::{changed_bytes, reparse, Change, Spliced};
 use super::rules::{
-    asciidoc_plain, escape_markdown, ext_end, insert_typed, line_breaks_before, next_marker,
-    shown_chars,
+    asciidoc_plain, byte_text, ceil_boundary, escape_markdown, ext_end, floor_boundary,
+    insert_typed, line_breaks_before, next_marker, shown_chars,
 };
-use crate::editor_view::{units, ToolName};
-use crate::facade_view::GapView;
+use crate::{EditorCommand, Key, Modifiers, Outcome, SourceEditor, Target, Tool};
 
 /// Which blocks changed in one input: the range of them in the blocks as
 /// they are now, through every splice of the input.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct Dirty(Option<(usize, usize)>);
+pub struct Dirty(Option<(usize, usize)>);
 
 impl Dirty {
     /// Takes in one more splice of the blocks.
@@ -66,39 +68,33 @@ impl Dirty {
     }
 
     /// The changed blocks, by their indices now.
-    pub(super) fn range(self) -> Option<Range<usize>> {
+    pub fn range(self) -> Option<Range<usize>> {
         self.0.map(|(lo, hi)| lo..hi)
     }
 }
 
 /// M-09.13: the rows the window measured for the cursor, in chars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Rows {
+pub struct Rows {
     /// The cursor they were measured at.
-    pub(super) at: usize,
-    pub(super) up: Option<usize>,
-    pub(super) down: Option<usize>,
-    pub(super) start: usize,
-    pub(super) end: usize,
+    pub at: usize,
+    /// The place one row up, if there is a row above in the block.
+    pub up: Option<usize>,
+    /// The place one row down, if there is a row below in the block.
+    pub down: Option<usize>,
+    /// The start of the cursor's row.
+    pub start: usize,
+    /// The end of the cursor's row.
+    pub end: usize,
 }
 
 /// M-09.11: the empty lines the cursor stands on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Gap {
+pub struct Gap {
     /// The block they come before (the number of blocks: at the end).
-    pub(super) before: usize,
+    pub before: usize,
     /// How many empty lines are shown, at least one.
-    pub(super) lines: usize,
-}
-
-impl Gap {
-    /// The gap for the window.
-    pub(super) fn view(self) -> GapView {
-        GapView {
-            before: units(self.before),
-            lines: units(self.lines),
-        }
-    }
+    pub lines: usize,
 }
 
 /// M-09.11, UC-005: the empty lines char `cursor` of `rope` stands on, when
@@ -107,7 +103,7 @@ impl Gap {
 /// cursor would stay at the end of the block before until something is
 /// typed. Each more Enter there adds a line (`cursor_gap` of the egui
 /// facade).
-pub(super) fn gap_at(rope: &Rope, cursor: usize, blocks: &[Block]) -> Option<Gap> {
+pub fn gap_at(rope: &Rope, cursor: usize, blocks: &[Block]) -> Option<Gap> {
     let cursor = cursor.min(rope.len_chars());
     let breaks = line_breaks_before(rope, cursor);
     if blocks.is_empty() {
@@ -129,24 +125,81 @@ pub(super) fn gap_at(rope: &Rope, cursor: usize, blocks: &[Block]) -> Option<Gap
     })
 }
 
-/// The facade's text and blocks while one input is applied.
-pub(super) struct FacadeEdit<'a> {
-    pub(super) editor: &'a mut SourceEditor,
-    pub(super) blocks: &'a mut Vec<Block>,
-    pub(super) format: NoteFormat,
-    /// Markdown: the note may hold link reference definitions.
-    pub(super) refs: &'a mut bool,
-    pub(super) dirty: Dirty,
-    pub(super) outcome: Outcome,
-    pub(super) rows: Option<Rows>,
+/// ADR-024, ADR-025: what one input of the facade gathers on its way,
+/// through every edit of it (the keys of the input mode first, then the
+/// facade's rules).
+#[derive(Debug, Default)]
+pub struct Gathered {
+    /// Which blocks changed.
+    pub dirty: Dirty,
+    /// Whether the cursor moved, and the edits of the text.
+    pub outcome: Outcome,
     /// What the keys asked of the window.
-    pub(super) commands: Vec<EditorCommand>,
+    pub commands: Vec<EditorCommand>,
     /// UC-005 A2: a toolbar function that asks first.
-    pub(super) request: Option<ToolName>,
-    /// The system clipboard's text, read by the window for Vim's `"+`.
-    pub(super) clipboard: Option<String>,
+    pub request: Option<Tool>,
     /// What Vim's `"+` yanked for the system clipboard.
-    pub(super) copied: Option<String>,
+    pub copied: Option<String>,
+}
+
+impl Gathered {
+    /// Takes in that the cursor moved (M-08.8: a fold moves it, too).
+    pub fn moved(&mut self, moved: bool) {
+        self.outcome.moved |= moved;
+    }
+}
+
+/// UC-005: the facade's text and blocks while one input is applied; what
+/// the input changes is gathered in the [`Gathered`] it borrows.
+#[derive(Debug)]
+pub struct FacadeEdit<'a> {
+    editor: &'a mut SourceEditor,
+    blocks: &'a mut Vec<Block>,
+    format: NoteFormat,
+    /// Markdown: the note may hold link reference definitions.
+    refs: &'a mut bool,
+    rows: Option<Rows>,
+    /// The system clipboard's text, read by the window for Vim's `"+`.
+    clipboard: Option<&'a str>,
+    gathered: &'a mut Gathered,
+}
+
+impl<'a> FacadeEdit<'a> {
+    /// An edit of the text of `editor` in `format`, whose blocks `blocks`
+    /// follow it; `refs` tells whether a Markdown note may hold link
+    /// reference definitions (then an edit parses it whole), and what the
+    /// edit changes goes into `gathered`.
+    pub fn new(
+        editor: &'a mut SourceEditor,
+        blocks: &'a mut Vec<Block>,
+        format: NoteFormat,
+        refs: &'a mut bool,
+        gathered: &'a mut Gathered,
+    ) -> Self {
+        Self {
+            editor,
+            blocks,
+            format,
+            refs,
+            rows: None,
+            clipboard: None,
+            gathered,
+        }
+    }
+
+    /// M-09.13: with the rows the window measured for the cursor.
+    #[must_use]
+    pub fn with_rows(mut self, rows: Option<Rows>) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// With the system clipboard's text the window read for Vim's `"+`.
+    #[must_use]
+    pub fn with_clipboard(mut self, clipboard: Option<&'a str>) -> Self {
+        self.clipboard = clipboard;
+        self
+    }
 }
 
 impl FacadeEdit<'_> {
@@ -159,8 +212,8 @@ impl FacadeEdit<'_> {
     }
 
     fn take(&mut self, outcome: Outcome) {
-        self.outcome.moved |= outcome.moved;
-        self.outcome.changes.extend(outcome.changes);
+        self.gathered.outcome.moved |= outcome.moved;
+        self.gathered.outcome.changes.extend(outcome.changes);
     }
 
     fn len(&self) -> usize {
@@ -169,7 +222,7 @@ impl FacadeEdit<'_> {
 
     fn set_selection(&mut self, cursor: usize, anchor: usize) {
         let moved = self.editor.set_selection(cursor, anchor);
-        self.outcome.moved |= moved;
+        self.gathered.outcome.moved |= moved;
     }
 
     /// The first block that ends at source byte `byte` or after it.
@@ -180,7 +233,7 @@ impl FacadeEdit<'_> {
 
     /// The block holding char `char` of the text, and the facade index in
     /// it.
-    pub(super) fn position_at(&self, char: usize) -> Option<(usize, usize)> {
+    fn position_at(&self, char: usize) -> Option<(usize, usize)> {
         let rope = self.rope();
         let byte = rope.char_to_byte(char.min(rope.len_chars()));
         let index = self
@@ -202,7 +255,7 @@ impl FacadeEdit<'_> {
     }
 
     /// The char index in the text of facade index `at` of block `index`.
-    pub(super) fn char_of(&self, index: usize, at: usize) -> usize {
+    fn char_of(&self, index: usize, at: usize) -> usize {
         let rope = self.rope();
         let offset = self.blocks[index].source_offset(at).min(rope.len_bytes());
         rope.byte_to_char(offset)
@@ -238,7 +291,7 @@ impl FacadeEdit<'_> {
     }
 
     /// M-09.11: the empty lines the cursor stands on, if it does.
-    pub(super) fn cursor_gap(&self) -> Option<Gap> {
+    fn cursor_gap(&self) -> Option<Gap> {
         gap_at(self.rope(), self.editor.cursor(), self.blocks)
     }
 
@@ -251,11 +304,11 @@ impl FacadeEdit<'_> {
             change,
             self.refs,
         );
-        self.dirty.splice(spliced);
+        self.gathered.dirty.splice(spliced);
     }
 
     /// Replaces the chars `range` by `text`, the cursor after it.
-    pub(super) fn replace(&mut self, range: Range<usize>, text: &str) {
+    pub fn replace(&mut self, range: Range<usize>, text: &str) {
         let len = self.len();
         let (from, to) = (range.start.min(len), range.end.min(len));
         let rope = self.rope();
@@ -287,11 +340,13 @@ impl FacadeEdit<'_> {
         }
     }
 
-    pub(super) fn undo(&mut self) {
+    /// M-10.1: undoes the last edit of the note's one history.
+    pub fn undo(&mut self) {
         self.tracked(SourceEditor::undo);
     }
 
-    pub(super) fn redo(&mut self) {
+    /// M-10.1: redoes the last undone edit.
+    pub fn redo(&mut self) {
         self.tracked(SourceEditor::redo);
     }
 
@@ -308,7 +363,7 @@ impl FacadeEdit<'_> {
     /// Markdown would read it as formatting; raw in code, markup, images
     /// and tables. Typing that cannot change the structure joins the
     /// block without parsing.
-    pub(super) fn type_text(&mut self, text: &str) {
+    pub fn type_text(&mut self, text: &str) {
         self.delete_selection();
         let cursor = self.editor.cursor();
         let byte = self.rope().char_to_byte(cursor);
@@ -343,7 +398,7 @@ impl FacadeEdit<'_> {
         self.take(outcome);
         if let (true, Some((index, at))) = (fast, position) {
             if insert_typed(self.blocks, index, at, byte, text, &raw) {
-                self.dirty.splice(Spliced {
+                self.gathered.dirty.splice(Spliced {
                     from: index,
                     removed: 1,
                     added: 1,
@@ -373,9 +428,7 @@ impl FacadeEdit<'_> {
             BlockKind::Code { .. } | BlockKind::Markup => "\n".to_owned(),
             BlockKind::ListItem { .. } => {
                 let rope = self.rope();
-                let span =
-                    block.span.start.min(rope.len_bytes())..block.span.end.min(rope.len_bytes());
-                let line = rope.byte_slice(span).to_string();
+                let line = byte_text(rope, block.span.clone());
                 format!("\n{}", next_marker(line.lines().next().unwrap_or("")))
             }
             BlockKind::Quote(depth) if markdown => format!("\n\n{} ", ">".repeat(*depth)),
@@ -419,9 +472,10 @@ impl FacadeEdit<'_> {
                 BlockKind::ThematicBreak => previous.span.start,
                 _ => previous.source_offset(shown_chars(previous)),
             };
-            let end = block.source_offset(0).max(start).min(len);
+            let start = floor_boundary(rope, start);
+            let end = ceil_boundary(rope, block.source_offset(0).max(start).min(len));
             // D-17: the spaces indenting the block's first line stay.
-            let between = rope.byte_slice(start.min(end)..end).to_string();
+            let between = rope.byte_slice(start..end).to_string();
             let end = match between.rfind('\n') {
                 Some(last) if between[last + 1..].chars().all(|c| c == ' ' || c == '\t') => {
                     start + last + 1
@@ -441,7 +495,7 @@ impl FacadeEdit<'_> {
 
     /// M-09.14: pastes `markup` as it is; markup of several lines stands on
     /// lines of its own, with blank lines around it.
-    pub(super) fn paste_markup(&mut self, markup: &str) {
+    pub fn paste_markup(&mut self, markup: &str) {
         self.delete_selection();
         let cursor = self.editor.cursor();
         let (lead, trail) = if markup.contains('\n') {
@@ -477,9 +531,9 @@ impl FacadeEdit<'_> {
 
     /// M-10.2, UC-005 A2: applies the toolbar function `tool` at the
     /// selection; Link and Image ask first.
-    pub(super) fn apply_tool(&mut self, tool: Tool) {
-        let Some(format) = super::super::editing::format_of(tool) else {
-            self.request = Some(tool.into());
+    pub fn apply_tool(&mut self, tool: Tool) {
+        let Some(format) = tool.format() else {
+            self.gathered.request = Some(tool);
             return;
         };
         let text = self.editor.text();
@@ -591,7 +645,7 @@ impl FacadeEdit<'_> {
 
     /// M-09.11 to M-09.13, M-10.1: a key pressed with `modifiers` (`key`
     /// of the egui facade).
-    pub(super) fn key(&mut self, key: Key, modifiers: Modifiers) {
+    pub fn key(&mut self, key: Key, modifiers: Modifiers) {
         // UC-005: on the empty lines of a new paragraph, Enter adds one more
         // and Backspace takes the last one away again.
         let gap = (!modifiers.command && !modifiers.alt)
@@ -680,8 +734,10 @@ impl FacadeEdit<'_> {
 
 /// M-11.2, M-11.3: the facade for the Vim and Nano keys: a line is a block
 /// (OQ-077), and moving goes by the characters and rows the facade shows.
-pub(super) struct FacadeTarget<'e, 'a> {
-    pub(super) edit: &'e mut FacadeEdit<'a>,
+#[derive(Debug)]
+pub struct FacadeTarget<'e, 'a> {
+    /// The edit the keys work on.
+    pub edit: &'e mut FacadeEdit<'a>,
 }
 
 impl FacadeTarget<'_, '_> {
@@ -707,7 +763,7 @@ impl Target for FacadeTarget<'_, '_> {
     fn set_cursor(&mut self, cursor: usize, anchor: usize) {
         let len = self.len();
         self.edit.set_selection(cursor.min(len), anchor.min(len));
-        self.edit.outcome.moved = true;
+        self.edit.gathered.outcome.moved = true;
     }
 
     fn left(&mut self, at: usize) -> usize {
@@ -812,7 +868,7 @@ impl Target for FacadeTarget<'_, '_> {
             let content = block.source_offset(0).max(start);
             let list = matches!(block.kind, BlockKind::ListItem { .. });
             let (insert, cursor) = if list {
-                let marker = self.edit.rope().byte_slice(start..content).to_string();
+                let marker = byte_text(self.edit.rope(), start..content);
                 let cursor = marker.chars().count();
                 (format!("{marker}\n"), cursor)
             } else {
@@ -829,15 +885,15 @@ impl Target for FacadeTarget<'_, '_> {
     }
 
     fn clipboard_read(&mut self) -> Option<String> {
-        self.edit.clipboard.clone()
+        self.edit.clipboard.map(str::to_owned)
     }
 
     fn clipboard_write(&mut self, text: &str) {
-        self.edit.copied = Some(text.to_owned());
+        self.edit.gathered.copied = Some(text.to_owned());
     }
 
     fn command(&mut self, command: EditorCommand) {
-        self.edit.commands.push(command);
+        self.edit.gathered.commands.push(command);
     }
 }
 
@@ -880,7 +936,7 @@ mod tests {
 
     #[test]
     fn m09_11_the_gap_needs_a_blank_line_outside_every_block() {
-        use underline_facade::blocks::parse_blocks;
+        use underline_markup::blocks::parse_blocks;
         let text = "First.\n\n\n\nSecond.\n";
         let blocks = parse_blocks(text, NoteFormat::Markdown);
         let rope = Rope::from_str(text);

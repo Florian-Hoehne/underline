@@ -8353,6 +8353,7 @@ name = "underline-editor-core"
 version = "0.1.0"
 dependencies = [
  "ropey",
+ "underline-markup",
 ]
 
 [[package]]

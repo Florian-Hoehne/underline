@@ -11,7 +11,7 @@
 //! source offsets of the cells of a table move with the text too (A-02).
 
 use ropey::Rope;
-use underline_facade::blocks::{Block, BlockKind, Run};
+use underline_markup::blocks::{Block, BlockKind, Run};
 
 /// M-09.10: escapes the characters Markdown would read as formatting:
 /// `\ * _ ` [ ] < > ~`, and at the start of a block also `# - + |`.
@@ -43,6 +43,13 @@ pub(super) fn asciidoc_plain(before: Option<char>, after: Option<char>, text: &s
 /// M-09.11: the marker of the next list item after the item line `line`:
 /// same indent, same bullet (`**` in AsciiDoc for the second level), the
 /// next number, and an open task box for tasks.
+///
+/// The byte slicing below relies on ASCII: the indent is sliced off by the
+/// byte length of the very characters taken (any whitespace), the bullets
+/// (`- * + .`) and the digits are ASCII, so their char counts are byte
+/// counts; the one character after them (a space or the delimiter) is read
+/// with `str::get`, which gives `None` rather than panicking when it is not
+/// ASCII after all.
 pub(super) fn next_marker(line: &str) -> String {
     let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
     let rest = &line[indent.len()..];
@@ -90,6 +97,35 @@ pub(super) fn line_breaks_before(rope: &Rope, at: usize) -> usize {
         }
     }
     breaks
+}
+
+/// Byte `byte` of `rope` moved down to the start of the char it falls in,
+/// at most the end of the rope; a slice of a rope must start and end on
+/// char boundaries, or ropey panics.
+pub(super) fn floor_boundary(rope: &Rope, byte: usize) -> usize {
+    let byte = byte.min(rope.len_bytes());
+    rope.char_to_byte(rope.byte_to_char(byte))
+}
+
+/// Byte `byte` of `rope` moved up to the start of the next char when it
+/// falls inside one, at most the end of the rope. A block's extent plus one
+/// byte (a line break, mostly) can end inside a multibyte char that follows
+/// it directly, as in `"# Hé\néx"`.
+pub(super) fn ceil_boundary(rope: &Rope, byte: usize) -> usize {
+    let floor = floor_boundary(rope, byte);
+    if floor == byte.min(rope.len_bytes()) {
+        floor
+    } else {
+        rope.char_to_byte(rope.byte_to_char(floor) + 1)
+    }
+}
+
+/// The text of the bytes `range` of `rope`, its start moved down and its end
+/// up to char boundaries (see [`floor_boundary`], [`ceil_boundary`]).
+pub(super) fn byte_text(rope: &Rope, range: std::ops::Range<usize>) -> String {
+    let start = floor_boundary(rope, range.start);
+    let end = ceil_boundary(rope, range.end).max(start);
+    rope.byte_slice(start..end).to_string()
 }
 
 /// The source offset right after the last thing block `block` covers: its
@@ -233,8 +269,8 @@ pub(super) fn has_reference_definitions(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use underline_core::NoteFormat;
-    use underline_facade::blocks::parse_blocks;
+    use underline_markup::blocks::parse_blocks;
+    use underline_markup::NoteFormat;
 
     #[test]
     fn uc005_m09_10_markdown_escapes_formatting_and_block_start_markers() {
