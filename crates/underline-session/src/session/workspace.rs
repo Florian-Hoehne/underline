@@ -655,12 +655,16 @@ impl Session {
     }
 
     /// M-05.2, UC-004 step 2: opens the note `note` in a tab, or activates
-    /// its tab (A1), and lists it first in the note overview.
-    pub fn open_note(&mut self, note: &NoteId) {
-        if self.open_tab(note, true, EditingView::Facade) {
+    /// its tab (A1), and lists it first in the note overview. Returns
+    /// whether a tab shows the note now; when it cannot be read (A10), the
+    /// status says why.
+    pub fn open_note(&mut self, note: &NoteId) -> bool {
+        let shown = self.open_tab(note, true, EditingView::Facade);
+        if shown {
             self.persist_tabs();
             self.refresh_overview();
         }
+        shown
     }
 
     /// Opens `id` in a tab; with `viewed`, records it as the most recently

@@ -34,7 +34,8 @@
 //! text and answers every input; the session keeps the mirror it syncs with
 //! (`ed_sync`), stores it, and sends what only it can make: the colours of
 //! the source view (`ed-highlight`) and the facade's colours and figures
-//! (`ed-enrich`).
+//! (`ed-enrich`). Feature F7 adds following links (UC-004 A2 to A4, M-07.3)
+//! and the outline, code and figures of the tool panel (M-16.5).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -56,9 +57,9 @@ pub use clip::clipboard_view;
 pub use editor_view::{
     ClipAction, ClipContentView, Clipped, CloseQuestion, CopyOnSelectView, DragName,
     EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FoundView,
-    HighlightView, Insertion, KeyHintView, KeyName, KeysStatusView, NotePropertiesView,
-    SectionView, SectionsView, SelectionCopy, SpanStyle, TabPropertiesView, TabViews, TextChange,
-    ToolName, ToolView, VimChange, VimModeName, VimState,
+    HighlightView, IndexEntryView, IndexesView, Insertion, KeyHintView, KeyName, KeysStatusView,
+    LinkAnswer, NotePropertiesView, SectionView, SectionsView, SelectionCopy, SpanStyle,
+    TabPropertiesView, TabViews, TextChange, ToolName, ToolView, VimChange, VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
@@ -68,8 +69,8 @@ pub use facade_view::{
 };
 pub use palette::PaletteView;
 pub use session::{
-    CreatePlan, EmbedDone, EmbedPlan, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session,
-    Synced,
+    CreatePlan, EmbedDone, EmbedPlan, Followed, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen,
+    Session, Synced,
 };
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,

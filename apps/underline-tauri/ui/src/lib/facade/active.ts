@@ -1,6 +1,7 @@
 // The facade shown now, for the window (the switch of the view, the
-// toolbar) and for later features that jump in it (M-09.16: the tool
-// panel's outline reveals a block). Its blocks come from the window's editor
+// toolbar) and for what jumps in it: the tool panel's outline reveals a
+// block (M-09.16, M-16.5), a link to a heading puts the cursor there
+// (M-07.3). Its blocks come from the window's editor
 // core (ADR-025), not from the backend's events.
 
 import type { Insertion } from '../bindings';
@@ -13,6 +14,11 @@ export interface ActiveFacade {
   readonly note: string;
   /** M-09.16: scrolls the block at the markup offset `offset` to the top, without moving the cursor. */
   reveal(offset: number): void;
+  /**
+   * M-07.3: the cursor to the markup offset `offset`, shown, with the
+   * keyboard; with `rev`, only while the text is the backend's of `rev`.
+   */
+  jump(offset: number, rev?: number): void;
   focus(): void;
   /** M-10.3 to M-10.5: puts `insertion` in at the cursor; resolves once it is shown. */
   insert(insertion: Insertion): Promise<void>;

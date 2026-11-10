@@ -31,6 +31,8 @@ fn main() {
         "ed_drop",
         "ed_drag",
         "ed_note_link",
+        "ed_follow_link",
+        "link_open_web",
         "app_close_anyway",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))

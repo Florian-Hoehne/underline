@@ -13,11 +13,24 @@
   backend reads them when the note is stored, changed outside or shown,
   not for every look.
 
-  Later features add the todos (M-16.3, F15), the git changes (M-16.4, F12)
-  and the outline, code and figures (M-16.5, F7).
+  M-16.5 (FR-041 to FR-043): "Outline (N)", "Code (N)" and "Figures (N)",
+  open at first, each "None" when empty, made by the backend from the
+  note's blocks for one revision (event `indexes`); until the first lists
+  of the note come, the three are not shown, as in egui before it made
+  them. A heading is indented 14 px per level below the note's highest
+  level, at most 4 levels deep, and screen readers hear its level; a long
+  entry wraps. A click shows the place: the facade scrolls its block to the top
+  and leaves the cursor (M-09.16), the source view puts the cursor there
+  and takes the keyboard.
+
+  Later features add the todos (M-16.3, F15) and the git changes (M-16.4,
+  F12) between the properties and the outline, as in egui.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { IndexEntryView } from './bindings';
+  import { activeSourceView } from './editor/active';
+  import { activeFacade } from './facade/active';
   import { toolPanelWidthWithin, type Shell } from './shell.svelte';
 
   type Props = { shell: Shell };
@@ -32,6 +45,43 @@
     shell.toolPanelWidth ?? toolPanelWidthWithin(shell.settings?.toolPanelWidth ?? 240),
   );
   const properties = $derived(shell.properties?.properties ?? null);
+  /** M-16.5: the lists of the active note, once the backend made them. */
+  const lists = $derived(
+    shell.indexes !== null && shell.indexes.note === shell.tabs.active ? shell.indexes : null,
+  );
+  const sections = $derived<{ title: string; entries: IndexEntryView[] }[]>(
+    lists
+      ? [
+          { title: 'Outline', entries: lists.outline },
+          { title: 'Code', entries: lists.code },
+          { title: 'Figures', entries: lists.figures },
+        ]
+      : [],
+  );
+
+  /** Headings deeper than this many levels below the highest are indented no further (ux review F7). */
+  const DEEPEST = 4;
+
+  /** M-16.5: 14 px per level below the note's highest heading, as egui, at most `DEEPEST` levels. */
+  function indent(depth: number): number {
+    return Math.min(depth, DEEPEST) * 14;
+  }
+
+  /**
+   * M-16.5, UC-004 step 5: the place of an entry: the facade scrolls its
+   * block to the top, the source view jumps there and takes the keyboard.
+   */
+  function show(note: string, offset: number) {
+    const facade = activeFacade();
+    if (facade?.note === note) {
+      facade.reveal(offset);
+      return;
+    }
+    const source = activeSourceView();
+    if (source?.note === note) {
+      source.jump(offset);
+    }
+  }
 
   onMount(() => shell.pinToolPanelWidth());
 
@@ -90,6 +140,32 @@
         <p class="weak">Not saved yet</p>
       {/if}
     </details>
+    {#if lists}
+      {#each sections as section (section.title)}
+        <details open>
+          <summary>{section.title} ({section.entries.length})</summary>
+          {#if section.entries.length === 0}
+            <p class="weak">None</p>
+          {:else}
+            <ul class="entries" aria-label={section.title}>
+              {#each section.entries as entry (`${entry.offset}:${entry.label}`)}
+                <li>
+                  <button
+                    type="button"
+                    class="entry"
+                    style:padding-left="calc(var(--space-1) + {indent(entry.depth)}px)"
+                    aria-label={section.title === 'Outline'
+                      ? `${entry.label}, level ${entry.depth + 1}`
+                      : undefined}
+                    onclick={() => show(lists.note, entry.offset)}>{entry.label}</button
+                  >
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </details>
+      {/each}
+    {/if}
   </div>
 </aside>
 
@@ -141,6 +217,43 @@
 
   .weak {
     margin: var(--space-2) 0 0;
+  }
+
+  details + details {
+    margin-top: var(--space-2);
+  }
+
+  .entries {
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* egui's selectable labels: plain text, tinted under the pointer. A long
+     label wraps, so it can be read without a pointer (ux review F7). */
+  .entry {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 24px;
+    padding: 2px var(--space-1);
+    font: inherit;
+    color: var(--ui-text);
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    border-radius: var(--radius);
+  }
+
+  .entry:hover {
+    background: color-mix(in srgb, var(--ui-chosen) 40%, transparent);
+  }
+
+  .entry:focus-visible {
+    outline: 2px solid var(--ui-focus);
+    outline-offset: -2px;
   }
 
   .edge {

@@ -8,7 +8,8 @@
   - without a workspace, the offer to open or create one (M-02);
   - with one, the note overview (M-05) beside the tabs and the note (M-06).
   The Open and Create dialogs float above it, not modal (M-21.1, M-21.2),
-  and so does "Changes not stored" (M-06.3, M-21.4).
+  and so do "Open web address" (M-07.3) and "Changes not stored" (M-06.3,
+  M-21.4).
 -->
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
@@ -18,6 +19,7 @@
   import EmptyScreen from './lib/EmptyScreen.svelte';
   import NoteArea from './lib/NoteArea.svelte';
   import OpenDialog from './lib/OpenDialog.svelte';
+  import OpenWebDialog from './lib/OpenWebDialog.svelte';
   import Overview from './lib/Overview.svelte';
   import StatusBar from './lib/StatusBar.svelte';
   import TopBar from './lib/TopBar.svelte';
@@ -63,6 +65,9 @@
       <OpenDialog {shell} dialog={shell.dialog} />
     {:else if shell.dialog?.kind === 'create'}
       <CreateDialog {shell} dialog={shell.dialog} />
+    {/if}
+    {#if shell.webQuestion !== null}
+      <OpenWebDialog {shell} address={shell.webQuestion} />
     {/if}
     {#if shell.closeQuestion}
       <CloseQuestionDialog {shell} question={shell.closeQuestion} />

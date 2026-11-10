@@ -253,7 +253,17 @@ impl Core {
         Ok(self.client()?.in_step(rev))
     }
 
-    /// Whether nothing waits to be sent or fetched.
+    /// M-07.3: the backend's revision the window last synced with.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    pub fn synced_rev(&mut self) -> Result<u32, CallError> {
+        Ok(self.client()?.synced())
+    }
+
+    /// Whether nothing waits: no batch on its way, no edits to send, no
+    /// fetch asked for.
     ///
     /// # Errors
     ///
@@ -618,5 +628,17 @@ mod tests {
         assert!(!whole["blocks"].as_array().expect("blocks").is_empty());
         head["blocks"] = whole["blocks"].clone();
         assert_eq!(head, whole);
+    }
+
+    /// M-07.3: the window sends the revision it is in step with along with
+    /// the place of a followed link; there is none before the sync started.
+    #[test]
+    fn m07_3_the_synced_revision_is_the_one_the_sync_started_with() {
+        let mut core = Core::open("Home", "# Home\n", "Markdown", false).expect("a format");
+        assert!(core.synced_rev().is_err());
+
+        core.start_sync(7);
+
+        assert_eq!(core.synced_rev().expect("syncing"), 7);
     }
 }

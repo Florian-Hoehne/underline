@@ -1,11 +1,11 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
-// `tabs`, `properties` and `close-question` events (ADR-022); the editor's
+// `tabs`, `properties`, `indexes` and `close-question` events (ADR-022); the editor's
 // `ed-highlight` goes to the source view shown now, `ed-changed`,
 // `ed-flush` and `ed-enrich` to the editor cores (ADR-025, `editor/sync.ts`),
 // plus the UI state that is not stored (M-22.4): the Open and Create
-// dialogs, the question before closing, the loading state and the panels'
-// widths while they are dragged. The text of the notes is not here: each
+// dialogs, the question before closing, "Open web address" (M-07.3), the
+// loading state and the panels' widths while they are dragged. The text of the notes is not here: each
 // open note's editor core holds it (ADR-025). No domain logic lives here:
 // every change goes to the backend, which answers with an event or with the
 // dialog's next stage.
@@ -18,6 +18,7 @@ import {
   type CreateAnswer,
   type EditingViewName,
   type FormatName,
+  type IndexesView,
   type OpenAnswer,
   type OpenOffer,
   type OverviewItem,
@@ -32,7 +33,10 @@ import {
   type WorkspaceView,
 } from './bindings';
 import { activeSourceView } from './editor/active';
+import { jumpTo } from './editor/jump';
 import {
+  coreHash,
+  inStepRevision,
   dropCore,
   enrichCore,
   flushCores,
@@ -138,6 +142,13 @@ export class Shell {
   /** M-16.2: the properties of the active tab's note, `null` without one. */
   properties = $state<TabPropertiesView | null>(null);
   /**
+   * M-16.5: the outline, code and figures the backend made last, of the
+   * note then active; the tool panel shows them while that note is.
+   */
+  indexes = $state.raw<IndexesView | null>(null);
+  /** M-07.3, UC-004 A4: the web address "Open web address" asks about. */
+  webQuestion = $state<string | null>(null);
+  /**
    * M-06.3, M-21.4: "Changes not stored": closing a tab or Underline could
    * not store its changes, and the user decides.
    */
@@ -209,6 +220,8 @@ export class Shell {
       events.workspace.listen((event) => {
         this.#sentDuringStart?.add('workspace');
         this.workspace = event.payload;
+        // A note of the same name in another workspace is another text.
+        this.indexes = null;
       }),
       events.overview.listen((event) => {
         this.#sentDuringStart?.add('overview');
@@ -222,6 +235,9 @@ export class Shell {
       }),
       events.properties.listen((event) => {
         this.properties = event.payload;
+      }),
+      events.indexes.listen((event) => {
+        this.indexes = event.payload;
       }),
       events.closeQuestion.listen((event) => {
         this.closeQuestion = event.payload;
@@ -470,6 +486,59 @@ export class Shell {
     const result = await this.#serial(() => flushed(() => commands.tabSetView(note, view)));
     if (result.status === 'error') {
       this.#fail('tab_set_view', result.error);
+    }
+  }
+
+  /**
+   * M-07.3, UC-004 A2 to A4: follows the link at `at` (web units) of the
+   * note `note`, once the window's edits reached the backend (ADR-025),
+   * with the revision they gave; the backend finds the link there. When
+   * the text changed after the click, nothing is followed. A heading is
+   * jumped to, possibly in a tab that opens; a web address may be asked
+   * about first. What else happened, the status bar says.
+   */
+  async followLink(note: string, at: number): Promise<void> {
+    const clicked = coreHash(note);
+    if (clicked === null) {
+      return;
+    }
+    const result = await this.#serial(() =>
+      flushed(async () => {
+        const rev = inStepRevision(note);
+        if (rev === null || coreHash(note) !== clicked) {
+          return { status: 'ok' as const, data: { kind: 'done' as const } };
+        }
+        return commands.edFollowLink(note, at, rev);
+      }),
+    );
+    if (result.status === 'error') {
+      this.#fail('ed_follow_link', result.error);
+      return;
+    }
+    const answer = result.data;
+    switch (answer.kind) {
+      case 'jump':
+        jumpTo(answer.note, answer.rev, answer.offset);
+        break;
+      case 'askWeb':
+        this.webQuestion = answer.address;
+        break;
+      case 'newNote':
+        // Q-56: the dialog "New note" comes with feature F8; until then the
+        // status bar says what egui's dialog says above its fields.
+        this.status = answer.problem;
+        break;
+      case 'done':
+        break;
+    }
+  }
+
+  /** M-07.3, UC-004 A4: "Open" or "Cancel" of "Open web address". */
+  async answerWeb(open: boolean): Promise<void> {
+    this.webQuestion = null;
+    const result = await this.#serial(() => commands.linkOpenWeb(open));
+    if (result.status === 'error') {
+      this.#fail('link_open_web', result.error);
     }
   }
 

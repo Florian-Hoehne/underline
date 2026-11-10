@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::editor_view::{HighlightView, TabPropertiesView};
+use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
@@ -42,4 +42,6 @@ pub enum Event {
     Flush(FlushView),
     /// ADR-025: what the backend made of the facade's blocks (`ed-enrich`).
     Enrich(Box<EnrichView>),
+    /// M-16.5: the outline, code and figures of the active tab's note.
+    Indexes(IndexesView),
 }

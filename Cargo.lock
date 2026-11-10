@@ -8445,6 +8445,7 @@ name = "underline-tauri"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "open",
  "parking_lot",
  "serde",
  "serde_json",

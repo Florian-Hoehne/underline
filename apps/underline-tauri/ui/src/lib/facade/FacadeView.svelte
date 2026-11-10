@@ -32,15 +32,18 @@
     moves the scroll position by as much, so the text in view stays. A
     selection whose ends are not drawn is painted where blocks are.
   - M-09.3: "Markdown"/"AsciiDoc" at the top right.
-  - M-07.4: pointing at a link shows its address and "Ctrl+click to follow"
-    (following it comes with F7).
+  - M-07.4: pointing at a link shows its address and "Ctrl+click to follow";
+    M-07.3: a click with Ctrl (Cmd on macOS) follows it (`onFollow`), the
+    click placing the cursor too.
   - M-08.8: fold arrows and "…" on headings, from the sections the core
     finds, shared with the source view.
   - M-09.8: while the cursor is in a figure, its markup shows below it and
     is edited there.
   - M-09.9: a picture enlarged over the window.
   - M-09.16: `reveal(offset)` scrolls a block to the top without moving the
-    cursor.
+    cursor (the tool panel's entries, M-16.5); `jump(offset)` puts the
+    cursor there, shows it and takes the keyboard (a heading a link leads
+    to, M-07.3).
   - M-12.2: the minimap gets one bar per row and figures as areas.
 -->
 <script module lang="ts">
@@ -78,6 +81,8 @@
   import type { InputModeName, KeysState } from '../editor/keys';
   import type { MinimapChange, MinimapSource } from '../editor/minimap';
   import { tabId } from '../tabs';
+  import { takeJump } from '../editor/jump';
+  import { coreInStep } from '../editor/sync';
   import { setActiveFacade, type ActiveFacade, type CursorMark } from './active';
   import { type FacadeBackend } from './backend';
   import { wasmFacadeBackend } from './wasmBackend';
@@ -115,6 +120,8 @@
     onError: (message: string) => void;
     /** M-10.9: the keys ask to store the note or close its tab. */
     onCommand?: (command: EditorCommandName) => void;
+    /** M-07.3, UC-004 BR-006: a Ctrl+click (Cmd+click) on a link follows the link at `at` (markup, web units). */
+    onFollow?: (at: number) => void;
     backend?: FacadeBackend;
     /** ADR-024 measuring point: called when a patch is in place. */
     probe?: ((start: number, patched: number) => void) | null;
@@ -129,6 +136,7 @@
     info,
     onError,
     onCommand,
+    onFollow,
     backend = wasmFacadeBackend(platform === 'macos'),
     probe = null,
   }: Props = $props();
@@ -165,10 +173,17 @@
   let drawn = $state(0);
   let enlarged = $state<{ url: string; width: number; height: number } | null>(null);
   let tooltip = $state<{ text: string; x: number; y: number } | null>(null);
+  /**
+   * M-07.4: the hint stands above the pointer, so it does not cover the
+   * line below the link (app-tester F7); near the top of the window, below.
+   */
+  const TOOLTIP_ABOVE = 80;
 
   let rev = 0;
   let version = 0;
   let destroyed = false;
+  /** Resolves once the facade's blocks are in (`open`). */
+  let opened: Promise<void> = Promise.resolve();
   /** ADR-025: lets the core's listener go. */
   let detach: (() => void) | null = null;
   const heights = new Heights();
@@ -457,6 +472,29 @@
     }
     holding = { index, into, until: performance.now() + time };
     scroller.scrollTop = PADDING + heights.top(index) + into;
+  }
+
+  /**
+   * M-07.3: the cursor to `offset` (markup, web units) once the blocks are
+   * in, shown, with the keyboard (egui: `jump_to_byte`, then the facade's
+   * `request_focus`). With `rev`, the offset is in the backend's text of
+   * that revision: when the core's text is no longer it, nothing moves.
+   */
+  function jump(offset: number, rev?: number) {
+    void opened.then(async () => {
+      await queue;
+      if (destroyed || (rev !== undefined && !coreInStep(note, rev))) {
+        return;
+      }
+      selections++;
+      anchor = offset;
+      head = offset;
+      gap = null;
+      sendSelection();
+      // The place the facade came back to gives way.
+      holding = null;
+      await focusCursor();
+    });
   }
 
   /** M-09.16: block `offset` to the top, the cursor where it is. */
@@ -1143,6 +1181,27 @@
     event.preventDefault();
   }
 
+  /**
+   * M-07.3, UC-004 BR-006: a click with Ctrl (Cmd on macOS) on a link
+   * follows it; the click placed the cursor as any click. The window gives
+   * the place of the link's first character, not its address: the backend
+   * finds the link there in its own text. A link in a table cell is not
+   * followed, as in egui (its runs are not mapped to the markup).
+   */
+  function onClick(event: MouseEvent) {
+    const command = platform === 'macos' ? event.metaKey : event.ctrlKey;
+    if (event.button !== 0 || !command || !onFollow) {
+      return;
+    }
+    const element = (event.target as Element | null)?.closest<HTMLElement>('[data-link][data-r]');
+    const index = Number(element?.closest<HTMLElement>('[data-b]')?.dataset.b);
+    const block = blocks[index];
+    const run = block?.runs[Number(element?.dataset.r)];
+    if (run?.link) {
+      onFollow(sourceAt(block, run, 0));
+    }
+  }
+
   /** M-07.4: the address of the link under the pointer. */
   function onPointerMove(event: PointerEvent) {
     const link = (event.target as Element | null)?.closest<HTMLElement>('[data-link]');
@@ -1273,6 +1332,7 @@
       return note;
     },
     reveal,
+    jump,
     focus: () => void focusCursor(),
     tool,
     settled: () => queue,
@@ -1299,7 +1359,8 @@
         );
       }
     });
-    void open().then(async () => {
+    opened = open();
+    void opened.then(async () => {
       if (destroyed || !scroller) {
         return;
       }
@@ -1317,6 +1378,11 @@
         await focusCursor();
       }
     });
+    // M-07.3: a link led here, to a heading.
+    const waiting = takeJump(note);
+    if (waiting !== null) {
+      jump(waiting.offset, waiting.rev);
+    }
     return () => {
       destroyed = true;
       backend.leave(note, detach && !loading ? { version, blocks } : null);
@@ -1370,6 +1436,7 @@
       ondragstart={refuse}
       onkeydown={onKeyDown}
       onmousedown={onMouseDown}
+      onclick={onClick}
       onpointermove={onPointerMove}
       onpointerleave={() => (tooltip = null)}
     >
@@ -1405,9 +1472,10 @@
   {#if tooltip}
     <div
       class="tooltip"
+      class:above={tooltip.y > TOOLTIP_ABOVE}
       role="tooltip"
       style:left="{tooltip.x + 12}px"
-      style:top="{tooltip.y + 16}px"
+      style:top="{tooltip.y > TOOLTIP_ABOVE ? tooltip.y - 8 : tooltip.y + 16}px"
     >
       {tooltip.text}
     </div>
@@ -1510,5 +1578,9 @@
     background: var(--ui-surface);
     border: 1px solid var(--ui-border);
     border-radius: var(--radius);
+  }
+
+  .tooltip.above {
+    transform: translateY(-100%);
   }
 </style>

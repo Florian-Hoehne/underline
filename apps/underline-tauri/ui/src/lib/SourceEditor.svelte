@@ -12,12 +12,15 @@
   the status line (M-11.4).
 
   Escape leaves the text for the note's tab in the Normal input mode
-  (M-08.10, ux review F3).
+  (M-08.10, ux review F3). A Ctrl+click (Cmd+click) on a link follows it
+  (M-07.3, `onFollow`); a jump a link asked for while the view was opening
+  is made once it shows.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { EditorCommandName } from './bindings';
   import { setActiveSourceView } from './editor/active';
+  import { takeJump } from './editor/jump';
   import type { EditorInfo } from './editor/info.svelte';
   import type { InputModeName } from './editor/keys';
   import type { LineNumberSide } from './editor/numbers';
@@ -45,6 +48,8 @@
     onError: (message: string) => void;
     /** M-10.9: the keys ask to store the note or close its tab. */
     onCommand?: (command: EditorCommandName) => void;
+    /** M-07.3: a Ctrl+click (Cmd+click) at `at` (web units) follows the link there. */
+    onFollow?: (at: number) => void;
     backend?: EditorBackend;
   };
 
@@ -59,6 +64,7 @@
     focus = false,
     onError,
     onCommand,
+    onFollow,
     backend = wasmBackend(mac),
   }: Props = $props();
 
@@ -99,6 +105,7 @@
       onRequest: (tool) => {
         if (info) info.request = tool;
       },
+      onFollow: (at) => onFollow?.(at),
     })
       .then((made) => {
         if (gone) {
@@ -113,7 +120,11 @@
           info.minimap = sourceMinimap(made);
         }
         loading = false;
-        if (focus) {
+        // M-07.3: a link led here, to a heading.
+        const waiting = takeJump(note);
+        if (waiting !== null) {
+          made.jump(waiting.offset, waiting.rev);
+        } else if (focus) {
           made.focus();
         }
       })

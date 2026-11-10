@@ -49,6 +49,12 @@ impl Session {
         self.mirror_of(note).text()
     }
 
+    /// The revision of the backend's text of `note`, which a window's core
+    /// in step with it sends along.
+    pub(crate) fn mirror_rev(&self, note: &NoteId) -> u32 {
+        self.mirror_of(note).rev()
+    }
+
     fn mirror_of(&self, note: &NoteId) -> &underline_editor_core::sync::Server {
         let open = self.open.as_ref().expect("a workspace is open");
         let index = open.tabs.find(note).expect("the tab is open");

@@ -22,8 +22,9 @@ use tauri_specta::Event as _;
 use underline_core::NoteId;
 use underline_session::{
     clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, DragName, EditingViewName,
-    EmbedAnswer, FormatName, Insertion, MirrorView, NewWorkspaceRequest, OpenAnswer, Session,
-    SettingName, StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
+    EmbedAnswer, FormatName, Insertion, LinkAnswer, MirrorView, NewWorkspaceRequest, OpenAnswer,
+    Session, SettingName, StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError,
+    UiErrorKind,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -513,6 +514,73 @@ pub async fn ed_note_link(
         )
     })
     .await?
+}
+
+/// UC-004 A2 to A4, M-07.3: follows the link at `at` (web units) of the
+/// text of the tab `note`, clicked while the window was in step with the
+/// backend's revision `rev` (its edits sent first). The session finds the
+/// link in its own text, so the window never names what is opened; a
+/// place of another revision follows nothing. A web address (after "Open
+/// web address" agreed) or a file is opened with the system's program once
+/// the session is let go (plan section 8: the `open` crate, no plugin); a
+/// failure is said in the status bar.
+#[tauri::command]
+#[specta::specta]
+pub async fn ed_follow_link(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    at: u32,
+    rev: u32,
+) -> Result<LinkAnswer, UiError> {
+    let id = NoteId::from_relative(&note);
+    let followed = on_session(&session, &waker, move |session| {
+        session.follow_link(&id, at, rev)
+    })
+    .await??;
+    if let Some(target) = followed.open {
+        open_with_system(&session, &waker, target).await?;
+    }
+    Ok(followed.answer)
+}
+
+/// UC-004 A4: the answer to "Open web address": with `open`, the address
+/// asked about opens in the browser, and web addresses are not asked about
+/// again until Underline closes.
+#[tauri::command]
+#[specta::specta]
+pub async fn link_open_web(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    open: bool,
+) -> Result<(), UiError> {
+    let address = on_session(&session, &waker, move |session| session.answer_web(open)).await?;
+    if let Some(address) = address {
+        open_with_system(&session, &waker, address).await?;
+    }
+    Ok(())
+}
+
+/// UC-004 BR-007: opens `target` with the program the system uses for it,
+/// without the session (`open::that_detached`, as egui); a failure becomes
+/// the status.
+async fn open_with_system(
+    session: &State<'_, SharedSession>,
+    waker: &State<'_, Waker>,
+    target: String,
+) -> Result<(), UiError> {
+    let opened = blocking({
+        let target = target.clone();
+        move || open::that_detached(&target).map_err(|error| error.to_string())
+    })
+    .await?;
+    if let Err(error) = opened {
+        on_session(session, waker, move |session| {
+            session.open_failed(&target, &error);
+        })
+        .await?;
+    }
+    Ok(())
 }
 
 /// M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the

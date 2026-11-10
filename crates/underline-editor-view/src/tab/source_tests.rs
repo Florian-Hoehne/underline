@@ -735,3 +735,43 @@ fn m10_3_a_link_with_spaces_and_brackets_as_egui_writes_it() {
     adoc.source_insert(link());
     assert_eq!(adoc.editor.text(), "link:../a b/Plan [v2].md[Plan [v2]]");
 }
+
+/// The link at web offset `at` of `text`.
+fn link(text: &str, format: NoteFormat, at: u32) -> Option<String> {
+    link_at_web(&ropey::Rope::from_str(text), format, at)
+}
+
+/// UC-004 BR-006, M-07.3: a Ctrl+click follows the link at the place
+/// clicked, as egui's `link_at` finds it; elsewhere there is none.
+#[test]
+fn uc004_m07_3_the_link_at_a_place_of_the_text() {
+    let md = "Read [the plan](Plan.md#goals) now.\n";
+    let at = |at| link(md, NoteFormat::Markdown, at);
+    // On the label, from its first character to just after its last, as
+    // egui; not on the brackets or the address.
+    assert_eq!(at(6).as_deref(), Some("Plan.md#goals"));
+    assert_eq!(at(14).as_deref(), Some("Plan.md#goals"));
+    assert_eq!(at(5), None);
+    assert_eq!(at(22), None);
+    assert_eq!(at(0), None);
+    assert_eq!(at(34), None);
+    // Past the end: nothing, no panic.
+    assert_eq!(at(1000), None);
+    assert_eq!(at(u32::MAX), None);
+
+    let adoc = "See link:Plan.adoc[the plan].\n";
+    assert_eq!(
+        link(adoc, NoteFormat::AsciiDoc, 20).as_deref(),
+        Some("Plan.adoc")
+    );
+}
+
+/// M-07.3, A-26: offsets are web units: an emoji counts two, a `\r\n`
+/// pair one.
+#[test]
+fn m07_3_the_link_is_found_at_web_offsets() {
+    let text = "🙂\r\n[x](y.md)\r\n";
+    // 🙂 is two units, the pair one: the bracket is at 3, the label at 4.
+    assert_eq!(link(text, NoteFormat::Markdown, 4).as_deref(), Some("y.md"));
+    assert_eq!(link(text, NoteFormat::Markdown, 3), None);
+}

@@ -86,3 +86,73 @@ pub enum EmbedAnswer {
     /// Nothing is inserted; the status bar says why.
     Refused,
 }
+
+/// UC-004 A2 to A4, M-07.3: what following a link asks of the window. The
+/// status bar says what else happened (a heading not found, a file that
+/// does not exist, a link leading outside the workspace).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LinkAnswer {
+    /// Nothing more for the window.
+    Done,
+    /// A2: the tab of `note`, active now, puts its cursor at the heading
+    /// the link names and shows it there.
+    Jump {
+        /// The note whose tab jumps.
+        note: String,
+        /// The revision of the backend's text `offset` is in.
+        rev: u32,
+        /// Where the heading's text starts, in web units.
+        offset: u32,
+    },
+    /// A4: the first web address of the session: "Open web address" asks
+    /// whether to open it (`link_open_web`).
+    AskWeb {
+        /// The address, as the link has it.
+        address: String,
+    },
+    /// A3: the linked note does not exist; "New note" offers to create
+    /// it with its folder and title filled in.
+    NewNote {
+        /// The folder of the link, `""` for the top folder.
+        folder: String,
+        /// The title of the link.
+        title: String,
+        /// "{title} does not exist yet. Create it?"
+        problem: String,
+    },
+}
+
+/// M-16.5, FR-041 to FR-043: one entry of the outline, the code index or
+/// the figure index of the tool panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct IndexEntryView {
+    /// What the entry shows, at most 60 characters.
+    pub label: String,
+    /// The nesting of a heading, 0 for the highest heading level of the
+    /// note; 0 for code and figures. Each level indents by 14 px.
+    pub depth: u32,
+    /// Where the block starts in the text, in web units of `rev`.
+    pub offset: u32,
+}
+
+/// M-16.5, UC-004 step 4: "Outline", "Code" and "Figures" of an open
+/// note, made from its blocks for one revision of the backend's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct IndexesView {
+    /// The note.
+    pub note: String,
+    /// The revision of the backend's text the lists were made from.
+    pub rev: u32,
+    /// The headings.
+    pub outline: Vec<IndexEntryView>,
+    /// The code blocks that are no diagrams.
+    pub code: Vec<IndexEntryView>,
+    /// The images and the diagrams.
+    pub figures: Vec<IndexEntryView>,
+}

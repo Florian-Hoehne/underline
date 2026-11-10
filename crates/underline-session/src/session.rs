@@ -7,6 +7,8 @@ pub(crate) use diagrams::SvgDiagrams;
 mod editing;
 mod embed;
 mod facade;
+mod indexes;
+mod links;
 mod sync;
 mod tab;
 #[cfg(test)]
@@ -14,6 +16,7 @@ mod window;
 mod workspace;
 
 pub use self::embed::{EmbedDone, EmbedPlan};
+pub use self::links::Followed;
 pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
@@ -103,6 +106,13 @@ pub struct Session {
     /// M-09: what the facades share: the colours of code blocks, what was
     /// found of image files, and the results of the tick's jobs.
     facade: facade::Shared,
+    /// M-16.5: the jobs that make the tool panel's lists.
+    index_jobs: indexes::IndexJobs,
+    /// UC-004 A4: the user agreed to open web addresses; asked once until
+    /// Underline closes.
+    web_allowed: bool,
+    /// UC-004 A4: the web address "Open web address" asks about.
+    web_asked: Option<String>,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -133,6 +143,8 @@ struct Told {
     tabs: TabsView,
     /// The properties section of the tool panel (M-16.2).
     properties: Option<TabPropertiesView>,
+    /// The number of the tool panel's lists last sent (M-16.5).
+    indexes: Option<u64>,
 }
 
 impl Session {
@@ -166,6 +178,7 @@ impl Session {
             overview: None,
             tabs: TabsView::default(),
             properties: None,
+            indexes: None,
         };
         let own_writes = OwnWrites::default();
         let mut session = Self {
@@ -186,6 +199,9 @@ impl Session {
             open: None,
             diagrams: None,
             facade: facade::Shared::default(),
+            index_jobs: indexes::IndexJobs::default(),
+            web_allowed: false,
+            web_asked: None,
             views_dirty: false,
             told,
         };
@@ -270,9 +286,10 @@ impl Session {
     /// settings file is looked at every 500 ms (M-20.6), due notes are
     /// stored in the background (M-10.8), the app state is written once a
     /// change is due (M-22.1), the colours of the lines the source view
-    /// shows are worked out (M-08.2), and the facade's colours and figures
-    /// for the window's editor core (M-09, `ed-enrich`). Returns what
-    /// changed for the window.
+    /// shows are worked out (M-08.2), the facade's colours and figures
+    /// for the window's editor core (M-09, `ed-enrich`), and the outline,
+    /// code and figures of the tool panel (M-16.5). Returns what changed
+    /// for the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
         self.settings.poll(now);
@@ -285,6 +302,7 @@ impl Session {
         let mut events = self.take_events();
         events.extend(self.highlight_event(now));
         events.extend(self.facade_events());
+        events.extend(self.indexes_events(now));
         events
     }
 

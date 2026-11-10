@@ -179,6 +179,23 @@ export const commands = {
 	 */
 	edNoteLink: (note: string, target: string) => typedError<Insertion, UiError>(__TAURI_INVOKE("ed_note_link", { note, target })),
 	/**
+	 *  UC-004 A2 to A4, M-07.3: follows the link at `at` (web units) of the
+	 *  text of the tab `note`, clicked while the window was in step with the
+	 *  backend's revision `rev` (its edits sent first). The session finds the
+	 *  link in its own text, so the window never names what is opened; a
+	 *  place of another revision follows nothing. A web address (after "Open
+	 *  web address" agreed) or a file is opened with the system's program once
+	 *  the session is let go (plan section 8: the `open` crate, no plugin); a
+	 *  failure is said in the status bar.
+	 */
+	edFollowLink: (note: string, at: number, rev: number) => typedError<LinkAnswer, UiError>(__TAURI_INVOKE("ed_follow_link", { note, at, rev })),
+	/**
+	 *  UC-004 A4: the answer to "Open web address": with `open`, the address
+	 *  asked about opens in the browser, and web addresses are not asked about
+	 *  again until Underline closes.
+	 */
+	linkOpenWeb: (open: boolean) => typedError<null, UiError>(__TAURI_INVOKE("link_open_web", { open })),
+	/**
 	 *  M-21.4, UC-005 A14 step 3: "Close anyway": Underline ends without the
 	 *  changes that could not be stored. What can be stored is stored once
 	 *  more, and the app state is written, when the app exits.
@@ -193,6 +210,7 @@ export const events = {
 	edEnrich: makeEvent<EnrichEvent, EnrichEvent>("ed-enrich"),
 	edFlush: makeEvent<FlushEvent, FlushEvent>("ed-flush"),
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
+	indexes: makeEvent<IndexesEvent, IndexesEvent>("indexes"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
@@ -853,6 +871,45 @@ export type HighlightView = {
 };
 
 /**
+ *  M-16.5, FR-041 to FR-043: one entry of the outline, the code index or
+ *  the figure index of the tool panel.
+ */
+export type IndexEntryView = {
+	/**  What the entry shows, at most 60 characters. */
+	label: string,
+	/**
+	 *  The nesting of a heading, 0 for the highest heading level of the
+	 *  note; 0 for code and figures. Each level indents by 14 px.
+	 */
+	depth: number,
+	/**  Where the block starts in the text, in web units of `rev`. */
+	offset: number,
+};
+
+/**
+ *  M-16.5: the outline, code and figures of the active tab's note, for one
+ *  revision of its text.
+ */
+export type IndexesEvent = IndexesView;
+
+/**
+ *  M-16.5, UC-004 step 4: "Outline", "Code" and "Figures" of an open
+ *  note, made from its blocks for one revision of the backend's text.
+ */
+export type IndexesView = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the backend's text the lists were made from. */
+	rev: number,
+	/**  The headings. */
+	outline: IndexEntryView[],
+	/**  The code blocks that are no diagrams. */
+	code: IndexEntryView[],
+	/**  The images and the diagrams. */
+	figures: IndexEntryView[],
+};
+
+/**
  *  UC-005 A2, A9 to A13, A18: what goes into the note at the cursor,
  *  replacing the selection, in the markup of the note's format.
  */
@@ -999,6 +1056,44 @@ export type KeysStatusView = {
 	/**  The Nano search prompt is open and takes every key. */
 	prompting: boolean,
 };
+
+/**
+ *  UC-004 A2 to A4, M-07.3: what following a link asks of the window. The
+ *  status bar says what else happened (a heading not found, a file that
+ *  does not exist, a link leading outside the workspace).
+ */
+export type LinkAnswer = 
+/**  Nothing more for the window. */
+{ kind: "done" } | 
+/**
+ *  A2: the tab of `note`, active now, puts its cursor at the heading
+ *  the link names and shows it there.
+ */
+{ kind: "jump"; 
+/**  The note whose tab jumps. */
+note: string; 
+/**  The revision of the backend's text `offset` is in. */
+rev: number; 
+/**  Where the heading's text starts, in web units. */
+offset: number } | 
+/**
+ *  A4: the first web address of the session: "Open web address" asks
+ *  whether to open it (`link_open_web`).
+ */
+{ kind: "askWeb"; 
+/**  The address, as the link has it. */
+address: string } | 
+/**
+ *  A3: the linked note does not exist; "New note" offers to create
+ *  it with its folder and title filled in.
+ */
+{ kind: "newNote"; 
+/**  The folder of the link, `""` for the top folder. */
+folder: string; 
+/**  The title of the link. */
+title: string; 
+/**  "{title} does not exist yet. Create it?" */
+problem: string };
 
 /**
  *  ADR-025: the backend's text of an open note as the window's editor core

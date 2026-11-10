@@ -288,7 +288,7 @@ Regeln für die Einfügestelle `p` von `a` gegenüber `b` (mit Δb = |b.insert| 
 - **`flush(note)` / `flushAll()`** in `ui/src/lib/editor/sync.ts`: senden, bis `buffer` und `inflight` leer sind.
 - **Der Helfer `flushed(fn)`** umschliesst jeden Command, der den Text liest oder den Tab ersetzt:
   - heute: `tab_close`, `tab_store` (auch `EditorCommandName.Store`/`Close` aus Patches), `ws_open`, `ws_start`,
-    `ws_create`;
+    `ws_create`, `ed_follow_link` (F7: Link und Überschrift werden im Spiegel gesucht, die Stelle trägt die Revision);
   - später: `note_rename`, `note_delete`, `export_run`, `git_*`, `sync_request`, `conflict_choose`;
   - neue lesende Commands kommen in diese Liste (Review-Regel).
 - **Fenster schliessen:**

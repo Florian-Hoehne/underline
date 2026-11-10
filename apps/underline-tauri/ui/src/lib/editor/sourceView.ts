@@ -19,7 +19,12 @@
 //   M-10.5); a drop first puts the cursor under the pointer (`placeAt`).
 // - A click places the cursor, a drag or Shift+click extends the selection,
 //   as CodeMirror does it; a double or triple click is a single click, as in
-//   egui (M-08.3). The selection is then given to the core.
+//   egui (M-08.3). The selection is then given to the core. A click with
+//   Ctrl (Cmd on macOS) also follows the link at that place (M-07.3,
+//   `onFollow` with the place; the backend finds the link in its text).
+// - `jump` puts the cursor at a place, shows it and takes the keyboard: a
+//   heading a link leads to (M-07.3, only while the text is still the
+//   backend's revision of the answer), an entry of the tool panel (M-16.5).
 // - An input method composes in CodeMirror's DOM; at its end the
 //   composition is taken back and the finished text sent (M-08.5).
 // - The colours come as `ed-highlight` events of the backend for the lines
@@ -270,6 +275,8 @@ export type SourceViewOptions = {
   onCommand?: (command: EditorCommandName) => void;
   /** UC-005 A2: a toolbar function asks first (Link, Image; feature F6). */
   onRequest?: (tool: ToolName) => void;
+  /** M-07.3, UC-004 BR-006: a Ctrl+click (Cmd+click) at `at` (web units) follows the link there. */
+  onFollow?: (at: number) => void;
 };
 
 /** What changed for those who follow the view (`subscribe`). */
@@ -514,6 +521,29 @@ export class SourceView {
     return { head: this.view.state.selection.main.head, hash };
   }
 
+  /**
+   * M-07.3, M-16.5: puts the cursor at `offset` (web units), after the
+   * inputs before it, scrolls it into view and takes the keyboard (egui's
+   * `jump_to_byte` and `focus_cursor`). With `rev`, the offset is in the
+   * backend's text of that revision: when the view's text is no longer it,
+   * nothing moves.
+   */
+  jump(offset: number, rev?: number): void {
+    this.#enqueue(async () => {
+      if (this.#destroyed || (rev !== undefined && !this.#inStepWith(rev))) {
+        return null;
+      }
+      const at = Math.min(Math.max(offset, 0), this.view.state.doc.length);
+      this.view.dispatch({
+        selection: { anchor: at },
+        scrollIntoView: true,
+        userEvent: 'select',
+      });
+      this.focus();
+      return null;
+    });
+  }
+
   /** M-10.5: the cursor back to `mark`, when the text is still the same. */
   back(mark: CursorMark): void {
     if (this.#destroyed || this.#backend.textHash(this.note) !== mark.hash) {
@@ -676,6 +706,7 @@ export class SourceView {
         keydown: (event) => this.#onKey(event),
         beforeinput: (event) => this.#onBeforeInput(event),
         mousedown: (event, view) => this.#onMouseDown(event, view),
+        click: (event, view) => this.#onClick(event, view),
         copy: (event) => this.#onClipboard(event, 'copy'),
         cut: (event) => this.#onClipboard(event, 'cut'),
         // Files come through the window's drop event (M-10.5, `drop.ts`);
@@ -771,6 +802,30 @@ export class SourceView {
     }
     view.focus();
     return true;
+  }
+
+  /**
+   * M-07.3, UC-004 BR-006: a click with Ctrl (Cmd on macOS) follows the
+   * link at the place clicked; the click also placed the cursor there. The
+   * place is given once the inputs before it reached the core.
+   */
+  #onClick(event: MouseEvent, view: EditorView): boolean {
+    const command = this.#options.mac ? event.metaKey : event.ctrlKey;
+    if (event.button !== 0 || !command || !this.#options.onFollow) {
+      return false;
+    }
+    const at = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (at === null) {
+      return false;
+    }
+    const follow = this.#options.onFollow;
+    this.#enqueue(async () => {
+      if (!this.#destroyed) {
+        follow(at);
+      }
+      return null;
+    });
+    return false;
   }
 
   #onClipboard(event: ClipboardEvent, action: ClipAction): boolean {
@@ -984,6 +1039,11 @@ export class SourceView {
         this.#fail(error);
       }
     });
+  }
+
+  /** Whether the view and its core hold the backend's text of `rev` and nothing of their own. */
+  #inStepWith(rev: number): boolean {
+    return this.#local.length === 0 && this.#backend.inStep(this.note, rev);
   }
 
   /** Whether the view shows the text of revision `rev` and nothing of its own. */

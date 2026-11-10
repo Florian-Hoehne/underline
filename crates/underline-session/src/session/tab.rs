@@ -17,6 +17,7 @@ use underline_editor_view::EditorTab;
 use underline_facade::highlight::DocumentHighlight;
 
 use super::facade::Facade;
+use super::indexes::TabIndexes;
 use crate::editor_view::{NotePropertiesView, TabPropertiesView};
 
 /// One open tab.
@@ -67,6 +68,8 @@ pub(super) struct Tab {
     /// M-09: how the backend makes the facade's views (its jobs, figures
     /// and colours); the blocks are the editor's (`edit.facade`).
     pub(super) facade: Option<Facade>,
+    /// M-16.5: the outline, code and figures of the tool panel.
+    pub(super) indexes: TabIndexes,
 }
 
 impl std::fmt::Debug for Tab {
@@ -114,6 +117,7 @@ impl Tab {
             viewport: None,
             highlight_told: None,
             facade: None,
+            indexes: TabIndexes::default(),
         }
     }
 

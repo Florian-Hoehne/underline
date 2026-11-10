@@ -27,6 +27,10 @@
   - M-10.5: files dropped on the window go into the note shown, at the
     place under the pointer (editor/drop.ts).
   - M-10.7: copy on select follows the setting (editor/clipboard.ts).
+
+  Feature F7 adds, as in egui:
+  - M-07.3: a Ctrl+click (Cmd+click) on a link in either view follows it
+    (`shell.followLink`).
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -291,6 +295,7 @@
                   {info}
                   onError={(message) => shell.editorFailed(message)}
                   onCommand={(name) => command(activeTab.note, name)}
+                  onFollow={(at) => void shell.followLink(activeTab.note, at)}
                 />
               {:else}
                 <SourceEditor
@@ -304,6 +309,7 @@
                   focus={focusFor === `${activeTab.note}:source`}
                   onError={(message) => shell.editorFailed(message)}
                   onCommand={(name) => command(activeTab.note, name)}
+                  onFollow={(at) => void shell.followLink(activeTab.note, at)}
                 />
               {/if}
             {/key}

@@ -126,7 +126,7 @@ Reihenfolge von links nach rechts:
 - [ ] **M-07.1** Ohne Tab steht „Select or create a note.“.
 - [x] **M-07.2** Die Werkzeugleiste über dem Editor hat den Umschalter „Facade“/„Source“ (FR-010). Der Umschalter
   speichert die Tabs und fokussiert den Editor. Cursor und Auswahl bleiben beim Wechsel erhalten (UC-005 A1).
-- [ ] **M-07.3** Links folgen (FR-040, `app:2463-2523`) mit Ctrl/Cmd+Klick, in beiden Ansichten. Ziel:
+- [~] **M-07.3** Links folgen (FR-040, `app:2463-2523`) mit Ctrl/Cmd+Klick, in beiden Ansichten. Ziel:
   - Überschrift → Sprung, sonst „The heading X was not found“.
   - Notiz → im Tab öffnen und zur Überschrift springen.
   - Fehlende Notiz → Dialog „New note“ vorbefüllt mit „{title} does not exist yet. Create it?“.
@@ -395,7 +395,7 @@ Reihenfolge von links nach rechts:
 - [x] **M-16.2** Properties: Place, Format, Size, Last change, sonst „Not saved yet“.
 - [ ] **M-16.3** Abschnitt Todos (M-18.1).
 - [ ] **M-16.4** Commit / Changes / Diff (M-19), nur in Git-Workspaces.
-- [ ] **M-16.5** Outline / Code / Figures (N):
+- [~] **M-16.5** Outline / Code / Figures (N):
   - Aus den Blöcken, gecacht je Revision.
   - Einrückung 14 px je Tiefe. Leere Liste „None“.
   - Ein Klick zeigt die Stelle (Facade: `reveal`, Quelle: Sprung und Fokus).

@@ -24,6 +24,14 @@
 // rough stand-in for `html_to_markup`. Files to put into a note come from a
 // small fake world outside the workspace (`FAKE_OUTSIDE`), and
 // `dragEnter`/`drop` deliver dragged files as Tauri would.
+//
+// Feature F7: following a link (`ed_follow_link`) finds it at the place
+// clicked in the mirror's text and resolves it roughly as `resolve_link`
+// does, over the fake notes; what the system would open is
+// only recorded (`openedWithSystem`). The tool panel's outline, code and
+// figures come as `indexes` events, from a rough stand-in for the facade's
+// blocks. The note `Link-Tour` of `/home/user/Work` holds a link of every
+// kind.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
@@ -43,6 +51,9 @@ import type {
   SettingsView,
   StartInfo,
   FigureView,
+  IndexEntryView,
+  IndexesView,
+  LinkAnswer,
   TabPropertiesView,
   TabsView,
   ToolView,
@@ -125,9 +136,49 @@ export type MockHandlers = {
   ed_sync: (args: { note: string; batch: SyncBatch }) => Promise<Ok<typeof commands.edSync>>;
   ed_resync: (args: { note: string; text: string }) => Promise<Ok<typeof commands.edResync>>;
   app_request_close: (args: { sent: boolean }) => Ok<typeof commands.appRequestClose>;
+  ed_follow_link: (args: {
+    note: string;
+    at: number;
+    rev: number;
+  }) => Promise<Ok<typeof commands.edFollowLink>>;
+  link_open_web: (args: { open: boolean }) => Promise<Ok<typeof commands.linkOpenWeb>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
+
+/** F7: a note with a link of every kind, headings, code and figures. */
+export const LINK_TOUR_NOTE = 'Link-Tour';
+
+/** The text of the link tour (M-07.3, M-16.5). */
+export const LINK_TOUR_TEXT = `# Link tour
+
+Hold Ctrl and click a link.
+
+- [Down to the details](#details)
+- [A heading that is not there](#nowhere)
+- [The roadmap](Projects/Roadmap.md#roadmap)
+- [A note to write](Ideas/Someday.md)
+- [The web](https://example.com/underline)
+- [A report](report.pdf)
+- [Outside](../../etc/hosts)
+
+## Details
+
+\`\`\`sh
+ls -l
+\`\`\`
+
+\`\`\`mermaid
+graph TD
+A-->B
+\`\`\`
+
+![The plan](img/plan.svg)
+
+### Deeper
+
+The end.
+`;
 
 /** The user's home directory in the fake file system. */
 export const FAKE_HOME = '/home/user';
@@ -145,7 +196,7 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
     'guide/Home',
     'Journal/2026-11-09',
   ],
-  '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE],
+  '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE, LINK_TOUR_NOTE],
   '/home/user/Letters': ['Draft'],
 };
 
@@ -246,8 +297,104 @@ export function fakeNoteText(note: string): string {
   if (note === TOUR_NOTE) {
     return TOUR_TEXT;
   }
+  if (note === LINK_TOUR_NOTE) {
+    return LINK_TOUR_TEXT;
+  }
   const title = (note.split('/').at(-1) ?? note).replace(/-/g, ' ');
   return `# ${title}\n\nThis note lives in the mock backend.\nType here to try the source view.\n`;
+}
+
+/** A label of the tool panel, at most 60 characters (`index.rs`). */
+function shorten(text: string): string {
+  const trimmed = text.trim();
+  const chars = [...trimmed];
+  return chars.length <= 60 ? trimmed : `${chars.slice(0, 59).join('')}…`;
+}
+
+/**
+ * M-07.3: a rough stand-in for `link_at_web` over Markdown: the address of
+ * the `[label](address)` whose label holds `at`, from its first character
+ * to just after its last.
+ */
+export function mockLinkAt(text: string, at: number): string | null {
+  for (const found of text.matchAll(/\[([^\]]*)\]\(([^)\s]*)\)/g)) {
+    const start = (found.index ?? 0) + 1;
+    if (at >= start && at <= start + found[1].length) {
+      return found[2];
+    }
+  }
+  return null;
+}
+
+/** GitHub's anchor of a heading (`heading_anchor`). */
+export function mockAnchor(heading: string): string {
+  return [...heading.trim().toLowerCase()]
+    .map((c) => (c === ' ' ? '-' : /[\p{L}\p{N}_-]/u.test(c) ? c : ''))
+    .join('');
+}
+
+/**
+ * M-16.5: a rough stand-in for `indexes` over Markdown: ATX headings,
+ * fenced code (a Mermaid or PlantUML block is a figure) and images alone
+ * on their line. The real rules are tested in Rust.
+ */
+export function mockIndexes(note: string, rev: number, text: string): IndexesView {
+  const outline: (IndexEntryView & { level: number })[] = [];
+  const code: IndexEntryView[] = [];
+  const figures: IndexEntryView[] = [];
+  const lines = text.split('\n');
+  let at = 0;
+  let fence: { offset: number; language: string; lines: string[] } | null = null;
+  for (const line of lines) {
+    if (fence) {
+      if (line.startsWith('```')) {
+        const diagram = /^(mermaid|plantuml|puml)$/i.test(fence.language);
+        const first =
+          fence.lines
+            .map((l) => l.trim())
+            .find((l) => l !== '' && !(diagram && (l.startsWith('@') || l.startsWith('%%')))) ??
+          '(empty)';
+        if (diagram) {
+          const name = /mermaid/i.test(fence.language) ? 'Mermaid' : 'PlantUML';
+          figures.push({
+            label: `${name} diagram: ${shorten(first)}`,
+            depth: 0,
+            offset: fence.offset,
+          });
+        } else {
+          const label = fence.language ? `${fence.language}: ${shorten(first)}` : shorten(first);
+          code.push({ label, depth: 0, offset: fence.offset });
+        }
+        fence = null;
+      } else {
+        fence.lines.push(line);
+      }
+    } else if (line.startsWith('```')) {
+      fence = { offset: at, language: line.slice(3).trim(), lines: [] };
+    } else {
+      const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+      const image = /^!\[([^\]]*)\]\(([^)]*)\)\s*$/.exec(line);
+      if (heading) {
+        outline.push({
+          label: shorten(heading[2]),
+          depth: 0,
+          offset: at,
+          level: heading[1].length,
+        });
+      } else if (image) {
+        figures.push({ label: shorten(image[1] || image[2]), depth: 0, offset: at });
+      }
+    }
+    at += line.length + 1;
+  }
+  const top = Math.min(...outline.map((h) => h.level));
+  return {
+    note,
+    rev,
+    outline: outline.map(({ level, ...entry }) => ({ ...entry, depth: level - top })),
+    code,
+    figures,
+  };
 }
 
 /**
@@ -358,6 +505,8 @@ function workspaceHandlers(
   | 'ed_sync'
   | 'ed_resync'
   | 'app_request_close'
+  | 'ed_follow_link'
+  | 'link_open_web'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -416,6 +565,10 @@ function workspaceHandlers(
   const before = new Map<string, MockClipboard>();
   /** How many images were pasted, for their names. */
   let pastedImages = 0;
+  /** F7, UC-004 A4: what the system's program opened, and the web question. */
+  const opened: string[] = [];
+  let webAllowed = false;
+  let webAsked: string | null = null;
   /** The folder of `note` in the workspace, with a slash, or nothing. */
   const folderOf = (note: string) =>
     note.includes('/') ? note.slice(0, note.lastIndexOf('/') + 1) : '';
@@ -572,12 +725,110 @@ function workspaceHandlers(
     overview: overview(),
     tabs: tabsView(),
   });
+  /** M-16.5: the lists of the active note, as the backend's tick sends them. */
+  const sendIndexes = async () => {
+    if (active === null || disposed) {
+      return;
+    }
+    const mirror = mirrors.get(active);
+    try {
+      await emit(
+        'indexes',
+        mockIndexes(active, mirror?.rev ?? 1, mirror?.text() ?? textOf(active)),
+      );
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
+  };
   const sendAll = async () => {
     const now = snapshot();
     await emit('workspace', now.workspace);
     await emit('overview', now.overview);
     await emit('tabs', now.tabs);
     await emit('properties', properties());
+    await sendIndexes();
+  };
+  /** UC-004 A2: the jump to the heading `anchor` of `note`, or why there is none. */
+  const jumpToHeading = async (note: string, anchor: string): Promise<LinkAnswer> => {
+    const mirror = mirrors.get(note);
+    const text = mirror?.text() ?? textOf(note);
+    let at = 0;
+    for (const line of text.split('\n')) {
+      const heading = /^(#{1,6})(\s+)(.*)$/.exec(line);
+      if (heading && mockAnchor(heading[3]) === anchor) {
+        return {
+          kind: 'jump',
+          note,
+          rev: mirror?.rev ?? 1,
+          offset: at + heading[1].length + heading[2].length,
+        };
+      }
+      at += line.length + 1;
+    }
+    await setStatus(`The heading ${anchor} was not found`);
+    return { kind: 'done' };
+  };
+  /** UC-004 BR-007: the system's program opens `target` (only recorded). */
+  const openWithSystem = (target: string) => {
+    opened.push(target);
+  };
+  /** UC-004 A2 to A4: a rough stand-in for `follow_link` over the fake notes. */
+  const followLink = async (note: string, raw: string): Promise<LinkAnswer> => {
+    const link = raw.trim();
+    if ((link.includes('://') && !link.startsWith('file://')) || link.startsWith('mailto:')) {
+      if (webAllowed) {
+        openWithSystem(link);
+        return { kind: 'done' };
+      }
+      webAsked = link;
+      return { kind: 'askWeb', address: link };
+    }
+    const [path, heading] = link.startsWith('file://')
+      ? [link.slice('file://'.length), undefined]
+      : (link.split(/#(.*)/s) as [string, string | undefined]);
+    if (path === '') {
+      return jumpToHeading(note, heading ?? '');
+    }
+    if (path.startsWith('/')) {
+      if (path in FAKE_OUTSIDE) {
+        openWithSystem(path);
+      } else {
+        await setStatus(`${path} does not exist`);
+      }
+      return { kind: 'done' };
+    }
+    const parts = folderOf(note).split('/').filter(Boolean);
+    for (const part of decodeURIComponent(path).split('/')) {
+      if (part === '..') {
+        if (parts.pop() === undefined) {
+          await setStatus(`${link} leads outside the workspace and is not followed`);
+          return { kind: 'done' };
+        }
+      } else if (part !== '.' && part !== '') {
+        parts.push(part);
+      }
+    }
+    const relative = parts.join('/');
+    const extension = /\.([^./]+)$/.exec(relative)?.[1];
+    const isNote = extension === 'md' || extension === 'adoc';
+    const id = isNote ? relative.replace(/\.[^./]+$/, '') : relative;
+    if (root && files[root]?.includes(id)) {
+      openTab(id);
+      await sendAll();
+      return heading === undefined ? { kind: 'done' } : jumpToHeading(id, heading);
+    }
+    if (isNote || extension === undefined) {
+      const at = id.lastIndexOf('/');
+      const noteTitle = title(id);
+      return {
+        kind: 'newNote',
+        folder: at < 0 ? '' : id.slice(0, at),
+        title: noteTitle,
+        problem: `${noteTitle} does not exist yet. Create it?`,
+      };
+    }
+    await setStatus(`${root}/${relative} does not exist`);
+    return { kind: 'done' };
   };
   const remember = () => {
     if (root) {
@@ -869,6 +1120,7 @@ function workspaceHandlers(
       }
       // The colours and figures follow, as the backend's tick sends them.
       setTimeout(() => void sendEnrich(note), 20);
+      setTimeout(() => void sendIndexes(), 20);
       return {
         note,
         rev: mirror.rev,
@@ -889,6 +1141,7 @@ function workspaceHandlers(
         followMirror(note, mirror);
         await changed(note);
         setTimeout(() => void sendEnrich(note), 0);
+        setTimeout(() => void sendIndexes(), 0);
       }
       if (reverted !== null) {
         // UC-004 A9, as the backend says it (`session/sync.rs`).
@@ -909,6 +1162,24 @@ function workspaceHandlers(
       return answer;
     },
     app_request_close: () => null,
+    ed_follow_link: async ({ note, at, rev }) => {
+      const mirror = mirrors.get(note);
+      if (!mirror || !tabs.some((tab) => tab.note === note)) {
+        throw notOpen(note);
+      }
+      // As the backend: a place of another revision follows nothing.
+      const link = mirror.rev === rev ? mockLinkAt(mirror.text(), at) : null;
+      return link === null ? { kind: 'done' } : followLink(note, link);
+    },
+    link_open_web: async ({ open: answer }) => {
+      const address = webAsked;
+      webAsked = null;
+      if (answer && address !== null) {
+        webAllowed = true;
+        openWithSystem(address);
+      }
+      return null;
+    },
   };
   handlers.__hooks = {
     backendEdit: async (note, at, remove, insert, sealed = true) => {
@@ -918,6 +1189,7 @@ function workspaceHandlers(
         followMirror(note, mirror);
         await changed(note);
         await emit('ed-changed', { note, rev });
+        await sendIndexes();
       }
       return rev ?? null;
     },
@@ -930,9 +1202,11 @@ function workspaceHandlers(
       followMirror(note, mirror);
       await emit('ed-changed', { note, rev });
       await setStatus(`${title(note)} was changed outside`);
+      await sendIndexes();
       return rev;
     },
     mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    openedWithSystem: () => [...opened],
     setClipboard: (content) => {
       clipboard = { text: null, html: null, image: false, ...content };
     },
@@ -965,6 +1239,8 @@ export type MockHooks = {
   outsideChange(note: string, text: string): Promise<number | null>;
   /** The backend's text of `note`, if a window's core holds it. */
   mirrorText(note: string): string | null;
+  /** F7, UC-004 BR-007: what the system's program would have opened, in order. */
+  openedWithSystem(): string[];
   /** F6: the system clipboard holds `content` now (unset parts are empty). */
   setClipboard(content: Partial<MockClipboard>): void;
   /** F6: what the system clipboard holds. */

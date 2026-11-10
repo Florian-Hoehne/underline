@@ -24,6 +24,9 @@ tauri = { version = "2.12", features = ["specta"] }
 parking_lot = "0.12"
 # ADR-014: the system clipboard, as in the egui app: text, HTML and images.
 arboard = { version = "3.7", default-features = false, features = ["image-data"] }
+# UC-004 BR-007, plan section 8: web addresses and files open with the
+# system's program, as in the egui app; no opener plugin.
+open.workspace = true
 # Typed bindings for the window (plan section 4). Release candidates: pinned
 # exactly, as tauri-specta asks.
 specta.workspace = true

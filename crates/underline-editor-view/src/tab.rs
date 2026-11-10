@@ -46,6 +46,21 @@ pub const FOUND_EVERY_MS: f64 = 300.0;
 /// applies to.
 pub type Versioned = (u32, Splice<BlockView>);
 
+/// UC-004 A2, BR-006, M-07.3: the address of the link at web offset `at`
+/// of the text in `rope` (in `format`), as the markup writes it, if a link
+/// is there: what a Ctrl+click (Cmd+click) there follows. As egui's source
+/// view, the whole text is parsed for it (`link_at` on its blocks); only
+/// the label of a link counts, from its first character to just after its
+/// last. The backend finds the link in its own copy of the text, so the
+/// window never names what the system opens.
+#[must_use]
+pub fn link_at_web(rope: &ropey::Rope, format: NoteFormat, at: u32) -> Option<String> {
+    let char_at = underline_editor_core::utf16::WebOffsets::of(rope).from_web(rope, at as usize);
+    let byte = rope.char_to_byte(char_at);
+    let blocks = underline_markup::blocks::parse_blocks(&rope.to_string(), format);
+    underline_markup::blocks::link_at(&blocks, byte)
+}
+
 /// The facade's blocks of the text and their views as the window has them
 /// (M-09, ADR-024).
 #[derive(Debug, Clone, Default)]

@@ -89,6 +89,7 @@ type Tab = Pick<
   | 'views'
   | 'text'
   | 'hash'
+  | 'syncedRev'
   | 'startSync'
   | 'takeOutbox'
   | 'acknowledge'
@@ -340,6 +341,11 @@ export class EditorCore {
 
   hash(): string {
     return this.#call((tab) => tab.hash());
+  }
+
+  /** M-07.3: the backend's revision the sync last confirmed. */
+  syncedRev(): number {
+    return this.#call((tab) => tab.syncedRev());
   }
 
   /** ADR-025: the sync starts from the backend's text at `rev` (`ed_mirror`). */

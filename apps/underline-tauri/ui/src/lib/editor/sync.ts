@@ -520,6 +520,36 @@ export function coreOf(note: string): TabCore | undefined {
   return cores.get(note);
 }
 
+/** M-07.3: the hash of the text of `note`'s core; `null` without a live one. */
+export function coreHash(note: string): string | null {
+  const tab = cores.get(note);
+  return tab && !tab.core.dead ? tab.core.hash() : null;
+}
+
+/**
+ * M-07.3: the backend's revision the core of `note` is in step with: its
+ * text is the backend's of that revision, nothing waits to be sent. `null`
+ * while edits wait, or without a live core.
+ */
+export function inStepRevision(note: string): number | null {
+  const tab = cores.get(note);
+  if (!tab || tab.core.dead) {
+    return null;
+  }
+  try {
+    const rev = tab.core.syncedRev();
+    return tab.core.inStep(rev) ? rev : null;
+  } catch {
+    // The sync of this core has not started.
+    return null;
+  }
+}
+
+/** M-07.3: whether the core of `note` holds the backend's text of revision `rev` and nothing of its own. */
+export function coreInStep(note: string, rev: number): boolean {
+  return inStepRevision(note) === rev;
+}
+
 /**
  * The core of `note`: opened from the backend's text (`ed_mirror`) the
  * first time, then kept while the tab is open.

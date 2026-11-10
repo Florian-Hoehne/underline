@@ -374,6 +374,16 @@ impl WasmTab {
         Ok(self.0.in_step(rev)?)
     }
 
+    /// M-07.3: the backend's revision the window last synced with.
+    ///
+    /// # Errors
+    ///
+    /// The sync was not started.
+    #[wasm_bindgen(js_name = syncedRev)]
+    pub fn synced_rev(&mut self) -> Result<u32, JsError> {
+        Ok(self.0.synced_rev()?)
+    }
+
     /// Whether nothing waits to be sent or fetched.
     ///
     /// # Errors

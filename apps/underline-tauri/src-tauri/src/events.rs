@@ -5,8 +5,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    ChangedView, CloseQuestion, EnrichView, Event, FlushView, HighlightView, OverviewItem,
-    SettingsView, StatusView, TabPropertiesView, TabsView, WorkspaceView,
+    ChangedView, CloseQuestion, EnrichView, Event, FlushView, HighlightView, IndexesView,
+    OverviewItem, SettingsView, StatusView, TabPropertiesView, TabsView, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -67,6 +67,12 @@ pub struct FlushEvent(pub FlushView);
 #[tauri_specta(event_name = "ed-enrich")]
 pub struct EnrichEvent(pub EnrichView);
 
+/// M-16.5: the outline, code and figures of the active tab's note, for one
+/// revision of its text.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "indexes")]
+pub struct IndexesEvent(pub IndexesView);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -82,6 +88,7 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Changed(changed) => ChangedEvent(changed).emit(app),
             Event::Flush(flush) => FlushEvent(flush).emit(app),
             Event::Enrich(enrich) => EnrichEvent(*enrich).emit(app),
+            Event::Indexes(indexes) => IndexesEvent(indexes).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");
