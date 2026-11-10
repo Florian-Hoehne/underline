@@ -1,23 +1,29 @@
 <!--
   M-06.1 to M-06.3 (UC-004 A5, FR-018): the tab bar, left to right, scrolling
   sideways when the tabs do not fit. A tab shows its note's title, marked
+  " ⚠" when its last save failed, else " •" with changes not stored, and
   " (deleted)" when the note was deleted outside; resting the pointer on it
   shows the note's file. A click activates the tab; "×" or a middle click
-  closes it.
+  closes it, after storing it. When storing fails, "Changes not stored"
+  asks first (CloseQuestionDialog).
 
-  Later features add the marks for unstored changes and failed saves and
-  the question when closing fails to store (F3), the context menu (M-06.4,
-  F8), and the tab "Todos (N)" (M-06.5, F15). Until then a tab "Todos" that
-  was active is remembered, but no note tab shows as active.
+  Plan section 14: the bar is a `tablist` over the note's `tabpanel`. Only
+  the active tab is in the Tab sequence; the arrow keys, Home and End move
+  among the tabs, Enter and Space activate one, and Delete closes it (Q-08:
+  "×" is no longer in the Tab sequence).
 
-  The active tab scrolls into view. After a tab closed, the keyboard goes to
-  the tab now at its place, else to the one left of it, else to the note
-  overview. (A tablist with arrow keys is left for F3, plan section 14.)
+  Later features add the context menu (M-06.4, F8) and the tab "Todos (N)"
+  (M-06.5, F15). Until then a tab "Todos" that was active is remembered,
+  but no note tab shows as active.
+
+  The active tab scrolls into view. After a tab closed with the keyboard,
+  the keyboard goes to the tab now at its place, else to the one left of
+  it, else to the note overview.
 -->
 <script lang="ts">
   import { tick } from 'svelte';
-  import { focusFallback } from './focus';
   import type { Shell } from './shell.svelte';
+  import { focusTabAt, markDescription, NOTE_PANEL_ID, tabId } from './tabs';
 
   type Props = { shell: Shell };
 
@@ -27,6 +33,8 @@
   const active = $derived(
     shell.tabs.todoList.open && shell.tabs.todoList.active ? null : shell.tabs.active,
   );
+  /** The tab in the Tab sequence: the active one, else the first. */
+  const reachable = $derived(active ?? shell.tabs.tabs[0]?.note ?? null);
 
   let bar = $state<HTMLElement | null>(null);
 
@@ -34,25 +42,22 @@
     if (active === null || !bar) {
       return;
     }
-    const tab = bar.querySelector<HTMLElement>('[aria-current="page"]');
+    // The whole tab, its "×" too.
+    const tab = bar.querySelector<HTMLElement>('[aria-selected="true"]')?.closest('.tab');
     tab?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
   });
+
+  const tabButtons = () => Array.from(bar?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []);
 
   /** M-06.3: closes the tab of `note`; with `moveFocus` the keyboard moves on. */
   async function close(note: string, moveFocus: boolean) {
     const at = shell.tabs.tabs.findIndex((tab) => tab.note === note);
-    await shell.closeTab(note);
-    if (!moveFocus) {
+    const closed = await shell.closeTab(note);
+    if (!moveFocus || !closed) {
       return;
     }
     await tick();
-    const labels = bar?.querySelectorAll<HTMLElement>('button.label') ?? [];
-    const next = labels[Math.min(at, labels.length - 1)];
-    if (next) {
-      next.focus();
-    } else {
-      focusFallback();
-    }
+    focusTabAt(at);
   }
 
   function onAuxClick(event: MouseEvent, note: string) {
@@ -68,32 +73,64 @@
       event.preventDefault();
     }
   }
+
+  /** Arrow keys, Home and End move among the tabs; Delete closes one. */
+  function onKey(event: KeyboardEvent, note: string) {
+    const tabs = tabButtons();
+    const at = tabs.indexOf(event.currentTarget as HTMLElement);
+    const to = {
+      ArrowLeft: at - 1,
+      ArrowRight: at + 1,
+      Home: 0,
+      End: tabs.length - 1,
+    }[event.key];
+    if (to !== undefined) {
+      event.preventDefault();
+      tabs[(to + tabs.length) % tabs.length]?.focus();
+    } else if (event.key === 'Delete') {
+      event.preventDefault();
+      void close(note, true);
+    }
+  }
 </script>
 
 <div class="tab-bar" bind:this={bar}>
-  <ul class="tabs">
+  <div class="tabs" role="tablist" aria-label="Open notes">
     {#each shell.tabs.tabs as tab (tab.note)}
-      <li class="tab" class:active={tab.note === active}>
+      <div class="tab" class:active={tab.note === active} role="presentation">
         <button
           type="button"
+          role="tab"
+          id={tabId(tab.note)}
           class="label"
           title={tab.path}
-          aria-current={tab.note === active ? 'page' : undefined}
+          aria-selected={tab.note === active}
+          aria-controls={tab.note === active ? NOTE_PANEL_ID : undefined}
+          tabindex={tab.note === reachable ? 0 : -1}
+          aria-describedby={markDescription(tab.label, tab.title)
+            ? `${tabId(tab.note)}-marks`
+            : undefined}
+          aria-keyshortcuts="Delete"
           onclick={() => shell.activateTab(tab.note)}
+          onkeydown={(event) => onKey(event, tab.note)}
           onmousedown={onMouseDown}
           onauxclick={(event) => onAuxClick(event, tab.note)}>{tab.label}</button
         >
+        {#if markDescription(tab.label, tab.title)}
+          <span id="{tabId(tab.note)}-marks" hidden>{markDescription(tab.label, tab.title)}</span>
+        {/if}
         <button
           type="button"
           class="close"
+          tabindex="-1"
           aria-label="Close {tab.label}"
           onmousedown={onMouseDown}
           onauxclick={(event) => onAuxClick(event, tab.note)}
           onclick={() => close(tab.note, true)}>×</button
         >
-      </li>
+      </div>
     {/each}
-  </ul>
+  </div>
 </div>
 
 <style>
@@ -111,7 +148,6 @@
     min-height: 32px;
     margin: 0;
     padding: 2px var(--space-1);
-    list-style: none;
   }
 
   .tab {

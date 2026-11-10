@@ -23,7 +23,7 @@ async function workbench(start: MockStart = {}, handlers = mockHandlers(start)) 
 const overview = () => screen.getByRole('complementary', { name: 'Notes' });
 const tabBar = () => document.querySelector<HTMLElement>('.tab-bar')!;
 const entry = (name: string) => within(overview()).getByRole('button', { name });
-const tab = (name: string) => within(tabBar()).getByRole('button', { name });
+const tab = (name: string) => within(tabBar()).getByRole('tab', { name });
 const labels = () =>
   within(overview())
     .getAllByRole('listitem')
@@ -134,11 +134,11 @@ describe('M-06 tabs', () => {
   it('M-06.2 a click activates the tab and moves its note up', async () => {
     await workbench({ givenDir: '/home/user/Notes' });
     await fireEvent.click(entry('Ideas'));
-    await waitFor(() => expect(tab('Ideas')).toHaveAttribute('aria-current', 'page'));
+    await waitFor(() => expect(tab('Ideas')).toHaveAttribute('aria-selected', 'true'));
 
     await fireEvent.click(tab('Home'));
 
-    await waitFor(() => expect(tab('Home')).toHaveAttribute('aria-current', 'page'));
+    await waitFor(() => expect(tab('Home')).toHaveAttribute('aria-selected', 'true'));
     expect(labels()[0]).toBe('Home  (top folder)');
   });
 
@@ -167,7 +167,7 @@ describe('M-06 tabs', () => {
 
     await emit('tabs', tabs);
 
-    await waitFor(() => expect(tab('Home')).not.toHaveAttribute('aria-current'));
+    await waitFor(() => expect(tab('Home')).toHaveAttribute('aria-selected', 'false'));
     expect(entry('Home (top folder)')).toHaveAttribute('aria-current', 'true');
     expect(screen.queryByText('Select or create a note.')).not.toBeInTheDocument();
   });
@@ -175,7 +175,7 @@ describe('M-06 tabs', () => {
   it('the active tab shows the area of its note', async () => {
     await workbench({ givenDir: '/home/user/Notes' });
 
-    expect(screen.getByRole('region', { name: 'Home' })).toHaveAttribute('data-view', 'facade');
+    expect(screen.getByRole('tabpanel', { name: 'Home' })).toHaveAttribute('data-view', 'source');
     expect(screen.queryByText('Select or create a note.')).not.toBeInTheDocument();
   });
 

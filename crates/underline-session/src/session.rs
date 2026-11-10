@@ -2,20 +2,29 @@
 //! state, the settings, the open workspace with its overview and tabs, and
 //! the status message, driven by [`Session::tick`] (ADR-022).
 
+mod editing;
+mod tab;
 mod workspace;
+
+pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use underline_core::{Effective, Git, OwnWrites, StateError, StateNotice, StateStore};
+use underline_core::{
+    Effective, Git, NoteId, NoteSaver, OwnWrites, StateError, StateNotice, StateStore,
+};
 use underline_facade::Registry;
 use underline_wiki::WikiRemote;
 
+use crate::editor_view::{revision, TabPropertiesView};
+use crate::event::TextReplaced;
 use crate::settings::theme_names;
 use crate::workspace_view::{TabsView, WorkspaceView};
 use crate::{Event, Platform, SettingName, SettingsState, StartInfo, StatusView};
 
+use self::editing::Colors;
 use self::workspace::OpenWorkspace;
 
 /// Wakes the tick at once (ADR-022), for example when the workspace
@@ -62,8 +71,17 @@ pub struct Session {
     /// The format modules, which write a new workspace's Home note.
     formats: Registry,
     /// The files Underline writes itself, which the watcher leaves out; the
-    /// note saver of feature F3 records into the same.
+    /// note saver records into the same.
     own_writes: OwnWrites,
+    /// Stores the notes atomically on a worker thread (ADR-005).
+    saver: NoteSaver,
+    /// The highlighting of the theme in effect (ADR-010).
+    colors: Option<Colors>,
+    /// The highlighting being made on a thread of its own, for this theme.
+    colors_coming: Option<(underline_core::Theme, std::sync::mpsc::Receiver<Colors>)>,
+    /// Tabs whose text was replaced by the session itself, such as after a
+    /// change from outside (UC-004 A7); the window asks for it again.
+    replaced: Vec<NoteId>,
     /// Wakes the tick when a background service has news.
     wake: Wake,
     /// The open workspace (UC-002).
@@ -96,6 +114,8 @@ struct Told {
     /// The overview by the generation of the workspace it was taken from.
     overview: Option<(PathBuf, u64)>,
     tabs: TabsView,
+    /// The properties section of the tool panel (M-16.2).
+    properties: Option<TabPropertiesView>,
 }
 
 impl Session {
@@ -128,7 +148,9 @@ impl Session {
             workspace: None,
             overview: None,
             tabs: TabsView::default(),
+            properties: None,
         };
+        let own_writes = OwnWrites::default();
         let mut session = Self {
             given_dir,
             started: false,
@@ -137,7 +159,11 @@ impl Session {
             status: String::new(),
             git: Git::new(),
             formats: Registry::default(),
-            own_writes: OwnWrites::default(),
+            saver: NoteSaver::new(own_writes.clone()),
+            own_writes,
+            colors: None,
+            colors_coming: None,
+            replaced: Vec::new(),
             wake: Wake::default(),
             open: None,
             views_dirty: false,
@@ -216,18 +242,22 @@ impl Session {
 
     /// The work of one tick at `now` (ADR-022): the changes from outside
     /// the workspace watcher reports are taken in (ADR-011), the user
-    /// settings file is looked at every 500 ms (M-20.6), the app state is
-    /// written once a change is due (M-22.1). Returns what changed for the
-    /// window.
+    /// settings file is looked at every 500 ms (M-20.6), due notes are
+    /// stored in the background (M-10.8), the app state is written once a
+    /// change is due (M-22.1), and the colours of the lines the source view
+    /// shows are worked out (M-08.2). Returns what changed for the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
         self.settings.poll(now);
         self.take_settings_messages();
+        self.autosave(now);
         if let Err(err) = self.state.write_if_due(now) {
             self.status = err.to_string();
         }
         self.show_state_notices();
-        self.take_events()
+        let mut events = self.take_events();
+        events.extend(self.highlight_event(now));
+        events
     }
 
     /// M-22.1: writes the app state now, as when the app ends. A failure
@@ -276,6 +306,34 @@ impl Session {
             if tabs != self.told.tabs {
                 self.told.tabs = tabs.clone();
                 events.push(Event::Tabs(tabs));
+            }
+        }
+        // M-16.2: built when the tabs may have changed, or when the window
+        // has none for the active tab yet, as after the workspace started.
+        let active = self
+            .open
+            .as_ref()
+            .and_then(|open| open.tabs.active())
+            .map(|(note, _)| note.as_str());
+        let told_note = self.told.properties.as_ref().map(|p| p.note.as_str());
+        if dirty || active != told_note {
+            let properties = self.properties_view();
+            if properties != self.told.properties {
+                self.told.properties.clone_from(&properties);
+                events.push(Event::Properties(properties));
+            }
+        }
+        for note in std::mem::take(&mut self.replaced) {
+            let rev = self
+                .open
+                .as_ref()
+                .and_then(|open| open.tabs.find(&note).map(|i| open.tabs.get(i)))
+                .map(|tab| revision(tab.editor.revision()));
+            if let Some(rev) = rev {
+                events.push(Event::TextReplaced(TextReplaced {
+                    note: note.as_str().to_owned(),
+                    rev,
+                }));
             }
         }
         if self.status != self.told.status {

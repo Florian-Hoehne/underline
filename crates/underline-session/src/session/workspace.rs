@@ -8,8 +8,9 @@
 //! `create_workspace`, `refresh_overview`, `open_note`, `open_tab`,
 //! `persist_tabs`, `close_tab` and `handle_outside_changes`.
 //!
-//! Left for later features, with a hook where they go: storing the tabs'
-//! changes before a switch or a close (F3), the syncer (F13), the searcher
+//! Feature F3 adds storing the tabs' changes before a switch or a close
+//! and the open tabs' text in the changes from outside. Left for later
+//! features, with a hook where they go: the syncer (F13), the searcher
 //! (F9), the change tracker (F12), the deleted notes (F8) and the window
 //! presence (F14).
 //!
@@ -23,11 +24,13 @@ use std::path::{Path, PathBuf};
 
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace, now,
-    user_settings_dir, CreateError, CreateProblem, DirectoryProblem, EditingView,
-    GitRepositoryOption, NewWorkspace, NoteId, OpenProblem, OverviewEntry, Surroundings, TabList,
-    TabState, TodoListState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
+    outside_copy_path, user_settings_dir, CreateError, CreateProblem, DirectoryProblem,
+    EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, OpenProblem, OverviewEntry,
+    Surroundings, TabList, TabState, TodoListState, Workspace, WorkspaceEvent, WorkspaceWatcher,
+    HOME_TITLE,
 };
 
+use super::tab::Tab;
 use super::Session;
 use crate::workspace_view::{
     CreateAnswer, EditingViewName, NewWorkspaceRequest, OpenAnswer, OpenOffer, OverviewItem,
@@ -39,8 +42,8 @@ const POLLING_STATUS: &str = "Changes from outside may show up later in the note
 
 /// The open workspace with its overview, tabs and watcher.
 pub(super) struct OpenWorkspace {
-    workspace: Workspace,
-    tabs: TabList<Tab>,
+    pub(super) workspace: Workspace,
+    pub(super) tabs: TabList<Tab>,
     /// Watches the workspace for changes from outside (ADR-011).
     watcher: WorkspaceWatcher,
     /// UC-002 step 7: the note overview, recently opened first.
@@ -64,32 +67,6 @@ impl std::fmt::Debug for OpenWorkspace {
             .field("tabs", &self.tabs.len())
             .field("overview", &self.overview.len())
             .finish_non_exhaustive()
-    }
-}
-
-/// One open tab (UC-004). The editor's document, the autosave clock and
-/// the save errors join it with feature F3.
-#[derive(Debug)]
-struct Tab {
-    path: PathBuf,
-    title: String,
-    /// The editing view the tab shows (UC-004 BR-003).
-    editing_view: EditingView,
-    /// The note was deleted outside while open (UC-004 A8).
-    deleted: bool,
-    /// What the file held when Underline last read it; a file that holds
-    /// anything else was changed outside (ADR-011).
-    on_disk: String,
-}
-
-impl Tab {
-    /// M-06.1: the title, marked when the note was deleted outside.
-    fn label(&self) -> String {
-        let mut label = self.title.clone();
-        if self.deleted {
-            label.push_str(" (deleted)");
-        }
-        label
     }
 }
 
@@ -141,22 +118,179 @@ fn create_failure_status(err: &CreateError) -> String {
     status
 }
 
+/// What opening a directory needs, taken from the session (A-22).
+#[derive(Debug, Clone)]
+pub struct OpenPlan {
+    surroundings: Surroundings,
+    recent: Vec<PathBuf>,
+    /// The root of the workspace open now.
+    open_root: Option<PathBuf>,
+}
+
+/// A directory checked and read without the session, to be opened by
+/// [`Session::finish_open`].
+#[derive(Debug)]
+pub struct PreparedOpen(Prepared);
+
+#[derive(Debug)]
+enum Prepared {
+    /// UC-002 A9: the workspace is open already.
+    AlreadyOpen,
+    /// The workspace, read.
+    Opened(Workspace),
+    /// What stands in the way (A3, A5, A7, A11).
+    Problem {
+        path: String,
+        problem: String,
+        offer: Option<OpenOffer>,
+        /// A3: a remembered workspace that is gone, to be forgotten.
+        forget: Option<PathBuf>,
+    },
+}
+
+impl OpenPlan {
+    /// UC-002 step 4: checks `dir` and reads the workspace in it; with
+    /// `anyway`, the check for an enclosing workspace is left out. Reads
+    /// the directory, so it runs without the session.
+    #[must_use]
+    pub fn prepare(&self, dir: &Path, anyway: bool) -> PreparedOpen {
+        let checked = if anyway {
+            check_readable_directory(dir, &self.surroundings).map_err(|problem| {
+                let text = format!("{problem}. Choose another directory.");
+                problem_of(display(dir), text, None, None)
+            })
+        } else {
+            check_open_directory(dir, &self.surroundings).map_err(|problem| match problem {
+                OpenProblem::Missing(missing) => {
+                    let text = format!(
+                        "{} does not exist. Choose another directory or create a new workspace there.",
+                        missing.display()
+                    );
+                    let offer = OpenOffer::Create {
+                        directory: display(&missing),
+                    };
+                    problem_of(display(dir), text, Some(offer), Some(missing))
+                }
+                OpenProblem::InsideWorkspace {
+                    directory,
+                    workspace,
+                } => {
+                    let text = format!(
+                        "{} lies inside the workspace {}.",
+                        directory.display(),
+                        workspace.display()
+                    );
+                    let offer = OpenOffer::Outer {
+                        outer: display(&workspace),
+                        inner: display(&directory),
+                    };
+                    problem_of(display(dir), text, Some(offer), None)
+                }
+                problem => {
+                    let text = format!("{problem}. Choose another directory.");
+                    problem_of(display(dir), text, None, None)
+                }
+            })
+        };
+        let dir = match checked {
+            Ok(dir) => dir,
+            Err(prepared) => return prepared,
+        };
+        if self
+            .open_root
+            .as_deref()
+            .is_some_and(|root| underline_root(root) == underline_root(&dir))
+        {
+            return PreparedOpen(Prepared::AlreadyOpen);
+        }
+        match Workspace::open_excluding(&dir, &self.recent) {
+            Ok(workspace) => PreparedOpen(Prepared::Opened(workspace)),
+            Err(err) => problem_of(
+                display(&dir),
+                format!("{err}. Choose another directory."),
+                None,
+                None,
+            ),
+        }
+    }
+}
+
+fn problem_of(
+    path: String,
+    problem: String,
+    offer: Option<OpenOffer>,
+    forget: Option<PathBuf>,
+) -> PreparedOpen {
+    PreparedOpen(Prepared::Problem {
+        path,
+        problem,
+        offer,
+        forget,
+    })
+}
+
+/// What creating a workspace needs, taken from the session (A-22).
+#[derive(Debug, Clone)]
+pub struct CreatePlan {
+    request: NewWorkspace,
+    home: String,
+    surroundings: Surroundings,
+    git: Git,
+}
+
+/// A workspace created, or why not, without the session.
+#[derive(Debug)]
+pub struct PreparedCreate {
+    directory: PathBuf,
+    created: Result<Workspace, CreateError>,
+}
+
+impl CreatePlan {
+    /// UC-001 step 5: creates the workspace with its Home note. Writes the
+    /// directory and may run git, so it runs without the session.
+    #[must_use]
+    pub fn prepare(self) -> PreparedCreate {
+        let created = create_workspace(&self.request, &self.home, &self.surroundings, &self.git);
+        PreparedCreate {
+            directory: self.request.directory,
+            created,
+        }
+    }
+}
+
 impl Session {
     /// M-01.1, UC-002 A1/A2: opens the directory given on the command line,
     /// else the workspace opened last; without either the window offers to
     /// open or create one. Only the first call opens anything.
+    ///
+    /// The same as [`Session::plan_start`], [`OpenPlan::prepare`] and
+    /// [`Session::finish_start`] in a row; the window's backend runs the
+    /// middle step without holding the session.
     pub fn start_workspace(&mut self) -> StartOpened {
-        let answer = if std::mem::replace(&mut self.started, true) {
-            OpenAnswer::Done
-        } else {
-            let start = self
-                .given_dir
-                .clone()
-                .or_else(|| self.state.last_workspace().map(Path::to_owned));
-            match start {
-                Some(dir) => self.request_open(&dir),
-                None => OpenAnswer::Done,
-            }
+        let prepared = self
+            .plan_start()
+            .map(|(plan, dir)| plan.prepare(&dir, false));
+        self.finish_start(prepared)
+    }
+
+    /// M-01.1: what opening the workspace to start with needs, and its
+    /// directory; `None` when there is none or it was asked for before.
+    pub fn plan_start(&mut self) -> Option<(OpenPlan, PathBuf)> {
+        if std::mem::replace(&mut self.started, true) {
+            return None;
+        }
+        let dir = self
+            .given_dir
+            .clone()
+            .or_else(|| self.state.last_workspace().map(Path::to_owned))?;
+        Some((self.plan_open(), dir))
+    }
+
+    /// M-01.1: opens the workspace to start with, as prepared.
+    pub fn finish_start(&mut self, prepared: Option<PreparedOpen>) -> StartOpened {
+        let answer = match prepared {
+            Some(prepared) => self.finish_open(prepared),
+            None => OpenAnswer::Done,
         };
         let snapshot = self.snapshot();
         // The window takes the snapshot as it is, so the tick sends only
@@ -228,9 +362,11 @@ impl Session {
                 .iter()
                 .map(|(note, tab)| TabView {
                     note: note.as_str().to_owned(),
+                    title: tab.title.clone(),
                     label: tab.label(),
                     path: display(&tab.path),
                     view: EditingViewName::from(tab.editing_view),
+                    save_error: tab.error.clone(),
                 })
                 .collect(),
             active,
@@ -272,99 +408,80 @@ impl Session {
     /// M-21.1, UC-002 step 4: checks the chosen directory and opens it, or
     /// says what stands in the way (A3, A5, A7, A11). With `anyway`, only
     /// the check for an enclosing workspace is left out (A5 step 2, A6).
+    ///
+    /// The same as [`Session::plan_open`], [`OpenPlan::prepare`] and
+    /// [`Session::finish_open`] in a row.
     pub fn open_chosen(&mut self, dir: &Path, anyway: bool) -> OpenAnswer {
-        if !anyway {
-            return self.request_open(dir);
-        }
-        match check_readable_directory(dir, &self.surroundings()) {
-            Ok(dir) => self.open_directory(&dir),
-            Err(problem) => {
-                let problem = format!("{problem}. Choose another directory.");
-                self.open_problem(display(dir), problem, None)
-            }
+        let prepared = self.plan_open().prepare(dir, anyway);
+        self.finish_open(prepared)
+    }
+
+    /// What opening a directory needs from the session: taken while it is
+    /// held, so the checks and the reading of the directory can run without
+    /// it (A-22).
+    #[must_use]
+    pub fn plan_open(&self) -> OpenPlan {
+        OpenPlan {
+            surroundings: self.surroundings(),
+            recent: self.state.recent_workspaces(),
+            open_root: self.open.as_ref().map(|open| open.root().to_owned()),
         }
     }
 
-    /// UC-002 step 4 for `dir`.
-    fn request_open(&mut self, dir: &Path) -> OpenAnswer {
-        let path = display(dir);
-        match check_open_directory(dir, &self.surroundings()) {
-            Ok(dir) => self.open_directory(&dir),
-            Err(OpenProblem::Missing(missing)) => {
+    /// UC-002 steps 5–9: opens a directory that passed the checks, or says
+    /// what stood in the way. The open notes are stored first (UC-005
+    /// BR-001); when that fails, the workspace stays open.
+    pub fn finish_open(&mut self, prepared: PreparedOpen) -> OpenAnswer {
+        let workspace = match prepared.0 {
+            Prepared::AlreadyOpen => return OpenAnswer::Done,
+            Prepared::Problem {
+                path,
+                problem,
+                offer,
+                forget,
+            } => {
                 // A3: a remembered workspace that is gone is forgotten.
-                self.state.forget_workspace(&missing);
-                let problem = format!(
-                    "{} does not exist. Choose another directory or create a new workspace there.",
-                    missing.display()
-                );
-                let offer = OpenOffer::Create {
-                    directory: display(&missing),
-                };
-                self.open_problem(path, problem, Some(offer))
+                if let Some(missing) = forget {
+                    self.state.forget_workspace(&missing);
+                }
+                return self.open_problem(path, problem, offer);
             }
-            Err(OpenProblem::InsideWorkspace {
-                directory,
-                workspace,
-            }) => {
-                let problem = format!(
-                    "{} lies inside the workspace {}.",
-                    directory.display(),
-                    workspace.display()
-                );
-                let offer = OpenOffer::Outer {
-                    outer: display(&workspace),
-                    inner: display(&directory),
-                };
-                self.open_problem(path, problem, Some(offer))
-            }
-            Err(problem) => {
-                let problem = format!("{problem}. Choose another directory.");
-                self.open_problem(path, problem, None)
-            }
-        }
-    }
-
-    /// UC-002 steps 5–9 for a directory that passed the checks.
-    fn open_directory(&mut self, dir: &Path) -> OpenAnswer {
-        // A9: the workspace is already open.
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| underline_root(open.workspace.root()) == underline_root(dir))
-        {
+            Prepared::Opened(workspace) => workspace,
+        };
+        // A9: the workspace is already open (it may have been opened while
+        // this one was read).
+        if self.open.as_ref().is_some_and(|open| {
+            underline_root(open.workspace.root()) == underline_root(workspace.root())
+        }) {
             return OpenAnswer::Done;
         }
-        // UC-005 BR-001: the tabs' changes are stored first, else "The
-        // workspace stays open, because changes could not be stored: …"
-        // (feature F3; without the editor there is nothing to store).
-        match Workspace::open_excluding(dir, &self.state.recent_workspaces()) {
-            Ok(workspace) => {
-                self.switch_to(workspace);
-                let Some(open) = &self.open else {
-                    return OpenAnswer::Done;
-                };
-                let workspace = &open.workspace;
-                let mut messages = vec![format!("Opened {}", workspace.root().display())];
-                if let Some(problem) = workspace.settings_problem() {
-                    messages.push(format!("using the user settings, because {problem}"));
-                }
-                let unreadable = &workspace.listing().unreadable;
-                if !unreadable.is_empty() {
-                    let unreadable: Vec<_> = unreadable.iter().map(|p| display(p)).collect();
-                    messages.push(format!("could not read {}", unreadable.join(", ")));
-                }
-                self.status = messages.join("; ");
-                self.show_state_notices();
-                // In the egui app the settings' messages reach the status
-                // one frame later, so they win.
-                self.take_settings_messages();
-                OpenAnswer::Done
-            }
-            Err(err) => {
-                let problem = format!("{err}. Choose another directory.");
-                self.open_problem(display(dir), problem, None)
-            }
+        if let Err(failures) = self.flush_all() {
+            self.status = format!(
+                "The workspace stays open, because changes could not be stored: {}",
+                failures.join("; ")
+            );
+            return OpenAnswer::Done;
         }
+        self.switch_to(workspace);
+        let Some(open) = &self.open else {
+            return OpenAnswer::Done;
+        };
+        let workspace = &open.workspace;
+        let mut messages = vec![format!("Opened {}", workspace.root().display())];
+        if let Some(problem) = workspace.settings_problem() {
+            messages.push(format!("using the user settings, because {problem}"));
+        }
+        let unreadable = &workspace.listing().unreadable;
+        if !unreadable.is_empty() {
+            let unreadable: Vec<_> = unreadable.iter().map(|p| display(p)).collect();
+            messages.push(format!("could not read {}", unreadable.join(", ")));
+        }
+        self.status = messages.join("; ");
+        self.show_state_notices();
+        // In the egui app the settings' messages reach the status one frame
+        // later, so they win.
+        self.take_settings_messages();
+        OpenAnswer::Done
     }
 
     /// M-21.3, UC-001 step 6, UC-002 steps 5–8: makes `workspace` the open
@@ -463,10 +580,38 @@ impl Session {
 
     /// M-21.2, UC-001 step 5, A3: creates the workspace, opens it with its
     /// Home note and says so; a failure says why and what is left (A5, A6).
+    ///
+    /// The same as [`Session::plan_create`], [`CreatePlan::prepare`] and
+    /// [`Session::finish_create`] in a row.
     pub fn create_workspace(&mut self, request: NewWorkspaceRequest) -> CreateAnswer {
-        // UC-005 BR-001: the tabs' changes are stored first, else "No
-        // workspace was created, because changes could not be stored: …"
-        // (feature F3).
+        match self.plan_create(request) {
+            Ok(plan) => {
+                let prepared = plan.prepare();
+                self.finish_create(prepared)
+            }
+            Err(answer) => answer,
+        }
+    }
+
+    /// UC-001 step 5: stores the open notes first (UC-005 BR-001) and takes
+    /// what creating the workspace needs from the session, so creating it
+    /// can run without the session (A-22). When the notes cannot be stored,
+    /// the answer is that no workspace was created.
+    ///
+    /// # Errors
+    ///
+    /// The answer for the window when nothing is to be created.
+    pub fn plan_create(
+        &mut self,
+        request: NewWorkspaceRequest,
+    ) -> Result<CreatePlan, CreateAnswer> {
+        if let Err(failures) = self.flush_all() {
+            self.status = format!(
+                "No workspace was created, because changes could not be stored: {}",
+                failures.join("; ")
+            );
+            return Err(CreateAnswer::Done);
+        }
         let remote = Some(request.remote.trim().to_owned()).filter(|a| !a.is_empty());
         let request = NewWorkspace {
             directory: PathBuf::from(request.directory),
@@ -474,7 +619,18 @@ impl Session {
             git: request.git.then_some(GitRepositoryOption { remote }),
         };
         let home = self.formats.new_note(request.default_format, HOME_TITLE);
-        match create_workspace(&request, &home, &self.surroundings(), &self.git) {
+        Ok(CreatePlan {
+            request,
+            home,
+            surroundings: self.surroundings(),
+            git: self.git.clone(),
+        })
+    }
+
+    /// UC-001 step 6, A1, A5, A6: opens the created workspace with its Home
+    /// note, or says why it could not be created.
+    pub fn finish_create(&mut self, prepared: PreparedCreate) -> CreateAnswer {
+        match prepared.created {
             Ok(workspace) => {
                 let root = display(workspace.root());
                 self.switch_to(workspace);
@@ -487,7 +643,7 @@ impl Session {
             // A1 after the check of step 5: the directory filled up meanwhile.
             Err(err) => match &err.problem {
                 CreateProblem::Directory(problem) => {
-                    directory_answer(display(&request.directory), problem)
+                    directory_answer(display(&prepared.directory), problem)
                 }
                 // A5 and A6.
                 _ => {
@@ -530,17 +686,24 @@ impl Session {
                     return false;
                 }
             };
-            let opened = open.tabs.open(id.clone(), || Tab {
-                path,
-                title: note.title(),
-                editing_view,
-                deleted: false,
-                on_disk: note.body,
+            let format = open
+                .workspace
+                .listing()
+                .notes
+                .iter()
+                .find(|entry| entry.id == note.id)
+                .map_or(open.workspace.default_format(), |entry| entry.format);
+            let title = note.title();
+            let opened = open.tabs.open(id.clone(), || {
+                let mut tab = Tab::new(path, title, format, editing_view, note.body);
+                tab.read_properties(&root);
+                tab
             });
-            // UC-004 A6, M-06.6: the tab used longest ago was closed. With
-            // the editor (F3) its changes are stored first; feature F16
-            // fixes that a failure is ignored there (inventory D-07).
-            if let Some((closed, _)) = opened.closed {
+            // UC-004 A6, M-06.6: the tab used longest ago was closed; its
+            // changes are stored first. Feature F16 fixes that a failure is
+            // ignored here, as in the egui app (inventory D-07).
+            if let Some((closed, mut tab)) = opened.closed {
+                let _ = tab.flush(&self.saver);
                 self.status = format!("Closed the tab {}, used longest ago", closed.title());
             }
         }
@@ -565,28 +728,15 @@ impl Session {
             self.state.set_todo_list(&root, open.todo_list);
         }
         open.tabs.activate(index);
+        // M-16.2: the properties of the note shown are read again.
+        open.tabs.get_mut(index).read_properties(&root);
         self.state.note_viewed(&root, note, now());
         self.persist_tabs();
         self.refresh_overview();
     }
 
-    /// M-06.3, UC-004 A5: closes the tab of `note`.
-    ///
-    /// With the editor (feature F3) the tab's changes are stored first, and
-    /// when they cannot be, the user is asked (UC-005 A14 step 3).
-    pub fn close_tab(&mut self, note: &NoteId) {
-        let Some(open) = &mut self.open else {
-            return;
-        };
-        let Some(index) = open.tabs.find(note) else {
-            return;
-        };
-        open.tabs.close(index);
-        self.persist_tabs();
-    }
-
     /// M-22.2, UC-004 step 6: remembers the open tabs and the active one.
-    fn persist_tabs(&mut self) {
+    pub(super) fn persist_tabs(&mut self) {
         let Some(open) = &self.open else {
             return;
         };
@@ -650,9 +800,11 @@ impl Session {
                     let Some(open) = &mut self.open else {
                         return;
                     };
+                    let root = open.workspace.root().to_owned();
                     if let Some((_, tab)) = open.tabs.iter_mut().find(|(_, t)| t.path == path) {
                         // UC-004 A8: the tab stays open, marked.
                         tab.deleted = true;
+                        tab.read_properties(&root);
                         self.status = format!("{} was deleted outside", tab.title);
                     }
                 }
@@ -696,30 +848,51 @@ impl Session {
         }
     }
 
-    /// A note's file changed outside. Returns whether the note overview
-    /// needs a rescan.
-    ///
-    /// UC-004 A7: a tab shows the file again. Without the editor (feature
-    /// F3) a tab holds no unstored change, so the new text is taken; F3
-    /// reloads the editor here and keeps both versions when the tab holds
-    /// an unstored change (A9).
+    /// A note's file changed outside: its tab shows it again (UC-004 A7),
+    /// or both versions are kept when the tab holds a change not stored
+    /// yet (A9). Returns whether the note overview needs a rescan.
     fn outside_change(&mut self, path: &Path) -> bool {
         let Some(open) = &mut self.open else {
             return false;
         };
-        let Some((_, tab)) = open.tabs.iter_mut().find(|(_, t)| t.path == path) else {
+        let root = open.workspace.root().to_owned();
+        let Some((note, tab)) = open.tabs.iter_mut().find(|(_, t)| t.path == path) else {
             return true;
         };
         let Ok(content) = std::fs::read_to_string(path) else {
             return false;
         };
         let was_deleted = std::mem::take(&mut tab.deleted);
-        // Only a file that holds something else than Underline last read
-        // was changed outside.
-        if content == tab.on_disk {
+        // Only a file that holds something else than Underline last read or
+        // stored was changed outside; unstored edits make no difference.
+        if content == tab.on_disk || tab.saving_text.as_deref() == Some(content.as_str()) {
             return was_deleted;
         }
-        tab.on_disk = content;
+        tab.read_properties(&root);
+        if tab.autosave.is_unstored() || tab.saving {
+            // UC-004 A9: neither version is overwritten.
+            if tab.kept_outside.as_deref() == Some(content.as_str()) {
+                return false;
+            }
+            tab.kept_outside = Some(content.clone());
+            let copy = outside_copy_path(path, std::time::SystemTime::now());
+            self.status = match self.saver.save_now(&copy, &content) {
+                Ok(()) => {
+                    let name = copy.file_name().unwrap_or_default().to_string_lossy();
+                    format!(
+                        "{} was changed outside while you were editing; your text stays, the other version is kept as {name}",
+                        tab.title
+                    )
+                }
+                Err(err) => format!(
+                    "{} was changed outside; the other version could not be kept: {err}",
+                    tab.title
+                ),
+            };
+            return true;
+        }
+        tab.reload(content);
+        self.replaced.push(note.clone());
         self.status = format!("{} was changed outside", tab.title);
         was_deleted
     }

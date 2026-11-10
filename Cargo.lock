@@ -8396,6 +8396,7 @@ dependencies = [
  "specta",
  "thiserror 1.0.69",
  "underline-core",
+ "underline-editor-core",
  "underline-facade",
  "underline-wiki",
 ]
@@ -8404,6 +8405,7 @@ dependencies = [
 name = "underline-tauri"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "parking_lot",
  "serde",
  "serde_json",

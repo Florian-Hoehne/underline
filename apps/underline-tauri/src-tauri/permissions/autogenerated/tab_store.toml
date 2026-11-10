@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-store"
+description = "Enables the tab_store command without any pre-configured scope."
+commands.allow = ["tab_store"]
+
+[[permission]]
+identifier = "deny-tab-store"
+description = "Denies the tab_store command without any pre-configured scope."
+commands.deny = ["tab_store"]

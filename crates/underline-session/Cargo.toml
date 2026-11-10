@@ -15,6 +15,7 @@ specta = ["dep:specta"]
 [dependencies]
 underline-core.workspace = true
 underline-facade.workspace = true
+underline-editor-core.workspace = true
 underline-wiki.workspace = true
 serde.workspace = true
 thiserror.workspace = true

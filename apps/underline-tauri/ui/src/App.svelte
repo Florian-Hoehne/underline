@@ -7,11 +7,13 @@
     so the empty screen does not flash;
   - without a workspace, the offer to open or create one (M-02);
   - with one, the note overview (M-05) beside the tabs and the note (M-06).
-  The Open and Create dialogs float above it, not modal (M-21.1, M-21.2).
+  The Open and Create dialogs float above it, not modal (M-21.1, M-21.2),
+  and so does "Changes not stored" (M-06.3, M-21.4).
 -->
 <script lang="ts">
   import { onDestroy, tick } from 'svelte';
   import { focusFallback } from './lib/focus';
+  import CloseQuestionDialog from './lib/CloseQuestionDialog.svelte';
   import CreateDialog from './lib/CreateDialog.svelte';
   import EmptyScreen from './lib/EmptyScreen.svelte';
   import NoteArea from './lib/NoteArea.svelte';
@@ -61,6 +63,9 @@
       <OpenDialog {shell} dialog={shell.dialog} />
     {:else if shell.dialog?.kind === 'create'}
       <CreateDialog {shell} dialog={shell.dialog} />
+    {/if}
+    {#if shell.closeQuestion}
+      <CloseQuestionDialog {shell} question={shell.closeQuestion} />
     {/if}
   </main>
   <StatusBar root={shell.workspaceRoot} status={shell.status} />

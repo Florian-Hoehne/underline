@@ -1,14 +1,18 @@
 // The window's mirror of the backend session: what `app_start` returned,
-// kept current by the `status`, `settings`, `workspace`, `overview` and
-// `tabs` events (ADR-022), plus the UI state that is not stored (M-22.4):
-// the Open and Create dialogs, the loading state and the overview's width
-// while it is dragged. No domain logic lives here: every change goes to the
+// kept current by the `status`, `settings`, `workspace`, `overview`,
+// `tabs`, `properties` and `close-question` events (ADR-022); the editor's
+// `ed-highlight` and `ed-replaced` go to the source view shown now, plus the UI
+// state that is not stored (M-22.4): the Open and Create dialogs, the
+// question before closing, the loading state and the panels' widths while
+// they are dragged. The text of the notes is not here: the source view asks
+// the backend for it (ADR-024). No domain logic lives here: every change goes to the
 // backend, which answers with an event or with the dialog's next stage.
 
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   commands,
   events,
+  type CloseQuestion,
   type CreateAnswer,
   type FormatName,
   type OpenAnswer,
@@ -18,11 +22,13 @@ import {
   type SettingName,
   type SettingsView,
   type StartInfo,
+  type TabPropertiesView,
   type TabsView,
   type UiError,
   type WorkspaceSnapshot,
   type WorkspaceView,
 } from './bindings';
+import { activeSourceView } from './editor/active';
 import { applyPalette } from './theme';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
@@ -61,6 +67,14 @@ export function overviewWidthWithin(width: number): number {
   return Math.min(OVERVIEW_WIDTH.max, Math.max(OVERVIEW_WIDTH.min, Math.round(width)));
 }
 
+/** M-16.1: the tool panel is 100 to 1000 pixels wide, like the overview. */
+export const TOOL_PANEL_WIDTH = OVERVIEW_WIDTH;
+
+/** `width` within the tool panel's range, rounded to a pixel. */
+export function toolPanelWidthWithin(width: number): number {
+  return Math.min(TOOL_PANEL_WIDTH.max, Math.max(TOOL_PANEL_WIDTH.min, Math.round(width)));
+}
+
 const NO_TABS: TabsView = { tabs: [], active: null, todoList: { open: false, active: false } };
 
 export class Shell {
@@ -95,6 +109,19 @@ export class Shell {
    * settings file again sets it back to the stored width (Q-03).
    */
   overviewWidth = $state<number | null>(null);
+  /**
+   * M-16.1: the tool panel's width, like `overviewWidth`: taken from the
+   * settings when the panel first shows, set back when a settings file is
+   * read again.
+   */
+  toolPanelWidth = $state<number | null>(null);
+  /** M-16.2: the properties of the active tab's note, `null` without one. */
+  properties = $state<TabPropertiesView | null>(null);
+  /**
+   * M-06.3, M-21.4: "Changes not stored": closing a tab or Underline could
+   * not store its changes, and the user decides.
+   */
+  closeQuestion = $state<CloseQuestion | null>(null);
   /** M-03.5: the wiki project URL typed in the Workspace menu, not stored. */
   wikiUrl = $state('');
   /** M-03.2: the search overlay (feature F9). */
@@ -153,6 +180,24 @@ export class Shell {
       events.tabs.listen((event) => {
         this.#sentDuringStart?.add('tabs');
         this.tabs = event.payload;
+      }),
+      events.properties.listen((event) => {
+        this.properties = event.payload;
+      }),
+      events.closeQuestion.listen((event) => {
+        this.closeQuestion = event.payload;
+      }),
+      // The editor's events are listened to here, once for the window, and
+      // handed to the source view shown now: listening per view left events
+      // without a listener after a tab switch.
+      events.edHighlight.listen((event) => {
+        activeSourceView()?.takeColors(event.payload);
+      }),
+      events.edReplaced.listen((event) => {
+        const view = activeSourceView();
+        if (view?.note === event.payload.note) {
+          view.replaced(event.payload.rev);
+        }
       }),
     ]);
     try {
@@ -310,12 +355,71 @@ export class Shell {
     }
   }
 
-  /** M-06.3: "×" or a middle click closes a tab. */
-  async closeTab(note: string): Promise<void> {
-    const result = await this.#serial(() => commands.tabClose(note));
+  /**
+   * M-06.3: "×" or a middle click closes a tab, after storing it; when that
+   * fails, "Changes not stored" asks first (UC-005 A14 step 3). With
+   * `force` ("Close anyway") it closes all the same. Resolves to whether
+   * the tab closed.
+   */
+  async closeTab(note: string, force = false): Promise<boolean> {
+    const result = await this.#serial(() => commands.tabClose(note, force));
     if (result.status === 'error') {
       this.#fail('tab_close', result.error);
+      return false;
     }
+    this.closeQuestion = result.data;
+    return result.data === null;
+  }
+
+  /** M-10.9: `Store` stores the note of the tab at once. */
+  async storeTab(note: string): Promise<void> {
+    const result = await this.#serial(() => commands.tabStore(note));
+    if (result.status === 'error') {
+      this.#fail('tab_store', result.error);
+    }
+  }
+
+  /** M-21.4: "Keep open": nothing closes. */
+  keepOpen(): void {
+    this.closeQuestion = null;
+  }
+
+  /** M-06.3, M-21.4: "Close anyway": the tab or Underline closes without the changes. */
+  async closeAnyway(): Promise<void> {
+    const question = this.closeQuestion;
+    this.closeQuestion = null;
+    if (question?.tab) {
+      await this.closeTab(question.tab, true);
+    } else if (question) {
+      const result = await commands.appCloseAnyway();
+      if (result.status === 'error') {
+        this.#fail('app_close_anyway', result.error);
+      }
+    }
+  }
+
+  /** M-16.1: the tool panel shows; its width comes from the settings. */
+  pinToolPanelWidth(): void {
+    if (this.toolPanelWidth === null) {
+      this.toolPanelWidth = toolPanelWidthWithin(this.settings?.toolPanelWidth ?? 240);
+    }
+  }
+
+  /**
+   * M-16.1, UC-010 A4: the tool panel was let go at `shown` pixels; as in
+   * egui, a width more than 1 pixel from the stored one is stored at once,
+   * but only while a note tab is active.
+   */
+  async toolPanelReleased(shown: number): Promise<void> {
+    const stored = this.settings?.toolPanelWidth ?? 240;
+    if (this.tabs.active !== null && Math.abs(Math.round(shown) - stored) > 1) {
+      await this.quickSetting('tool_panel_width', String(toolPanelWidthWithin(shown)));
+    }
+  }
+
+  /** Reports a failure of the editor in the status bar, as other commands do. */
+  editorFailed(message: string): void {
+    this.status = message;
   }
 
   /** M-05.1: the overview shows; its width comes from the settings. */
@@ -377,6 +481,9 @@ export class Shell {
     this.settings = settings;
     if (reread && this.overviewWidth !== null) {
       this.overviewWidth = overviewWidthWithin(settings.overviewWidth);
+    }
+    if (reread && this.toolPanelWidth !== null) {
+      this.toolPanelWidth = toolPanelWidthWithin(settings.toolPanelWidth);
     }
     applyPalette(settings.palette);
   }

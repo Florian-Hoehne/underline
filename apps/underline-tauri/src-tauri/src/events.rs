@@ -4,7 +4,10 @@
 use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
-use underline_session::{Event, OverviewItem, SettingsView, StatusView, TabsView, WorkspaceView};
+use underline_session::{
+    CloseQuestion, Event, HighlightView, OverviewItem, SettingsView, StatusView, TabPropertiesView,
+    TabsView, TextReplaced, WorkspaceView,
+};
 
 /// M-04.7: the status message changed.
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
@@ -32,6 +35,28 @@ pub struct OverviewEvent(pub Vec<OverviewItem>);
 #[tauri_specta(event_name = "tabs")]
 pub struct TabsEvent(pub TabsView);
 
+/// UC-004 A7: the text of an open tab was replaced, such as after a change
+/// from outside; the window asks for it again.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "ed-replaced")]
+pub struct TextReplacedEvent(pub TextReplaced);
+
+/// M-08.2, ADR-024: the colours of the lines the source view shows.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "ed-highlight")]
+pub struct HighlightEvent(pub HighlightView);
+
+/// M-16.2: the properties of the active tab's note; `null` without one.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "properties")]
+pub struct PropertiesEvent(pub Option<TabPropertiesView>);
+
+/// M-21.4, UC-005 A14 step 3: closing Underline failed to store changes;
+/// the window asks "Changes not stored".
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "close-question")]
+pub struct CloseQuestionEvent(pub CloseQuestion);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -42,6 +67,9 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Workspace(workspace) => WorkspaceEvent(workspace).emit(app),
             Event::Overview(overview) => OverviewEvent(overview).emit(app),
             Event::Tabs(tabs) => TabsEvent(tabs).emit(app),
+            Event::TextReplaced(replaced) => TextReplacedEvent(replaced).emit(app),
+            Event::Highlight(highlight) => HighlightEvent(highlight).emit(app),
+            Event::Properties(properties) => PropertiesEvent(properties).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

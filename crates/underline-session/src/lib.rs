@@ -21,11 +21,15 @@
 //! ([`PaletteView`], M-01.6), the app state (M-01.3, M-22.1) and the status
 //! message (M-04.7). Feature F2 adds the workspace: the Open and Create
 //! dialogs (UC-001, UC-002, M-21), the note overview (M-05), the tabs
-//! (M-06) and what is remembered of them (M-22.2).
+//! (M-06) and what is remembered of them (M-22.2). Feature F3 adds the text
+//! of the open notes (ADR-024): editing in the source view (UC-005, M-08,
+//! M-10.1), the autosave (M-10.8), storing before a close (M-06.3, M-21.4),
+//! the changes from outside (M-07.5) and the properties (M-16.2).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
 
+mod editor_view;
 mod error;
 mod event;
 mod palette;
@@ -34,10 +38,14 @@ mod settings;
 mod start;
 mod workspace_view;
 
+pub use editor_view::{
+    ClipAction, CloseQuestion, EditorInput, EditorPatch, EditorState, HighlightView, KeyName,
+    NotePropertiesView, SpanStyle, TabPropertiesView, TextChange,
+};
 pub use error::{UiError, UiErrorKind};
-pub use event::{Event, StatusView};
+pub use event::{Event, StatusView, TextReplaced};
 pub use palette::PaletteView;
-pub use session::Session;
+pub use session::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen, Session};
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,
     USER_SETTINGS_POLL,

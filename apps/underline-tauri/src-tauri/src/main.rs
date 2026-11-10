@@ -8,6 +8,7 @@
 //! binary must understand `mcp` just like the egui app.
 
 mod bindings;
+mod clipboard;
 mod commands;
 mod events;
 mod ticker;
@@ -17,11 +18,14 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
+use tauri_specta::Event as _;
 use underline_core::Workspace;
 use underline_session::Session;
 
-use crate::commands::SharedSession;
+use crate::clipboard::SystemClipboard;
+use crate::commands::{Closer, SharedClipboard, SharedSession};
+use crate::events::CloseQuestionEvent;
 use crate::ticker::Waker;
 
 /// The window starts hidden and the frontend shows it after its first
@@ -96,26 +100,68 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
     // changes.
     let wake = waker.clone();
     session.set_wake(move || wake.wake());
+    // UC-010 BR-004: the colours are made on a thread of their own, so
+    // they are ready when the first note shows.
+    session.warm_colors();
     let app = tauri::Builder::default()
         .manage(SharedSession::new(Mutex::new(session)))
+        // ADR-014: the source view copies and pastes through the system's
+        // clipboard, kept open while the app runs.
+        .manage(SharedClipboard::new(Mutex::new(SystemClipboard::new())))
         .manage(waker)
         .invoke_handler(bindings.invoke_handler())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if ask_before_closing(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .setup(move |app| {
             bindings.mount_events(app);
+            let handle = app.handle().clone();
+            app.manage(Closer::new(move || handle.exit(0)));
             ticker::spawn(app.handle().clone(), wakes)?;
             show_window_at_the_latest(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())?;
-    app.run(|app, event| {
-        // M-22.1: the app state is written when the app ends.
-        if let RunEvent::Exit = event {
-            if let Err(error) = app.state::<SharedSession>().lock().write_state_now() {
-                eprintln!("The app state could not be written at the end: {error}");
+    app.run(|app, event| match event {
+        // M-21.4: an end the window did not ask for, such as the last window
+        // going, stores everything first like closing the window does.
+        RunEvent::ExitRequested { api, .. } if !app.state::<Closer>().closing_anyway() => {
+            if ask_before_closing(app) {
+                api.prevent_exit();
             }
         }
+        // M-21.4, M-22.1: what can be stored is stored, and the app state is
+        // written, when the app ends.
+        RunEvent::Exit => {
+            if let Err(problems) = app.state::<SharedSession>().lock().end() {
+                for problem in problems {
+                    eprintln!("At the end: {problem}");
+                }
+            }
+        }
+        _ => {}
     });
     Ok(())
+}
+
+/// M-21.4, UC-005 BR-001: closing the window or ending the app stores every
+/// change first; when that fails, it asks "Changes not stored" (A14 step 3)
+/// and returns `true`: the window stays open. "Close anyway" ends the app
+/// (`app_close_anyway`).
+fn ask_before_closing(app: &tauri::AppHandle) -> bool {
+    let question = app.state::<SharedSession>().lock().request_close();
+    app.state::<Waker>().wake();
+    let Some(question) = question else {
+        return false;
+    };
+    if let Err(error) = CloseQuestionEvent(question).emit(app) {
+        eprintln!("The question before closing could not be sent: {error}");
+    }
+    true
 }
 
 /// Shows the main window after [`SHOW_WINDOW_AT_THE_LATEST`] if the

@@ -108,11 +108,11 @@ Reihenfolge von links nach rechts:
 
 ## M-06 Tabs (FR-018)
 
-- [ ] **M-06.1** Tab-Leiste mit horizontalem Scroll. Label: Titel, dazu „ ⚠“ bei Speicherfehler, sonst „ •“ wenn
+- [x] **M-06.1** Tab-Leiste mit horizontalem Scroll. Label: Titel, dazu „ ⚠“ bei Speicherfehler, sonst „ •“ wenn
   ungespeichert, und „ (deleted)“ wenn ausserhalb gelöscht. Hover zeigt den Pfad.
-- [ ] **M-06.2** Ein Klick aktiviert den Tab, merkt „zuletzt geöffnet“ vor, speichert die Tabs und sortiert die
+- [x] **M-06.2** Ein Klick aktiviert den Tab, merkt „zuletzt geöffnet“ vor, speichert die Tabs und sortiert die
   Übersicht neu.
-- [ ] **M-06.3** Mittelklick oder „×“ schliesst den Tab. Vorher wird gespeichert; scheitert das, fragt M-21.2.
+- [x] **M-06.3** Mittelklick oder „×“ schliesst den Tab. Vorher wird gespeichert; scheitert das, fragt M-21.2.
 - [ ] **M-06.4** Kontextmenü: „Rename…  F2“, „Delete…“, „Export…  Ctrl+Shift+E“.
 - [ ] **M-06.5** Todos-Tab „Todos (N)“, wenn die Liste offen ist. Schliessen mit „×“ oder Mittelklick. Das Öffnen
   einer Notiz deaktiviert ihn, lässt ihn aber offen.
@@ -135,7 +135,7 @@ Reihenfolge von links nach rechts:
   - Datei → öffnen, falls vorhanden, sonst „X does not exist“.
   - Ausserhalb → „{link} leads outside the workspace and is not followed“.
 - [ ] **M-07.4** In der Facade zeigt Hover über einem Link die Adresse und „Ctrl+click to follow“.
-- [ ] **M-07.5** Änderungen von aussen (ADR-011):
+- [x] **M-07.5** Änderungen von aussen (ADR-011):
   - Ist der Inhalt gleich der Fassung auf Platte oder dem gerade Gespeicherten → ignorieren.
   - Tab ungespeichert oder Speichern läuft → die fremde Fassung als Kopie ablegen (einmal je Inhalt):
     „{t} was changed outside while you were editing; your text stays, the other version is kept as {name}“.
@@ -151,9 +151,9 @@ Reihenfolge von links nach rechts:
 - [ ] **M-08.2** Syntax-Hervorhebung von Markdown/AsciiDoc mit syntect (ADR-010). Code in Fences wird in seiner
   Sprache eingefärbt. Noch nicht gefärbte Zeilen erscheinen schlicht und werden nachgefärbt (Budget 4 ms je Frame).
   Die Palette kommt aus dem Theme.
-- [ ] **M-08.3** Maus: Klick setzt den Cursor, Ziehen oder Shift+Klick erweitert die Auswahl. *Kein Doppel- oder
+- [x] **M-08.3** Maus: Klick setzt den Cursor, Ziehen oder Shift+Klick erweitert die Auswahl. *Kein Doppel- oder
   Dreifachklick.*
-- [ ] **M-08.4** Tasten (Normal):
+- [x] **M-08.4** Tasten (Normal):
   - Bearbeiten: Backspace, Delete, Enter, Tab (4 Leerzeichen), Ctrl+A.
   - Bewegen: Pfeile (Up/Down überspringen gefaltete Zeilen und halten die Spalte), PageUp/PageDown, Home/End,
     Ctrl+Home/End. Shift erweitert die Auswahl.
@@ -171,7 +171,7 @@ Reihenfolge von links nach rechts:
   - Der Faltzustand gilt für beide Ansichten.
 - [ ] **M-08.9** Cursor blinkt im Takt von egui. Nach jeder Bewegung ist er sofort sichtbar. Er wird nur mit Fokus
   gezeichnet.
-- [ ] **M-08.10** Tab, Pfeile und (in Vim/Nano) Escape verlassen den Editor nicht über die Fokus-Navigation.
+- [x] **M-08.10** Tab, Pfeile und (in Vim/Nano) Escape verlassen den Editor nicht über die Fokus-Navigation.
 
 ## M-09 Facade (FR-009, FR-011, FR-012, NFR-007)
 
@@ -234,7 +234,7 @@ Reihenfolge von links nach rechts:
 
 ## M-10 Bearbeiten, beide Ansichten (UC-005)
 
-- [ ] **M-10.1** Undo/Redo (BR-004):
+- [x] **M-10.1** Undo/Redo (BR-004):
   - Tasten: Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl/Cmd+Y.
   - Zusammenfassen: Zeichen eines Wortes werden ein Schritt. Ein Leerzeichen nach einem Wort beginnt einen neuen.
     Backspaces in Folge sind ein Schritt. Alles mit `\n` ist ein eigener Schritt.
@@ -271,7 +271,7 @@ Reihenfolge von links nach rechts:
   - Nach dem Loslassen der Maus wird die Auswahl kopiert; der alte Inhalt der Zwischenablage wird gemerkt.
   - Einfügen über genau dieser Auswahl fügt den alten Inhalt ein.
   - Abschaltbar.
-- [ ] **M-10.8** Autosave (FR-044, NFR-005):
+- [x] **M-10.8** Autosave (FR-044, NFR-005):
   - Gespeichert wird 1 s nach der letzten Änderung, spätestens nach 2 s. Neuer Versuch nach 10 s.
   - Atomar (ADR-005), im Hintergrund.
   - Fehler → rot „Not stored: {err}. Underline keeps trying.“ über dem Editor und „ ⚠“ im Tab.
@@ -392,7 +392,7 @@ Reihenfolge von links nach rechts:
 ## M-16 Werkzeugpanel rechts (FR-019, FR-041–043)
 
 - [ ] **M-16.1** Breite veränderbar (100–1000) und wird gespeichert, aber nur mit aktivem Tab.
-- [ ] **M-16.2** Properties: Place, Format, Size, Last change, sonst „Not saved yet“.
+- [x] **M-16.2** Properties: Place, Format, Size, Last change, sonst „Not saved yet“.
 - [ ] **M-16.3** Abschnitt Todos (M-18.1).
 - [ ] **M-16.4** Commit / Changes / Diff (M-19), nur in Git-Workspaces.
 - [ ] **M-16.5** Outline / Code / Figures (N):

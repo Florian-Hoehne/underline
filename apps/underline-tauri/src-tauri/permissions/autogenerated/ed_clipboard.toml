@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ed-clipboard"
+description = "Enables the ed_clipboard command without any pre-configured scope."
+commands.allow = ["ed_clipboard"]
+
+[[permission]]
+identifier = "deny-ed-clipboard"
+description = "Denies the ed_clipboard command without any pre-configured scope."
+commands.deny = ["ed_clipboard"]

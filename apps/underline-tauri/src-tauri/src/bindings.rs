@@ -15,7 +15,10 @@ use tauri_specta::{collect_commands, collect_events, Builder};
 use underline_session::PaletteView;
 
 use crate::commands;
-use crate::events::{OverviewEvent, SettingsEvent, StatusEvent, TabsEvent, WorkspaceEvent};
+use crate::events::{
+    CloseQuestionEvent, HighlightEvent, OverviewEvent, PropertiesEvent, SettingsEvent, StatusEvent,
+    TabsEvent, TextReplacedEvent, WorkspaceEvent,
+};
 
 /// Where the generated bindings live.
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/lib/bindings.ts");
@@ -46,14 +49,25 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ws_create,
             commands::tab_open,
             commands::tab_activate,
-            commands::tab_close
+            commands::tab_close,
+            commands::tab_store,
+            commands::ed_open,
+            commands::ed_input,
+            commands::ed_select,
+            commands::ed_viewport,
+            commands::ed_clipboard,
+            commands::app_close_anyway
         ])
         .events(collect_events![
             StatusEvent,
             SettingsEvent,
             WorkspaceEvent,
             OverviewEvent,
-            TabsEvent
+            TabsEvent,
+            TextReplacedEvent,
+            HighlightEvent,
+            PropertiesEvent,
+            CloseQuestionEvent
         ])
         .disable_serde_phases()
 }

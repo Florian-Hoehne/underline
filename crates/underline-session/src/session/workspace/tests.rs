@@ -537,11 +537,11 @@ fn m06_3_closing_a_tab_activates_its_right_neighbour() {
     session.open_note(&id("B"));
     session.activate_tab(&id("A"));
 
-    session.close_tab(&id("A"));
+    session.close_tab(&id("A"), false);
 
     assert_eq!(tabs(&session), ["Home", "B"]);
     assert_eq!(active(&session).as_deref(), Some("B"));
-    session.close_tab(&id("Unknown"));
+    session.close_tab(&id("Unknown"), false);
     assert_eq!(tabs(&session), ["Home", "B"]);
 }
 
@@ -894,8 +894,12 @@ fn adr022_m01_1_the_start_snapshot_is_not_sent_again_as_events() {
 
     let events = session.take_events();
 
+    // The properties of the tool panel (M-16.2) are no part of the
+    // snapshot; they follow as an event.
     assert!(
-        events.iter().all(|e| matches!(e, Event::Status(_))),
+        events
+            .iter()
+            .all(|e| matches!(e, Event::Status(_) | Event::Properties(_))),
         "{events:?}"
     );
     session.open_note(&id("A"));

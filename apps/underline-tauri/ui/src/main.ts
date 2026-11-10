@@ -29,6 +29,11 @@ await tick();
 // M-01.1: the workspace to start with opens while the window shows its
 // loading state.
 void shell.startWorkspace();
+// ADR-024: a build made with VITE_UL_BENCH=1 measures the source view.
+if (import.meta.env.VITE_UL_BENCH === '1') {
+  const { runBench } = await import('./lib/editor/bench');
+  void runBench(shell).catch((error: unknown) => console.error('The measurement failed', error));
+}
 // Not in requestAnimationFrame: WebKitGTK runs no frames for a hidden window.
 if (inTauri) {
   void showWindow();

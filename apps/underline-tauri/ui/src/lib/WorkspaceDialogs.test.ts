@@ -24,12 +24,12 @@ function dialog(name: string) {
 
 /** A tab of the tab bar, by its label. */
 function tab(name: string) {
-  return within(document.querySelector<HTMLElement>('.tab-bar')!).getByRole('button', { name });
+  return within(document.querySelector<HTMLElement>('.tab-bar')!).getByRole('tab', { name });
 }
 
 /** A note of the overview, by its label. */
 function entry(name: string) {
-  return within(screen.getByRole('complementary')).getByRole('button', { name });
+  return within(screen.getByRole('complementary', { name: 'Notes' })).getByRole('button', { name });
 }
 
 describe('M-01.1 start (UC-002 A1, A2, plan section 14)', () => {
@@ -72,7 +72,7 @@ describe('M-01.1 start (UC-002 A1, A2, plan section 14)', () => {
 
     expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'false');
     expect(screen.getByRole('heading', { name: 'Notes' })).toBeInTheDocument();
-    expect(tab('Home')).toHaveAttribute('aria-current', 'page');
+    expect(tab('Home')).toHaveAttribute('aria-selected', 'true');
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe(
         '/home/user/Notes  |  Opened /home/user/Notes',
@@ -83,7 +83,7 @@ describe('M-01.1 start (UC-002 A1, A2, plan section 14)', () => {
   it('opens the workspace opened last without a given one', async () => {
     await app({ lastWorkspace: '/home/user/Work', recent: ['/home/user/Work'] });
 
-    expect(tab('README')).toHaveAttribute('aria-current', 'page');
+    expect(tab('README')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows the Open dialog with the problem when the given directory is gone', async () => {
@@ -260,7 +260,7 @@ describe('M-21.2 Create dialog (UC-001)', () => {
     await waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent('Workspace created in /home/user/Fresh'),
     );
-    expect(tab('Home')).toHaveAttribute('aria-current', 'page');
+    expect(tab('Home')).toHaveAttribute('aria-selected', 'true');
   });
 
   it('UC-001 A3: the git option asks for the remote, then creates', async () => {

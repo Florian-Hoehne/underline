@@ -109,6 +109,19 @@ impl Document {
     /// Takes back the last edit; returns the char index to put the cursor at
     /// and the first changed line.
     pub fn undo(&mut self) -> Option<(usize, usize)> {
+        let inverse = self.undo_edit()?;
+        Some(self.after(&inverse))
+    }
+
+    /// Applies the last undone edit again.
+    pub fn redo(&mut self) -> Option<(usize, usize)> {
+        let applied = self.redo_edit()?;
+        Some(self.after(&applied))
+    }
+
+    /// Takes back the last edit, like [`Document::undo`], and returns the
+    /// change that did it, for views that patch their copy of the text.
+    pub fn undo_edit(&mut self) -> Option<Edit> {
         let edit = self.undo.pop()?;
         let inverse = self.apply(Edit {
             at: edit.at,
@@ -116,21 +129,25 @@ impl Document {
             inserted: edit.removed.clone(),
         });
         self.redo.push(edit);
-        Some((
-            inverse.at + inverse.inserted.chars().count(),
-            self.rope.char_to_line(inverse.at),
-        ))
+        Some(inverse)
     }
 
-    /// Applies the last undone edit again.
-    pub fn redo(&mut self) -> Option<(usize, usize)> {
+    /// Applies the last undone edit again, like [`Document::redo`], and
+    /// returns it.
+    pub fn redo_edit(&mut self) -> Option<Edit> {
         let edit = self.redo.pop()?;
         let applied = self.apply(edit.clone());
         self.undo.push(edit);
-        Some((
-            applied.at + applied.inserted.chars().count(),
-            self.rope.char_to_line(applied.at),
-        ))
+        Some(applied)
+    }
+
+    /// UC-005 BR-004: the cursor goes to the end of the text `edit` put in;
+    /// with the first line it changed.
+    fn after(&self, edit: &Edit) -> (usize, usize) {
+        (
+            edit.at + edit.inserted.chars().count(),
+            self.rope.char_to_line(edit.at),
+        )
     }
 
     fn apply(&mut self, edit: Edit) -> Edit {

@@ -2,7 +2,8 @@
   A dialog window as the egui app shows them: not modal, so the window
   behind stays usable (inventory conventions), with its title on top.
 
-  Escape closes it (inventory D-02, fixed in the Tauri app). When it shows,
+  Escape closes it (inventory D-02, fixed in the Tauri app), and Tab and
+  Shift+Tab stay inside it (ux review F3). When it shows,
   and whenever `step` changes, the keyboard goes to the element marked
   `data-autofocus` (its text selected with `data-select`), else to the
   dialog itself, so Tab continues inside it. When it closes with the
@@ -61,11 +62,36 @@
     };
   });
 
+  const FOCUSABLE =
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
+  /**
+   * Escape closes the dialog, also with the keyboard on its frame; Tab and
+   * Shift+Tab go round inside it (ux review F3).
+   */
   function onKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
       onClose();
+      return;
+    }
+    if (event.key !== 'Tab' || !frame) {
+      return;
+    }
+    const inside = Array.from(frame.querySelectorAll<HTMLElement>(FOCUSABLE));
+    const first = inside[0];
+    const last = inside[inside.length - 1];
+    const active = document.activeElement;
+    if (!first || !last) {
+      event.preventDefault();
+      frame.focus();
+    } else if (event.shiftKey && (active === first || active === frame)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
     }
   }
 </script>

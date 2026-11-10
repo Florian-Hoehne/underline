@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ed-open"
+description = "Enables the ed_open command without any pre-configured scope."
+commands.allow = ["ed_open"]
+
+[[permission]]
+identifier = "deny-ed-open"
+description = "Denies the ed_open command without any pre-configured scope."
+commands.deny = ["ed_open"]

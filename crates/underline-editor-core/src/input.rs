@@ -20,6 +20,18 @@ pub enum Key {
     ArrowUp,
     /// The down arrow key.
     ArrowDown,
+    /// The Delete key.
+    Delete,
+    /// The Tab key.
+    Tab,
+    /// The Home key.
+    Home,
+    /// The End key.
+    End,
+    /// The Page Up key.
+    PageUp,
+    /// The Page Down key.
+    PageDown,
     /// The A key.
     A,
     /// The B key.
@@ -96,6 +108,25 @@ pub struct Modifiers {
     pub command: bool,
 }
 
+impl Modifiers {
+    /// The modifiers of a key event as a webview reports them
+    /// (`ctrlKey`, `altKey`, `shiftKey`, `metaKey`), on macOS when `mac`.
+    ///
+    /// They follow egui exactly (plan section 14): `command` is `Ctrl` off
+    /// macOS and `Cmd` (`metaKey`) on macOS, and `mac_cmd` is set on macOS
+    /// only.
+    #[must_use]
+    pub fn from_web(ctrl: bool, alt: bool, shift: bool, meta: bool, mac: bool) -> Self {
+        Self {
+            alt,
+            ctrl,
+            shift,
+            mac_cmd: mac && meta,
+            command: if mac { meta } else { ctrl },
+        }
+    }
+}
+
 /// One input event as the keys see it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyInput<'a> {
@@ -114,4 +145,29 @@ pub enum KeyInput<'a> {
     Copy,
     /// The platform's paste, whatever it pastes.
     Paste,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Plan section 14: off macOS, Ctrl is the command key and `mac_cmd`
+    /// stays off, whatever the Meta (Super) key does.
+    #[test]
+    fn web_modifiers_off_macos_take_ctrl_as_command() {
+        let ctrl = Modifiers::from_web(true, false, false, false, false);
+        assert!(ctrl.command && ctrl.ctrl && !ctrl.mac_cmd);
+        let meta = Modifiers::from_web(false, false, false, true, false);
+        assert!(!meta.command && !meta.mac_cmd);
+    }
+
+    /// Plan section 14: on macOS, Cmd is the command key and `mac_cmd`;
+    /// Ctrl is only Ctrl.
+    #[test]
+    fn web_modifiers_on_macos_take_cmd_as_command() {
+        let cmd = Modifiers::from_web(false, false, true, true, true);
+        assert!(cmd.command && cmd.mac_cmd && cmd.shift && !cmd.ctrl);
+        let ctrl = Modifiers::from_web(true, true, false, false, true);
+        assert!(!ctrl.command && !ctrl.mac_cmd && ctrl.ctrl && ctrl.alt);
+    }
 }

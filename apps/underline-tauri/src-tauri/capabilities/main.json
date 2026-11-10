@@ -16,6 +16,13 @@
     "allow-ws-create",
     "allow-tab-open",
     "allow-tab-activate",
-    "allow-tab-close"
+    "allow-tab-close",
+    "allow-tab-store",
+    "allow-ed-open",
+    "allow-ed-input",
+    "allow-ed-select",
+    "allow-ed-viewport",
+    "allow-ed-clipboard",
+    "allow-app-close-anyway"
   ]
 }

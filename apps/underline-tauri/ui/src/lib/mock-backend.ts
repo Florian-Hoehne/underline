@@ -8,13 +8,18 @@
 // The workspaces are a small fake file system (`FAKE_FILES`), so the Open
 // and Create dialogs, the note overview and the tabs can be tried in a
 // browser. Its rules are rough stand-ins for underline-core; the real rules
-// are tested in Rust.
+// are tested in Rust. The open notes are fake documents
+// (`editor/fakeEditor.ts`): the source view can be typed in, the autosave
+// marks and clears the tab after a second, and notes listed in
+// `MockStart.failingSaves` cannot be stored, to try the failure paths.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
+  ClipAction,
   commands,
   CreateAnswer,
+  EditorInput,
   EditingViewName,
   NewWorkspaceRequest,
   OpenAnswer,
@@ -23,10 +28,13 @@ import type {
   SettingName,
   SettingsView,
   StartInfo,
+  EditorPatch,
+  TabPropertiesView,
   TabsView,
   UiError,
   WorkspaceSnapshot,
 } from './bindings';
+import { FakeEditor } from './editor/fakeEditor';
 import palettes from './palettes.generated.json';
 
 /** The success value of a command in the generated bindings. */
@@ -57,7 +65,29 @@ export type MockHandlers = {
   }) => Ok<typeof commands.wsCreate> | Promise<Ok<typeof commands.wsCreate>>;
   tab_open: (args: { note: string }) => Promise<Ok<typeof commands.tabOpen>>;
   tab_activate: (args: { note: string }) => Promise<Ok<typeof commands.tabActivate>>;
-  tab_close: (args: { note: string }) => Promise<Ok<typeof commands.tabClose>>;
+  tab_close: (args: { note: string; force: boolean }) => Promise<Ok<typeof commands.tabClose>>;
+  tab_store: (args: { note: string }) => Promise<Ok<typeof commands.tabStore>>;
+  ed_open: (args: { note: string }) => Ok<typeof commands.edOpen>;
+  ed_input: (args: {
+    note: string;
+    input: EditorInput;
+  }) => Ok<typeof commands.edInput> | Promise<Ok<typeof commands.edInput>>;
+  ed_select: (args: {
+    note: string;
+    rev: number;
+    anchor: number;
+    head: number;
+  }) => Ok<typeof commands.edSelect>;
+  ed_viewport: (args: {
+    note: string;
+    from: number;
+    to: number;
+  }) => Promise<Ok<typeof commands.edViewport>>;
+  ed_clipboard: (args: {
+    note: string;
+    action: ClipAction;
+  }) => Promise<Ok<typeof commands.edClipboard>>;
+  app_close_anyway: () => Ok<typeof commands.appCloseAnyway>;
 };
 
 /** The user's home directory in the fake file system. */
@@ -115,7 +145,18 @@ export type MockStart = Partial<Omit<StartInfo, 'settings'>> & {
   settings?: Partial<SettingsView>;
   /** The recently opened workspaces, the most recent first. */
   recent?: string[];
+  /** Notes (ids) whose saves fail, to try M-10.8 and the close question. */
+  failingSaves?: string[];
 };
+
+/** The reason a failing save gives in the mock. */
+export const MOCK_SAVE_ERROR = 'Permission denied (os error 13)';
+
+/** The text of a fake note. */
+export function fakeNoteText(note: string): string {
+  const title = (note.split('/').at(-1) ?? note).replace(/-/g, ' ');
+  return `# ${title}\n\nThis note lives in the mock backend.\nType here to try the source view.\n`;
+}
 
 /**
  * Handlers answering like a window started without a workspace (M-02),
@@ -165,7 +206,7 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
       await setStatus(wikiStatus(url));
       return null;
     },
-    ...workspaceHandlers(start, setStatus),
+    ...workspaceHandlers(start, setStatus, () => settings),
   };
 }
 
@@ -176,6 +217,7 @@ type FakeTab = { note: string; view: EditingViewName };
 function workspaceHandlers(
   start: MockStart,
   setStatus: (text: string) => Promise<void>,
+  settings: () => SettingsView,
 ): Pick<
   MockHandlers,
   | 'ws_start'
@@ -186,6 +228,13 @@ function workspaceHandlers(
   | 'tab_open'
   | 'tab_activate'
   | 'tab_close'
+  | 'tab_store'
+  | 'ed_open'
+  | 'ed_input'
+  | 'ed_select'
+  | 'ed_viewport'
+  | 'ed_clipboard'
+  | 'app_close_anyway'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
     Object.entries(FAKE_FILES).map(([root, notes]) => [root, [...notes]]),
@@ -231,15 +280,82 @@ function workspaceHandlers(
             : title(note),
       }));
   };
+  /** The fake documents of the open notes, and their save state. */
+  const docs = new Map<string, FakeEditor>();
+  const unstored = new Set<string>();
+  const saveErrors = new Map<string, string>();
+  const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let clipboard: string | null = null;
+  const docOf = (note: string): FakeEditor => {
+    let doc = docs.get(note);
+    if (!doc) {
+      doc = new FakeEditor(note, fakeNoteText(note));
+      docs.set(note, doc);
+    }
+    return doc;
+  };
+  const label = (note: string) =>
+    title(note) + (saveErrors.has(note) ? ' ⚠' : unstored.has(note) ? ' •' : '');
   const tabsView = (): TabsView => ({
     tabs: tabs.map((tab) => ({
       note: tab.note,
-      label: title(tab.note),
+      title: title(tab.note),
+      label: label(tab.note),
       path: `${root}/${tab.note}.md`,
       view: tab.view,
+      saveError: saveErrors.get(tab.note) ?? null,
     })),
     active,
     todoList: { open: false, active: false },
+  });
+  const properties = (): TabPropertiesView | null =>
+    active === null
+      ? null
+      : {
+          note: active,
+          properties: {
+            place: `${active}.md`,
+            format: 'Markdown',
+            size: `${new TextEncoder().encode(docOf(active).text).length} bytes`,
+            lastChange: '2026-11-09 10:00',
+          },
+        };
+  /** Stores `note` now; the failure names the note, as the backend's does. */
+  const store = (note: string): string | null => {
+    if (!unstored.has(note) && !saveErrors.has(note)) {
+      return null;
+    }
+    if (start.failingSaves?.includes(note)) {
+      saveErrors.set(note, MOCK_SAVE_ERROR);
+      return `${title(note)}: ${MOCK_SAVE_ERROR}`;
+    }
+    unstored.delete(note);
+    saveErrors.delete(note);
+    return null;
+  };
+  /** M-10.8: stored a second after the last change. */
+  const changed = async (note: string) => {
+    const first = !unstored.has(note);
+    unstored.add(note);
+    clearTimeout(saveTimers.get(note));
+    saveTimers.set(
+      note,
+      setTimeout(() => {
+        const failure = store(note);
+        void setStatus(
+          failure
+            ? `${title(note)} could not be stored: ${MOCK_SAVE_ERROR}`
+            : `Saved ${title(note)}`,
+        ).then(sendAll);
+      }, 1000),
+    );
+    if (first) {
+      await emit('tabs', tabsView());
+    }
+  };
+  const marked = (patch: EditorPatch, note: string): EditorPatch => ({
+    ...patch,
+    unstored: unstored.has(note),
   });
   const snapshot = (): WorkspaceSnapshot => ({
     workspace: root ? { root, name: root.split('/').at(-1) ?? root } : null,
@@ -251,6 +367,7 @@ function workspaceHandlers(
     await emit('workspace', now.workspace);
     await emit('overview', now.overview);
     await emit('tabs', now.tabs);
+    await emit('properties', properties());
   };
   const remember = () => {
     if (root) {
@@ -398,19 +515,95 @@ function workspaceHandlers(
       }
       return null;
     },
-    tab_close: async ({ note }) => {
+    tab_close: async ({ note, force }) => {
       const at = tabs.findIndex((tab) => tab.note === note);
-      if (at >= 0) {
-        tabs.splice(at, 1);
-        if (active === note) {
-          active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
-        }
-        remember();
-        await sendAll();
+      if (at < 0) {
+        return null;
       }
+      const failure = store(note);
+      if (failure && !force) {
+        await sendAll();
+        return { tab: note, what: `the tab ${title(note)}`, error: failure };
+      }
+      clearTimeout(saveTimers.get(note));
+      docs.delete(note);
+      unstored.delete(note);
+      saveErrors.delete(note);
+      tabs.splice(at, 1);
+      if (active === note) {
+        active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
+      }
+      remember();
+      await sendAll();
       return null;
     },
+    tab_store: async ({ note }) => {
+      unstored.add(note);
+      const failure = store(note);
+      await setStatus(
+        failure
+          ? `${title(note)} could not be stored: ${MOCK_SAVE_ERROR}`
+          : `Stored ${title(note)}`,
+      );
+      await sendAll();
+      return null;
+    },
+    ed_open: ({ note }) => {
+      if (!tabs.some((tab) => tab.note === note)) {
+        throw notOpen(note);
+      }
+      return docOf(note).state();
+    },
+    ed_input: async ({ note, input }) => {
+      const doc = docOf(note);
+      const patch = doc.input(input);
+      if (patch.changes.length > 0) {
+        await changed(note);
+      }
+      return marked(patch, note);
+    },
+    ed_select: ({ note, rev, anchor, head }) => {
+      docOf(note).select(rev, anchor, head);
+      return null;
+    },
+    ed_viewport: async ({ note, from, to }) => {
+      const doc = docOf(note);
+      const lines = doc.text.split('\n').slice(from, to);
+      await emit('ed-highlight', {
+        note,
+        rev: doc.rev,
+        from,
+        lines: lines.map((line) =>
+          line.startsWith('#') ? [[0, line.length, 0] as [number, number, number]] : [],
+        ),
+        styles: [{ color: settings().palette.heading, bold: true, italic: false }],
+      });
+      return null;
+    },
+    ed_clipboard: async ({ note, action }) => {
+      const doc = docOf(note);
+      let patch: EditorPatch;
+      if (action === 'copy') {
+        clipboard = doc.selected() || clipboard;
+        patch = doc.unchanged();
+      } else if (action === 'cut') {
+        const cut = doc.cut();
+        clipboard = cut.text || clipboard;
+        patch = cut.patch;
+      } else {
+        patch = clipboard === null ? doc.unchanged() : doc.paste(clipboard);
+      }
+      if (patch.changes.length > 0) {
+        await changed(note);
+      }
+      return marked(patch, note);
+    },
+    app_close_anyway: () => null,
   };
+}
+
+function notOpen(note: string): UiError {
+  return { kind: 'invalid', message: `The tab ${note} is not open` };
 }
 
 /**

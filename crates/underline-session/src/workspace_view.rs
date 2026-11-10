@@ -64,14 +64,19 @@ impl From<EditingViewName> for EditingView {
 pub struct TabView {
     /// The note the tab shows, by its id.
     pub note: String,
-    /// The title, marked " (deleted)" when the note was deleted outside.
-    /// The marks for a failed save (" ⚠") and for unstored changes (" •")
-    /// come with the editor (feature F3).
+    /// The note's title, without marks.
+    pub title: String,
+    /// The title, marked " ⚠" when the last save failed, else " •" with
+    /// changes not stored, and " (deleted)" when the note was deleted
+    /// outside.
     pub label: String,
     /// The note's file, shown when the pointer rests on the tab.
     pub path: String,
     /// The editing view of the tab (M-06.7).
     pub view: EditingViewName,
+    /// M-10.8: why the last save failed, for the line above the editor
+    /// "Not stored: {err}. Underline keeps trying."; `None` when it did not.
+    pub save_error: Option<String>,
 }
 
 /// The tab "Todos" (M-06.5, UC-021 BR-005), as it is remembered.

@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 
+use crate::editor_view::{HighlightView, TabPropertiesView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
 
@@ -13,6 +14,19 @@ use crate::SettingsView;
 pub struct StatusView {
     /// The text, as the egui app shows it; empty when there is none.
     pub text: String,
+}
+
+/// The session replaced the text of an open tab by itself, such as after a
+/// change from outside (UC-004 A7); the window asks for it again
+/// (`ed_open`) unless it shows this revision already.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct TextReplaced {
+    /// The note of the tab.
+    pub note: String,
+    /// The revision of the new text.
+    pub rev: u32,
 }
 
 /// A change the window has to show.
@@ -29,4 +43,11 @@ pub enum Event {
     Overview(Vec<OverviewItem>),
     /// The tab bar changed (M-06).
     Tabs(TabsView),
+    /// The text of an open tab was replaced (UC-004 A7).
+    TextReplaced(TextReplaced),
+    /// The colours of the lines the source view shows (M-08.2).
+    Highlight(HighlightView),
+    /// The properties section of the tool panel changed (M-16.2); `None`
+    /// without an active note tab.
+    Properties(Option<TabPropertiesView>),
 }

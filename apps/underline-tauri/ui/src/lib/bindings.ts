@@ -62,13 +62,66 @@ export const commands = {
 	tabOpen: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_open", { note })),
 	/**  M-06.2, UC-004 A5: activates the tab of `note`. */
 	tabActivate: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_activate", { note })),
-	/**  M-06.3, UC-004 A5: closes the tab of `note`. */
-	tabClose: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_close", { note })),
+	/**
+	 *  M-06.3, UC-004 A5: closes the tab of `note`, storing its changes first.
+	 *  When they cannot be stored, the tab stays and the answer is the question
+	 *  "Changes not stored" (UC-005 A14 step 3); with `force` ("Close anyway")
+	 *  the tab closes all the same.
+	 */
+	tabClose: (note: string, force: boolean) => typedError<CloseQuestion | null, UiError>(__TAURI_INVOKE("tab_close", { note, force })),
+	/**
+	 *  M-10.9, UC-005 BR-009: stores the note of the tab at once; the status
+	 *  bar says "Stored {t}" or why it could not be stored.
+	 */
+	tabStore: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_store", { note })),
+	/**
+	 *  ADR-024: the text of the tab of `note` with its cursor, when the source
+	 *  view starts showing it or after its text was replaced.
+	 * 
+	 *  Like the other editor commands it is synchronous: it runs on the main
+	 *  thread in the order the window sent it, which the spike F0 measured as
+	 *  the fastest way (`spikes/f0-editor/RESULTS.md`).
+	 */
+	edOpen: (note: string) => typedError<EditorState, UiError>(__TAURI_INVOKE("ed_open", { note })),
+	/**
+	 *  ADR-024, UC-005 step 1, M-08.4, M-10.1: one input of the source view; the
+	 *  answer is the patch. The colours follow as the event `ed-highlight`.
+	 */
+	edInput: (note: string, input: EditorInput) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_input", { note, input })),
+	/**
+	 *  M-08.3: the mouse set the cursor and the selection, in UTF-16 units of
+	 *  the revision `rev`.
+	 */
+	edSelect: (note: string, rev: number, anchor: number, head: number) => typedError<null, UiError>(__TAURI_INVOKE("ed_select", { note, rev, anchor, head })),
+	/**
+	 *  M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the
+	 *  end not included); their colours come as the event `ed-highlight`.
+	 */
+	edViewport: (note: string, from: number, to: number) => typedError<null, UiError>(__TAURI_INVOKE("ed_viewport", { note, from, to })),
+	/**
+	 *  M-08.6, ADR-014: copy, cut or paste in the source view, as plain text
+	 *  through the system clipboard.
+	 * 
+	 *  The clipboard is read before the session is taken and written after it
+	 *  is let go, and never on the main thread: on Linux, reading it waits for
+	 *  the program that owns it, which may be this window.
+	 */
+	edClipboard: (note: string, action: ClipAction) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_clipboard", { note, action })),
+	/**
+	 *  M-21.4, UC-005 A14 step 3: "Close anyway": Underline ends without the
+	 *  changes that could not be stored. What can be stored is stored once
+	 *  more, and the app state is written, when the app exits.
+	 */
+	appCloseAnyway: () => typedError<null, UiError>(__TAURI_INVOKE("app_close_anyway")),
 };
 
 /** Events */
 export const events = {
+	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
+	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
+	edReplaced: makeEvent<TextReplacedEvent, TextReplacedEvent>("ed-replaced"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
+	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
 	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
@@ -76,6 +129,37 @@ export const events = {
 };
 
 /* Types */
+/**  The clipboard keys of the source view (M-08.6, ADR-014). */
+export type ClipAction = 
+/**  The selected markup goes to the clipboard as plain text. */
+"copy" | 
+/**  Copy, then the selection goes. */
+"cut" | 
+/**  The plain text of the clipboard replaces the selection. */
+"paste";
+
+/**
+ *  M-06.3, M-21.4, UC-005 A14 step 3: "Changes not stored": closing failed
+ *  to store, and the user decides.
+ */
+export type CloseQuestion = {
+	/**  The note of the tab to close; `None` when Underline closes. */
+	tab: string | null,
+	/**
+	 *  "the tab {title}" or "Underline", for "Close {what} anyway and lose
+	 *  these changes?".
+	 */
+	what: string,
+	/**  Why, for "Changes could not be stored: {error}". */
+	error: string,
+};
+
+/**
+ *  M-21.4, UC-005 A14 step 3: closing Underline failed to store changes;
+ *  the window asks "Changes not stored".
+ */
+export type CloseQuestionEvent = CloseQuestion;
+
 /**  The stage the Create dialog goes to (M-21.2, UC-001). */
 export type CreateAnswer = 
 /**
@@ -106,12 +190,144 @@ export type EditingViewName =
 /**  The formatted note. */
 "facade";
 
+/**  One input of the source view (UC-005, M-08.4, M-08.5). */
+export type EditorInput = 
+/**  Typed text, or the finished text of an input method. */
+{ kind: "text"; 
+/**  The text. */
+text: string } | 
+/**
+ *  A key with the modifiers the webview reported; the backend makes the
+ *  platform's command key of them (Ctrl, or Cmd on macOS).
+ */
+{ kind: "key"; 
+/**  The key. */
+key: KeyName; 
+/**  `ctrlKey`. */
+ctrl: boolean; 
+/**  `altKey`. */
+alt: boolean; 
+/**  `shiftKey`. */
+shift: boolean; 
+/**  `metaKey` (Cmd on macOS). */
+meta: boolean; 
+/**
+ *  How many lines Page Up and Page Down move: the lines the view
+ *  shows.
+ */
+page: number };
+
+/**
+ *  The answer to an input (ADR-024): the changes of the text, one after the
+ *  other, and where the cursor and the selection are now.
+ */
+export type EditorPatch = {
+	/**
+	 *  The revision the changes apply to. When the window's text has
+	 *  another revision, it asks for the whole text again (`ed_open`).
+	 */
+	base: number,
+	/**  The revision after the changes. */
+	rev: number,
+	/**  The changes, each relative to the text after the ones before it. */
+	changes: TextChange[],
+	/**  The other end of the selection, in UTF-16 units. */
+	anchor: number,
+	/**  The cursor, in UTF-16 units. */
+	head: number,
+	/**  The cursor moved by the input and is scrolled into view. */
+	scroll: boolean,
+	/**
+	 *  M-06.1: the note holds changes that are not stored yet. The tab bar
+	 *  shows it from the `tabs` event; the patch carries it so a view does
+	 *  not have to wait for the tick.
+	 */
+	unstored: boolean,
+};
+
+/**  The text of an open note as the window starts showing it. */
+export type EditorState = {
+	/**  The note, by its id. */
+	note: string,
+	/**  The revision of `text`; every patch names the revision it applies to. */
+	rev: number,
+	/**  The whole markup. */
+	text: string,
+	/**  The other end of the selection, in UTF-16 units. */
+	anchor: number,
+	/**  The cursor, in UTF-16 units. */
+	head: number,
+};
+
 /**  A note format as the Create dialog names it (UC-001 BR-001). */
 export type FormatName = 
 /**  Markdown, preselected. */
 "Markdown" | 
 /**  AsciiDoc. */
 "AsciiDoc";
+
+/**  M-08.2, ADR-024: the colours of the lines the source view shows. */
+export type HighlightEvent = HighlightView;
+
+/**
+ *  M-08.2: the highlighting of the lines the source view shows, sent after
+ *  the input that changed them (ADR-024), never with it.
+ */
+export type HighlightView = {
+	/**  The note. */
+	note: string,
+	/**
+	 *  The revision of the text the colours are for; the window drops them
+	 *  for another revision, as newer ones follow.
+	 */
+	rev: number,
+	/**  The first line, counted from 0. */
+	from: number,
+	/**
+	 *  For each line from `from` on: `[start, end, style]`, with start and
+	 *  end in UTF-16 units of the line and `style` an index into `styles`.
+	 *  Text in the plain colour of the theme has no span.
+	 */
+	lines: (([number, number, number])[])[],
+	/**  The looks the spans refer to. */
+	styles: SpanStyle[],
+};
+
+/**
+ *  A key the source view hands to the editor (M-08.4, M-10.1), named as
+ *  the webview's `KeyboardEvent.key` names it; letters in capitals.
+ */
+export type KeyName = 
+/**  Backspace. */
+"Backspace" | 
+/**  Delete. */
+"Delete" | 
+/**  Enter. */
+"Enter" | 
+/**  Tab. */
+"Tab" | 
+/**  The left arrow. */
+"ArrowLeft" | 
+/**  The right arrow. */
+"ArrowRight" | 
+/**  The up arrow. */
+"ArrowUp" | 
+/**  The down arrow. */
+"ArrowDown" | 
+/**  Home. */
+"Home" | 
+/**  End. */
+"End" | 
+/**  Page Up. */
+"PageUp" | 
+/**  Page Down. */
+"PageDown" | 
+/**  A, for Ctrl/Cmd+A. */
+"A" | 
+/**  Y, for Ctrl/Cmd+Y. */
+"Y" | 
+/**  Z, for Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z. */
+"Z";
 
 /**  What the user chose in the Create dialog (UC-001 steps 1–4, A3). */
 export type NewWorkspaceRequest = {
@@ -123,6 +339,18 @@ export type NewWorkspaceRequest = {
 	git: boolean,
 	/**  The address of the git remote; empty for none. Only used with `git`. */
 	remote: string,
+};
+
+/**  M-16.2, UC-004 BR-010: the properties of a stored note. */
+export type NotePropertiesView = {
+	/**  "Place": the place in the workspace, such as `guide/Install.adoc`. */
+	place: string,
+	/**  "Format": "Markdown" or "AsciiDoc". */
+	format: string,
+	/**  "Size", such as `2 KB`. */
+	size: string,
+	/**  "Last change", local time to the minute. */
+	lastChange: string,
 };
 
 /**  The answer to choosing a directory to open (UC-002 step 4). */
@@ -250,6 +478,9 @@ export type Platform =
 /**  Linux and every other system, which use the same shortcut texts. */
 "linux";
 
+/**  M-16.2: the properties of the active tab's note; `null` without one. */
+export type PropertiesEvent = TabPropertiesView | null;
+
 /**  One setting of UC-010 BR-001, named as in the settings file. */
 export type SettingName = "default_format" | "theme" | "input_mode" | "show_line_numbers" | "line_number_side" | "show_minimap" | "copy_on_select" | "git_sync_interval" | "agent_access" | "overview_width" | "tool_panel_width" | "show_menu_bar" | "blink_found_in_minimap";
 
@@ -308,6 +539,16 @@ export type SettingsView = {
 	widthGeneration: number,
 };
 
+/**  How one kind of highlighted text looks (ADR-010). */
+export type SpanStyle = {
+	/**  The colour, `#rrggbb`. */
+	color: string,
+	/**  Bold. */
+	bold: boolean,
+	/**  Italic. */
+	italic: boolean,
+};
+
 /**  What the window needs to know when it starts (M-01). */
 export type StartInfo = {
 	/**
@@ -356,20 +597,35 @@ export type StatusView = {
 	text: string,
 };
 
+/**  M-16.2: the properties section of the tool panel for the active tab. */
+export type TabPropertiesView = {
+	/**  The note of the active tab. */
+	note: string,
+	/**  `None` when the file cannot be read: "Not saved yet". */
+	properties: NotePropertiesView | null,
+};
+
 /**  One tab of the tab bar (M-06.1). */
 export type TabView = {
 	/**  The note the tab shows, by its id. */
 	note: string,
+	/**  The note's title, without marks. */
+	title: string,
 	/**
-	 *  The title, marked " (deleted)" when the note was deleted outside.
-	 *  The marks for a failed save (" ⚠") and for unstored changes (" •")
-	 *  come with the editor (feature F3).
+	 *  The title, marked " ⚠" when the last save failed, else " •" with
+	 *  changes not stored, and " (deleted)" when the note was deleted
+	 *  outside.
 	 */
 	label: string,
 	/**  The note's file, shown when the pointer rests on the tab. */
 	path: string,
 	/**  The editing view of the tab (M-06.7). */
 	view: EditingViewName,
+	/**
+	 *  M-10.8: why the last save failed, for the line above the editor
+	 *  "Not stored: {err}. Underline keeps trying."; `None` when it did not.
+	 */
+	saveError: string | null,
 };
 
 /**  M-06: the tab bar changed. */
@@ -388,6 +644,37 @@ export type TabsView = {
 	/**  The tab "Todos"; its list comes with feature F15. */
 	todoList: TodoTabView,
 };
+
+/**
+ *  One change of the text: the UTF-16 range `from..to` of the text before it
+ *  was replaced by `insert`.
+ */
+export type TextChange = {
+	/**  Where the replaced text starts. */
+	from: number,
+	/**  Where the replaced text ends. */
+	to: number,
+	/**  The text put in its place. */
+	insert: string,
+};
+
+/**
+ *  The session replaced the text of an open tab by itself, such as after a
+ *  change from outside (UC-004 A7); the window asks for it again
+ *  (`ed_open`) unless it shows this revision already.
+ */
+export type TextReplaced = {
+	/**  The note of the tab. */
+	note: string,
+	/**  The revision of the new text. */
+	rev: number,
+};
+
+/**
+ *  UC-004 A7: the text of an open tab was replaced, such as after a change
+ *  from outside; the window asks for it again.
+ */
+export type TextReplacedEvent = TextReplaced;
 
 /**  The tab "Todos" (M-06.5, UC-021 BR-005), as it is remembered. */
 export type TodoTabView = {

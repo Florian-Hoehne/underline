@@ -14,6 +14,13 @@ fn main() {
         "tab_open",
         "tab_activate",
         "tab_close",
+        "tab_store",
+        "ed_open",
+        "ed_input",
+        "ed_select",
+        "ed_viewport",
+        "ed_clipboard",
+        "app_close_anyway",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");
