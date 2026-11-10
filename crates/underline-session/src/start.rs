@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::SettingsView;
+use crate::{SettingsView, ToolView};
 
 /// The operating system the app runs on.
 ///
@@ -57,6 +57,10 @@ pub struct StartInfo {
     /// The status message at start, such as a note about the state file
     /// (M-01.3).
     pub status: String,
+    /// M-10.2: the buttons of the formatting toolbar.
+    pub tools: Vec<ToolView>,
+    /// M-11.4: the input modes of the "Keys" choice, by name.
+    pub input_modes: Vec<String>,
 }
 
 #[cfg(test)]

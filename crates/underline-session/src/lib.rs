@@ -24,7 +24,10 @@
 //! (M-06) and what is remembered of them (M-22.2). Feature F3 adds the text
 //! of the open notes (ADR-024): editing in the source view (UC-005, M-08,
 //! M-10.1), the autosave (M-10.8), storing before a close (M-06.3, M-21.4),
-//! the changes from outside (M-07.5) and the properties (M-16.2).
+//! the changes from outside (M-07.5) and the properties (M-16.2). Feature
+//! F4 adds the Nano keys (M-11.3), the status of the input modes for the
+//! status line (M-11.4), the formatting toolbar (M-10.2) and folding
+//! (M-08.8); the window's Vim keys send their edits as changes (A-01).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -39,8 +42,10 @@ mod start;
 mod workspace_view;
 
 pub use editor_view::{
-    ClipAction, CloseQuestion, EditorInput, EditorPatch, EditorState, HighlightView, KeyName,
-    NotePropertiesView, SpanStyle, TabPropertiesView, TextChange,
+    ClipAction, CloseQuestion, EditorCommandName, EditorInput, EditorPatch, EditorState, FoundView,
+    HighlightView, KeyHintView, KeyName, KeysStatusView, NotePropertiesView, SectionView,
+    SectionsView, SpanStyle, TabPropertiesView, TextChange, ToolName, ToolView, VimChange,
+    VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView, TextReplaced};

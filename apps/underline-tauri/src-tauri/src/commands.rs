@@ -19,9 +19,9 @@ use std::sync::Arc;
 use tauri::State;
 use underline_core::NoteId;
 use underline_session::{
-    ClipAction, CloseQuestion, CreateAnswer, EditorInput, EditorPatch, EditorState,
+    ClipAction, CloseQuestion, CreateAnswer, EditorInput, EditorPatch, EditorState, KeysStatusView,
     NewWorkspaceRequest, OpenAnswer, Session, SettingName, StartInfo, StartOpened, UiError,
-    UiErrorKind,
+    UiErrorKind, VimChange, VimState,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -285,20 +285,108 @@ pub fn ed_input(
     patch
 }
 
-/// M-08.3: the mouse set the cursor and the selection, in UTF-16 units of
-/// the revision `rev`.
+/// M-08.3: the mouse (or the window's Vim keys) set the cursor and the
+/// selection, in UTF-16 units of the revision `rev`; the answer is the
+/// place for the status line (M-11.4). A cursor in a folded section expands
+/// it (M-08.8), which the tick sends as `ed-sections`.
 #[tauri::command]
 #[specta::specta]
 pub fn ed_select(
     session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
     note: String,
     rev: u32,
     anchor: u32,
     head: u32,
-) -> Result<(), UiError> {
+) -> Result<String, UiError> {
+    let place = session
+        .lock()
+        .editor_select(&NoteId::from_relative(&note), rev, anchor, head);
+    waker.wake();
+    place
+}
+
+/// A-01, ADR-024: the window's Vim keys changed the text of revision
+/// `base`; `new_step` marks the start of an insert session (M-10.1). The
+/// answer is `null` when the text has another revision by now or a change
+/// does not fit it; nothing is applied then, and the window shows the text
+/// again.
+#[tauri::command]
+#[specta::specta]
+#[allow(clippy::too_many_arguments)]
+pub fn ed_apply(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    base: u32,
+    changes: Vec<VimChange>,
+    anchor: u32,
+    head: u32,
+    new_step: bool,
+) -> Result<Option<EditorPatch>, UiError> {
+    let patch = session.lock().editor_apply(
+        &NoteId::from_relative(&note),
+        base,
+        &changes,
+        (anchor, head),
+        new_step,
+    );
+    waker.wake();
+    patch
+}
+
+/// M-08.8: the fold arrow of the section whose heading is `line` (from 0)
+/// was clicked; the sections follow as `ed-sections`.
+#[tauri::command]
+#[specta::specta]
+pub fn ed_fold(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    line: u32,
+) -> Result<EditorPatch, UiError> {
+    let patch = session
+        .lock()
+        .editor_fold(&NoteId::from_relative(&note), line);
+    waker.wake();
+    patch
+}
+
+/// M-11.4, FR-026: the left part of the editor's status line in the input
+/// mode of the settings; `vim` is what the window's Vim keys are doing.
+#[tauri::command]
+#[specta::specta]
+pub fn ed_keys_status(
+    session: State<'_, SharedSession>,
+    note: String,
+    vim: Option<VimState>,
+) -> Result<Option<KeysStatusView>, UiError> {
     session
         .lock()
-        .editor_select(&NoteId::from_relative(&note), rev, anchor, head)
+        .editor_keys_status(&NoteId::from_relative(&note), vim)
+}
+
+/// M-11.2, A-01: the registers `"+` and `"*` of the window's Vim keys read
+/// the system clipboard (ADR-014) as plain text; `null` without text.
+#[tauri::command]
+#[specta::specta]
+pub async fn clip_read_text(
+    clipboard: State<'_, SharedClipboard>,
+) -> Result<Option<String>, UiError> {
+    let clipboard = Arc::clone(&clipboard);
+    blocking(move || clipboard.lock().read_text()).await
+}
+
+/// M-11.2, A-01: a yank into `"+` or `"*` puts the text on the system
+/// clipboard.
+#[tauri::command]
+#[specta::specta]
+pub async fn clip_write_text(
+    clipboard: State<'_, SharedClipboard>,
+    text: String,
+) -> Result<(), UiError> {
+    let clipboard = Arc::clone(&clipboard);
+    blocking(move || clipboard.lock().write_text(&text)).await
 }
 
 /// M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the
@@ -462,6 +550,11 @@ mod tests {
         "ed_select",
         "ed_viewport",
         "ed_clipboard",
+        "ed_apply",
+        "ed_fold",
+        "ed_keys_status",
+        "clip_read_text",
+        "clip_write_text",
         "app_close_anyway",
     ];
 
@@ -797,6 +890,57 @@ mod tests {
 
         let state = mock.invoke("ed_open", json!({ "note": "Home" })).unwrap();
         assert_eq!(state["text"], json!("# Home\n"));
+    }
+
+    #[test]
+    fn a01_m08_8_m11_4_vim_changes_folding_keys_status_and_the_clipboard() {
+        let dir = temp_dir("f4");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        let rev = mock.invoke("ed_open", json!({ "note": "Home" })).unwrap()["rev"].clone();
+
+        let applied = mock
+            .invoke(
+                "ed_apply",
+                json!({ "note": "Home", "base": rev, "anchor": 0, "head": 0, "newStep": false,
+                        "changes": [{ "from": 0, "to": 2, "insert": "", "newStep": true }] }),
+            )
+            .unwrap();
+        assert_eq!(applied["changes"], json!([]));
+        assert_eq!(applied["place"], json!("Ln 1, Col 1"));
+        let refused = mock
+            .invoke(
+                "ed_apply",
+                json!({ "note": "Home", "base": rev, "anchor": 0, "head": 0, "changes": [],
+                        "newStep": false }),
+            )
+            .unwrap();
+        assert_eq!(refused, Value::Null);
+
+        let place = mock
+            .invoke(
+                "ed_select",
+                json!({ "note": "Home", "rev": applied["rev"], "anchor": 0, "head": 4 }),
+            )
+            .unwrap();
+        assert_eq!(place, json!("Ln 1, Col 5 · 4 chars"));
+        let folded = mock
+            .invoke("ed_fold", json!({ "note": "Home", "line": 0 }))
+            .unwrap();
+        assert_eq!(folded["changes"], json!([]));
+
+        let status = mock
+            .invoke("ed_keys_status", json!({ "note": "Home", "vim": null }))
+            .unwrap();
+        assert_eq!(status, Value::Null, "the usual keys have no status");
+
+        mock.invoke("clip_write_text", json!({ "text": "yanked" }))
+            .unwrap();
+        assert_eq!(
+            mock.invoke("clip_read_text", json!({})).unwrap(),
+            json!("yanked")
+        );
     }
 
     #[test]

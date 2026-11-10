@@ -12,10 +12,19 @@
 // with them (the backend sends `ed-highlight` after every key). At the end
 // it replaces the note's text by the results as JSON and stores it, so the
 // script that started the app can read them from the note's file.
+//
+// Feature F4 (`VITE_UL_BENCH_F4=1`): with colours, line numbers on the left,
+// the minimap beside the view and a folded section near the start, once in
+// each input mode (Normal, Vim in insert mode, Nano). The input mode is set
+// through the settings, as the backend reads it from them; run the app with
+// a HOME of its own so the user's settings stay untouched.
 
 import { EditorView } from '@codemirror/view';
+import { mount, unmount } from 'svelte';
 import { commands, events } from '../bindings';
+import Minimap from '../Minimap.svelte';
 import type { Shell } from '../shell.svelte';
+import type { InputModeName } from './keys';
 import { SourceView, tauriBackend } from './sourceView';
 
 const TEXT = 'the quick brown fox *jumps* over the lazy_dog, ';
@@ -27,6 +36,8 @@ type Stats = { n: number; median: number; p95: number; p99: number; max: number 
 
 type Row = {
   colors: boolean;
+  mode?: InputModeName;
+  part?: string;
   position: string;
   line: number;
   proc: Stats;
@@ -78,6 +89,13 @@ async function typeAt(view: SourceView, line: number, keys: number): Promise<Sam
   view.view.dispatch({ selection: { anchor: at }, userEvent: 'select.pointer' });
   view.view.dispatch({ effects: EditorView.scrollIntoView(at, { y: 'center' }) });
   await view.settled();
+  if (view.mode === 'Vim') {
+    // Typing is the insert mode's (`A`: at the end of the line).
+    view.view.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'A', bubbles: true, cancelable: true }),
+    );
+    await view.settled();
+  }
   await afterPaint();
   await afterPaint();
   const samples: Sample[] = [];
@@ -110,6 +128,12 @@ async function typeAt(view: SourceView, line: number, keys: number): Promise<Sam
     }
   }
   view.probe = null;
+  if (view.mode === 'Vim') {
+    view.view.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    await view.settled();
+  }
   return samples;
 }
 
@@ -147,7 +171,10 @@ async function measure(shell: Shell): Promise<void> {
   document.body.append(host);
   const rows: Row[] = [];
   const opened: Record<string, number> = {};
-  for (const colors of [false, true]) {
+  if (import.meta.env.VITE_UL_BENCH_F4 === '1') {
+    await measureF4(host, note, keys, rows, opened);
+  }
+  for (const colors of import.meta.env.VITE_UL_BENCH_F4 === '1' ? [] : [false, true]) {
     const start = performance.now();
     const view = await SourceView.open(host, note, tauriBackend, {
       mac: false,
@@ -179,6 +206,7 @@ async function measure(shell: Shell): Promise<void> {
     view.destroy();
   }
   host.remove();
+  await commands.settingsQuick('input_mode', 'Normal');
   const results = {
     started: new Date().toISOString(),
     userAgent: navigator.userAgent,
@@ -213,4 +241,92 @@ function timerResolution(): number {
     }
   }
   return smallest;
+}
+
+/**
+ * Feature F4: typing in each input mode with colours, line numbers, the
+ * minimap and a folded section near the start.
+ */
+async function measureF4(
+  host: HTMLElement,
+  note: string,
+  keys: number,
+  rows: Row[],
+  opened: Record<string, number>,
+): Promise<void> {
+  host.style.display = 'flex';
+  // `VITE_UL_BENCH_DIAG=1`: Normal only, each part alone, to find what costs.
+  const diag = import.meta.env.VITE_UL_BENCH_DIAG === '1';
+  const runs: { mode: InputModeName; part: string }[] = diag
+    ? ['none', 'numbers', 'minimap', 'fold', 'all'].map((part) => ({ mode: 'Normal', part }))
+    : (['Normal', 'Vim', 'Nano'] as InputModeName[]).map((mode) => ({ mode, part: 'all' }));
+  for (const { mode, part } of runs) {
+    const has = (what: string) => part === 'all' || part === what;
+    await commands.settingsQuick('input_mode', mode);
+    const text = document.createElement('div');
+    text.style.cssText = 'flex: 1 1 auto; min-width: 0; height: 100%';
+    host.append(text);
+    const start = performance.now();
+    const view = await SourceView.open(text, note, tauriBackend, {
+      mac: false,
+      label: note,
+      onError: (message) => console.error(message),
+      mode,
+      lineNumbers: { shown: has('numbers'), side: 'Left' },
+    });
+    opened[`${mode} ${part}`] = performance.now() - start;
+    const strip = document.createElement('div');
+    strip.style.cssText = 'flex: 0 0 80px; height: 100%; margin-left: 4px';
+    host.append(strip);
+    const minimap = has('minimap')
+      ? mount(Minimap, { target: strip, props: { view, palette: null, blink: true } })
+      : null;
+    const unlisten = await Promise.all([
+      events.edHighlight.listen((event) => view.takeColors(event.payload)),
+      events.edSections.listen((event) => view.takeSections(event.payload)),
+      events.edFound.listen((event) => view.takeFound(event.payload)),
+    ]);
+    // A folded section near the start: the heading of line 3 % of the note
+    // or the next one.
+    const lines = view.view.state.doc.lines;
+    const doc = view.view.state.doc;
+    let heading = Math.round(lines * 0.03);
+    while (heading < lines && !doc.line(heading).text.startsWith('#')) {
+      heading += 1;
+    }
+    if (has('fold')) {
+      await tauriBackend.fold(note, heading - 1);
+    }
+    await sleep(500);
+    const positions: [string, number][] = diag
+      ? [['middle', Math.round(lines * 0.5)]]
+      : [
+          ['end', Math.round(lines * 0.98)],
+          ['middle', Math.round(lines * 0.5)],
+          ['start', Math.round(lines * 0.02)],
+        ];
+    for (const [position, line] of positions) {
+      const samples = await typeAt(view, line, keys);
+      rows.push({
+        colors: true,
+        mode,
+        part,
+        position,
+        line,
+        proc: stats(samples.map((s) => s.proc)),
+        nextPaint: stats(samples.map((s) => s.paint)),
+        firstFrame: samples.filter((s) => s.firstFrame).length / (samples.length || 1),
+      });
+    }
+    if (has('fold')) {
+      await tauriBackend.fold(note, heading - 1);
+    }
+    unlisten.forEach((stop) => stop());
+    if (minimap) {
+      void unmount(minimap);
+    }
+    view.destroy();
+    text.remove();
+    strip.remove();
+  }
 }

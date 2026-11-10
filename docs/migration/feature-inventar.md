@@ -161,7 +161,7 @@ Reihenfolge von links nach rechts:
 - [ ] **M-08.5** IME: es wird nur der fertige Text eingefügt, die Komposition wird nicht angezeigt.
 - [ ] **M-08.6** Kopieren und Ausschneiden legen das Markup ab. Einfügen fügt immer reinen Text ein. Ein Bild in der
   Zwischenablage wird als PNG neben der Notiz gespeichert und als Bild eingefügt (M-10.6).
-- [ ] **M-08.7** Zeilennummern (FR-028/029): ein/aus, links oder rechts. Die Breite folgt der Stellenzahl, die Farbe
+- [x] **M-08.7** Zeilennummern (FR-028/029): ein/aus, links oder rechts. Die Breite folgt der Stellenzahl, die Farbe
   ist 45 % der Textfarbe. Nur in der Quellansicht.
 - [ ] **M-08.8** Falten (FR-027):
   - Der Pfeil im Gutter erscheint bei Hover oder wenn gefaltet. Eine gefaltete Überschrift endet auf „…“.
@@ -275,12 +275,12 @@ Reihenfolge von links nach rechts:
   - Gespeichert wird 1 s nach der letzten Änderung, spätestens nach 2 s. Neuer Versuch nach 10 s.
   - Atomar (ADR-005), im Hintergrund.
   - Fehler → rot „Not stored: {err}. Underline keeps trying.“ über dem Editor und „ ⚠“ im Tab.
-- [ ] **M-10.9** Befehle aus den Eingabemodi: `Store` (Vim `:w`, Nano Ctrl+O/Ctrl+S) speichert sofort, mit „Stored
+- [x] **M-10.9** Befehle aus den Eingabemodi: `Store` (Vim `:w`, Nano Ctrl+O/Ctrl+S) speichert sofort, mit „Stored
   {t}“ oder „… could not be stored: …“. `Close` schliesst den Tab.
 
 ## M-11 Eingabemodi (FR-024/025/026)
 
-- [ ] **M-11.1** Normal: siehe M-08.4 und M-09.13.
+- [x] **M-11.1** Normal: siehe M-08.4 und M-09.13.
 - [ ] **M-11.2** Vim (`keys:175-1060`), heute in beiden Ansichten gleich (in der Facade ist eine „Zeile“ ein
   Block). *Laut Entscheidung F-2 übernimmt `codemirror-vim` den Vim-Modus der Quellansicht. Das ist eine gewollte
   Abweichung: Dort ist die Liste unten eine Untergrenze, in der Facade gilt sie genau.*
@@ -303,7 +303,7 @@ Reihenfolge von links nach rechts:
   - Ctrl+O und Ctrl+S speichern, Ctrl+X schliesst.
   - Ctrl+A und Ctrl+E gehen an Zeilenanfang/-ende.
   - Alles andere wirkt wie Normal. Auf macOS gilt Cmd wie Ctrl.
-- [ ] **M-11.4** Statuszeile des Editors (FR-026, `app:1136-1305`):
+- [x] **M-11.4** Statuszeile des Editors (FR-026, `app:1136-1305`):
   - Links:
     - Modus-Badge in Theme-Farbe: „{keymap} · {mode}“, unter 450 px nur der Modus.
     - Wartende Tasten.
@@ -317,10 +317,10 @@ Reihenfolge von links nach rechts:
 
 ## M-12 Minimap (FR-030)
 
-- [ ] **M-12.1** Streifen von 80 px mit 4 px Abstand, unter 240 px Breite ausgeblendet. Massstab höchstens 0,2.
+- [x] **M-12.1** Streifen von 80 px mit 4 px Abstand, unter 240 px Breite ausgeblendet. Massstab höchstens 0,2.
 - [ ] **M-12.2** In der Quellansicht ein Balken je Zeile, Überschriften kräftiger. In der Facade ein Balken je
   Layoutzeile, Abbildungen als Fläche. Neuaufbau höchstens alle 150 ms.
-- [ ] **M-12.3** Der sichtbare Bereich ist getönt. Klick oder Ziehen zentriert die Ansicht auf diese Stelle.
+- [x] **M-12.3** Der sichtbare Bereich ist getönt. Klick oder Ziehen zentriert die Ansicht auf diese Stelle.
 - [ ] **M-12.4** Sieb (UC-008): Gibt es Treffer, wird der Streifen abgedunkelt (schwarz, Alpha 150). Jeder Treffer
   leuchtet an Zeile und Spalte. Treffer blinken 0,6 s an, 0,4 s aus; das Blinken ist per Einstellung abschaltbar.
 

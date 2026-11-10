@@ -10,8 +10,8 @@ entsteht in Phase 4.
 | F0 Spike | – | entschieden: Variante A ([ADR-024](../architecture/decisions/ADR-024-the-backend-owns-the-note-text.md)) | `8181d28` |
 | F1 Shell | M-01.2–6, M-03.1/3/5/6, M-04.7 ✔; M-01.1, M-02.1 und M-03.4 folgen mit F2, M-03.2 mit F9, M-03.7 mit F10 | fertig | siehe git log „F1“ |
 | F2 Workspace | M-01.1, M-02.1, M-03.4, M-05.1, M-05.2, M-06.1–3 (ohne Editor-Teile), M-06.5 (nur Zustand), M-06.7, M-21.1–3, M-22.1, M-22.2 ✔ (M-06.1–3 und M-21.3 werden mit F3 bzw. den Dienst-Features abgehakt). Folgen: M-05.3 mit F12, M-05.4–6 und „New note…“ mit F8, M-06.4 mit F8, M-06.6 mit F16, Tab-Marken „ ⚠“/„ •“ und die Rückfrage beim Schliessen mit F3, Tab „Todos (N)“ mit F15, Syncer/Searcher/ChangeTracker mit F13/F9/F12, D-05 mit F14 | fertig | siehe git log „F2“ |
-
 | F3 Quellansicht | M-06.1 (Marken), M-06.3, M-07.5, M-08.1–M-08.4, M-08.6 (Text), M-08.9, M-08.10, M-10.1, M-10.8, M-10.9 (nur `Store`, Befehl `tab_store`), M-16.1, M-16.2, M-21.4 (Speichern und Rückfrage) umgesetzt, noch nicht von app-tester geprüft. Folgen: M-07.2 (Facade gesperrt bis F5, Q-12), M-08.5 nur synthetisch geprüft (Q-09), M-08.7/M-08.8/M-10.2/Statuszeile/Minimap/Vim/Nano mit F4, Bilder in der Zwischenablage mit F6, Sync vor dem Schliessen mit F13, Werkzeugpanel ohne aktiven Tab mit F12/F15 | umgesetzt, Prüfung offen | – |
+| F4 Eingabemodi, Statuszeile, Toolbar, Falten, Zeilennummern, Minimap | M-08.7, M-08.8, M-10.2 (ohne Link-/Bild-Dialog, F6), M-10.9 (Vim `:w`/`:q`/`:q!`/`:wq`/`:x`, Nano Ctrl+O/Ctrl+S/Ctrl+X), M-11.1–M-11.4, M-12.1–M-12.3, M-12.4 (Darstellung, mit den Treffern der Vim-/Nano-Suche; die Suche selbst folgt mit F9) umgesetzt, noch nicht von app-tester geprüft. Folgen: Link- und Bild-Dialog mit F6 (bis dahin gesperrt, Q-14), Copy on select selbst mit F6 (der Umschalter speichert schon), Falten in der Facade mit F5 | fertig | – |
 
 ## Gewollte Abweichungen
 
@@ -50,6 +50,14 @@ Vom Benutzer entschieden:
 | A-24 | F3 | Die Hervorhebung rechnet im Tick höchstens 4 ms und macht sofort weiter; bis dahin bleiben Zeilen schlicht (wie egui mit 4 ms je Frame). Nach einem Themewechsel kommen die Farben je sichtbarem Bereich neu. | ADR-010, ADR-024 |
 | A-25 | F3 | Die Scrollposition eines Tabs bleibt beim Tabwechsel erhalten, solange das Fenster lebt (CodeMirror wird je Tab neu aufgebaut; egui behält das Widget). | wie egui im Ergebnis |
 | A-26 | F3 | Ein `\r\n`-Paar ist für Pfeile, Backspace und Delete ein Schritt (egui: zwei). Die Datei behält ihre Zeilenenden Byte für Byte (NFR-007); Enter fügt wie in egui `\n` ein. Ins Fenster gehen Text und Offsets mit vereinheitlichten Zeilenumbrüchen (CodeMirror zählt jeden Umbruch als eine Einheit). | MUSS 1 aus dem Review F3; im Webview gibt es keine Stelle zwischen `\r` und `\n`. |
+| A-27 | F4 | Vim der Quellansicht (A-01) im Einzelnen: `codemirror-vim` ändert den Text zuerst im Fenster und schickt jede Änderung mit ihrer Revision ans Backend (`ed_apply`); ein Befehl, der mehrere Stellen ändert, geht als eine Änderung über den ganzen Bereich. Das Backend prüft alle Änderungen eines Aufrufs (Bereich, Reihenfolge, keine Stelle in einem Surrogatpaar), bevor es eine anwendet. Eine Antwort des Backends, die inzwischen kommt (Undo, Toolbar, Einfügen), wird über die noch nicht gesendeten Änderungen verschoben, wie bei CodeMirrors gemeinsamem Bearbeiten. Hat sich der Text im Backend sonst geändert (von aussen, später Agenten) oder passt eine Änderung nicht, wird sie verworfen und die Ansicht zeigt den Text des Backends. Undo-Schritte: Das Fenster markiert den Anfang jedes Vim-Befehls und jeder INSERT-Sitzung; jeder Befehl ist ein eigener Schritt, und das Tippen einer INSERT-Sitzung beginnt einen neuen Schritt, in ihr fasst das Backend wie in Normal wortweise zusammen (egui: dieselben Regeln über das Dokument, ohne Markierung). `u`, Ctrl+R, `:undo` und `:redo` nutzen die eine History des Backends. `"+` und `"*` lesen und schreiben die Systemzwischenablage über das Backend; ein Einfügen liest sie jedes Mal neu; `"+` steht als wartende Taste in der Statuszeile. Die Treffer der Suche markiert `codemirror-vim` selbst im sichtbaren Bereich, in den Farben von egui; Escape und `:noh` beenden die Markierung. Hinweise von `codemirror-vim` („3 lines yanked“) erscheinen in seiner Zeile unten im Editor in der Textfarbe und ändern den Modus der Statuszeile nicht; den Hinweis „(JavaScript regexp: set pcre)“ blendet das Fenster aus. Der Blockcursor hat die Textfarbe des Themes. In INSERT gelten die Tasten von Normal (M-08.4) über das Backend. In NORMAL und VISUAL belegt `codemirror-vim` Ctrl+A, B, C, D, E, F, I, N, O, P, Q, R, T, U, V, W, X, Y und Ctrl+[; davon fehlen dort die Toolbar-Tasten Ctrl+B (Bold), Ctrl+E (Code) und Ctrl+I (Italic); die übrigen Toolbar- und die Falttasten wirken (Q-15). | F-2; Q-15, Q-16 |
+| A-28 | F4 | Die Statuszeile misst „unter 720 px“ und „unter 450 px“ an ihrer ganzen Breite; egui misst den Platz neben dem Badge. Die Auswahl „Keys:“ ist eine native Auswahlliste mit dem Text „Keys:“ davor (schmal ohne ihn, dann heisst sie für Screenreader „Keys“); egui zeigt „Keys: Vim“ als einen Text der Combo. In einem schmalen Editor fallen zuerst die Hinweise weg; reicht der Platz dann noch nicht, rückt der rechte Teil (Umschalter, Auswahl, Ort) in eine zweite Zeile, statt abgeschnitten zu werden (egui schneidet ab). Die wartenden Tasten bleiben lesbar (höchstens 40 % der Breite). Der Ort ist mindestens 14 Zeichen breit. Das Badge ist für Screenreader ein höflicher Status. Gedrückte Umschalter haben zusätzlich zur Farbe einen Rand. | Webview; NFR-010, NFR-011 (UX-Review F4) |
+| A-29 | F4 | Die Zeilennummern rechts sind eine eigene Ebene neben dem Text (CodeMirror hat rechts keinen Gutter); die Breite folgt der Stellenzahl wie links. | Plan Abschnitt 6 |
+| A-30 | F4 | Die Sektionen kommen nach der Eingabe als Event (`ed-sections`, ADR-024): Der Pfeil und das „…“ erscheinen einige Millisekunden nach der Eingabe; solange nichts gefaltet ist, sucht das Backend höchstens alle 300 ms neu (wie egui). Ist etwas gefaltet, rechnet eine Eingabe, die Zeilen hinzufügt oder entfernt, die Sektionen sofort neu (wie egui), damit Auf/Ab nie in einen gefalteten Bereich gehen. | ADR-024 |
+| A-31 | F4 | Die Vim-Tasten werden erst geladen, wenn der Modus Vim gewählt ist (eigenes Modul); der erste Wechsel zu Vim wartet darauf. | NFR-001: der Start lädt rund 190 kB weniger. |
+| A-32 | F4 | Die Minimap legt die Balken nach Zeilenlänge aus (eine Zeile je angefangene Textbreite, wie CodeMirror Zeilen schätzt, die es nicht gezeichnet hat) und streckt sie auf die Höhe des Inhalts; egui nimmt die gemessene Höhe jeder Zeile. Bei sehr unterschiedlich langen umbrochenen Zeilen können Balken und Treffer um wenige Pixel von der Lage im Text abweichen. | ADR-024, Messpunkt F4: die Lage jeder Zeile bei CodeMirror zu erfragen kostete beim Tippen bis 10 ms. |
+| A-33 | F4 | F6 und Shift+F6 wechseln in jedem Eingabemodus zwischen Tab-Leiste, Ansichtsschalter mit Toolbar, Text und Statuszeile; so verlässt man den Text auch in Vim und Nano, wo Escape und Tab im Text bleiben. egui hat diese Taste nicht. „Link“ und „Image“ sind bis F6 gesperrt, ihre Tasten (Ctrl+K, Ctrl+Shift+I) tun nichts; Nanos Ctrl+K schneidet weiter. Das „…“ einer gefalteten Überschrift steht in der Textfarbe und heisst für Screenreader „folded“; der Pfeil nimmt Klicks über die ganze Breite des Gutters und 24 px hoch an und bleibt sichtbar, wenn der Zeiger in den Gutter geht. | NFR-011 (Tastaturfalle), Q-14, Q-17, UX-Review F4 |
+| A-34 | F4 | Die markierten Treffer der Nano-Suche gehen höchstens alle 300 ms neu ans Fenster, solange der Text sich ändert, und höchstens 10'000 davon (mit der Gesamtzahl). | ADR-024 |
 
 Nicht testbar war in F1 der Screenshot des echten Tauri-Fensters: Es ist ein natives Wayland-Fenster, und `xdotool`,
 `grim` und `import` fehlen. Geprüft wurde im Mock-Modus mit Playwright. Das echte Fenster lief ohne Fehler im
@@ -62,6 +70,7 @@ Rust-Log.
 | Tippen Quellansicht, p99 (10'000 Zeilen) | 1,2 ms (Verarbeitung) | 7 ms (Verarbeitung, Spike) | ADR-012, ADR-024 |
 | Tippen Facade, p99 (10'000 Zeilen) | 1,4 ms (Verarbeitung) | 9–10 ms (Verarbeitung, Spike) | ADR-012, ADR-024 |
 | Tippen Quellansicht F3, p99 (10'000 Zeilen) | 1,2 ms (Verarbeitung) | 5–7 ms ohne, 7–10 ms mit Hervorhebung (Verarbeitung) | Messpunkt F3, unten |
+| Tippen Quellansicht F4, p99 (10'000 Zeilen, Hervorhebung, Zeilennummern, Minimap, eine Sektion gefaltet) | 1,2 ms (Verarbeitung) | Normal 9–12 ms, Vim 9 ms, Nano 9 ms (Verarbeitung) | Messpunkt F4, unten |
 
 ### Messpunkt F3: Quellansicht (ADR-024)
 
@@ -88,3 +97,31 @@ Werte in ms, je 500 Tasten. Öffnen der Quellansicht (`ed_open` und CodeMirror a
 Quellansicht bleibt unter 16 ms p99 und bringt 87–91 % der Tasten in den nächsten Frame (Spike: 87–89 %). Das
 Anwenden der Farben kostet Zeit zwischen den Tasten, nicht in der gemessenen Verarbeitung. Nicht gemessen:
 echte OS-Tasten (`xdotool` fehlt, kein `sudo`), Tottasten, eine echte IME, WebView2 und WKWebView.
+
+### Messpunkt F4: Eingabemodi mit Zeilennummern, Minimap und Falten
+
+Methode wie F3, Build mit `VITE_UL_BENCH=1 VITE_UL_BENCH_F4=1` (Treiber `bench.ts`, `measureF4`), die App mit
+eigenem `HOME` gestartet, damit die Benutzereinstellungen unberührt bleiben. Je Modus öffnet der Treiber eine
+Quellansicht mit Hervorhebung und Zeilennummern links, daneben die Minimap (`Minimap.svelte`), und faltet die erste
+Sektion ab 3 % der Notiz. Der Modus wird über die Einstellungen gesetzt, da das Backend ihn dort liest. In Vim wird
+mit `A` in INSERT getippt. 500 gezählte Tasten je Stelle.
+
+| Modus | Stelle (Zeile) | median | p95 | p99 | max | nächster Paint p99 | im ersten Frame |
+|---|---|---|---|---|---|---|---|
+| Normal | Anfang (200) | 4 | 7 | 10 | 16 | 28 | 88 % |
+| Normal | Mitte (5'001) | 4 | 8 | 9 | 17 | 30 | 86 % |
+| Normal | Ende (9'801) | 4 | 7 | 12 | 19 | 29 | 85 % |
+| Vim | Anfang (200) | 4 | 8 | 9 | 31 | 32 | 87 % |
+| Vim | Mitte (5'001) | 4 | 8 | 9 | 13 | 31 | 86 % |
+| Vim | Ende (9'801) | 4 | 8 | 9 | 15 | 31 | 87 % |
+| Nano | Anfang (200) | 4 | 7 | 9 | 21 | 29 | 90 % |
+| Nano | Mitte (5'001) | 4 | 6 | 9 | 11 | 29 | 88 % |
+| Nano | Ende (9'801) | 4 | 8 | 9 | 12 | 31 | 88 % |
+
+Werte in ms, Lauf nach den Korrekturen aus dem Review F4. Öffnen: 8–30 ms. Die ersten beiden Läufe lagen bei p99 15–29 ms bzw. 10–18 ms. Ursachen, mit einem
+Diagnoselauf je Teil (`VITE_UL_BENCH_DIAG=1`) gefunden und behoben: Die Minimap fragte CodeMirror alle 150 ms nach
+der Lage jeder der 10'000 Zeilen (jetzt aus Zeilenlängen geschätzt wie CodeMirror selbst, auf die Inhaltshöhe
+gestreckt); das Backend suchte bei gefalteter Sektion die Sektionen bei jeder Taste neu (jetzt nur, wenn sich die
+Zahl der Zeilen ändert, sonst höchstens alle 300 ms im Tick). Ohne Zeilennummern, Minimap und Falten liegt p99 wie in
+F3 bei 9 ms. Die Werte bleiben unter 16 ms p99; 85–90 % der Tasten kommen in den nächsten
+Frame. Nicht gemessen: echte OS-Tasten, WebView2, WKWebView.

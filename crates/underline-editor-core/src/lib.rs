@@ -22,5 +22,5 @@ pub mod utf16;
 pub use document::{Document, Edit};
 pub use input::{Key, KeyInput, Modifiers};
 pub use keys::{EditorCommand, InputMode, InputStatus, KeyMap, Keys, KeysMode, Target};
-pub use source::{Applied, Outcome, SourceEditor};
+pub use source::{Applied, CursorPlace, Outcome, SourceEditor, SourceKeys};
 pub use toolbar::Tool;

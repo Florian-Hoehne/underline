@@ -20,6 +20,11 @@ fn main() {
         "ed_select",
         "ed_viewport",
         "ed_clipboard",
+        "ed_apply",
+        "ed_fold",
+        "ed_keys_status",
+        "clip_read_text",
+        "clip_write_text",
         "app_close_anyway",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))

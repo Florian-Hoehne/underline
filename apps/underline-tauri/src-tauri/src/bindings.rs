@@ -16,8 +16,8 @@ use underline_session::PaletteView;
 
 use crate::commands;
 use crate::events::{
-    CloseQuestionEvent, HighlightEvent, OverviewEvent, PropertiesEvent, SettingsEvent, StatusEvent,
-    TabsEvent, TextReplacedEvent, WorkspaceEvent,
+    CloseQuestionEvent, FoundEvent, HighlightEvent, OverviewEvent, PropertiesEvent, SectionsEvent,
+    SettingsEvent, StatusEvent, TabsEvent, TextReplacedEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -56,6 +56,11 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ed_select,
             commands::ed_viewport,
             commands::ed_clipboard,
+            commands::ed_apply,
+            commands::ed_fold,
+            commands::ed_keys_status,
+            commands::clip_read_text,
+            commands::clip_write_text,
             commands::app_close_anyway
         ])
         .events(collect_events![
@@ -66,6 +71,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             TabsEvent,
             TextReplacedEvent,
             HighlightEvent,
+            SectionsEvent,
+            FoundEvent,
             PropertiesEvent,
             CloseQuestionEvent
         ])

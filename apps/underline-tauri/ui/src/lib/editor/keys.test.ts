@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keyInput, type KeyEventLike } from './keys';
+import { keyInput, routeKey, type KeyEventLike } from './keys';
 
 function key(key: string, mods: Partial<KeyEventLike> = {}): KeyEventLike {
   return {
@@ -58,5 +58,81 @@ describe('M-08.4 keys of the source view', () => {
 
   it('moves at least one line a page', () => {
     expect(keyInput(key('PageDown'), false, 0.4)).toMatchObject({ page: 1 });
+  });
+});
+
+describe('M-11, M-10.2, M-08.8 keys by input mode', () => {
+  const send = (route: ReturnType<typeof routeKey>) =>
+    route !== null && route !== 'swallow' ? route.send : route;
+
+  it('M-10.2 the toolbar keys need the command key, with Shift where the hint says', () => {
+    expect(send(routeKey(key('b', { ctrlKey: true }), false, 1))).toMatchObject({ key: 'B' });
+    // Q-14: Link and Image do nothing until their dialogs come (F6).
+    expect(routeKey(key('K', { ctrlKey: true }), false, 1)).toBe('swallow');
+    expect(routeKey(key('I', { ctrlKey: true, shiftKey: true }), false, 1)).toBe('swallow');
+    expect(send(routeKey(key('i', { ctrlKey: true }), false, 1))).toMatchObject({ key: 'I' });
+    expect(send(routeKey(key('H', { ctrlKey: true, shiftKey: true }), false, 1))).toMatchObject({
+      key: 'H',
+      shift: true,
+    });
+    expect(send(routeKey(key('h', { ctrlKey: true }), false, 1))).toBeNull();
+    expect(send(routeKey(key('b', { metaKey: true }), true, 1))).toMatchObject({ key: 'B' });
+    expect(send(routeKey(key('b', { ctrlKey: true }), true, 1))).toBeNull();
+  });
+
+  it('M-08.8 Ctrl/Cmd+Shift+[ and ] fold and expand, whatever the layout makes of them', () => {
+    expect(send(routeKey(key('{', { ctrlKey: true, shiftKey: true }), false, 1))).toMatchObject({
+      key: 'BracketLeft',
+    });
+    expect(
+      send(routeKey(key('*', { code: 'BracketRight', ctrlKey: true, shiftKey: true }), false, 1)),
+    ).toMatchObject({ key: 'BracketRight' });
+    expect(send(routeKey(key('[', { ctrlKey: true }), false, 1))).toBeNull();
+  });
+
+  it('M-11.3 Nano takes Escape, its Ctrl keys and Alt+U/E, Cmd as Ctrl on macOS', () => {
+    const nano = { mode: 'Nano' as const };
+    expect(send(routeKey(key('Escape'), false, 1, nano))).toMatchObject({ key: 'Escape' });
+    for (const letter of ['k', 'u', 'w', 'o', 's', 'x', 'a', 'e']) {
+      expect(send(routeKey(key(letter, { ctrlKey: true }), false, 1, nano))).toMatchObject({
+        key: letter.toUpperCase(),
+      });
+    }
+    expect(send(routeKey(key('k', { metaKey: true }), true, 1, nano))).toMatchObject({
+      key: 'K',
+    });
+    expect(send(routeKey(key('¨', { code: 'KeyU', altKey: true }), true, 1, nano))).toMatchObject({
+      key: 'U',
+      alt: true,
+    });
+    // Ctrl+C copies, unless the search prompt is open.
+    expect(send(routeKey(key('c', { ctrlKey: true }), false, 1, nano))).toBeNull();
+    expect(
+      send(routeKey(key('c', { ctrlKey: true }), false, 1, { ...nano, prompting: true })),
+    ).toMatchObject({ key: 'C' });
+    expect(send(routeKey(key('Enter'), false, 1, { ...nano, prompting: true }))).toMatchObject({
+      key: 'Enter',
+    });
+  });
+
+  it('A-01 Vim: the editing keys in insert mode, else only toolbar and folding keys', () => {
+    const normal = { mode: 'Vim' as const };
+    const insert = { mode: 'Vim' as const, vimInsert: true };
+    expect(routeKey(key('Tab'), false, 1, normal)).toBe('swallow');
+    expect(routeKey(key('Escape'), false, 1, normal)).toBe('swallow');
+    expect(routeKey(key('z', { ctrlKey: true }), false, 1, normal)).toBeNull();
+    expect(send(routeKey(key('b', { ctrlKey: true }), false, 1, normal))).toMatchObject({
+      key: 'B',
+    });
+    expect(
+      send(routeKey(key('[', { ctrlKey: true, shiftKey: true }), false, 1, normal)),
+    ).toMatchObject({ key: 'BracketLeft' });
+    expect(send(routeKey(key('Backspace'), false, 1, insert))).toMatchObject({
+      key: 'Backspace',
+    });
+    expect(send(routeKey(key('z', { ctrlKey: true }), false, 1, insert))).toMatchObject({
+      key: 'Z',
+    });
+    expect(routeKey(key('x'), false, 1, insert)).toBeNull();
   });
 });

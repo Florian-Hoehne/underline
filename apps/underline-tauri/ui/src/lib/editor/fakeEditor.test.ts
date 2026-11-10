@@ -41,4 +41,8 @@ describe('the mock backend edits like the backend (UTF-16 units)', () => {
     doc.input(press('A', { ctrl: true }));
     expect(doc.selection()).toEqual([0, 5]);
   });
+
+  it('names the place of a cursor on an empty first line Col 1', () => {
+    expect(new FakeEditor('x', '\nabc').place()).toBe('Ln 1, Col 1');
+  });
 });

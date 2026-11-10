@@ -2,7 +2,9 @@
 //! inputs and patches, the autosave and its marks (M-06.1, M-10.8), storing
 //! at once (M-10.9), closing after storing (M-06.3, M-21.4), the changes
 //! from outside with the open text (M-07.5), the clipboard (M-08.6), the
-//! highlighting (M-08.2) and the properties (M-16.2).
+//! highlighting (M-08.2) and the properties (M-16.2). Feature F4: the Nano
+//! keys (M-11.3), the toolbar (M-10.2), the edits of the window's Vim keys
+//! (A-01), the status line's keys and place (M-11.4) and folding (M-08.8).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,8 +12,10 @@ use std::time::{Duration, Instant};
 
 use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
 
-use crate::editor_view::{EditorInput, KeyName, TextChange};
-use crate::{Event, Session, SettingsState};
+use crate::editor_view::{
+    EditorCommandName, EditorInput, KeyName, TextChange, ToolName, VimChange, VimModeName, VimState,
+};
+use crate::{Event, Session, SettingName, SettingsState};
 
 /// A fresh, empty folder for one test.
 fn temp_dir(name: &str) -> PathBuf {
@@ -658,4 +662,554 @@ fn uc005_br001_storing_at_once_waits_for_a_background_save() {
         "the older text never lands after the newer one"
     );
     assert_eq!(label(&session, "Home"), "Home");
+}
+
+// ------------------------------------------------------------- F4 ----
+
+/// `key` with Ctrl (and Cmd on macOS for the command key's functions).
+fn ctrl(key: KeyName) -> EditorInput {
+    EditorInput::Key {
+        key,
+        ctrl: true,
+        alt: false,
+        shift: false,
+        meta: false,
+        page: 10,
+    }
+}
+
+fn alt(key: KeyName) -> EditorInput {
+    EditorInput::Key {
+        key,
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+        page: 10,
+    }
+}
+
+/// The note `Home` holding `body`, the cursor at its start, in `mode`.
+fn home_with(name: &str, body: &str, mode: &str) -> Session {
+    let dir = temp_dir(name);
+    let (mut session, _) = session_with(&dir, &["Home"]);
+    let home = id("Home");
+    session
+        .editor_input(&home, command(KeyName::A, false))
+        .unwrap();
+    session.editor_input(&home, text(body)).unwrap();
+    session
+        .editor_input(&home, command(KeyName::Home, false))
+        .unwrap();
+    // Nano's Ctrl+A goes to the line start: the mode comes after the text.
+    session.quick_setting(SettingName::InputMode, mode.into());
+    session
+}
+
+/// Ticks until an event of the active tab matches `pick`.
+fn event_soon<T>(session: &mut Session, mut pick: impl FnMut(Event) -> Option<T>) -> Option<T> {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(2) {
+        for event in session.tick(Instant::now() + Duration::from_secs(1)) {
+            if let Some(found) = pick(event) {
+                return Some(found);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+#[test]
+fn uc005_br010_m11_3_nano_cuts_lines_that_add_up_and_pastes_them() {
+    let mut session = home_with("nano-cut", "a\nb\nc\n", "Nano");
+    let home = id("Home");
+
+    session.editor_input(&home, ctrl(KeyName::K)).unwrap();
+    let patch = session.editor_input(&home, ctrl(KeyName::K)).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "c\n");
+    assert_eq!(patch.keys.as_ref().unwrap().keymap, "NANO");
+
+    session.editor_input(&home, ctrl(KeyName::U)).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "a\nb\nc\n");
+
+    // Typing ends the run of cuts: the next cut holds only the new line,
+    // which as the last line takes the break before it along.
+    session.editor_input(&home, ctrl(KeyName::K)).unwrap();
+    session.editor_input(&home, text("x")).unwrap();
+    session.editor_input(&home, ctrl(KeyName::K)).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "a\nb");
+    session.editor_input(&home, ctrl(KeyName::U)).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "a\nx\nb");
+}
+
+#[test]
+fn m11_3_nano_ctrl_a_and_ctrl_e_go_to_the_line_ends_alt_u_and_alt_e_undo_and_redo() {
+    let mut session = home_with("nano-keys", "one two\n", "Nano");
+    let home = id("Home");
+
+    let end = session.editor_input(&home, ctrl(KeyName::E)).unwrap();
+    assert_eq!(end.place, "Ln 1, Col 8");
+    let start = session.editor_input(&home, ctrl(KeyName::A)).unwrap();
+    assert_eq!(start.place, "Ln 1, Col 1");
+
+    session.editor_input(&home, text("x")).unwrap();
+    session.editor_input(&home, alt(KeyName::U)).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "one two\n");
+    session.editor_input(&home, alt(KeyName::E)).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "xone two\n");
+}
+
+#[test]
+fn uc008_br008_m11_3_nano_searches_by_prompt_and_marks_the_hits_until_escape() {
+    let mut session = home_with("nano-search", "ab\nab\n", "Nano");
+    let home = id("Home");
+
+    let prompt = session.editor_input(&home, ctrl(KeyName::W)).unwrap();
+    let keys = prompt.keys.unwrap();
+    assert!(keys.prompting);
+    assert_eq!(keys.pending, "Search: ");
+    assert_eq!(keys.hints[0].keys, "Enter");
+    // The prompt takes the text; the note keeps it.
+    let typed = session.editor_input(&home, text("ab")).unwrap();
+    assert!(typed.changes.is_empty());
+    assert_eq!(typed.keys.unwrap().pending, "Search: ab");
+
+    let found = session.editor_input(&home, key(KeyName::Enter)).unwrap();
+    assert_eq!(found.place, "Ln 2, Col 1", "the next hit, after the cursor");
+    let keys = found.keys.unwrap();
+    assert!(!keys.prompting);
+    assert_eq!(
+        (keys.hints[0].keys.as_str(), keys.hints[0].action.as_str()),
+        ("Esc", "End search")
+    );
+    session.editor_viewport(&home, 0, 3).unwrap();
+    let marked = event_soon(&mut session, |e| match e {
+        Event::Found(found) => Some(found),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(marked.ranges, [(0, 2), (3, 5)]);
+
+    session.editor_input(&home, key(KeyName::Escape)).unwrap();
+    let cleared = event_soon(&mut session, |e| match e {
+        Event::Found(found) => Some(found),
+        _ => None,
+    })
+    .unwrap();
+    assert!(cleared.ranges.is_empty());
+}
+
+#[test]
+fn m11_3_nano_ctrl_c_and_escape_cancel_the_prompt() {
+    let mut session = home_with("nano-cancel", "ab\n", "Nano");
+    let home = id("Home");
+
+    session.editor_input(&home, ctrl(KeyName::W)).unwrap();
+    let cancelled = session.editor_input(&home, ctrl(KeyName::C)).unwrap();
+    assert!(!cancelled.keys.unwrap().prompting);
+    session.editor_input(&home, ctrl(KeyName::W)).unwrap();
+    let cancelled = session.editor_input(&home, key(KeyName::Escape)).unwrap();
+    assert!(!cancelled.keys.unwrap().prompting);
+}
+
+#[test]
+fn m10_9_m11_3_nano_ctrl_o_ctrl_s_and_ctrl_x_ask_the_window() {
+    let mut session = home_with("nano-commands", "a\n", "Nano");
+    let home = id("Home");
+
+    for (input, asked) in [
+        (KeyName::O, EditorCommandName::Store),
+        (KeyName::S, EditorCommandName::Store),
+        (KeyName::X, EditorCommandName::Close),
+    ] {
+        let patch = session.editor_input(&home, ctrl(input)).unwrap();
+        assert_eq!(patch.commands, [asked]);
+        assert!(patch.changes.is_empty());
+    }
+}
+
+#[test]
+fn m11_1_without_nano_its_keys_do_nothing_but_the_usual() {
+    let mut session = home_with("nano-off", "a\nb\n", "Normal");
+    let home = id("Home");
+
+    let patch = session.editor_input(&home, ctrl(KeyName::K)).unwrap();
+
+    assert!(patch.keys.is_none());
+    assert!(patch.changes.is_empty(), "Ctrl+K asks for a link instead");
+    assert_eq!(patch.request, Some(ToolName::Link));
+    assert_eq!(editor_text(&mut session, "Home"), "a\nb\n");
+}
+
+#[test]
+fn uc005_a2_m10_2_the_toolbar_toggles_inline_formats_as_one_undo_step() {
+    let mut session = home_with("toolbar-inline", "word\n", "Normal");
+    let home = id("Home");
+    let rev = session.editor_state(&home).unwrap().rev;
+    session.editor_select(&home, rev, 0, 4).unwrap();
+
+    let bold = session
+        .editor_input(
+            &home,
+            EditorInput::Tool {
+                tool: ToolName::Bold,
+            },
+        )
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "**word**\n");
+    assert_eq!(
+        bold.place, "Ln 1, Col 7 · 4 chars",
+        "the word stays selected"
+    );
+
+    session
+        .editor_input(
+            &home,
+            EditorInput::Tool {
+                tool: ToolName::Bold,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        editor_text(&mut session, "Home"),
+        "word\n",
+        "a second time removes it"
+    );
+
+    session
+        .editor_input(&home, command(KeyName::Z, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "**word**\n");
+    session
+        .editor_input(&home, command(KeyName::Z, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "word\n");
+}
+
+#[test]
+fn uc005_br005_m10_2_line_formats_and_shortcuts_follow_the_note_format() {
+    let dir = temp_dir("toolbar-format");
+    let root = dir.join("notes");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("Doc.adoc"), "line\n").unwrap();
+    fs::create_dir_all(dir.join("home")).unwrap();
+    let mut session = Session::new(
+        Some(root),
+        StateStore::in_memory(),
+        None,
+        SettingsState::with_user_file(
+            Some(dir.join("home").join(SETTINGS_FILE_NAME)),
+            Instant::now(),
+        ),
+    );
+    session.start_workspace();
+    let doc = id("Doc");
+    session.open_note(&doc);
+
+    // Ctrl+Shift+H: an AsciiDoc heading; Ctrl+B: AsciiDoc bold.
+    session
+        .editor_input(&doc, command(KeyName::H, true))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Doc"), "== line\n");
+    session
+        .editor_input(&doc, command(KeyName::End, false))
+        .unwrap();
+    session
+        .editor_input(&doc, command(KeyName::B, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Doc"), "== line\n**");
+    let image = session
+        .editor_input(
+            &doc,
+            EditorInput::Tool {
+                tool: ToolName::Image,
+            },
+        )
+        .unwrap();
+    assert_eq!(image.request, Some(ToolName::Image));
+    assert!(image.changes.is_empty(), "Image asks first (feature F6)");
+}
+
+fn change(from: u32, to: u32, insert: &str, new_step: bool) -> VimChange {
+    VimChange {
+        from,
+        to,
+        insert: insert.into(),
+        new_step,
+    }
+}
+
+#[test]
+fn a01_the_vim_keys_changes_are_taken_for_their_revision_only() {
+    let mut session = home_with("vim-apply", "one two\n", "Vim");
+    let home = id("Home");
+    let rev = session.editor_state(&home).unwrap().rev;
+
+    let patch = session
+        .editor_apply(&home, rev, &[change(0, 4, "", true)], (0, 0), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "two\n");
+    assert!(patch.changes.is_empty(), "the window has the change");
+    assert_eq!(patch.base, rev);
+    assert_ne!(patch.rev, rev);
+    assert!(label(&session, "Home").ends_with('•'));
+
+    let refused = session
+        .editor_apply(&home, rev, &[], (0, 0), false)
+        .unwrap();
+    assert!(refused.is_none(), "an old revision is refused");
+
+    // One history with the other inputs (M-10.1).
+    session
+        .editor_input(&home, command(KeyName::Z, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "one two\n");
+}
+
+#[test]
+fn a01_changes_that_do_not_fit_are_refused_whole() {
+    let mut session = home_with("vim-refuse", "a🙂b\r\ncd", "Vim");
+    let home = id("Home");
+    // In the window: "a🙂b\ncd", 7 units.
+    let rev = session.editor_state(&home).unwrap().rev;
+    let mut refused = |changes: &[VimChange]| {
+        session
+            .editor_apply(&home, rev, changes, (0, 0), false)
+            .unwrap()
+            .is_none()
+    };
+
+    assert!(refused(&[change(0, 8, "", false)]), "beyond the end");
+    assert!(refused(&[change(3, 2, "", false)]), "backwards");
+    assert!(
+        refused(&[change(2, 2, "x", false)]),
+        "inside the surrogate pair"
+    );
+    assert!(
+        refused(&[change(0, 1, "", false), change(6, 7, "", false)]),
+        "the second is beyond the end after the first"
+    );
+    assert_eq!(
+        editor_text(&mut session, "Home"),
+        "a🙂b\ncd",
+        "nothing applied"
+    );
+
+    // Several changes, each on the text after the one before; the `\r\n`
+    // pair counts once, and stays bytes for bytes elsewhere.
+    let patch = session
+        .editor_apply(
+            &home,
+            rev,
+            &[change(0, 1, "", true), change(4, 6, "CD", true)],
+            (0, 0),
+            false,
+        )
+        .unwrap();
+    assert!(patch.is_some());
+    assert_eq!(session.editor_state(&home).unwrap().text, "🙂b\nCD");
+}
+
+#[test]
+fn a01_m10_1_the_vim_keys_mark_their_undo_steps() {
+    let mut session = home_with("vim-steps", "", "Vim");
+    let home = id("Home");
+    let rev = |session: &mut Session| session.editor_state(&home).unwrap().rev;
+
+    // An insert session typed through the usual inputs, after its start
+    // was marked; then a command of its own.
+    let start = rev(&mut session);
+    session
+        .editor_apply(&home, start, &[], (0, 0), true)
+        .unwrap();
+    session.editor_input(&home, text("ab")).unwrap();
+    let now = rev(&mut session);
+    session
+        .editor_apply(&home, now, &[change(2, 2, "c", true)], (3, 3), false)
+        .unwrap();
+    // The same insertion without a mark merges with the typing.
+    let now = rev(&mut session);
+    session
+        .editor_apply(&home, now, &[change(3, 3, "d", false)], (4, 4), false)
+        .unwrap();
+
+    session
+        .editor_input(&home, command(KeyName::Z, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "ab");
+    session
+        .editor_input(&home, command(KeyName::Z, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "");
+}
+
+#[test]
+fn m11_3_a_paste_into_the_open_nano_prompt_stays_out_of_the_note() {
+    let mut session = home_with("nano-paste", "ab\n", "Nano");
+    let home = id("Home");
+    session.editor_input(&home, ctrl(KeyName::W)).unwrap();
+
+    let patch = session.editor_paste(&home, Some("pasted")).unwrap();
+
+    assert!(patch.changes.is_empty());
+    assert_eq!(editor_text(&mut session, "Home"), "ab\n");
+    session.editor_input(&home, key(KeyName::Escape)).unwrap();
+    session.editor_paste(&home, Some("x")).unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "xab\n");
+}
+
+#[test]
+fn uc005_br004_m10_2_bold_without_selection_merges_with_the_typing_as_in_egui() {
+    // egui's `apply_format` replaces through the document like typing, so
+    // "****" right after a typed word is undone with it.
+    let mut session = home_with("toolbar-merge", "", "Normal");
+    let home = id("Home");
+    session.editor_input(&home, text("w")).unwrap();
+    session.editor_input(&home, text("o")).unwrap();
+
+    session
+        .editor_input(
+            &home,
+            EditorInput::Tool {
+                tool: ToolName::Bold,
+            },
+        )
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "wo****");
+
+    session
+        .editor_input(&home, command(KeyName::Z, false))
+        .unwrap();
+    assert_eq!(editor_text(&mut session, "Home"), "");
+}
+
+#[test]
+fn m10_9_storing_at_once_leaves_no_later_saved_status() {
+    let mut session = home_with("store-once", "x\n", "Nano");
+    let home = id("Home");
+
+    session.store_tab(&home);
+    assert_eq!(session.status(), "Stored Home");
+    for seconds in [1.5, 3.0, 12.0] {
+        session.tick(Instant::now() + Duration::from_secs_f32(seconds));
+        std::thread::sleep(Duration::from_millis(20));
+        session.tick(Instant::now() + Duration::from_secs_f32(seconds));
+    }
+
+    assert_eq!(
+        session.status(),
+        "Stored Home",
+        "no \"Saved Home\" after it"
+    );
+}
+
+#[test]
+fn m11_4_the_keys_of_the_status_line_follow_the_input_mode() {
+    let mut session = home_with("keys-status", "a\n", "Normal");
+    let home = id("Home");
+    assert!(session.editor_keys_status(&home, None).unwrap().is_none());
+
+    session.quick_setting(SettingName::InputMode, "Vim".into());
+    let vim = session
+        .editor_keys_status(
+            &home,
+            Some(VimState {
+                mode: VimModeName::VisualLine,
+                pending: "2d".into(),
+                marked: true,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (vim.keymap.as_str(), vim.mode.as_deref()),
+        ("VIM", Some("VISUAL LINE"))
+    );
+    assert_eq!(vim.color, 2);
+    assert_eq!(vim.pending, "", "visual mode shows nothing typed");
+    assert_eq!(vim.hints[0].keys, "d");
+
+    let normal = session
+        .editor_keys_status(
+            &home,
+            Some(VimState {
+                mode: VimModeName::Normal,
+                pending: "2d".into(),
+                marked: true,
+            }),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(normal.pending, "2d");
+    assert_eq!(normal.hints[0].action, "end search");
+
+    session.quick_setting(SettingName::InputMode, "Nano".into());
+    let nano = session.editor_keys_status(&home, None).unwrap().unwrap();
+    assert_eq!((nano.keymap.as_str(), nano.mode), ("NANO", None));
+    assert_eq!(nano.hints[0].keys, "^O");
+}
+
+#[test]
+fn uc005_m11_4_the_place_says_line_column_and_what_is_selected() {
+    let mut session = home_with("place", "ab\ncd\n", "Normal");
+    let home = id("Home");
+    let rev = session.editor_state(&home).unwrap().rev;
+
+    assert_eq!(
+        session.editor_select(&home, rev, 1, 2).unwrap(),
+        "Ln 1, Col 3 · 1 char"
+    );
+    assert_eq!(
+        session.editor_select(&home, rev, 0, 5).unwrap(),
+        "Ln 2, Col 3 · 2 lines"
+    );
+    assert_eq!(
+        session.editor_state(&home).unwrap().place,
+        "Ln 2, Col 3 · 2 lines"
+    );
+}
+
+#[test]
+fn uc004_br012_m08_8_folding_by_key_is_told_after_the_input() {
+    let mut session = home_with("folding", "# A\none\n# B\ntwo\n", "Normal");
+    let home = id("Home");
+    session.editor_viewport(&home, 0, 5).unwrap();
+    let first = event_soon(&mut session, |e| match e {
+        Event::Sections(sections) => Some(sections),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(first.sections.len(), 2);
+    assert!(first.sections.iter().all(|s| !s.folded));
+
+    // The cursor on "one": folding moves it to the heading.
+    session
+        .editor_input(&home, key(KeyName::ArrowDown))
+        .unwrap();
+    let folded = session
+        .editor_input(&home, command(KeyName::BracketLeft, true))
+        .unwrap();
+    assert_eq!(folded.place, "Ln 1, Col 4");
+    let told = event_soon(&mut session, |e| match e {
+        Event::Sections(sections) => Some(sections),
+        _ => None,
+    })
+    .unwrap();
+    assert!(told.sections[0].folded);
+    assert_eq!((told.sections[0].line, told.sections[0].last), (0, 1));
+
+    // Down steps over the folded line; the arrow expands again.
+    let down = session
+        .editor_input(&home, key(KeyName::ArrowDown))
+        .unwrap();
+    assert_eq!(down.place, "Ln 3, Col 4");
+    session.editor_fold(&home, 0).unwrap();
+    let open = event_soon(&mut session, |e| match e {
+        Event::Sections(sections) => Some(sections),
+        _ => None,
+    })
+    .unwrap();
+    assert!(!open.sections[0].folded);
 }

@@ -1,7 +1,7 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
 // `tabs`, `properties` and `close-question` events (ADR-022); the editor's
-// `ed-highlight` and `ed-replaced` go to the source view shown now, plus the UI
+// `ed-highlight`, `ed-sections`, `ed-found` and `ed-replaced` go to the source view shown now, plus the UI
 // state that is not stored (M-22.4): the Open and Create dialogs, the
 // question before closing, the loading state and the panels' widths while
 // they are dragged. The text of the notes is not here: the source view asks
@@ -192,6 +192,12 @@ export class Shell {
       // without a listener after a tab switch.
       events.edHighlight.listen((event) => {
         activeSourceView()?.takeColors(event.payload);
+      }),
+      events.edSections.listen((event) => {
+        activeSourceView()?.takeSections(event.payload);
+      }),
+      events.edFound.listen((event) => {
+        activeSourceView()?.takeFound(event.payload);
       }),
       events.edReplaced.listen((event) => {
         const view = activeSourceView();

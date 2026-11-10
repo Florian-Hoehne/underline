@@ -97,6 +97,89 @@ pub struct InputStatus {
 }
 
 impl InputStatus {
+    /// FR-026: the status of the Vim keys in `mode`, with `pending` typed
+    /// but not done yet (a count, an operator, or the command line) and
+    /// whether the hits of a search are `marked` (UC-008 BR-008).
+    ///
+    /// Shared by the Vim keys of this crate and by a view whose Vim keys
+    /// come from elsewhere (the source view of the Tauri window,
+    /// `codemirror-vim`), so the status line reads the same.
+    #[must_use]
+    pub fn vim(mode: KeysMode, pending: String, marked: bool) -> Self {
+        let hints = match mode {
+            KeysMode::Normal => marked
+                .then_some(("Esc", "end search"))
+                .into_iter()
+                .chain([
+                    ("i", "insert"),
+                    ("v", "visual"),
+                    (":w", "store"),
+                    (":q", "close"),
+                    ("dd", "delete line"),
+                    ("yy", "yank"),
+                    ("p", "put"),
+                    ("u", "undo"),
+                    ("Ctrl+R", "redo"),
+                    ("/ n", "search"),
+                ])
+                .collect(),
+            KeysMode::Insert => vec![("Esc", "normal mode")],
+            KeysMode::Visual | KeysMode::VisualLine => vec![
+                ("d", "delete"),
+                ("y", "yank"),
+                ("c", "change"),
+                ("Esc", "normal mode"),
+            ],
+            KeysMode::Command => vec![("Enter", "run"), ("Esc", "cancel")],
+        };
+        let pending = match mode {
+            KeysMode::Normal | KeysMode::Command => pending,
+            _ => String::new(),
+        };
+        Self {
+            keymap: KeyMap::Vim,
+            mode: Some(mode),
+            pending,
+            hints,
+        }
+    }
+
+    /// FR-026: the status of the Nano keys: the search `prompt` while it is
+    /// open, else the commands, with "End search" first while the hits of a
+    /// search are `marked` (UC-008 BR-008).
+    #[must_use]
+    pub fn nano(prompt: Option<&str>, marked: bool) -> Self {
+        let (pending, hints) = match prompt {
+            Some(prompt) => (
+                format!("Search: {prompt}"),
+                vec![("Enter", "find"), ("^C", "cancel")],
+            ),
+            None => (
+                String::new(),
+                marked
+                    .then_some(("Esc", "End search"))
+                    .into_iter()
+                    .chain([
+                        ("^O", "Store"),
+                        ("^X", "Close"),
+                        ("^K", "Cut line"),
+                        ("^U", "Paste"),
+                        ("^W", "Where is"),
+                        ("M-U", "Undo"),
+                        ("M-E", "Redo"),
+                        ("^A/^E", "Line start/end"),
+                    ])
+                    .collect(),
+            ),
+        };
+        Self {
+            keymap: KeyMap::Nano,
+            mode: None,
+            pending,
+            hints,
+        }
+    }
+
     /// All of it as one line of text, where colors cannot be shown.
     #[must_use]
     pub fn text(&self) -> String {
@@ -200,6 +283,13 @@ impl Keys {
             InputMode::Vim => self.vim.search.as_deref().filter(|_| self.vim.marked),
             InputMode::Nano => self.nano.search.as_deref().filter(|_| self.nano.marked),
         }
+    }
+
+    /// Whether the search prompt of the Nano keys is open: it takes every
+    /// key and every text until Enter, Escape or Ctrl+C.
+    #[must_use]
+    pub fn prompting(&self) -> bool {
+        self.mode == InputMode::Nano && self.nano.prompt.is_some()
     }
 
     /// FR-026: the active mode and its most important commands, for the
@@ -1047,62 +1137,24 @@ impl Vim {
     }
 
     fn status(&self) -> InputStatus {
-        let status = |mode, pending, hints| InputStatus {
-            keymap: KeyMap::Vim,
-            mode: Some(mode),
-            pending,
-            hints,
+        let mode = match &self.mode {
+            VimMode::Normal => KeysMode::Normal,
+            VimMode::Insert => KeysMode::Insert,
+            VimMode::Visual { lines: true, .. } => KeysMode::VisualLine,
+            VimMode::Visual { lines: false, .. } => KeysMode::Visual,
+            VimMode::Command(_) => KeysMode::Command,
         };
-        match &self.mode {
-            VimMode::Normal => status(
-                KeysMode::Normal,
-                self.count
-                    .chars()
-                    .chain(self.operator.map(|(op, _)| op))
-                    .chain(self.pending)
-                    .collect(),
-                (self.search.is_some() && self.marked)
-                    .then_some(("Esc", "end search"))
-                    .into_iter()
-                    .chain([
-                        ("i", "insert"),
-                        ("v", "visual"),
-                        (":w", "store"),
-                        (":q", "close"),
-                        ("dd", "delete line"),
-                        ("yy", "yank"),
-                        ("p", "put"),
-                        ("u", "undo"),
-                        ("Ctrl+R", "redo"),
-                        ("/ n", "search"),
-                    ])
-                    .collect(),
-            ),
-            VimMode::Insert => status(
-                KeysMode::Insert,
-                String::new(),
-                vec![("Esc", "normal mode")],
-            ),
-            VimMode::Visual { lines, .. } => status(
-                if *lines {
-                    KeysMode::VisualLine
-                } else {
-                    KeysMode::Visual
-                },
-                String::new(),
-                vec![
-                    ("d", "delete"),
-                    ("y", "yank"),
-                    ("c", "change"),
-                    ("Esc", "normal mode"),
-                ],
-            ),
-            VimMode::Command(line) => status(
-                KeysMode::Command,
-                line.clone(),
-                vec![("Enter", "run"), ("Esc", "cancel")],
-            ),
-        }
+        let pending = match &self.mode {
+            VimMode::Normal => self
+                .count
+                .chars()
+                .chain(self.operator.map(|(op, _)| op))
+                .chain(self.pending)
+                .collect(),
+            VimMode::Command(line) => line.clone(),
+            _ => String::new(),
+        };
+        InputStatus::vim(mode, pending, self.search.is_some() && self.marked)
     }
 }
 
@@ -1251,35 +1303,7 @@ impl Nano {
     }
 
     fn status(&self) -> InputStatus {
-        let status = |pending, hints| InputStatus {
-            keymap: KeyMap::Nano,
-            mode: None,
-            pending,
-            hints,
-        };
-        match &self.prompt {
-            Some(prompt) => status(
-                format!("Search: {prompt}"),
-                vec![("Enter", "find"), ("^C", "cancel")],
-            ),
-            None => status(
-                String::new(),
-                (self.search.is_some() && self.marked)
-                    .then_some(("Esc", "End search"))
-                    .into_iter()
-                    .chain([
-                        ("^O", "Store"),
-                        ("^X", "Close"),
-                        ("^K", "Cut line"),
-                        ("^U", "Paste"),
-                        ("^W", "Where is"),
-                        ("M-U", "Undo"),
-                        ("M-E", "Redo"),
-                        ("^A/^E", "Line start/end"),
-                    ])
-                    .collect(),
-            ),
-        }
+        InputStatus::nano(self.prompt.as_deref(), self.search.is_some() && self.marked)
     }
 }
 
@@ -1546,5 +1570,59 @@ mod tests {
         let mut lines = run("x\n", 0, "u");
         lines.clipboard = Some("pasted".into());
         assert_eq!(lines.string(), "x\n");
+    }
+
+    /// FR-026: the status line of the Vim keys of another view (the
+    /// window's `codemirror-vim`) reads as that of these keys.
+    #[test]
+    fn uc005_fr026_status_of_vim_and_nano_for_any_view() {
+        let normal = InputStatus::vim(KeysMode::Normal, "2d".into(), false);
+        assert_eq!(
+            normal.text(),
+            Keys {
+                mode: InputMode::Vim,
+                ..Keys::default()
+            }
+            .status()
+            .unwrap()
+            .text()
+            .replacen("NORMAL", "NORMAL  2d", 1)
+        );
+        let marked = InputStatus::vim(KeysMode::Normal, String::new(), true);
+        assert_eq!(marked.hints[0], ("Esc", "end search"));
+        let visual = InputStatus::vim(KeysMode::Visual, "x".into(), true);
+        assert_eq!(visual.pending, "");
+        assert_eq!(visual.hints[0], ("d", "delete"));
+        let command = InputStatus::vim(KeysMode::Command, ":wq".into(), false);
+        assert_eq!(command.text(), "VIM  COMMAND  :wq  Enter run  Esc cancel");
+        let prompt = InputStatus::nano(Some("ab"), true);
+        assert_eq!(prompt.text(), "NANO  Search: ab  Enter find  ^C cancel");
+        assert_eq!(
+            InputStatus::nano(None, true).hints[0],
+            ("Esc", "End search")
+        );
+    }
+
+    /// M-11.3: the search prompt of the Nano keys takes every key.
+    #[test]
+    fn m11_3_nano_prompting() {
+        let mut keys = Keys {
+            mode: InputMode::Nano,
+            ..Keys::default()
+        };
+        let mut lines = Lines::new("ab\n");
+        assert!(!keys.prompting());
+        let ctrl_w = KeyInput::Key {
+            key: Key::W,
+            pressed: true,
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Modifiers::default()
+            },
+        };
+        keys.handle(vec![ctrl_w], |e| Some(*e), &mut lines);
+        assert!(keys.prompting());
+        keys.mode = InputMode::Normal;
+        assert!(!keys.prompting(), "only in the Nano mode");
     }
 }

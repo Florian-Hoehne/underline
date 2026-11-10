@@ -1,11 +1,12 @@
 // The source view (M-08, UC-005): CodeMirror 6 as a view only (ADR-021,
 // ADR-024). The backend owns the text: every input goes to it as one
 // command, one after the other, and its patch is dispatched to CodeMirror
-// afterwards. CodeMirror has no keymap and no history of its own, and
-// nothing it would change by itself reaches the text; only the patches do.
+// afterwards. CodeMirror has no keymap and no history of its own.
 //
 // - Keys of the editor (`keys.ts`) and typed text go to the backend, which
-//   applies the egui editor's rules (no moving or deleting by words).
+//   applies the egui editor's rules (no moving or deleting by words), the
+//   Nano keys (M-11.3), the toolbar keys (M-10.2) and the folding keys
+//   (M-08.8).
 // - Copy, cut and paste go through the backend's clipboard (M-08.6).
 // - A click places the cursor, a drag or Shift+click extends the selection,
 //   as CodeMirror does it; a double or triple click is a single click, as in
@@ -13,17 +14,25 @@
 // - An input method composes in CodeMirror's DOM; at its end the
 //   composition is taken back and the finished text sent (M-08.5).
 // - The colours come as `ed-highlight` events for the lines shown
-//   (M-08.2), never with the keystroke.
-//
-// Line numbers, folding, the minimap, the status line and the toolbar come
-// with feature F4 as further extensions of `extensions()`; Vim through
-// `@replit/codemirror-vim` too.
+//   (M-08.2), the sections as `ed-sections` (M-08.8) and the marked hits of
+//   the Nano search as `ed-found` (M-11.3), never with the keystroke.
+// - The Vim keys are `codemirror-vim` (A-01, `vim.ts`). They change the
+//   text in CodeMirror first; each change is sent to the backend
+//   (`ed_apply`) for the revision it was made on. A patch of the backend
+//   that comes meanwhile (an undo, say) is moved over the changes not yet
+//   sent, and they over it, as CodeMirror's collaborative editing does, so
+//   no key is lost. When the backend's text is no longer the one a change
+//   was made on, the view shows the backend's text again.
+// - Line numbers (M-08.7, `numbers.ts`), the fold arrows (`folding.ts`) and
+//   the marked hits (`found.ts`) are further extensions.
 
 import {
   Annotation,
   ChangeSet,
+  Compartment,
   EditorSelection,
   EditorState,
+  Prec,
   type Extension,
   type StateEffect,
   type Text,
@@ -34,22 +43,65 @@ import { EditorView, drawSelection, type ViewUpdate } from '@codemirror/view';
 import {
   commands,
   type ClipAction,
+  type EditorCommandName,
   type EditorInput,
   type EditorPatch,
   type EditorState as EditorStateView,
+  type FoundView,
   type HighlightView,
+  type KeysStatusView,
+  type SectionsView,
+  type TextChange,
+  type VimChange,
+  type ToolName,
   type UiError,
+  type VimState,
 } from '../bindings';
+import { folding, sectionsField, setSections } from './folding';
+import { foundField, foundRanges, setFound } from './found';
 import { colorField, setColors } from './highlight';
-import { keyInput } from './keys';
+import { routeKey, type InputModeName } from './keys';
+import { lineNumbersOn, type LineNumberSide } from './numbers';
+
+/**
+ * The Vim keys (`vim.ts` with `codemirror-vim`), loaded once the Vim mode
+ * is chosen, so the start of the window does not wait for them (NFR-001).
+ */
+type VimModule = typeof import('./vim');
+let vimModule: VimModule | null = null;
+
+async function loadVim(): Promise<VimModule> {
+  vimModule ??= await import('./vim');
+  return vimModule;
+}
 
 /** What the source view needs of the backend (ADR-024). */
 export interface EditorBackend {
   open(note: string): Promise<EditorStateView>;
   input(note: string, input: EditorInput): Promise<EditorPatch>;
   clipboard(note: string, action: ClipAction): Promise<EditorPatch>;
-  select(note: string, rev: number, anchor: number, head: number): Promise<void>;
+  /** Sets the selection; gives the place for the status line. */
+  select(note: string, rev: number, anchor: number, head: number): Promise<string>;
   viewport(note: string, from: number, to: number): Promise<void>;
+  /**
+   * A-01: the Vim keys' changes; `newStep` marks the start of an insert
+   * session. `null` when the revision is gone or a change does not fit.
+   */
+  apply(
+    note: string,
+    base: number,
+    changes: VimChange[],
+    anchor: number,
+    head: number,
+    newStep: boolean,
+  ): Promise<EditorPatch | null>;
+  /** M-08.8: folds or expands the section of the heading on `line`. */
+  fold(note: string, line: number): Promise<EditorPatch>;
+  /** M-11.4: the status line's keys in the input mode of the settings. */
+  keysStatus(note: string, vim: VimState | null): Promise<KeysStatusView | null>;
+  /** ADR-014: the system clipboard as plain text, for Vim's `"+` and `"*`. */
+  readClipboard(): Promise<string | null>;
+  writeClipboard(text: string): Promise<void>;
 }
 
 type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };
@@ -67,11 +119,17 @@ export const tauriBackend: EditorBackend = {
   open: (note) => unwrap(commands.edOpen(note)),
   input: (note, input) => unwrap(commands.edInput(note, input)),
   clipboard: (note, action) => unwrap(commands.edClipboard(note, action)),
-  select: async (note, rev, anchor, head) => {
-    await unwrap(commands.edSelect(note, rev, anchor, head));
-  },
+  select: (note, rev, anchor, head) => unwrap(commands.edSelect(note, rev, anchor, head)),
   viewport: async (note, from, to) => {
     await unwrap(commands.edViewport(note, from, to));
+  },
+  apply: (note, base, changes, anchor, head, newStep) =>
+    unwrap(commands.edApply(note, base, changes, anchor, head, newStep)),
+  fold: (note, line) => unwrap(commands.edFold(note, line)),
+  keysStatus: (note, vim) => unwrap(commands.edKeysStatus(note, vim)),
+  readClipboard: () => unwrap(commands.clipReadText()),
+  writeClipboard: async (text) => {
+    await unwrap(commands.clipWriteText(text));
   },
 };
 
@@ -84,7 +142,9 @@ const BLINK_MS = 1000;
 /**
  * M-08.1: DejaVu Sans Mono 14 px with soft wrap, in the theme's colours
  * (the `--palette-*` variables, lib/theme.ts). egui leaves 6 px around
- * the text.
+ * the text. The line numbers and the "…" of a folded heading are 45 % of
+ * the text colour (M-08.7); a marked hit is behind the text in the theme's
+ * colour for hits and underlined in its colour for a hit (UC-008 BR-008).
  */
 const sourceTheme = EditorView.theme({
   '&': {
@@ -107,7 +167,73 @@ const sourceTheme = EditorView.theme({
   '.cm-cursor': { borderLeft: '2px solid var(--palette-foreground)' },
   '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground':
     { backgroundColor: 'var(--palette-selection)' },
+  '.cm-gutters': {
+    backgroundColor: 'var(--palette-background)',
+    color: 'color-mix(in srgb, var(--palette-foreground) 45%, transparent)',
+    border: 'none',
+  },
+  '.cm-lineNumbers .cm-gutterElement': { padding: '0', minWidth: '1ch', textAlign: 'right' },
+  // egui: 6 px, the 14 px arrow, then 2 px to the numbers.
+  '.cm-ul-fold-gutter .cm-gutterElement': {
+    width: '14px',
+    padding: '0 2px 0 6px',
+    overflow: 'visible',
+  },
+  // The arrow takes clicks over the whole gutter and at least 24 px high
+  // (WCAG 2.2 target size), centred on its line.
+  '.cm-ul-arrow': {
+    display: 'flex',
+    position: 'relative',
+    height: '24px',
+    margin: 'calc((1.25em - 24px) / 2) -2px 0 -6px',
+    padding: '0 2px 0 6px',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    fill: 'currentColor',
+  },
+  '.cm-ul-numbers-right': { pointerEvents: 'none' },
+  '.cm-ul-number': {
+    position: 'absolute',
+    textAlign: 'right',
+    color: 'color-mix(in srgb, var(--palette-foreground) 45%, transparent)',
+  },
+  '.cm-ul-folded': { marginLeft: '8px', color: 'var(--ui-text)' },
+  '.cm-ul-found, .cm-searchMatch': {
+    backgroundColor: 'var(--palette-found-background)',
+    boxShadow: 'inset 0 -2px var(--palette-found)',
+  },
+  // A-01: the command line of the Vim keys (`:` and `/`).
+  '.cm-panels': {
+    backgroundColor: 'var(--palette-panel)',
+    color: 'var(--palette-foreground)',
+    borderTop: '1px solid var(--ui-border)',
+  },
+  '.cm-vim-panel': { fontFamily: 'var(--font-mono)', padding: '2px 6px' },
+  // A notice ("3 lines yanked") in the text colour; the hint on the kind of
+  // search patterns (`set pcre`) is left out, as egui has none.
+  '.cm-vim-panel .cm-vim-message': { color: 'var(--palette-foreground) !important' },
+  '.cm-vim-panel > div > span + span': { display: 'none' },
+  '.cm-vim-panel input': { color: 'var(--palette-foreground)', fontFamily: 'var(--font-mono)' },
 });
+
+/**
+ * A-01: the block cursor of the Vim keys in the theme's colours; above the
+ * look `codemirror-vim` brings.
+ */
+const vimTheme = Prec.highest(
+  EditorView.theme({
+    // Doubled, to win over the look of `codemirror-vim` whatever comes first.
+    '.cm-fat-cursor.cm-fat-cursor': {
+      background: 'var(--palette-foreground)',
+      color: 'var(--palette-background)',
+    },
+    '&:not(.cm-focused) .cm-fat-cursor.cm-fat-cursor': {
+      background: 'none',
+      outline: 'solid 1px var(--palette-foreground)',
+    },
+  }),
+);
 
 /** Where each note's view was scrolled to, while the window lives. */
 const scrolled = new Map<string, StateEffect<unknown>>();
@@ -123,7 +249,40 @@ export type SourceViewOptions = {
   colors?: boolean;
   /** Escape left the text; the keyboard goes elsewhere (M-08.10). */
   onLeave?: () => void;
+  /** The input mode of the settings (M-11). */
+  mode?: InputModeName;
+  /** M-08.7: line numbers on or off, left or right. */
+  lineNumbers?: { shown: boolean; side: LineNumberSide };
+  /** M-11.4: the place of the cursor changed. */
+  onPlace?: (place: string) => void;
+  /** M-11.4: the status of the Vim or Nano keys changed (`null`: none). */
+  onKeys?: (status: KeysStatusView | null) => void;
+  /** M-10.9: the keys ask to store the note or close its tab. */
+  onCommand?: (command: EditorCommandName) => void;
+  /** UC-005 A2: a toolbar function asks first (Link, Image; feature F6). */
+  onRequest?: (tool: ToolName) => void;
 };
+
+/** What changed for those who follow the view (`subscribe`). */
+export type ViewChange = 'content' | 'scroll';
+
+/** One change as the backend takes it: the whole span the change touched. */
+function covering(changes: ChangeSet, after: Text): TextChange | null {
+  let fromA = Infinity;
+  let toA = -1;
+  let fromB = Infinity;
+  let toB = -1;
+  changes.iterChangedRanges((fa, ta, fb, tb) => {
+    fromA = Math.min(fromA, fa);
+    toA = Math.max(toA, ta);
+    fromB = Math.min(fromB, fb);
+    toB = Math.max(toB, tb);
+  });
+  if (toA < 0) {
+    return null;
+  }
+  return { from: fromA, to: toA, insert: after.sliceString(fromB, toB) };
+}
 
 export class SourceView {
   readonly view: EditorView;
@@ -131,17 +290,44 @@ export class SourceView {
   #backend: EditorBackend;
   #options: SourceViewOptions;
   #rev: number;
+  /** The text of `#rev`: what the backend has, without the changes not sent. */
+  #baseDoc: Text;
+  /**
+   * A-01: the Vim keys' changes not sent yet, each on the text before it,
+   * and whether it starts an undo step (M-10.1).
+   */
+  #local: { changes: ChangeSet; newStep: boolean }[] = [];
+  /** A Vim command ended or an insert session began: the next change is a new step. */
+  #stepStart = true;
+  /** An insert session began and is to be marked in the backend. */
+  #insertStart = false;
+  /** The user moved the cursor or the selection since it was sent. */
+  #selectionDirty = false;
+  /** A job sending the changes and the selection waits in the queue. */
+  #syncQueued = false;
   /** The inputs run one after the other, each on the last patch. */
   #queue: Promise<unknown> = Promise.resolve();
-  /** Colours for a revision the view has not reached yet. */
+  /** Colours, sections and hits for a revision the view has not reached yet. */
   #pending: HighlightView | null = null;
+  #pendingSections: SectionsView | null = null;
+  #pendingFound: FoundView | null = null;
   /** What an input method changed in CodeMirror, taken back at its end. */
   #composed: { changes: ChangeSet; startDoc: Text } | null = null;
+  #composing = new WeakSet<Transaction>();
   #viewport: [number, number] | null = null;
-  /** The mouse's selection waiting to be sent. */
-  #selection: { rev: number; anchor: number; head: number } | null = null;
   #viewportTimer: ReturnType<typeof setTimeout> | null = null;
   #destroyed = false;
+  #mode: InputModeName;
+  /** The mode of the settings, while the Vim keys load. */
+  #wantedMode: InputModeName;
+  #modeSlot = new Compartment();
+  #numbersSlot = new Compartment();
+  /** The Nano search prompt is open (M-11.3). */
+  #prompting = false;
+  #unwatchVim: (() => void) | null = null;
+  #lastVim = '';
+  #keysAsked = 0;
+  #listeners = new Set<(change: ViewChange) => void>();
   /** Measuring (`bench.ts`): when an input's handling began and its patch was in. */
   probe: ((start: number, patched: number) => void) | null = null;
 
@@ -155,11 +341,21 @@ export class SourceView {
     this.#backend = backend;
     this.#options = options;
     this.#rev = state.rev;
+    this.#mode = options.mode ?? 'Normal';
+    this.#wantedMode = this.#mode;
+    const editorState = this.#stateOf(state);
+    this.#baseDoc = editorState.doc;
     this.view = new EditorView({
       parent,
-      state: this.#stateOf(state),
+      state: editorState,
       scrollTo: scrolled.get(state.note),
     });
+    this.view.scrollDOM.addEventListener('scroll', this.#scrolled, { passive: true });
+    this.#modeStarted();
+    this.#options.onPlace?.(state.place);
+    if (this.#mode === 'Nano') {
+      this.#takeKeys(state.keys);
+    }
     this.#reportViewport(true);
   }
 
@@ -170,13 +366,21 @@ export class SourceView {
     backend: EditorBackend,
     options: SourceViewOptions,
   ): Promise<SourceView> {
-    const state = await backend.open(note);
+    const [state] = await Promise.all([
+      backend.open(note),
+      options.mode === 'Vim' ? loadVim() : null,
+    ]);
     return new SourceView(parent, state, backend, options);
   }
 
   /** The revision of the text shown. */
   get rev(): number {
     return this.#rev;
+  }
+
+  /** The input mode the view follows. */
+  get mode(): InputModeName {
+    return this.#mode;
   }
 
   /** Waits until every input sent so far is handled. */
@@ -188,15 +392,96 @@ export class SourceView {
     this.view.focus();
   }
 
+  /**
+   * Calls `listener` when the text, its layout or the hits changed
+   * (`content`), or when the view scrolled (`scroll`).
+   */
+  subscribe(listener: (change: ViewChange) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  /** M-12.4: the marked hits, `[from, to]`: of the Nano or of the Vim search. */
+  hits(): [number, number][] {
+    if (this.#mode === 'Vim') {
+      return vimModule?.vimHits(this.view) ?? [];
+    }
+    return foundRanges(this.view.state.field(foundField));
+  }
+
+  /**
+   * M-11: follows the input mode `mode` of the settings; the Vim keys take
+   * over once they are loaded.
+   */
+  setMode(mode: InputModeName): void {
+    this.#wantedMode = mode;
+    if (mode === 'Vim' && !vimModule) {
+      loadVim().then(
+        () => this.setMode(this.#wantedMode),
+        (error: unknown) => this.#fail(error),
+      );
+      return;
+    }
+    if (mode === this.#mode || this.#destroyed) {
+      return;
+    }
+    this.#unwatchVim?.();
+    this.#unwatchVim = null;
+    vimModule?.dropVimKeys(this.view);
+    this.#mode = mode;
+    this.#prompting = false;
+    this.view.dispatch({ effects: this.#modeSlot.reconfigure(this.#modeExtension()) });
+    this.#modeStarted();
+  }
+
+  /** M-08.7: follows the line numbers of the settings. */
+  setLineNumbers(shown: boolean, side: LineNumberSide): void {
+    if (this.#destroyed) {
+      return;
+    }
+    this.#options.lineNumbers = { shown, side };
+    this.view.dispatch({ effects: this.#numbersSlot.reconfigure(lineNumbersOn(shown, side)) });
+  }
+
+  /** M-10.2: a button of the toolbar; the keyboard goes back into the text. */
+  tool(tool: ToolName): void {
+    this.#enqueue(() => this.#backend.input(this.note, { kind: 'tool', tool }));
+    this.focus();
+  }
+
   /** M-08.2: colours from the backend; kept for a later revision. */
   takeColors(colors: HighlightView): void {
     if (colors.note !== this.note) {
       return;
     }
-    if (colors.rev === this.#rev) {
+    if (this.#inStep(colors.rev)) {
       this.view.dispatch({ effects: setColors.of(colors) });
     } else {
       this.#pending = colors;
+    }
+  }
+
+  /** M-08.8: the sections from the backend; kept for a later revision. */
+  takeSections(sections: SectionsView): void {
+    if (sections.note !== this.note) {
+      return;
+    }
+    if (this.#inStep(sections.rev)) {
+      this.view.dispatch({ effects: setSections.of(sections.sections) });
+    } else {
+      this.#pendingSections = sections;
+    }
+  }
+
+  /** M-11.3: the marked hits of the Nano search; kept for a later revision. */
+  takeFound(found: FoundView): void {
+    if (found.note !== this.note) {
+      return;
+    }
+    if (this.#inStep(found.rev)) {
+      this.view.dispatch({ effects: setFound.of(found.ranges) });
+    } else {
+      this.#pendingFound = found;
     }
   }
 
@@ -212,12 +497,62 @@ export class SourceView {
     if (this.#viewportTimer !== null) {
       clearTimeout(this.#viewportTimer);
     }
+    this.#unwatchVim?.();
+    vimModule?.dropVimKeys(this.view);
+    this.view.scrollDOM.removeEventListener('scroll', this.#scrolled);
+    this.#listeners.clear();
     scrolled.set(this.note, this.view.scrollSnapshot());
     this.view.destroy();
   }
 
+  #modeExtension(): Extension {
+    const leaves = this.#mode === 'Normal';
+    return [
+      this.#mode === 'Vim' && vimModule ? [vimModule.vimExtension(), vimTheme] : [],
+      EditorView.contentAttributes.of(
+        leaves ? { 'aria-description': 'Escape leaves the text' } : {},
+      ),
+    ];
+  }
+
+  /** The view now follows `#mode`: the Vim keys are tied, the status line told. */
+  #modeStarted(): void {
+    if (this.#mode === 'Vim' && vimModule) {
+      const { onVimChange, vimKeys } = vimModule;
+      this.#stepStart = true;
+      vimKeys(
+        this.view,
+        {
+          undo: () => this.#history('Z'),
+          redo: () => this.#history('Y'),
+          command: (command) => this.#command(command),
+        },
+        {
+          read: () => this.#backend.readClipboard(),
+          write: (text) => {
+            this.#backend.writeClipboard(text).catch((error: unknown) => this.#fail(error));
+          },
+        },
+      );
+      const unwatch = onVimChange(this.view, () => this.#vimChanged());
+      const unbound = vimModule.onVimBoundary(this.view, (insert) => this.#vimBoundary(insert));
+      this.#unwatchVim = () => {
+        unwatch();
+        unbound();
+      };
+      this.#lastVim = '';
+      this.#vimChanged();
+    } else if (this.#mode === 'Nano') {
+      this.#askKeys(null);
+    } else {
+      this.#options.onKeys?.(null);
+    }
+  }
+
   #extensions(): Extension[] {
     return [
+      // A-01: the Vim keys see the keys first.
+      this.#modeSlot.of(this.#modeExtension()),
       EditorView.lineWrapping,
       drawSelection({ cursorBlinkRate: BLINK_MS }),
       EditorView.contentAttributes.of({
@@ -225,9 +560,16 @@ export class SourceView {
         autocorrect: 'off',
         autocapitalize: 'off',
         'aria-label': this.#options.label,
-        'aria-description': 'Escape leaves the text',
       }),
+      folding((line) => this.#enqueue(() => this.#backend.fold(this.note, line))),
+      this.#numbersSlot.of(
+        lineNumbersOn(
+          this.#options.lineNumbers?.shown ?? false,
+          this.#options.lineNumbers?.side ?? 'Left',
+        ),
+      ),
       colorField,
+      foundField,
       sourceTheme,
       EditorView.domEventHandlers({
         keydown: (event) => this.#onKey(event),
@@ -272,10 +614,14 @@ export class SourceView {
   }
 
   #onKey(event: KeyboardEvent): boolean {
-    if (event.key === 'Escape' && !this.view.composing) {
+    if (event.defaultPrevented) {
+      // The Vim keys took it.
+      return true;
+    }
+    if (event.key === 'Escape' && !this.view.composing && this.#mode === 'Normal') {
       // M-08.10: in the Normal input mode Escape leaves the editor, as in
-      // egui; Vim and Nano keep it (feature F4). The keyboard goes to the
-      // note's tab (ux review F3), else nowhere.
+      // egui; Vim and Nano keep it. The keyboard goes to the note's tab
+      // (ux review F3), else nowhere.
       event.preventDefault();
       if (this.#options.onLeave) {
         this.#options.onLeave();
@@ -284,12 +630,18 @@ export class SourceView {
       }
       return true;
     }
-    const input = keyInput(event, this.#options.mac, this.#page());
-    if (input === null || this.view.composing) {
+    const route = routeKey(event, this.#options.mac, this.#page(), {
+      mode: this.#mode,
+      vimInsert: this.#mode === 'Vim' && !!vimModule?.vimInserting(this.view),
+      prompting: this.#prompting,
+    });
+    if (route === null || this.view.composing) {
       return false;
     }
     event.preventDefault();
-    this.#enqueue(() => this.#backend.input(this.note, input));
+    if (route !== 'swallow') {
+      this.#enqueue(() => this.#backend.input(this.note, route.send));
+    }
     return true;
   }
 
@@ -331,7 +683,10 @@ export class SourceView {
     return true;
   }
 
-  /** Only the backend changes the text; an input method may compose. */
+  /**
+   * Only the backend changes the text, an input method may compose, and
+   * the Vim keys change it first (A-01).
+   */
   #filter(tr: Transaction): Transaction | readonly TransactionSpec[] {
     if (!tr.docChanged || tr.annotation(fromBackend)) {
       return tr;
@@ -340,9 +695,10 @@ export class SourceView {
       this.#composed = this.#composed
         ? { ...this.#composed, changes: this.#composed.changes.compose(tr.changes) }
         : { changes: tr.changes, startDoc: tr.startState.doc };
+      this.#composing.add(tr);
       return tr;
     }
-    return [];
+    return this.#mode === 'Vim' ? tr : [];
   }
 
   /** M-08.5: takes back what the composition did and sends its text. */
@@ -366,29 +722,103 @@ export class SourceView {
   }
 
   #updated(update: ViewUpdate): void {
-    const byUser = update.transactions.some(
-      (tr) => tr.isUserEvent('select') && !tr.annotation(fromBackend),
-    );
-    if (update.selectionSet && byUser) {
-      // M-08.3: the selection the mouse made, for the revision it was made
-      // in. A drag makes many; only the last one waiting is sent.
-      const { anchor, head } = update.state.selection.main;
-      const waiting = this.#selection !== null;
-      this.#selection = { rev: this.#rev, anchor, head };
-      if (!waiting) {
-        this.#enqueue(async () => {
-          const selection = this.#selection;
-          this.#selection = null;
-          if (selection) {
-            await this.#backend.select(this.note, selection.rev, selection.anchor, selection.head);
-          }
-          return null;
-        });
+    let sync = false;
+    for (const tr of update.transactions) {
+      if (tr.annotation(fromBackend) || this.#composing.has(tr)) {
+        continue;
       }
+      if (tr.docChanged) {
+        // A-01: a change of the Vim keys, sent with the next sync.
+        this.#local.push({ changes: tr.changes, newStep: this.#takeStepStart() });
+        sync = true;
+      }
+      if (tr.selection) {
+        // M-08.3: the selection the mouse (or the Vim keys) made.
+        this.#selectionDirty = true;
+        sync = true;
+      }
+    }
+    if (sync) {
+      this.#scheduleSync();
+    }
+    if (this.#mode === 'Vim') {
+      // A search marks its hits after the key that ran it (UC-008 BR-008).
+      this.#vimChanged();
     }
     if (update.viewportChanged || update.docChanged) {
       this.#reportViewport(false);
     }
+    if (
+      update.docChanged ||
+      update.viewportChanged ||
+      update.geometryChanged ||
+      update.startState.field(sectionsField) !== update.state.field(sectionsField) ||
+      update.startState.field(foundField) !== update.state.field(foundField)
+    ) {
+      this.#notify();
+    }
+  }
+
+  #notify(change: ViewChange = 'content'): void {
+    for (const listener of this.#listeners) {
+      listener(change);
+    }
+  }
+
+  #scrolled = (): void => this.#notify('scroll');
+
+  /** Sends the changes and the selection the user made, after the inputs before them. */
+  #scheduleSync(): void {
+    if (this.#syncQueued) {
+      return;
+    }
+    this.#syncQueued = true;
+    this.#enqueue(() => this.#sync());
+  }
+
+  async #sync(): Promise<null> {
+    this.#syncQueued = false;
+    const sent = this.#local;
+    this.#local = [];
+    const dirty = this.#selectionDirty;
+    this.#selectionDirty = false;
+    const insertStart = this.#insertStart;
+    this.#insertStart = false;
+    const { anchor, head } = this.view.state.selection.main;
+    if (sent.length > 0 || insertStart) {
+      const changes: VimChange[] = [];
+      let doc = this.#baseDoc;
+      for (const { changes: change, newStep } of sent) {
+        doc = change.apply(doc);
+        const whole = covering(change, doc);
+        if (whole) {
+          changes.push({ ...whole, newStep });
+        }
+      }
+      const answer = await this.#backend.apply(
+        this.note,
+        this.#rev,
+        changes,
+        anchor,
+        head,
+        insertStart,
+      );
+      if (this.#destroyed) {
+        return null;
+      }
+      if (answer === null) {
+        // The backend's text changed meanwhile (UC-004 A7): show it again.
+        await this.#reload();
+        return null;
+      }
+      this.#baseDoc = doc;
+      this.#rev = answer.rev;
+      this.#took(answer);
+    } else if (dirty) {
+      const place = await this.#backend.select(this.note, this.#rev, anchor, head);
+      this.#options.onPlace?.(place);
+    }
+    return null;
   }
 
   /** M-08.2: tells the backend which lines are shown, once they changed. */
@@ -433,13 +863,18 @@ export class SourceView {
     });
   }
 
+  /** Whether the view shows the text of revision `rev` and nothing of its own. */
+  #inStep(rev: number): boolean {
+    return rev === this.#rev && this.#local.length === 0;
+  }
+
   async #apply(patch: EditorPatch): Promise<void> {
     if (patch.base !== this.#rev) {
       // The backend's text changed meanwhile (UC-004 A7): show it again.
       await this.#reload();
       return;
     }
-    let changes = ChangeSet.empty(this.view.state.doc.length);
+    let changes = ChangeSet.empty(this.#baseDoc.length);
     for (const change of patch.changes) {
       changes = changes.compose(
         ChangeSet.of(
@@ -448,21 +883,64 @@ export class SourceView {
         ),
       );
     }
-    const length = changes.newLength;
+    this.#baseDoc = changes.apply(this.#baseDoc);
+    // A-01: the Vim keys' changes not sent yet move over the patch, and the
+    // patch over them.
+    let shown = changes;
+    this.#local = this.#local.map((local) => {
+      const moved = local.changes.map(shown);
+      shown = shown.map(local.changes, true);
+      return { ...local, changes: moved };
+    });
+    const length = shown.newLength;
+    const keepOwn = this.#selectionDirty || this.#local.length > 0;
+    const selection = keepOwn
+      ? this.view.state.selection.map(shown)
+      : EditorSelection.single(Math.min(patch.anchor, length), Math.min(patch.head, length));
     this.view.dispatch({
-      changes,
-      selection: EditorSelection.single(
-        Math.min(patch.anchor, length),
-        Math.min(patch.head, length),
-      ),
+      changes: shown,
+      selection,
       annotations: fromBackend.of(true),
-      effects: patch.scroll ? EditorView.scrollIntoView(Math.min(patch.head, length)) : [],
+      effects:
+        patch.scroll && !keepOwn ? EditorView.scrollIntoView(Math.min(patch.head, length)) : [],
     });
     this.#rev = patch.rev;
-    if (this.#pending?.rev === this.#rev) {
-      const pending = this.#pending;
+    this.#took(patch);
+  }
+
+  /** What comes with every patch: the place, the keys, the commands, a request. */
+  #took(patch: EditorPatch): void {
+    this.#options.onPlace?.(patch.place);
+    if (this.#mode === 'Nano') {
+      // Newer than any status asked for before.
+      this.#keysAsked += 1;
+      this.#takeKeys(patch.keys);
+    }
+    for (const command of patch.commands) {
+      this.#options.onCommand?.(command);
+    }
+    if (patch.request) {
+      this.#options.onRequest?.(patch.request);
+    }
+    this.#takePending();
+  }
+
+  /** Colours, sections and hits that waited for the revision shown now. */
+  #takePending(): void {
+    const colors = this.#pending;
+    if (colors && this.#inStep(colors.rev)) {
       this.#pending = null;
-      this.view.dispatch({ effects: setColors.of(pending) });
+      this.view.dispatch({ effects: setColors.of(colors) });
+    }
+    const sections = this.#pendingSections;
+    if (sections && this.#inStep(sections.rev)) {
+      this.#pendingSections = null;
+      this.view.dispatch({ effects: setSections.of(sections.sections) });
+    }
+    const found = this.#pendingFound;
+    if (found && this.#inStep(found.rev)) {
+      this.#pendingFound = null;
+      this.view.dispatch({ effects: setFound.of(found.ranges) });
     }
   }
 
@@ -472,13 +950,96 @@ export class SourceView {
       return null;
     }
     const snapshot = this.view.scrollSnapshot();
+    this.#unwatchVim?.();
+    this.#unwatchVim = null;
     this.view.setState(this.#stateOf(state));
     this.view.dispatch({ effects: snapshot });
     this.#rev = state.rev;
+    this.#baseDoc = this.view.state.doc;
+    this.#local = [];
+    this.#selectionDirty = false;
     this.#pending = null;
+    this.#pendingSections = null;
+    this.#pendingFound = null;
     this.#viewport = null;
+    this.#modeStarted();
+    this.#options.onPlace?.(state.place);
     this.#reportViewport(true);
     return null;
+  }
+
+  /** M-10.1: the backend's undo (`Z`) or redo (`Y`), for the Vim keys. */
+  #history(key: 'Z' | 'Y'): void {
+    const mac = this.#options.mac;
+    this.#enqueue(() =>
+      this.#backend.input(this.note, {
+        kind: 'key',
+        key,
+        ctrl: !mac,
+        alt: false,
+        shift: false,
+        meta: mac,
+        page: 1,
+      }),
+    );
+  }
+
+  /** M-10.9: a command of the Vim keys, after the changes before it are sent. */
+  #command(command: EditorCommandName): void {
+    this.#enqueue(async () => {
+      this.#options.onCommand?.(command);
+      return null;
+    });
+  }
+
+  /** Whether the next change starts an undo step; it is taken by it. */
+  #takeStepStart(): boolean {
+    const start = this.#stepStart;
+    this.#stepStart = this.#mode !== 'Vim';
+    return start;
+  }
+
+  /**
+   * M-10.1, A-01: a Vim command ended (the next change is a step of its
+   * own) or an insert session began (its typing is a step of its own,
+   * marked in the backend even before it changes anything).
+   */
+  #vimBoundary(insert: boolean): void {
+    this.#stepStart = true;
+    if (insert) {
+      this.#insertStart = true;
+      this.#scheduleSync();
+    }
+  }
+
+  /** M-11.4: the Vim keys changed their mode or what is typed. */
+  #vimChanged(): void {
+    const state = vimModule?.vimState(this.view) ?? null;
+    const key = JSON.stringify(state);
+    if (key === this.#lastVim) {
+      return;
+    }
+    this.#lastVim = key;
+    this.#askKeys(state);
+    this.#notify();
+  }
+
+  /** Asks the backend for the status line's keys; a later answer wins. */
+  #askKeys(vim: VimState | null): void {
+    const asked = ++this.#keysAsked;
+    this.#backend.keysStatus(this.note, vim).then(
+      (status) => {
+        if (asked === this.#keysAsked && !this.#destroyed) {
+          this.#takeKeys(status);
+        }
+      },
+      (error: unknown) => this.#fail(error),
+    );
+  }
+
+  #takeKeys(status: KeysStatusView | null): void {
+    this.#prompting = status?.prompting ?? false;
+    this.#options.onKeys?.(status);
   }
 
   #fail(error: unknown): void {

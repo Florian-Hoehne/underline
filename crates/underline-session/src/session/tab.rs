@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use underline_core::{Autosave, EditingView, NoteFormat, NoteProperties, NoteSaver};
-use underline_editor_core::SourceEditor;
+use underline_editor_core::{Keys, SourceEditor};
 use underline_facade::highlight::DocumentHighlight;
 
+use super::folding::Folds;
 use crate::editor_view::{NotePropertiesView, TabPropertiesView};
 
 /// One open tab.
@@ -50,6 +51,15 @@ pub(super) struct Tab {
     pub(super) viewport: Option<Range<usize>>,
     /// The revision and the lines whose colours the window has.
     pub(super) highlight_told: Option<(u64, Range<usize>)>,
+    /// M-11.3: the state of the Nano keys (the Vim keys of the source view
+    /// are the window's, A-01).
+    pub(super) keys: Keys,
+    /// M-08.8: what is folded, shared by both views.
+    pub(super) folds: Folds,
+    /// The revision and the pattern whose marked Nano hits the window has.
+    pub(super) found_told: Option<(u64, Option<String>)>,
+    /// When the marked hits were found last.
+    pub(super) found_at: Option<Instant>,
 }
 
 impl std::fmt::Debug for Tab {
@@ -90,6 +100,10 @@ impl Tab {
             highlight: None,
             viewport: None,
             highlight_told: None,
+            keys: Keys::default(),
+            folds: Folds::default(),
+            found_told: None,
+            found_at: None,
         }
     }
 
@@ -183,5 +197,7 @@ impl Tab {
         self.on_disk = text;
         self.highlight = None;
         self.highlight_told = None;
+        // M-08.8: the folded sections stay folded where they are now.
+        self.refold();
     }
 }

@@ -1,15 +1,25 @@
 <!--
   M-08 (UC-005): the source view of one note. It asks the backend for the
   text and shows it in CodeMirror (editor/sourceView.ts). The backend's
-  colours (`ed-highlight`) and replaced texts (`ed-replaced`) reach it
-  through the shell, which listens for the whole window. While the text
-  loads the area stays empty; a failure is said in the status bar.
+  colours (`ed-highlight`), sections (`ed-sections`), Nano hits (`ed-found`)
+  and replaced texts (`ed-replaced`) reach it through the shell, which
+  listens for the whole window. While the text loads the area stays empty;
+  a failure is said in the status bar.
 
-  Escape leaves the text for the note's tab (M-08.10, ux review F3).
+  It follows the input mode and the line numbers of the settings (M-11,
+  M-08.7) and tells `info` the place of the cursor and the keys' status for
+  the status line (M-11.4).
+
+  Escape leaves the text for the note's tab in the Normal input mode
+  (M-08.10, ux review F3).
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { EditorCommandName } from './bindings';
   import { setActiveSourceView } from './editor/active';
+  import type { EditorInfo } from './editor/info.svelte';
+  import type { InputModeName } from './editor/keys';
+  import type { LineNumberSide } from './editor/numbers';
   import { SourceView, tauriBackend, type EditorBackend } from './editor/sourceView';
   import { tabId } from './tabs';
 
@@ -20,36 +30,85 @@
     label: string;
     /** Cmd is the command key. */
     mac: boolean;
+    /** The input mode of the settings. */
+    mode?: InputModeName;
+    /** M-08.7: line numbers on or off, and their side. */
+    lineNumbers?: boolean;
+    lineNumberSide?: LineNumberSide;
+    /** What the status line and the minimap show of the view. */
+    info?: EditorInfo;
     /** The keyboard goes into the text once it is shown. */
     focus?: boolean;
     onError: (message: string) => void;
+    /** M-10.9: the keys ask to store the note or close its tab. */
+    onCommand?: (command: EditorCommandName) => void;
     backend?: EditorBackend;
   };
 
-  let { note, label, mac, focus = false, onError, backend = tauriBackend }: Props = $props();
+  let {
+    note,
+    label,
+    mac,
+    mode = 'Normal',
+    lineNumbers = false,
+    lineNumberSide = 'Left',
+    info,
+    focus = false,
+    onError,
+    onCommand,
+    backend = tauriBackend,
+  }: Props = $props();
 
   let host = $state<HTMLElement | null>(null);
   let loading = $state(true);
+  let view = $state.raw<SourceView | null>(null);
 
   /** Escape: the keyboard goes to the note's tab. */
   function leave() {
     document.getElementById(tabId(note))?.focus();
   }
 
+  $effect(() => {
+    view?.setMode(mode);
+  });
+
+  $effect(() => {
+    view?.setLineNumbers(lineNumbers, lineNumberSide);
+  });
+
   onMount(() => {
-    let view: SourceView | null = null;
+    let opened: SourceView | null = null;
     let gone = false;
-    SourceView.open(host!, note, backend, { mac, label, onError, onLeave: leave })
-      .then((opened) => {
+    SourceView.open(host!, note, backend, {
+      mac,
+      label,
+      onError,
+      onLeave: leave,
+      mode,
+      lineNumbers: { shown: lineNumbers, side: lineNumberSide },
+      onPlace: (place) => {
+        if (info) info.place = place;
+      },
+      onKeys: (status) => {
+        if (info) info.keys = status;
+      },
+      onCommand: (command) => onCommand?.(command),
+      onRequest: (tool) => {
+        if (info) info.request = tool;
+      },
+    })
+      .then((made) => {
         if (gone) {
-          opened.destroy();
+          made.destroy();
           return;
         }
-        view = opened;
-        setActiveSourceView(view);
+        opened = made;
+        view = made;
+        setActiveSourceView(made);
+        if (info) info.view = made;
         loading = false;
         if (focus) {
-          view.focus();
+          made.focus();
         }
       })
       .catch((error: unknown) => {
@@ -62,9 +121,14 @@
       });
     return () => {
       gone = true;
-      if (view) {
+      if (opened) {
         setActiveSourceView(null);
-        view.destroy();
+        if (info?.view === opened) {
+          info.view = null;
+          info.keys = null;
+          info.place = '';
+        }
+        opened.destroy();
       }
     };
   });

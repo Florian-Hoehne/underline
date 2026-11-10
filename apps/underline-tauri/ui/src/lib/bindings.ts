@@ -89,10 +89,12 @@ export const commands = {
 	 */
 	edInput: (note: string, input: EditorInput) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_input", { note, input })),
 	/**
-	 *  M-08.3: the mouse set the cursor and the selection, in UTF-16 units of
-	 *  the revision `rev`.
+	 *  M-08.3: the mouse (or the window's Vim keys) set the cursor and the
+	 *  selection, in UTF-16 units of the revision `rev`; the answer is the
+	 *  place for the status line (M-11.4). A cursor in a folded section expands
+	 *  it (M-08.8), which the tick sends as `ed-sections`.
 	 */
-	edSelect: (note: string, rev: number, anchor: number, head: number) => typedError<null, UiError>(__TAURI_INVOKE("ed_select", { note, rev, anchor, head })),
+	edSelect: (note: string, rev: number, anchor: number, head: number) => typedError<string, UiError>(__TAURI_INVOKE("ed_select", { note, rev, anchor, head })),
 	/**
 	 *  M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the
 	 *  end not included); their colours come as the event `ed-highlight`.
@@ -108,6 +110,34 @@ export const commands = {
 	 */
 	edClipboard: (note: string, action: ClipAction) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_clipboard", { note, action })),
 	/**
+	 *  A-01, ADR-024: the window's Vim keys changed the text of revision
+	 *  `base`; `new_step` marks the start of an insert session (M-10.1). The
+	 *  answer is `null` when the text has another revision by now or a change
+	 *  does not fit it; nothing is applied then, and the window shows the text
+	 *  again.
+	 */
+	edApply: (note: string, base: number, changes: VimChange[], anchor: number, head: number, newStep: boolean) => typedError<EditorPatch | null, UiError>(__TAURI_INVOKE("ed_apply", { note, base, changes, anchor, head, newStep })),
+	/**
+	 *  M-08.8: the fold arrow of the section whose heading is `line` (from 0)
+	 *  was clicked; the sections follow as `ed-sections`.
+	 */
+	edFold: (note: string, line: number) => typedError<EditorPatch, UiError>(__TAURI_INVOKE("ed_fold", { note, line })),
+	/**
+	 *  M-11.4, FR-026: the left part of the editor's status line in the input
+	 *  mode of the settings; `vim` is what the window's Vim keys are doing.
+	 */
+	edKeysStatus: (note: string, vim: VimState | null) => typedError<KeysStatusView | null, UiError>(__TAURI_INVOKE("ed_keys_status", { note, vim })),
+	/**
+	 *  M-11.2, A-01: the registers `"+` and `"*` of the window's Vim keys read
+	 *  the system clipboard (ADR-014) as plain text; `null` without text.
+	 */
+	clipReadText: () => typedError<string | null, UiError>(__TAURI_INVOKE("clip_read_text")),
+	/**
+	 *  M-11.2, A-01: a yank into `"+` or `"*` puts the text on the system
+	 *  clipboard.
+	 */
+	clipWriteText: (text: string) => typedError<null, UiError>(__TAURI_INVOKE("clip_write_text", { text })),
+	/**
 	 *  M-21.4, UC-005 A14 step 3: "Close anyway": Underline ends without the
 	 *  changes that could not be stored. What can be stored is stored once
 	 *  more, and the app state is written, when the app exits.
@@ -118,8 +148,10 @@ export const commands = {
 /** Events */
 export const events = {
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
+	edFound: makeEvent<FoundEvent, FoundEvent>("ed-found"),
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
 	edReplaced: makeEvent<TextReplacedEvent, TextReplacedEvent>("ed-replaced"),
+	edSections: makeEvent<SectionsEvent, SectionsEvent>("ed-sections"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
@@ -190,6 +222,16 @@ export type EditingViewName =
 /**  The formatted note. */
 "facade";
 
+/**
+ *  M-10.9, UC-005 BR-009, BR-010: what the keys of the editor ask of the
+ *  window.
+ */
+export type EditorCommandName = 
+/**  Store the note at once (`:w`, Ctrl+O, Ctrl+S). */
+"store" | 
+/**  Close the tab (`:q`, Ctrl+X). */
+"close";
+
 /**  One input of the source view (UC-005, M-08.4, M-08.5). */
 export type EditorInput = 
 /**  Typed text, or the finished text of an input method. */
@@ -215,7 +257,11 @@ meta: boolean;
  *  How many lines Page Up and Page Down move: the lines the view
  *  shows.
  */
-page: number };
+page: number } | 
+/**  M-10.2: a button of the formatting toolbar. */
+{ kind: "tool"; 
+/**  The function. */
+tool: ToolName };
 
 /**
  *  The answer to an input (ADR-024): the changes of the text, one after the
@@ -243,6 +289,23 @@ export type EditorPatch = {
 	 *  not have to wait for the tick.
 	 */
 	unstored: boolean,
+	/**  UC-005: the place of the cursor for the status line. */
+	place: string,
+	/**
+	 *  FR-026: the status of the Nano keys after the input; `None` in the
+	 *  other modes.
+	 */
+	keys: KeysStatusView | null,
+	/**
+	 *  M-10.9: what the Nano keys ask of the window, in order: store the
+	 *  note at once, close its tab.
+	 */
+	commands: EditorCommandName[],
+	/**
+	 *  UC-005 A2: a toolbar function that asks first (Link, Image); the
+	 *  window opens its dialog (feature F6).
+	 */
+	request: ToolName | null,
 };
 
 /**  The text of an open note as the window starts showing it. */
@@ -257,6 +320,13 @@ export type EditorState = {
 	anchor: number,
 	/**  The cursor, in UTF-16 units. */
 	head: number,
+	/**
+	 *  UC-005: the place of the cursor for the status line, such as
+	 *  "Ln 3, Col 5 · 4 chars".
+	 */
+	place: string,
+	/**  FR-026: the status of the Nano keys; `None` in the other modes. */
+	keys: KeysStatusView | null,
 };
 
 /**  A note format as the Create dialog names it (UC-001 BR-001). */
@@ -265,6 +335,28 @@ export type FormatName =
 "Markdown" | 
 /**  AsciiDoc. */
 "AsciiDoc";
+
+/**
+ *  M-11.3, UC-008 BR-008: the marked hits of the Nano search in the active
+ *  tab's note.
+ */
+export type FoundEvent = FoundView;
+
+/**
+ *  UC-008 BR-008, M-11.3: the hits of the search of the Nano keys while
+ *  they are marked, in UTF-16 units; empty when none are. At most
+ *  [`FoundView::MAX`] hits are sent; `count` says how many there are.
+ */
+export type FoundView = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the text the hits are in. */
+	rev: number,
+	/**  The hits, `[from, to]`, the first [`FoundView::MAX`] of them. */
+	ranges: ([number, number])[],
+	/**  How many hits there are in all. */
+	count: number,
+};
 
 /**  M-08.2, ADR-024: the colours of the lines the source view shows. */
 export type HighlightEvent = HighlightView;
@@ -291,6 +383,14 @@ export type HighlightView = {
 	lines: (([number, number, number])[])[],
 	/**  The looks the spans refer to. */
 	styles: SpanStyle[],
+};
+
+/**  One command of the status line: its keys and what it does. */
+export type KeyHintView = {
+	/**  The keys, such as ":w" or "^O". */
+	keys: string,
+	/**  What they do, such as "store". */
+	action: string,
 };
 
 /**
@@ -322,12 +422,73 @@ export type KeyName =
 "PageUp" | 
 /**  Page Down. */
 "PageDown" | 
-/**  A, for Ctrl/Cmd+A. */
+/**
+ *  Escape (M-11.3: ends the marking of the Nano search, cancels its
+ *  prompt).
+ */
+"Escape" | 
+/**  `[`, for Ctrl/Cmd+Shift+[ (M-08.8: fold). */
+"BracketLeft" | 
+/**  `]`, for Ctrl/Cmd+Shift+] (M-08.8: expand). */
+"BracketRight" | 
+/**  A, for Ctrl/Cmd+A (and Nano's Ctrl+A). */
 "A" | 
+/**  B, for Ctrl/Cmd+B (M-10.2). */
+"B" | 
+/**  C, for Nano's Ctrl+C. */
+"C" | 
+/**  E, for Ctrl/Cmd+E (M-10.2) and Nano's Ctrl+E and Alt+E. */
+"E" | 
+/**  H, for Ctrl/Cmd+Shift+H (M-10.2). */
+"H" | 
+/**  I, for Ctrl/Cmd+I and Ctrl/Cmd+Shift+I (M-10.2). */
+"I" | 
+/**  K, for Ctrl/Cmd+K (M-10.2) and Nano's Ctrl+K. */
+"K" | 
+/**  L, for Ctrl/Cmd+Shift+L (M-10.2). */
+"L" | 
+/**  O, for Nano's Ctrl+O. */
+"O" | 
+/**  Q, for Ctrl/Cmd+Shift+Q (M-10.2). */
+"Q" | 
+/**  S, for Nano's Ctrl+S. */
+"S" | 
+/**  T, for Ctrl/Cmd+Shift+T (M-10.2). */
+"T" | 
+/**  U, for Nano's Ctrl+U and Alt+U. */
+"U" | 
+/**  W, for Nano's Ctrl+W. */
+"W" | 
+/**  X, for Nano's Ctrl+X. */
+"X" | 
 /**  Y, for Ctrl/Cmd+Y. */
 "Y" | 
 /**  Z, for Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z. */
 "Z";
+
+/**
+ *  FR-026, M-11.4: the left part of the editor's status line with the Vim
+ *  or Nano keys: the badge, what is typed but not done, and the commands,
+ *  the most important first (the window leaves out from the end what does
+ *  not fit).
+ */
+export type KeysStatusView = {
+	/**  "VIM" or "NANO". */
+	keymap: string,
+	/**  The Vim mode, such as "NORMAL" or "VISUAL LINE"; `None` for Nano. */
+	mode: string | null,
+	/**
+	 *  Which of the palette's mode colours the badge has: 0 normal (and
+	 *  Nano), 1 insert, 2 visual, 3 command (`PaletteView::mode_colors`).
+	 */
+	color: number,
+	/**  What is typed but not done yet, or the Nano search prompt. */
+	pending: string,
+	/**  The commands. */
+	hints: KeyHintView[],
+	/**  The Nano search prompt is open and takes every key. */
+	prompting: boolean,
+};
 
 /**  What the user chose in the Create dialog (UC-001 steps 1–4, A3). */
 export type NewWorkspaceRequest = {
@@ -481,6 +642,41 @@ export type Platform =
 /**  M-16.2: the properties of the active tab's note; `null` without one. */
 export type PropertiesEvent = TabPropertiesView | null;
 
+/**
+ *  M-08.8, UC-004 BR-012: one section of the note, as the source view folds
+ *  it: lines counted from 0.
+ */
+export type SectionView = {
+	/**  The line of the heading. */
+	line: number,
+	/**
+	 *  The last line folding hides; `line` when the section has nothing to
+	 *  fold.
+	 */
+	last: number,
+	/**  The section is folded. */
+	folded: boolean,
+};
+
+/**
+ *  M-08.8, M-12.2: the sections of the active tab's note, with what is
+ *  folded, after the input that changed them.
+ */
+export type SectionsEvent = SectionsView;
+
+/**
+ *  M-08.8, M-12.2: the sections of the note shown, sent after the input
+ *  that changed them (ADR-024), and when a section was folded or expanded.
+ */
+export type SectionsView = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the text the sections are of. */
+	rev: number,
+	/**  The sections, in order. */
+	sections: SectionView[],
+};
+
 /**  One setting of UC-010 BR-001, named as in the settings file. */
 export type SettingName = "default_format" | "theme" | "input_mode" | "show_line_numbers" | "line_number_side" | "show_minimap" | "copy_on_select" | "git_sync_interval" | "agent_access" | "overview_width" | "tool_panel_width" | "show_menu_bar" | "blink_found_in_minimap";
 
@@ -575,6 +771,10 @@ export type StartInfo = {
 	 *  (M-01.3).
 	 */
 	status: string,
+	/**  M-10.2: the buttons of the formatting toolbar. */
+	tools: ToolView[],
+	/**  M-11.4: the input modes of the "Keys" choice, by name. */
+	inputModes: string[],
 };
 
 /**
@@ -647,7 +847,8 @@ export type TabsView = {
 
 /**
  *  One change of the text: the UTF-16 range `from..to` of the text before it
- *  was replaced by `insert`.
+ *  was replaced by `insert`. The window sends such changes too, for the
+ *  edits its own Vim keys make (`ed_apply`, A-01).
  */
 export type TextChange = {
 	/**  Where the replaced text starts. */
@@ -684,6 +885,37 @@ export type TodoTabView = {
 	active: boolean,
 };
 
+/**  M-10.2, FR-023: a function of the formatting toolbar. */
+export type ToolName = 
+/**  Heading. */
+"heading" | 
+/**  Bold. */
+"bold" | 
+/**  Italic. */
+"italic" | 
+/**  Code. */
+"code" | 
+/**  List. */
+"list" | 
+/**  Quote. */
+"quote" | 
+/**  Link: asks for a web address or a note first. */
+"link" | 
+/**  Image: asks for an image file first. */
+"image" | 
+/**  Table. */
+"table";
+
+/**  M-10.2: one button of the formatting toolbar, as the egui app labels it. */
+export type ToolView = {
+	/**  The function. */
+	tool: ToolName,
+	/**  The label of the button, such as "B" or "List". */
+	label: string,
+	/**  The hint shown on hover, with the key, such as "Bold (Ctrl+B)". */
+	hint: string,
+};
+
 /**
  *  A failure of a command, shown to the user.
  * 
@@ -713,6 +945,48 @@ export type UiErrorKind =
 "invalid" | 
 /**  A failure the user cannot act on. */
 "internal";
+
+/**
+ *  A-01: one change the window's Vim keys made, like [`TextChange`], and
+ *  whether it starts a new undo step: the window marks the start of each
+ *  Vim command and of each insert session (M-10.1).
+ */
+export type VimChange = {
+	/**  Where the replaced text starts, in UTF-16 units. */
+	from: number,
+	/**  Where the replaced text ends. */
+	to: number,
+	/**  The text put in its place. */
+	insert: string,
+	/**  It is not undone together with the change before it. */
+	newStep: boolean,
+};
+
+/**  FR-026: a mode of the Vim keys, as the window's Vim keys report it. */
+export type VimModeName = 
+/**  NORMAL. */
+"normal" | 
+/**  INSERT. */
+"insert" | 
+/**  VISUAL. */
+"visual" | 
+/**  VISUAL LINE. */
+"visualLine" | 
+/**  COMMAND: a command line after `:` or `/`. */
+"command";
+
+/**
+ *  FR-026, A-01: what the window's Vim keys (`codemirror-vim`) are doing,
+ *  for the status line.
+ */
+export type VimState = {
+	/**  The mode. */
+	mode: VimModeName,
+	/**  What is typed but not done yet, such as `2d` or `"+`. */
+	pending: string,
+	/**  The hits of a search are marked (UC-008 BR-008). */
+	marked: boolean,
+};
 
 /**  M-21.3, M-03.3, M-04.7: a workspace was opened; `null` while none is. */
 export type WorkspaceEvent = WorkspaceView | null;

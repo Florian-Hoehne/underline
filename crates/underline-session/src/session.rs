@@ -3,6 +3,7 @@
 //! the status message, driven by [`Session::tick`] (ADR-022).
 
 mod editing;
+mod folding;
 mod tab;
 mod workspace;
 
@@ -201,6 +202,11 @@ impl Session {
             settings: self.settings.view(),
             themes: theme_names(),
             status: self.status.clone(),
+            tools: crate::ToolView::all(),
+            input_modes: underline_core::InputMode::ALL
+                .iter()
+                .map(|mode| mode.label().to_owned())
+                .collect(),
         }
     }
 
@@ -245,7 +251,9 @@ impl Session {
     /// settings file is looked at every 500 ms (M-20.6), due notes are
     /// stored in the background (M-10.8), the app state is written once a
     /// change is due (M-22.1), and the colours of the lines the source view
-    /// shows are worked out (M-08.2). Returns what changed for the window.
+    /// shows are worked out (M-08.2), then its sections and the marked hits
+    /// of the Nano search (M-08.8, M-11.3). Returns what changed for the
+    /// window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
         self.settings.poll(now);
@@ -257,6 +265,7 @@ impl Session {
         self.show_state_notices();
         let mut events = self.take_events();
         events.extend(self.highlight_event(now));
+        events.extend(self.editor_events(now));
         events
     }
 

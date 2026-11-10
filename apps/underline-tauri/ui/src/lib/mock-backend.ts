@@ -31,10 +31,13 @@ import type {
   EditorPatch,
   TabPropertiesView,
   TabsView,
+  ToolView,
   UiError,
+  VimChange,
+  VimState,
   WorkspaceSnapshot,
 } from './bindings';
-import { FakeEditor } from './editor/fakeEditor';
+import { FakeEditor, fakeVimStatus, type FakeMode } from './editor/fakeEditor';
 import palettes from './palettes.generated.json';
 
 /** The success value of a command in the generated bindings. */
@@ -87,6 +90,21 @@ export type MockHandlers = {
     note: string;
     action: ClipAction;
   }) => Promise<Ok<typeof commands.edClipboard>>;
+  ed_apply: (args: {
+    note: string;
+    base: number;
+    changes: VimChange[];
+    anchor: number;
+    head: number;
+    newStep: boolean;
+  }) => Promise<Ok<typeof commands.edApply>>;
+  ed_fold: (args: { note: string; line: number }) => Promise<Ok<typeof commands.edFold>>;
+  ed_keys_status: (args: {
+    note: string;
+    vim: VimState | null;
+  }) => Ok<typeof commands.edKeysStatus>;
+  clip_read_text: () => Ok<typeof commands.clipReadText>;
+  clip_write_text: (args: { text: string }) => Ok<typeof commands.clipWriteText>;
   app_close_anyway: () => Ok<typeof commands.appCloseAnyway>;
 };
 
@@ -149,6 +167,19 @@ export type MockStart = Partial<Omit<StartInfo, 'settings'>> & {
   failingSaves?: string[];
 };
 
+/** M-10.2: the toolbar's buttons, as the backend gives them (`Tool::label`, `Tool::hint`). */
+export const FAKE_TOOLS: readonly ToolView[] = [
+  { tool: 'heading', label: 'H', hint: 'Heading (Ctrl+Shift+H)' },
+  { tool: 'bold', label: 'B', hint: 'Bold (Ctrl+B)' },
+  { tool: 'italic', label: 'I', hint: 'Italic (Ctrl+I)' },
+  { tool: 'code', label: '</>', hint: 'Code (Ctrl+E)' },
+  { tool: 'list', label: 'List', hint: 'List (Ctrl+Shift+L)' },
+  { tool: 'quote', label: 'Quote', hint: 'Quote (Ctrl+Shift+Q)' },
+  { tool: 'link', label: 'Link', hint: 'Link (Ctrl+K)' },
+  { tool: 'image', label: 'Image', hint: 'Image (Ctrl+Shift+I)' },
+  { tool: 'table', label: 'Table', hint: 'Table (Ctrl+Shift+T)' },
+];
+
 /** The reason a failing save gives in the mock. */
 export const MOCK_SAVE_ERROR = 'Permission denied (os error 13)';
 
@@ -178,6 +209,8 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         recentWorkspaces: recent ?? [],
         platform: 'linux',
         themes: PALETTES.map((palette) => palette.theme),
+        tools: [...FAKE_TOOLS],
+        inputModes: ['Normal', 'Vim', 'Nano'],
         ...info,
         settings,
         status,
@@ -196,6 +229,18 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         settings = { ...settings, showMenuBar: value === 'true' };
       } else if (key === 'overview_width') {
         settings = { ...settings, overviewWidth: Number(value) };
+      } else if (key === 'input_mode') {
+        settings = { ...settings, inputMode: value };
+      } else if (key === 'show_minimap') {
+        settings = { ...settings, showMinimap: value === 'true' };
+      } else if (key === 'copy_on_select') {
+        settings = { ...settings, copyOnSelect: value === 'true' };
+      } else if (key === 'show_line_numbers') {
+        settings = { ...settings, showLineNumbers: value === 'true' };
+      } else if (key === 'line_number_side') {
+        settings = { ...settings, lineNumberSide: value };
+      } else if (key === 'blink_found_in_minimap') {
+        settings = { ...settings, blinkFoundInMinimap: value === 'true' };
       } else {
         return null;
       }
@@ -234,6 +279,11 @@ function workspaceHandlers(
   | 'ed_select'
   | 'ed_viewport'
   | 'ed_clipboard'
+  | 'ed_apply'
+  | 'ed_fold'
+  | 'ed_keys_status'
+  | 'clip_read_text'
+  | 'clip_write_text'
   | 'app_close_anyway'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -292,7 +342,19 @@ function workspaceHandlers(
       doc = new FakeEditor(note, fakeNoteText(note));
       docs.set(note, doc);
     }
+    doc.mode = settings().inputMode as FakeMode;
     return doc;
+  };
+  /** M-08.8, M-11.3: the sections and the Nano hits follow each input, as events. */
+  const editorEvents = async (note: string) => {
+    const doc = docOf(note);
+    try {
+      await emit('ed-sections', { note, rev: doc.rev, sections: doc.sections() });
+      const ranges = doc.found();
+      await emit('ed-found', { note, rev: doc.rev, ranges, count: ranges.length });
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
   };
   const label = (note: string) =>
     title(note) + (saveErrors.has(note) ? ' ⚠' : unstored.has(note) ? ' •' : '');
@@ -560,14 +622,43 @@ function workspaceHandlers(
       if (patch.changes.length > 0) {
         await changed(note);
       }
+      setTimeout(() => void editorEvents(note), 0);
       return marked(patch, note);
     },
     ed_select: ({ note, rev, anchor, head }) => {
-      docOf(note).select(rev, anchor, head);
+      const place = docOf(note).select(rev, anchor, head);
+      setTimeout(() => void editorEvents(note), 0);
+      return place;
+    },
+    ed_apply: async ({ note, base, changes, anchor, head }) => {
+      const doc = docOf(note);
+      const patch = doc.apply(base, changes, anchor, head);
+      if (patch && changes.length > 0) {
+        await changed(note);
+      }
+      setTimeout(() => void editorEvents(note), 0);
+      return patch && marked(patch, note);
+    },
+    ed_fold: async ({ note, line }) => {
+      const patch = docOf(note).fold(line);
+      setTimeout(() => void editorEvents(note), 0);
+      return marked(patch, note);
+    },
+    ed_keys_status: ({ note, vim }) => {
+      const doc = docOf(note);
+      if (doc.mode === 'Vim') {
+        return fakeVimStatus(vim);
+      }
+      return doc.keys();
+    },
+    clip_read_text: () => clipboard,
+    clip_write_text: ({ text }) => {
+      clipboard = text;
       return null;
     },
     ed_viewport: async ({ note, from, to }) => {
       const doc = docOf(note);
+      setTimeout(() => void editorEvents(note), 0);
       const lines = doc.text.split('\n').slice(from, to);
       await emit('ed-highlight', {
         note,

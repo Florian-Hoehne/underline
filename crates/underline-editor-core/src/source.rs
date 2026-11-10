@@ -18,7 +18,11 @@
 //!   [`Document`]'s merging rules; afterwards the cursor stands at the end of
 //!   the text put back (BR-004).
 //!
-//! The folding keys and the toolbar shortcuts come with feature F4.
+//! With feature F4 come the Nano keys ([`SourceKeys`], the [`Target`] of
+//! the source view), the place of the cursor for the status line
+//! ([`CursorPlace`]), the edits of the toolbar and of the window's own Vim
+//! keys (`replace_bytes`, `apply_web`) and searching (`find`). Which lines
+//! are folded the session works out; the editor only steps over them.
 //!
 //! Every change is reported as an [`Applied`] change in web units
 //! (`crate::utf16`): UTF-16 units with each line break counted once, as
@@ -32,6 +36,7 @@ use std::ops::Range;
 
 use crate::document::{Document, Edit};
 use crate::input::{Key, Modifiers};
+use crate::keys::{EditorCommand, Target};
 use crate::utf16::{len_web, normalize_breaks, WebOffsets};
 
 /// One change of the text, as a view patches it, in web units.
@@ -66,6 +71,41 @@ impl Outcome {
     #[must_use]
     pub fn edited(&self) -> bool {
         !self.changes.is_empty()
+    }
+}
+
+/// UC-005, FR-026: the place of the cursor, line and column counted from 1
+/// in chars of the markup, and the size of the selection: its chars and the
+/// lines it touches (0 when nothing is selected).
+///
+/// Ported from `CursorPlace` of `underline-editor`'s `source_view.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorPlace {
+    /// The line of the cursor, from 1.
+    pub line: usize,
+    /// The column of the cursor in chars, from 1.
+    pub column: usize,
+    /// How many chars are selected.
+    pub selected_chars: usize,
+    /// How many lines the selection touches; a line it only reaches at its
+    /// start does not count.
+    pub selected_lines: usize,
+}
+
+impl CursorPlace {
+    /// The place as the status line shows it: "Ln 3, Col 5", then what is
+    /// selected, as "· 4 chars" within one line and "· 3 lines" across
+    /// several.
+    #[must_use]
+    pub fn label(&self) -> String {
+        let place = format!("Ln {}, Col {}", self.line, self.column);
+        match (self.selected_chars, self.selected_lines) {
+            (0, _) => place,
+            (1, _) => format!("{place} · 1 char"),
+            // Within one line: the chars.
+            (n, 0 | 1) => format!("{place} · {n} chars"),
+            (_, lines) => format!("{place} · {lines} lines"),
+        }
     }
 }
 
@@ -387,6 +427,176 @@ impl SourceEditor {
         }
     }
 
+    /// Replaces the bytes in `range` by `text` and selects the bytes
+    /// `select` of the changed text, as a toolbar function does (UC-005 A2,
+    /// BR-005): one change, so one undo step as in egui (`apply_format`).
+    pub fn replace_bytes(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        select: Range<usize>,
+    ) -> Outcome {
+        let rope = self.doc.rope();
+        let bytes = rope.len_bytes();
+        let from = rope.byte_to_char(range.start.min(bytes));
+        let to = rope.byte_to_char(range.end.min(bytes));
+        let outcome = self.replace(from..to, text);
+        let rope = self.doc.rope();
+        let bytes = rope.len_bytes();
+        self.anchor = rope.byte_to_char(select.start.min(bytes));
+        self.cursor = rope.byte_to_char(select.end.min(bytes));
+        outcome
+    }
+
+    /// The selection as byte offsets, start before end.
+    #[must_use]
+    pub fn selection_bytes(&self) -> Range<usize> {
+        let rope = self.doc.rope();
+        let Range { start, end } = self.selection();
+        rope.char_to_byte(start)..rope.char_to_byte(end)
+    }
+
+    /// Replaces the web units `from..to` by `insert`, a change the window
+    /// made itself (its Vim keys, A-01), then puts the cursor and the
+    /// anchor at the web offsets `head` and `anchor` of the changed text.
+    /// The change is checked against the text: one beyond its end is
+    /// clamped. The line breaks of `insert` are kept as they come.
+    pub fn apply_web(
+        &mut self,
+        from: usize,
+        to: usize,
+        insert: &str,
+        selection: Option<(usize, usize)>,
+    ) -> Outcome {
+        let (start, end) = self.with_web(|web| {
+            let rope = self.doc.rope();
+            (web.from_web(rope, from), web.from_web(rope, to.max(from)))
+        });
+        let mut outcome = self.replace(start..end, insert);
+        if let Some((head, anchor)) = selection {
+            outcome.moved |= self.set_selection_web(head, anchor);
+        }
+        outcome
+    }
+
+    /// A-01: whether the changes `changes` (`from`, `to`, inserted text in
+    /// web units, each on the text after the ones before it) fit the text:
+    /// `from <= to <= length` and no offset inside a surrogate pair. Checked
+    /// on a copy of the rope, so nothing is applied when one does not fit.
+    #[must_use]
+    pub fn web_changes_fit(&self, changes: &[(usize, usize, &str)]) -> bool {
+        let mut rope = self.doc.rope().clone();
+        for &(from, to, insert) in changes {
+            let web = WebOffsets::of(&rope);
+            let len = web.to_web(&rope, rope.len_chars());
+            if from > to || to > len {
+                return false;
+            }
+            let start = web.from_web(&rope, from);
+            let end = web.from_web(&rope, to);
+            if web.to_web(&rope, start) != from || web.to_web(&rope, end) != to {
+                return false;
+            }
+            rope.remove(start..end);
+            rope.insert(start, insert);
+        }
+        true
+    }
+
+    /// UC-005: the place of the cursor and the size of the selection.
+    #[must_use]
+    pub fn cursor_place(&self) -> CursorPlace {
+        let rope = self.doc.rope();
+        let line = rope.char_to_line(self.cursor);
+        let Range { start, end } = self.selection();
+        let selected_lines = if start == end {
+            0
+        } else {
+            // A selection of whole lines ends at the start of the next one,
+            // which is not selected.
+            rope.char_to_line(end - 1) - rope.char_to_line(start) + 1
+        };
+        CursorPlace {
+            line: line + 1,
+            column: self.cursor - rope.line_to_char(line) + 1,
+            selected_chars: end - start,
+            selected_lines,
+        }
+    }
+
+    /// Searches `pattern` in the text after (or before) char `from`, going
+    /// round at the end; gives its char index (M-11.3, ported from egui).
+    #[must_use]
+    pub fn find(&self, pattern: &str, from: usize, forward: bool) -> Option<usize> {
+        if pattern.is_empty() {
+            return None;
+        }
+        let text = self.doc.text();
+        let rope = self.doc.rope();
+        let len = rope.len_chars();
+        let byte = if forward {
+            let at = rope.char_to_byte((from + 1).min(len));
+            text[at..]
+                .find(pattern)
+                .map(|i| at + i)
+                .or_else(|| text.find(pattern))
+        } else {
+            text[..rope.char_to_byte(from.min(len))]
+                .rfind(pattern)
+                .or_else(|| text.rfind(pattern))
+        }?;
+        Some(rope.byte_to_char(byte))
+    }
+
+    /// Every place of `pattern` in the text, as char ranges (UC-008 BR-008:
+    /// the hits of the Nano search, marked until Escape).
+    #[must_use]
+    pub fn find_all(&self, pattern: &str) -> Vec<Range<usize>> {
+        if pattern.is_empty() {
+            return Vec::new();
+        }
+        let text = self.doc.text();
+        let rope = self.doc.rope();
+        let count = pattern.chars().count();
+        text.match_indices(pattern)
+            .map(|(byte, _)| {
+                let start = rope.byte_to_char(byte);
+                start..start + count
+            })
+            .collect()
+    }
+
+    /// The char range `range` as web offsets of the window.
+    #[must_use]
+    pub fn to_web_range(&self, range: Range<usize>) -> Range<usize> {
+        self.with_web(|web| {
+            let rope = self.doc.rope();
+            web.to_web(rope, range.start)..web.to_web(rope, range.end)
+        })
+    }
+
+    /// The char range of `line` without what ends it, as the keys see a
+    /// line.
+    fn line_range(&self, at: usize) -> Range<usize> {
+        let rope = self.doc.rope();
+        let line = rope.char_to_line(at.min(rope.len_chars()));
+        let start = rope.line_to_char(line);
+        start..start + self.doc.line_text(line).chars().count()
+    }
+
+    /// The char range of the line at `at` with its line break.
+    fn whole_line_range(&self, at: usize) -> Range<usize> {
+        let rope = self.doc.rope();
+        let line = rope.char_to_line(at.min(rope.len_chars()));
+        let start = rope.line_to_char(line);
+        let end = if line + 1 < rope.len_lines() {
+            rope.line_to_char(line + 1)
+        } else {
+            rope.len_chars()
+        };
+        start..end
+    }
+
     /// Takes back the last undo step (M-10.1).
     pub fn undo(&mut self) -> Outcome {
         let lines_before = self.doc.len_lines();
@@ -453,6 +663,148 @@ impl SourceEditor {
             Some(found) if found < lines => found,
             _ => line,
         }
+    }
+}
+
+/// The source view for the Nano keys (M-11.3): a line is a line of markup,
+/// as in the egui widget (`SourceTarget`). It gathers what the keys did:
+/// the changes for the window, whether the cursor moved, and the commands
+/// for the window (store, close).
+///
+/// The Nano keys never use the clipboard; what the keys put on it is kept
+/// in [`SourceKeys::copied`], and reading it gives nothing.
+#[derive(Debug)]
+pub struct SourceKeys<'a> {
+    editor: &'a mut SourceEditor,
+    /// What the keys did to the text and the cursor.
+    pub outcome: Outcome,
+    /// What the keys asked of the window, in order.
+    pub commands: Vec<EditorCommand>,
+    /// What the keys put on the clipboard last.
+    pub copied: Option<String>,
+}
+
+impl<'a> SourceKeys<'a> {
+    /// The keys' view of `editor`.
+    pub fn new(editor: &'a mut SourceEditor) -> Self {
+        Self {
+            editor,
+            outcome: Outcome::default(),
+            commands: Vec::new(),
+            copied: None,
+        }
+    }
+
+    fn take(&mut self, outcome: Outcome) {
+        self.outcome.moved |= outcome.moved;
+        self.outcome.changes.extend(outcome.changes);
+    }
+}
+
+impl Target for SourceKeys<'_> {
+    fn len(&self) -> usize {
+        self.editor.doc.len_chars()
+    }
+
+    fn char_at(&self, at: usize) -> Option<char> {
+        let rope = self.editor.doc.rope();
+        (at < rope.len_chars()).then(|| rope.char(at))
+    }
+
+    fn cursor(&self) -> (usize, usize) {
+        (self.editor.cursor, self.editor.anchor)
+    }
+
+    fn set_cursor(&mut self, cursor: usize, anchor: usize) {
+        self.editor.set_selection(cursor, anchor);
+        self.outcome.moved = true;
+    }
+
+    fn left(&mut self, at: usize) -> usize {
+        self.editor.step_left(at)
+    }
+
+    fn right(&mut self, at: usize) -> usize {
+        self.editor.step_right(at)
+    }
+
+    fn up(&mut self, at: usize) -> usize {
+        let rope = self.editor.doc.rope();
+        let line = rope.char_to_line(at);
+        let column = at - rope.line_to_char(line);
+        let up = self.editor.visible_line(line.saturating_sub(1), -1);
+        self.editor.at_line(up, column)
+    }
+
+    fn down(&mut self, at: usize) -> usize {
+        let rope = self.editor.doc.rope();
+        let line = rope.char_to_line(at);
+        let column = at - rope.line_to_char(line);
+        let last = self.editor.doc.len_lines().saturating_sub(1);
+        let down = self.editor.visible_line((line + 1).min(last), 1);
+        self.editor.at_line(down, column)
+    }
+
+    fn line(&mut self, at: usize) -> Range<usize> {
+        self.editor.line_range(at)
+    }
+
+    fn whole_line(&mut self, at: usize) -> Range<usize> {
+        self.editor.whole_line_range(at)
+    }
+
+    fn separator(&mut self, _at: usize) -> &'static str {
+        "\n"
+    }
+
+    fn text(&self, range: Range<usize>) -> String {
+        let len = self.len();
+        self.editor
+            .doc
+            .rope()
+            .slice(range.start.min(len)..range.end.min(len))
+            .to_string()
+    }
+
+    fn replace(&mut self, range: Range<usize>, text: &str) {
+        let outcome = self.editor.replace(range, text);
+        self.take(outcome);
+    }
+
+    fn undo(&mut self) {
+        let outcome = self.editor.undo();
+        self.take(outcome);
+    }
+
+    fn redo(&mut self) {
+        let outcome = self.editor.redo();
+        self.take(outcome);
+    }
+
+    fn open_line(&mut self, at: usize, below: bool) {
+        let line = self.line(at);
+        if below {
+            self.replace(line.end..line.end, "\n");
+        } else {
+            self.replace(line.start..line.start, "\n");
+            self.set_cursor(line.start, line.start);
+        }
+    }
+
+    fn find(&self, pattern: &str, from: usize, forward: bool) -> Option<usize> {
+        self.editor.find(pattern, from, forward)
+    }
+
+    fn clipboard_read(&mut self) -> Option<String> {
+        None
+    }
+
+    fn clipboard_write(&mut self, text: &str) {
+        self.copied = Some(text.to_owned());
+    }
+
+    fn command(&mut self, command: EditorCommand) {
+        self.commands.push(command);
     }
 }
 
@@ -921,5 +1273,92 @@ mod tests {
         window.follow(&lone, &outcome);
         assert_eq!(lone.web_text(), "a\nb");
         assert_eq!(lone.text(), "a\rb");
+    }
+
+    #[test]
+    fn uc005_m11_4_the_place_names_line_column_and_the_selection() {
+        let mut editor = editor("ab\ncd\nef", 4);
+        assert_eq!(editor.cursor_place().label(), "Ln 2, Col 2");
+        editor.set_selection(4, 3);
+        assert_eq!(editor.cursor_place().label(), "Ln 2, Col 2 · 1 char");
+        editor.set_selection(5, 3);
+        assert_eq!(editor.cursor_place().label(), "Ln 2, Col 3 · 2 chars");
+        editor.set_selection(6, 0);
+        assert_eq!(
+            editor.cursor_place().label(),
+            "Ln 3, Col 1 · 2 lines",
+            "a selection up to a line's start does not count that line"
+        );
+        editor.set_selection(7, 0);
+        assert_eq!(editor.cursor_place().label(), "Ln 3, Col 2 · 3 lines");
+    }
+
+    #[test]
+    fn m11_3_find_goes_round_and_find_all_gives_every_hit() {
+        let editor = editor("ab ab ab", 0);
+        assert_eq!(editor.find("ab", 0, true), Some(3));
+        assert_eq!(editor.find("ab", 6, true), Some(0), "round at the end");
+        assert_eq!(editor.find("ab", 3, false), Some(0));
+        assert_eq!(editor.find("", 0, true), None);
+        assert_eq!(editor.find_all("ab"), [0..2, 3..5, 6..8]);
+        let crlf = SourceEditor::new("x\r\nab");
+        assert_eq!(crlf.to_web_range(crlf.find_all("ab")[0].clone()), 2..4);
+    }
+
+    #[test]
+    fn uc005_a2_m10_2_replace_bytes_is_one_undo_step_and_selects() {
+        let mut editor = editor("héllo", 0);
+        let outcome = editor.replace_bytes(0..6, "**héllo**", 2..8);
+
+        assert_eq!(editor.text(), "**héllo**");
+        assert_eq!(editor.selection(), 2..7);
+        assert!(outcome.edited());
+        editor.undo();
+        assert_eq!(editor.text(), "héllo");
+    }
+
+    #[test]
+    fn a01_apply_web_takes_a_change_of_the_window_in_web_units() {
+        let mut editor = editor("🙂ab\r\ncd", 0);
+        let mut window = Window::of(&editor);
+
+        let outcome = editor.apply_web(2, 4, "X", Some((3, 3)));
+        window.follow(&editor, &outcome);
+
+        assert_eq!(editor.text(), "🙂X\r\ncd");
+        assert_eq!(editor.selection_web(), (3, 3));
+        let outcome = editor.apply_web(3, 4, "", None);
+        window.follow(&editor, &outcome);
+        assert_eq!(editor.text(), "🙂Xcd", "the pair goes as one break");
+    }
+
+    #[test]
+    fn uc005_br010_m11_3_the_nano_keys_work_on_the_source_view() {
+        use crate::input::KeyInput;
+        use crate::keys::{InputMode, Keys};
+
+        let mut editor = editor("one\ntwo\n", 0);
+        let mut keys = Keys::default();
+        keys.mode = InputMode::Nano;
+        let ctrl = |key| KeyInput::Key {
+            key,
+            pressed: true,
+            modifiers: Modifiers {
+                ctrl: true,
+                command: true,
+                ..NONE
+            },
+        };
+        let mut target = SourceKeys::new(&mut editor);
+        let (through, _) = keys.handle(
+            vec![ctrl(Key::K), ctrl(Key::O), KeyInput::Text("x")],
+            |e| Some(*e),
+            &mut target,
+        );
+
+        assert_eq!(through, [KeyInput::Text("x")], "text is left to the editor");
+        assert_eq!(target.commands, [EditorCommand::Store]);
+        assert_eq!(target.outcome.changes.len(), 1);
+        assert_eq!(editor.text(), "two\n");
     }
 }
