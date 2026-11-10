@@ -407,12 +407,43 @@
       },
       {
         "args": [
+          true
+        ],
+        "call": "copyOnSelect",
+        "out": {
+          "copy": {
+            "first": true,
+            "html": null,
+            "text": "more"
+          },
+          "forget": false
+        }
+      },
+      {
+        "args": [],
+        "call": "overCopied",
+        "out": true
+      },
+      {
+        "args": [
+          true
+        ],
+        "call": "copyOnSelect",
+        "out": {
+          "copy": null,
+          "forget": false
+        }
+      },
+      {
+        "args": [
           "copy",
           null
         ],
         "call": "clipboard",
         "out": {
           "copied": "more",
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 33,
             "base": 6,
@@ -436,6 +467,8 @@
         "call": "clipboard",
         "out": {
           "copied": "more",
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 29,
             "base": 6,
@@ -459,12 +492,57 @@
       },
       {
         "args": [
+          true
+        ],
+        "call": "copyOnSelect",
+        "out": {
+          "copy": null,
+          "forget": true
+        }
+      },
+      {
+        "args": [
           "paste",
-          "pasted\nline"
+          {
+            "image": true,
+            "markup": null,
+            "text": null
+          }
         ],
         "call": "clipboard",
         "out": {
           "copied": null,
+          "html": null,
+          "image": true,
+          "patch": {
+            "anchor": 29,
+            "base": 7,
+            "changes": [],
+            "commands": [],
+            "head": 29,
+            "keys": null,
+            "place": "Ln 4, Col 1",
+            "request": null,
+            "rev": 7,
+            "scroll": false,
+            "unstored": false
+          }
+        }
+      },
+      {
+        "args": [
+          "paste",
+          {
+            "image": false,
+            "markup": "**pasted**",
+            "text": "pasted\nline"
+          }
+        ],
+        "call": "clipboard",
+        "out": {
+          "copied": null,
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 40,
             "base": 7,
@@ -488,6 +566,92 @@
       },
       {
         "args": [
+          {
+            "image": true,
+            "kind": "dropped",
+            "place": "a b.png"
+          }
+        ],
+        "call": "insert",
+        "out": {
+          "anchor": 54,
+          "base": 8,
+          "changes": [
+            {
+              "from": 40,
+              "insert": "\n\n![](a b.png)\n\n",
+              "to": 40
+            }
+          ],
+          "commands": [],
+          "head": 54,
+          "keys": null,
+          "place": "Ln 7, Col 13",
+          "request": null,
+          "rev": 9,
+          "scroll": true,
+          "unstored": false
+        }
+      },
+      {
+        "args": [
+          {
+            "kind": "text",
+            "text": " "
+          }
+        ],
+        "call": "insert",
+        "out": {
+          "anchor": 55,
+          "base": 9,
+          "changes": [
+            {
+              "from": 54,
+              "insert": " ",
+              "to": 54
+            }
+          ],
+          "commands": [],
+          "head": 55,
+          "keys": null,
+          "place": "Ln 7, Col 14",
+          "request": null,
+          "rev": 10,
+          "scroll": true,
+          "unstored": false
+        }
+      },
+      {
+        "args": [
+          {
+            "address": "Plan.md",
+            "kind": "link",
+            "label": "Plan"
+          }
+        ],
+        "call": "insert",
+        "out": {
+          "anchor": 70,
+          "base": 10,
+          "changes": [
+            {
+              "from": 55,
+              "insert": "[Plan](Plan.md)",
+              "to": 55
+            }
+          ],
+          "commands": [],
+          "head": 70,
+          "keys": null,
+          "place": "Ln 7, Col 29",
+          "request": null,
+          "rev": 11,
+          "scroll": true,
+          "unstored": false
+        }
+      },
+      {
+        "args": [
           8,
           [
             {
@@ -502,19 +666,7 @@
           false
         ],
         "call": "apply",
-        "out": {
-          "anchor": 1,
-          "base": 8,
-          "changes": [],
-          "commands": [],
-          "head": 1,
-          "keys": null,
-          "place": "Ln 1, Col 2",
-          "request": null,
-          "rev": 9,
-          "scroll": true,
-          "unstored": false
-        }
+        "out": null
       },
       {
         "args": [
@@ -632,11 +784,11 @@
         ],
         "call": "input",
         "out": {
-          "anchor": 1,
-          "base": 9,
+          "anchor": 70,
+          "base": 11,
           "changes": [],
           "commands": [],
-          "head": 1,
+          "head": 70,
           "keys": {
             "color": 0,
             "hints": [
@@ -654,9 +806,9 @@
             "pending": "Search: ",
             "prompting": true
           },
-          "place": "Ln 1, Col 2",
+          "place": "Ln 7, Col 29",
           "request": null,
-          "rev": 9,
+          "rev": 11,
           "scroll": false,
           "unstored": false
         }
@@ -670,11 +822,11 @@
         ],
         "call": "input",
         "out": {
-          "anchor": 1,
-          "base": 9,
+          "anchor": 70,
+          "base": 11,
           "changes": [],
           "commands": [],
-          "head": 1,
+          "head": 70,
           "keys": {
             "color": 0,
             "hints": [
@@ -692,9 +844,9 @@
             "pending": "Search: body",
             "prompting": true
           },
-          "place": "Ln 1, Col 2",
+          "place": "Ln 7, Col 29",
           "request": null,
-          "rev": 9,
+          "rev": 11,
           "scroll": false,
           "unstored": false
         }
@@ -708,12 +860,17 @@
           "found": null,
           "sections": {
             "note": "Home",
-            "rev": 9,
+            "rev": 11,
             "sections": [
               {
+                "folded": false,
+                "last": 15,
+                "line": 0
+              },
+              {
                 "folded": true,
-                "last": 11,
-                "line": 6
+                "last": 15,
+                "line": 10
               }
             ]
           }
@@ -733,11 +890,11 @@
         ],
         "call": "input",
         "out": {
-          "anchor": 51,
-          "base": 9,
+          "anchor": 82,
+          "base": 11,
           "changes": [],
           "commands": [],
-          "head": 51,
+          "head": 82,
           "keys": {
             "color": 0,
             "hints": [
@@ -783,9 +940,9 @@
             "pending": "",
             "prompting": false
           },
-          "place": "Ln 8, Col 1",
+          "place": "Ln 12, Col 1",
           "request": null,
-          "rev": 9,
+          "rev": 11,
           "scroll": true,
           "unstored": false
         }
@@ -801,20 +958,25 @@
             "note": "Home",
             "ranges": [
               [
-                51,
-                55
+                82,
+                86
               ]
             ],
-            "rev": 9
+            "rev": 11
           },
           "sections": {
             "note": "Home",
-            "rev": 9,
+            "rev": 11,
             "sections": [
               {
                 "folded": false,
-                "last": 11,
-                "line": 6
+                "last": 15,
+                "line": 0
+              },
+              {
+                "folded": false,
+                "last": 15,
+                "line": 10
               }
             ]
           }
@@ -823,12 +985,12 @@
       {
         "args": [],
         "call": "text",
-        "out": "V# Title\n\nSome text x😀****😀\r\npasted\nline.\n\n## Sub\nbody\n\n```rust\nfn main() {}\n```\n"
+        "out": "# Title\n\nSome text x😀****😀\r\npasted\nline\n\n![](a b.png) [Plan](Plan.md)\n\n.\n\n## Sub\nbody\n\n```rust\nfn main() {}\n```\n"
       },
       {
         "args": [],
         "call": "hash",
-        "out": "1c748bfb8b786cc7"
+        "out": "dde0481850a116e3"
       }
     ]
   },
@@ -1252,6 +1414,22 @@
         "call": "facadeClipboard",
         "out": {
           "error": "The clipboard action is not valid: unknown variant `shred`, expected one of `copy`, `cut`, `paste` at line 1 column 7"
+        }
+      },
+      {
+        "args": [
+          {
+            "anchor": 0,
+            "head": 0,
+            "rev": 0
+          },
+          {
+            "kind": "x"
+          }
+        ],
+        "call": "facadeInsert",
+        "out": {
+          "error": "The insertion is not valid: unknown variant `x`, expected one of `link`, `image`, `file`, `dropped`, `text` at line 1 column 11"
         }
       },
       {
@@ -1863,6 +2041,8 @@
         "call": "facadeClipboard",
         "out": {
           "copied": "*",
+          "html": "<p>*</p>",
+          "image": false,
           "patch": {
             "anchor": 19,
             "base": 3,
@@ -1890,11 +2070,17 @@
           },
           "paste",
           false,
-          "*"
+          {
+            "image": false,
+            "markup": null,
+            "text": "*"
+          }
         ],
         "call": "facadeClipboard",
         "out": {
           "copied": null,
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 19,
             "base": 3,
@@ -2092,11 +2278,17 @@
           },
           "paste",
           true,
-          "*plain*"
+          {
+            "image": false,
+            "markup": "**html**",
+            "text": "*plain*"
+          }
         ],
         "call": "facadeClipboard",
         "out": {
           "copied": null,
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 28,
             "base": 4,
@@ -2206,77 +2398,402 @@
       {
         "args": [
           {
-            "anchor": 0,
-            "head": 0,
-            "rev": 4
+            "anchor": 28,
+            "head": 28,
+            "rev": 5
+          },
+          "paste",
+          false,
+          {
+            "image": false,
+            "markup": "## From\n\n*html*",
+            "text": "html"
+          }
+        ],
+        "call": "facadeClipboard",
+        "out": {
+          "copied": null,
+          "html": null,
+          "image": false,
+          "patch": {
+            "anchor": 47,
+            "base": 5,
+            "blocks": [
+              {
+                "base": 6,
+                "blocks": [
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 19,
+                    "line": 2,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 18,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            0
+                          ],
+                          [
+                            4,
+                            5
+                          ],
+                          [
+                            6,
+                            8
+                          ],
+                          [
+                            7,
+                            10
+                          ],
+                          [
+                            13,
+                            17
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "A pa*x**plain*"
+                      }
+                    ],
+                    "start": 10
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "level": 2,
+                      "type": "heading"
+                    },
+                    "length": 8,
+                    "line": 4,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 7,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            3
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "From"
+                      }
+                    ],
+                    "start": 30
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 7,
+                    "line": 6,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 5,
+                        "italic": true,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            1
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "html"
+                      }
+                    ],
+                    "start": 39
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 36,
+                    "line": 8,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 14,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            0
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "*ragraph with "
+                      },
+                      {
+                        "bold": true,
+                        "code": false,
+                        "end": 20,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            16
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "bold"
+                      },
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 35,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            22
+                          ]
+                        ],
+                        "strike": false,
+                        "text": " and 😀 here."
+                      }
+                    ],
+                    "start": 47
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "depth": 0,
+                      "type": "listItem"
+                    },
+                    "length": 11,
+                    "line": 10,
+                    "lines": 1,
+                    "prefix": "•  ",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 10,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "item one"
+                      }
+                    ],
+                    "start": 84
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "depth": 0,
+                      "type": "listItem"
+                    },
+                    "length": 11,
+                    "line": 11,
+                    "lines": 1,
+                    "prefix": "•  ",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 10,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "item two"
+                      }
+                    ],
+                    "start": 95
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "depth": 1,
+                      "type": "quote"
+                    },
+                    "length": 10,
+                    "line": 13,
+                    "lines": 1,
+                    "prefix": "    ",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 9,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "a quote"
+                      }
+                    ],
+                    "start": 107
+                  }
+                ],
+                "from": 1,
+                "lineShift": 6,
+                "note": "Home",
+                "removed": 4,
+                "rev": 6,
+                "shift": 19,
+                "version": 7
+              }
+            ],
+            "commands": [],
+            "copied": null,
+            "gap": null,
+            "head": 47,
+            "keys": null,
+            "place": "Ln 9, Col 1",
+            "request": null,
+            "rev": 6,
+            "scroll": true,
+            "unstored": false,
+            "wantsClipboard": false
+          }
+        }
+      },
+      {
+        "args": [
+          {
+            "anchor": 47,
+            "head": 47,
+            "rev": 6
           },
           {
-            "kind": "tool",
-            "tool": "bold"
-          },
-          null,
-          null
+            "kind": "image",
+            "place": "Plan-2026-11-10-0930.png"
+          }
         ],
-        "call": "facadeInput",
+        "call": "facadeInsert",
         "out": {
-          "anchor": 30,
-          "base": 5,
+          "anchor": 76,
+          "base": 6,
           "blocks": [
             {
-              "base": 6,
+              "base": 7,
               "blocks": [
                 {
                   "colors": null,
-                  "figure": null,
-                  "kind": {
-                    "type": "paragraph"
+                  "figure": {
+                    "caption": null,
+                    "failed": false,
+                    "loading": "Loading Plan-2026-11-10-0930.png…",
+                    "message": null,
+                    "picture": null,
+                    "sourceShown": false,
+                    "unreadable": null
                   },
-                  "length": 58,
-                  "line": 2,
+                  "kind": {
+                    "alt": "",
+                    "target": "Plan-2026-11-10-0930.png",
+                    "type": "image"
+                  },
+                  "length": 30,
+                  "line": 8,
                   "lines": 1,
                   "prefix": "",
                   "runs": [
                     {
                       "bold": false,
                       "code": false,
-                      "end": 36,
+                      "end": 29,
                       "italic": false,
                       "link": null,
                       "offsets": [
                         [
                           0,
                           0
-                        ],
-                        [
-                          4,
-                          5
-                        ],
-                        [
-                          6,
-                          8
-                        ],
-                        [
-                          7,
-                          10
-                        ],
-                        [
-                          13,
-                          17
                         ]
                       ],
                       "strike": false,
-                      "text": "A pa*x**plain******ragraph with "
-                    },
+                      "text": "![](Plan-2026-11-10-0930.png)"
+                    }
+                  ],
+                  "start": 47
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 36,
+                  "line": 10,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
                     {
-                      "bold": true,
+                      "bold": false,
                       "code": false,
-                      "end": 42,
+                      "end": 14,
                       "italic": false,
                       "link": null,
                       "offsets": [
                         [
                           0,
-                          38
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "*ragraph with "
+                    },
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 20,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          16
                         ]
                       ],
                       "strike": false,
@@ -2285,20 +2802,20 @@
                     {
                       "bold": false,
                       "code": false,
-                      "end": 57,
+                      "end": 35,
                       "italic": false,
                       "link": null,
                       "offsets": [
                         [
                           0,
-                          44
+                          22
                         ]
                       ],
                       "strike": false,
                       "text": " and 😀 here."
                     }
                   ],
-                  "start": 10
+                  "start": 78
                 },
                 {
                   "colors": null,
@@ -2308,7 +2825,7 @@
                     "type": "listItem"
                   },
                   "length": 11,
-                  "line": 4,
+                  "line": 12,
                   "lines": 1,
                   "prefix": "•  ",
                   "runs": [
@@ -2328,7 +2845,7 @@
                       "text": "item one"
                     }
                   ],
-                  "start": 69
+                  "start": 115
                 },
                 {
                   "colors": null,
@@ -2338,7 +2855,7 @@
                     "type": "listItem"
                   },
                   "length": 11,
-                  "line": 5,
+                  "line": 13,
                   "lines": 1,
                   "prefix": "•  ",
                   "runs": [
@@ -2358,7 +2875,7 @@
                       "text": "item two"
                     }
                   ],
-                  "start": 80
+                  "start": 126
                 },
                 {
                   "colors": null,
@@ -2368,7 +2885,7 @@
                     "type": "quote"
                   },
                   "length": 10,
-                  "line": 7,
+                  "line": 15,
                   "lines": 1,
                   "prefix": "    ",
                   "runs": [
@@ -2388,26 +2905,110 @@
                       "text": "a quote"
                     }
                   ],
-                  "start": 92
+                  "start": 138
                 }
               ],
-              "from": 1,
-              "lineShift": 0,
+              "from": 4,
+              "lineShift": 2,
               "note": "Home",
               "removed": 4,
-              "rev": 6,
-              "shift": 4,
-              "version": 7
+              "rev": 7,
+              "shift": 31,
+              "version": 8
             }
           ],
           "commands": [],
           "copied": null,
           "gap": null,
-          "head": 30,
+          "head": 76,
           "keys": null,
-          "place": "Ln 3, Col 21",
+          "place": "Ln 9, Col 30",
           "request": null,
-          "rev": 6,
+          "rev": 7,
+          "scroll": true,
+          "unstored": false,
+          "wantsClipboard": false
+        }
+      },
+      {
+        "args": [
+          true
+        ],
+        "call": "copyOnSelect",
+        "out": {
+          "copy": null,
+          "forget": false
+        }
+      },
+      {
+        "args": [
+          {
+            "anchor": 0,
+            "head": 0,
+            "rev": 7
+          },
+          {
+            "kind": "tool",
+            "tool": "bold"
+          },
+          null,
+          null
+        ],
+        "call": "facadeInput",
+        "out": {
+          "anchor": 2,
+          "base": 7,
+          "blocks": [
+            {
+              "base": 8,
+              "blocks": [
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 13,
+                  "line": 0,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 12,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "****# Facade"
+                    }
+                  ],
+                  "start": 0
+                }
+              ],
+              "from": 0,
+              "lineShift": 0,
+              "note": "Home",
+              "removed": 1,
+              "rev": 8,
+              "shift": 4,
+              "version": 9
+            }
+          ],
+          "commands": [],
+          "copied": null,
+          "gap": null,
+          "head": 2,
+          "keys": null,
+          "place": "Ln 1, Col 3",
+          "request": null,
+          "rev": 8,
           "scroll": true,
           "unstored": false,
           "wantsClipboard": false
@@ -2477,16 +3078,15 @@
         "args": [],
         "call": "facadeState",
         "out": {
-          "anchor": 30,
+          "anchor": 2,
           "blocks": [
             {
               "colors": null,
               "figure": null,
               "kind": {
-                "level": 1,
-                "type": "heading"
+                "type": "paragraph"
               },
-              "length": 9,
+              "length": 13,
               "line": 0,
               "lines": 1,
               "prefix": "",
@@ -2494,17 +3094,17 @@
                 {
                   "bold": false,
                   "code": false,
-                  "end": 8,
+                  "end": 12,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      2
+                      0
                     ]
                   ],
                   "strike": false,
-                  "text": "Facade"
+                  "text": "****# Facade"
                 }
               ],
               "start": 0
@@ -2515,7 +3115,7 @@
               "kind": {
                 "type": "paragraph"
               },
-              "length": 58,
+              "length": 19,
               "line": 2,
               "lines": 1,
               "prefix": "",
@@ -2523,7 +3123,7 @@
                 {
                   "bold": false,
                   "code": false,
-                  "end": 36,
+                  "end": 18,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -2549,18 +3149,145 @@
                     ]
                   ],
                   "strike": false,
-                  "text": "A pa*x**plain******ragraph with "
-                },
+                  "text": "A pa*x**plain*"
+                }
+              ],
+              "start": 14
+            },
+            {
+              "colors": null,
+              "figure": null,
+              "kind": {
+                "level": 2,
+                "type": "heading"
+              },
+              "length": 8,
+              "line": 4,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
                 {
-                  "bold": true,
+                  "bold": false,
                   "code": false,
-                  "end": 42,
+                  "end": 7,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      38
+                      3
+                    ]
+                  ],
+                  "strike": false,
+                  "text": "From"
+                }
+              ],
+              "start": 34
+            },
+            {
+              "colors": null,
+              "figure": null,
+              "kind": {
+                "type": "paragraph"
+              },
+              "length": 7,
+              "line": 6,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
+                {
+                  "bold": false,
+                  "code": false,
+                  "end": 5,
+                  "italic": true,
+                  "link": null,
+                  "offsets": [
+                    [
+                      0,
+                      1
+                    ]
+                  ],
+                  "strike": false,
+                  "text": "html"
+                }
+              ],
+              "start": 43
+            },
+            {
+              "colors": null,
+              "figure": {
+                "caption": null,
+                "failed": false,
+                "loading": "Loading Plan-2026-11-10-0930.png…",
+                "message": null,
+                "picture": null,
+                "sourceShown": false,
+                "unreadable": null
+              },
+              "kind": {
+                "alt": "",
+                "target": "Plan-2026-11-10-0930.png",
+                "type": "image"
+              },
+              "length": 30,
+              "line": 8,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
+                {
+                  "bold": false,
+                  "code": false,
+                  "end": 29,
+                  "italic": false,
+                  "link": null,
+                  "offsets": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "strike": false,
+                  "text": "![](Plan-2026-11-10-0930.png)"
+                }
+              ],
+              "start": 51
+            },
+            {
+              "colors": null,
+              "figure": null,
+              "kind": {
+                "type": "paragraph"
+              },
+              "length": 36,
+              "line": 10,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
+                {
+                  "bold": false,
+                  "code": false,
+                  "end": 14,
+                  "italic": false,
+                  "link": null,
+                  "offsets": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "strike": false,
+                  "text": "*ragraph with "
+                },
+                {
+                  "bold": true,
+                  "code": false,
+                  "end": 20,
+                  "italic": false,
+                  "link": null,
+                  "offsets": [
+                    [
+                      0,
+                      16
                     ]
                   ],
                   "strike": false,
@@ -2569,20 +3296,20 @@
                 {
                   "bold": false,
                   "code": false,
-                  "end": 57,
+                  "end": 35,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      44
+                      22
                     ]
                   ],
                   "strike": false,
                   "text": " and 😀 here."
                 }
               ],
-              "start": 10
+              "start": 82
             },
             {
               "colors": null,
@@ -2592,7 +3319,7 @@
                 "type": "listItem"
               },
               "length": 11,
-              "line": 4,
+              "line": 12,
               "lines": 1,
               "prefix": "•  ",
               "runs": [
@@ -2612,7 +3339,7 @@
                   "text": "item one"
                 }
               ],
-              "start": 69
+              "start": 119
             },
             {
               "colors": null,
@@ -2622,7 +3349,7 @@
                 "type": "listItem"
               },
               "length": 11,
-              "line": 5,
+              "line": 13,
               "lines": 1,
               "prefix": "•  ",
               "runs": [
@@ -2642,7 +3369,7 @@
                   "text": "item two"
                 }
               ],
-              "start": 80
+              "start": 130
             },
             {
               "colors": null,
@@ -2652,7 +3379,7 @@
                 "type": "quote"
               },
               "length": 10,
-              "line": 7,
+              "line": 15,
               "lines": 1,
               "prefix": "    ",
               "runs": [
@@ -2672,7 +3399,7 @@
                   "text": "a quote"
                 }
               ],
-              "start": 92
+              "start": 142
             },
             {
               "colors": null,
@@ -2682,7 +3409,7 @@
                 "type": "code"
               },
               "length": 23,
-              "line": 9,
+              "line": 17,
               "lines": 3,
               "prefix": "",
               "runs": [
@@ -2702,7 +3429,7 @@
                   "text": "let x = 1;"
                 }
               ],
-              "start": 103
+              "start": 153
             },
             {
               "colors": null,
@@ -2793,7 +3520,7 @@
                 "type": "table"
               },
               "length": 30,
-              "line": 13,
+              "line": 21,
               "lines": 3,
               "prefix": "",
               "runs": [
@@ -2813,12 +3540,12 @@
                   "text": "| a | b |\n|---|---|\n| 1 | 2 |"
                 }
               ],
-              "start": 127
+              "start": 177
             }
           ],
           "format": "Markdown",
           "gap": null,
-          "head": 30,
+          "head": 2,
           "keys": {
             "color": 0,
             "hints": [
@@ -2869,9 +3596,9 @@
             "prompting": false
           },
           "note": "Home",
-          "place": "Ln 3, Col 21",
-          "rev": 6,
-          "version": 7
+          "place": "Ln 1, Col 3",
+          "rev": 8,
+          "version": 9
         }
       },
       {
@@ -2879,7 +3606,7 @@
           {
             "anchor": 0,
             "head": 0,
-            "rev": 6
+            "rev": 8
           },
           {
             "kind": "text",
@@ -2890,13 +3617,13 @@
         ],
         "call": "facadeInput",
         "out": {
-          "anchor": 10,
-          "base": 6,
+          "anchor": 14,
+          "base": 8,
           "blocks": [],
           "commands": [],
           "copied": null,
           "gap": null,
-          "head": 10,
+          "head": 14,
           "keys": {
             "color": 0,
             "hints": [
@@ -2948,7 +3675,7 @@
           },
           "place": "Ln 3, Col 1",
           "request": null,
-          "rev": 6,
+          "rev": 8,
           "scroll": true,
           "unstored": false,
           "wantsClipboard": false
@@ -2963,12 +3690,12 @@
           "found": null,
           "sections": {
             "note": "Home",
-            "rev": 6,
+            "rev": 8,
             "sections": [
               {
                 "folded": false,
-                "last": 15,
-                "line": 0
+                "last": 23,
+                "line": 4
               }
             ]
           }
@@ -2977,12 +3704,12 @@
       {
         "args": [],
         "call": "text",
-        "out": "# Facade\n\nA pa\\*x\\*\\*plain\\******ragraph with **bold** and 😀 here.\r\n\n- item one\n- item two\n\n> a quote\n\n```rust\nlet x = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        "out": "****# Facade\n\nA pa\\*x\\*\\*plain\\*\n\n## From\n\n*html*\n\n![](Plan-2026-11-10-0930.png)\n\n*ragraph with **bold** and 😀 here.\r\n\n- item one\n- item two\n\n> a quote\n\n```rust\nlet x = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
       },
       {
         "args": [],
         "call": "hash",
-        "out": "cec9d21b802bda86"
+        "out": "34a86ca61723ffea"
       }
     ]
   },
@@ -3295,6 +4022,22 @@
         "call": "facadeClipboard",
         "out": {
           "error": "The clipboard action is not valid: unknown variant `shred`, expected one of `copy`, `cut`, `paste` at line 1 column 7"
+        }
+      },
+      {
+        "args": [
+          {
+            "anchor": 0,
+            "head": 0,
+            "rev": 0
+          },
+          {
+            "kind": "x"
+          }
+        ],
+        "call": "facadeInsert",
+        "out": {
+          "error": "The insertion is not valid: unknown variant `x`, expected one of `link`, `image`, `file`, `dropped`, `text` at line 1 column 11"
         }
       },
       {
@@ -3972,6 +4715,8 @@
         "call": "facadeClipboard",
         "out": {
           "copied": "*",
+          "html": "<p>*</p>",
+          "image": false,
           "patch": {
             "anchor": 17,
             "base": 3,
@@ -3999,11 +4744,17 @@
           },
           "paste",
           false,
-          "*"
+          {
+            "image": false,
+            "markup": null,
+            "text": "*"
+          }
         ],
         "call": "facadeClipboard",
         "out": {
           "copied": null,
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 17,
             "base": 3,
@@ -4193,11 +4944,17 @@
           },
           "paste",
           true,
-          "*plain*"
+          {
+            "image": false,
+            "markup": "**html**",
+            "text": "*plain*"
+          }
         ],
         "call": "facadeClipboard",
         "out": {
           "copied": null,
+          "html": null,
+          "image": false,
           "patch": {
             "anchor": 24,
             "base": 4,
@@ -4411,40 +5168,335 @@
       {
         "args": [
           {
-            "anchor": 0,
-            "head": 0,
-            "rev": 4
+            "anchor": 24,
+            "head": 24,
+            "rev": 5
+          },
+          "paste",
+          false,
+          {
+            "image": false,
+            "markup": "## From\n\n*html*",
+            "text": "html"
+          }
+        ],
+        "call": "facadeClipboard",
+        "out": {
+          "copied": null,
+          "html": null,
+          "image": false,
+          "patch": {
+            "anchor": 43,
+            "base": 5,
+            "blocks": [
+              {
+                "base": 6,
+                "blocks": [
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 15,
+                    "line": 2,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 7,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            0
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "A pa*x*"
+                      },
+                      {
+                        "bold": true,
+                        "code": false,
+                        "end": 13,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            8
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "plain"
+                      }
+                    ],
+                    "start": 10
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 8,
+                    "line": 4,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 7,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            0
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "## From"
+                      }
+                    ],
+                    "start": 26
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 7,
+                    "line": 6,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": true,
+                        "code": false,
+                        "end": 5,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            1
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "html"
+                      }
+                    ],
+                    "start": 35
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "type": "paragraph"
+                    },
+                    "length": 27,
+                    "line": 8,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": true,
+                        "code": false,
+                        "end": 19,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            1
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "ragraph with *bold"
+                      },
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 26,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            20
+                          ]
+                        ],
+                        "strike": false,
+                        "text": " here."
+                      }
+                    ],
+                    "start": 43
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "depth": 0,
+                      "type": "listItem"
+                    },
+                    "length": 11,
+                    "line": 10,
+                    "lines": 1,
+                    "prefix": "•  ",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 10,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "item one"
+                      }
+                    ],
+                    "start": 71
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "depth": 0,
+                      "type": "listItem"
+                    },
+                    "length": 11,
+                    "line": 11,
+                    "lines": 1,
+                    "prefix": "•  ",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 10,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "item two"
+                      }
+                    ],
+                    "start": 82
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "label": "NOTE",
+                      "type": "admonition"
+                    },
+                    "length": 21,
+                    "line": 13,
+                    "lines": 1,
+                    "prefix": "    NOTE  ",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 20,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            6
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "An admonition."
+                      }
+                    ],
+                    "start": 94
+                  }
+                ],
+                "from": 1,
+                "lineShift": 6,
+                "note": "Home",
+                "removed": 4,
+                "rev": 6,
+                "shift": 19,
+                "version": 7
+              }
+            ],
+            "commands": [],
+            "copied": null,
+            "gap": null,
+            "head": 43,
+            "keys": null,
+            "place": "Ln 9, Col 1",
+            "request": null,
+            "rev": 6,
+            "scroll": true,
+            "unstored": false,
+            "wantsClipboard": false
+          }
+        }
+      },
+      {
+        "args": [
+          {
+            "anchor": 43,
+            "head": 43,
+            "rev": 6
           },
           {
-            "kind": "tool",
-            "tool": "bold"
-          },
-          null,
-          null
+            "kind": "image",
+            "place": "Plan-2026-11-10-0930.png"
+          }
         ],
-        "call": "facadeInput",
+        "call": "facadeInsert",
         "out": {
-          "anchor": 25,
-          "base": 5,
+          "anchor": 76,
+          "base": 6,
           "blocks": [
             {
-              "base": 6,
+              "base": 7,
               "blocks": [
                 {
                   "colors": null,
-                  "figure": null,
-                  "kind": {
-                    "type": "paragraph"
+                  "figure": {
+                    "caption": null,
+                    "failed": false,
+                    "loading": "Loading Plan-2026-11-10-0930.png…",
+                    "message": null,
+                    "picture": null,
+                    "sourceShown": false,
+                    "unreadable": null
                   },
-                  "length": 43,
-                  "line": 2,
+                  "kind": {
+                    "alt": "Plan-2026-11-10-0930",
+                    "target": "Plan-2026-11-10-0930.png",
+                    "type": "image"
+                  },
+                  "length": 34,
+                  "line": 8,
                   "lines": 1,
                   "prefix": "",
                   "runs": [
                     {
                       "bold": false,
                       "code": false,
-                      "end": 6,
+                      "end": 33,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4454,48 +5506,32 @@
                         ]
                       ],
                       "strike": false,
-                      "text": "A pa*x"
-                    },
+                      "text": "image::Plan-2026-11-10-0930.png[]"
+                    }
+                  ],
+                  "start": 43
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 27,
+                  "line": 10,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
                     {
                       "bold": true,
                       "code": false,
-                      "end": 13,
+                      "end": 19,
                       "italic": false,
                       "link": null,
                       "offsets": [
                         [
                           0,
-                          8
-                        ]
-                      ],
-                      "strike": false,
-                      "text": "plain"
-                    },
-                    {
-                      "bold": false,
-                      "code": false,
-                      "end": 16,
-                      "italic": false,
-                      "link": null,
-                      "offsets": [
-                        [
-                          0,
-                          15
-                        ]
-                      ],
-                      "strike": false,
-                      "text": "*"
-                    },
-                    {
-                      "bold": true,
-                      "code": false,
-                      "end": 35,
-                      "italic": false,
-                      "link": null,
-                      "offsets": [
-                        [
-                          0,
-                          17
+                          1
                         ]
                       ],
                       "strike": false,
@@ -4504,20 +5540,20 @@
                     {
                       "bold": false,
                       "code": false,
-                      "end": 42,
+                      "end": 26,
                       "italic": false,
                       "link": null,
                       "offsets": [
                         [
                           0,
-                          36
+                          20
                         ]
                       ],
                       "strike": false,
                       "text": " here."
                     }
                   ],
-                  "start": 10
+                  "start": 78
                 },
                 {
                   "colors": null,
@@ -4527,7 +5563,7 @@
                     "type": "listItem"
                   },
                   "length": 11,
-                  "line": 4,
+                  "line": 12,
                   "lines": 1,
                   "prefix": "•  ",
                   "runs": [
@@ -4547,7 +5583,7 @@
                       "text": "item one"
                     }
                   ],
-                  "start": 54
+                  "start": 106
                 },
                 {
                   "colors": null,
@@ -4557,7 +5593,7 @@
                     "type": "listItem"
                   },
                   "length": 11,
-                  "line": 5,
+                  "line": 13,
                   "lines": 1,
                   "prefix": "•  ",
                   "runs": [
@@ -4577,7 +5613,7 @@
                       "text": "item two"
                     }
                   ],
-                  "start": 65
+                  "start": 117
                 },
                 {
                   "colors": null,
@@ -4587,7 +5623,7 @@
                     "type": "admonition"
                   },
                   "length": 21,
-                  "line": 7,
+                  "line": 15,
                   "lines": 1,
                   "prefix": "    NOTE  ",
                   "runs": [
@@ -4607,26 +5643,110 @@
                       "text": "An admonition."
                     }
                   ],
-                  "start": 77
+                  "start": 129
                 }
               ],
-              "from": 1,
-              "lineShift": 0,
+              "from": 4,
+              "lineShift": 2,
               "note": "Home",
               "removed": 4,
-              "rev": 6,
-              "shift": 2,
-              "version": 7
+              "rev": 7,
+              "shift": 35,
+              "version": 8
             }
           ],
           "commands": [],
           "copied": null,
           "gap": null,
-          "head": 25,
+          "head": 76,
           "keys": null,
-          "place": "Ln 3, Col 16",
+          "place": "Ln 9, Col 34",
           "request": null,
-          "rev": 6,
+          "rev": 7,
+          "scroll": true,
+          "unstored": false,
+          "wantsClipboard": false
+        }
+      },
+      {
+        "args": [
+          true
+        ],
+        "call": "copyOnSelect",
+        "out": {
+          "copy": null,
+          "forget": false
+        }
+      },
+      {
+        "args": [
+          {
+            "anchor": 0,
+            "head": 0,
+            "rev": 7
+          },
+          {
+            "kind": "tool",
+            "tool": "bold"
+          },
+          null,
+          null
+        ],
+        "call": "facadeInput",
+        "out": {
+          "anchor": 1,
+          "base": 7,
+          "blocks": [
+            {
+              "base": 8,
+              "blocks": [
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 11,
+                  "line": 0,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 10,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "**= Facade"
+                    }
+                  ],
+                  "start": 0
+                }
+              ],
+              "from": 0,
+              "lineShift": 0,
+              "note": "Home",
+              "removed": 1,
+              "rev": 8,
+              "shift": 2,
+              "version": 9
+            }
+          ],
+          "commands": [],
+          "copied": null,
+          "gap": null,
+          "head": 1,
+          "keys": null,
+          "place": "Ln 1, Col 2",
+          "request": null,
+          "rev": 8,
           "scroll": true,
           "unstored": false,
           "wantsClipboard": false
@@ -4696,16 +5816,15 @@
         "args": [],
         "call": "facadeState",
         "out": {
-          "anchor": 25,
+          "anchor": 1,
           "blocks": [
             {
               "colors": null,
               "figure": null,
               "kind": {
-                "level": 1,
-                "type": "heading"
+                "type": "paragraph"
               },
-              "length": 9,
+              "length": 11,
               "line": 0,
               "lines": 1,
               "prefix": "",
@@ -4713,17 +5832,17 @@
                 {
                   "bold": false,
                   "code": false,
-                  "end": 8,
+                  "end": 10,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      2
+                      0
                     ]
                   ],
                   "strike": false,
-                  "text": "Facade"
+                  "text": "**= Facade"
                 }
               ],
               "start": 0
@@ -4734,7 +5853,7 @@
               "kind": {
                 "type": "paragraph"
               },
-              "length": 43,
+              "length": 15,
               "line": 2,
               "lines": 1,
               "prefix": "",
@@ -4742,7 +5861,7 @@
                 {
                   "bold": false,
                   "code": false,
-                  "end": 6,
+                  "end": 7,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -4752,7 +5871,7 @@
                     ]
                   ],
                   "strike": false,
-                  "text": "A pa*x"
+                  "text": "A pa*x*"
                 },
                 {
                   "bold": true,
@@ -4768,32 +5887,128 @@
                   ],
                   "strike": false,
                   "text": "plain"
-                },
+                }
+              ],
+              "start": 12
+            },
+            {
+              "colors": null,
+              "figure": null,
+              "kind": {
+                "type": "paragraph"
+              },
+              "length": 8,
+              "line": 4,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
                 {
                   "bold": false,
                   "code": false,
-                  "end": 16,
+                  "end": 7,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      15
+                      0
                     ]
                   ],
                   "strike": false,
-                  "text": "*"
-                },
+                  "text": "## From"
+                }
+              ],
+              "start": 28
+            },
+            {
+              "colors": null,
+              "figure": null,
+              "kind": {
+                "type": "paragraph"
+              },
+              "length": 7,
+              "line": 6,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
                 {
                   "bold": true,
                   "code": false,
-                  "end": 35,
+                  "end": 5,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      17
+                      1
+                    ]
+                  ],
+                  "strike": false,
+                  "text": "html"
+                }
+              ],
+              "start": 37
+            },
+            {
+              "colors": null,
+              "figure": {
+                "caption": null,
+                "failed": false,
+                "loading": "Loading Plan-2026-11-10-0930.png…",
+                "message": null,
+                "picture": null,
+                "sourceShown": false,
+                "unreadable": null
+              },
+              "kind": {
+                "alt": "Plan-2026-11-10-0930",
+                "target": "Plan-2026-11-10-0930.png",
+                "type": "image"
+              },
+              "length": 34,
+              "line": 8,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
+                {
+                  "bold": false,
+                  "code": false,
+                  "end": 33,
+                  "italic": false,
+                  "link": null,
+                  "offsets": [
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "strike": false,
+                  "text": "image::Plan-2026-11-10-0930.png[]"
+                }
+              ],
+              "start": 45
+            },
+            {
+              "colors": null,
+              "figure": null,
+              "kind": {
+                "type": "paragraph"
+              },
+              "length": 27,
+              "line": 10,
+              "lines": 1,
+              "prefix": "",
+              "runs": [
+                {
+                  "bold": true,
+                  "code": false,
+                  "end": 19,
+                  "italic": false,
+                  "link": null,
+                  "offsets": [
+                    [
+                      0,
+                      1
                     ]
                   ],
                   "strike": false,
@@ -4802,20 +6017,20 @@
                 {
                   "bold": false,
                   "code": false,
-                  "end": 42,
+                  "end": 26,
                   "italic": false,
                   "link": null,
                   "offsets": [
                     [
                       0,
-                      36
+                      20
                     ]
                   ],
                   "strike": false,
                   "text": " here."
                 }
               ],
-              "start": 10
+              "start": 80
             },
             {
               "colors": null,
@@ -4825,7 +6040,7 @@
                 "type": "listItem"
               },
               "length": 11,
-              "line": 4,
+              "line": 12,
               "lines": 1,
               "prefix": "•  ",
               "runs": [
@@ -4845,7 +6060,7 @@
                   "text": "item one"
                 }
               ],
-              "start": 54
+              "start": 108
             },
             {
               "colors": null,
@@ -4855,7 +6070,7 @@
                 "type": "listItem"
               },
               "length": 11,
-              "line": 5,
+              "line": 13,
               "lines": 1,
               "prefix": "•  ",
               "runs": [
@@ -4875,7 +6090,7 @@
                   "text": "item two"
                 }
               ],
-              "start": 65
+              "start": 119
             },
             {
               "colors": null,
@@ -4885,7 +6100,7 @@
                 "type": "admonition"
               },
               "length": 21,
-              "line": 7,
+              "line": 15,
               "lines": 1,
               "prefix": "    NOTE  ",
               "runs": [
@@ -4905,7 +6120,7 @@
                   "text": "An admonition."
                 }
               ],
-              "start": 77
+              "start": 131
             },
             {
               "colors": null,
@@ -4915,7 +6130,7 @@
                 "type": "code"
               },
               "length": 19,
-              "line": 10,
+              "line": 18,
               "lines": 3,
               "prefix": "",
               "runs": [
@@ -4935,12 +6150,12 @@
                   "text": "print(1)"
                 }
               ],
-              "start": 115
+              "start": 169
             }
           ],
           "format": "AsciiDoc",
           "gap": null,
-          "head": 25,
+          "head": 1,
           "keys": {
             "color": 0,
             "hints": [
@@ -4991,9 +6206,9 @@
             "prompting": false
           },
           "note": "Home",
-          "place": "Ln 3, Col 16",
-          "rev": 6,
-          "version": 7
+          "place": "Ln 1, Col 2",
+          "rev": 8,
+          "version": 9
         }
       },
       {
@@ -5001,7 +6216,7 @@
           {
             "anchor": 0,
             "head": 0,
-            "rev": 6
+            "rev": 8
           },
           {
             "kind": "text",
@@ -5012,13 +6227,13 @@
         ],
         "call": "facadeInput",
         "out": {
-          "anchor": 10,
-          "base": 6,
+          "anchor": 12,
+          "base": 8,
           "blocks": [],
           "commands": [],
           "copied": null,
           "gap": null,
-          "head": 10,
+          "head": 12,
           "keys": {
             "color": 0,
             "hints": [
@@ -5070,7 +6285,7 @@
           },
           "place": "Ln 3, Col 1",
           "request": null,
-          "rev": 6,
+          "rev": 8,
           "scroll": true,
           "unstored": false,
           "wantsClipboard": false
@@ -5085,26 +6300,20 @@
           "found": null,
           "sections": {
             "note": "Home",
-            "rev": 6,
-            "sections": [
-              {
-                "folded": false,
-                "last": 12,
-                "line": 0
-              }
-            ]
+            "rev": 8,
+            "sections": []
           }
         }
       },
       {
         "args": [],
         "call": "text",
-        "out": "= Facade\n\nA pa*x**plain****ragraph with *bold* here.\n\n* item one\n* item two\n\nNOTE: An admonition.\n\n[source,python]\n----\nprint(1)\n----\n"
+        "out": "**= Facade\n\nA pa*x**plain*\n\n## From\n\n*html*\n\nimage::Plan-2026-11-10-0930.png[]\n\n*ragraph with *bold* here.\n\n* item one\n* item two\n\nNOTE: An admonition.\n\n[source,python]\n----\nprint(1)\n----\n"
       },
       {
         "args": [],
         "call": "hash",
-        "out": "95c3836daaa34b1b"
+        "out": "003e11e94c3e3840"
       }
     ]
   }

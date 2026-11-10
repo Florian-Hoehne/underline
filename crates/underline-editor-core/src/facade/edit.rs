@@ -26,7 +26,7 @@ use std::ops::Range;
 
 use ropey::Rope;
 use underline_markup::blocks::{link_at, Block, BlockKind};
-use underline_markup::formatting::apply_format;
+use underline_markup::formatting::{apply_format, Format};
 use underline_markup::NoteFormat;
 
 use super::reparse::{changed_bytes, reparse, Change, Spliced};
@@ -123,6 +123,25 @@ pub fn gap_at(rope: &Rope, cursor: usize, blocks: &[Block]) -> Option<Gap> {
         before: next,
         lines: breaks - 1,
     })
+}
+
+/// UC-005 A9 step 2: whether char `cursor` of `rope` is in a code block of
+/// `blocks`, the blocks of the text, as the facade places it: in the first
+/// block that ends at it or after it, else in the last one
+/// (`cursor_in_code` of the egui facade).
+#[must_use]
+pub fn cursor_in_code(rope: &Rope, cursor: usize, blocks: &[Block]) -> bool {
+    let byte = rope.char_to_byte(cursor.min(rope.len_chars()));
+    let index = blocks.partition_point(|b| ext_end(b) < byte);
+    let index = if index < blocks.len() {
+        index
+    } else {
+        let Some(last) = blocks.len().checked_sub(1) else {
+            return false;
+        };
+        last
+    };
+    matches!(blocks[index].kind, BlockKind::Code { .. })
 }
 
 /// ADR-024, ADR-025: what one input of the facade gathers on its way,
@@ -517,6 +536,35 @@ impl FacadeEdit<'_> {
         true
     }
 
+    /// UC-005 A9 step 2: inserts `text` as it is at the cursor, replacing
+    /// the selection, as egui's `SourceView::insert_text` does for a
+    /// dropped file's place in a code block and the space between dropped
+    /// items; nothing is escaped.
+    pub fn insert_raw(&mut self, text: &str) {
+        let selection = self.editor.selection();
+        let rope = self.rope();
+        let start = rope.char_to_byte(selection.start);
+        let old_end = rope.char_to_byte(selection.end);
+        let outcome = self.editor.type_text(text);
+        let edited = outcome.edited();
+        self.take(outcome);
+        if edited {
+            self.follow(Change {
+                start,
+                old_end,
+                new_end: start + text.len(),
+            });
+        }
+    }
+
+    /// UC-005 A9 step 2: whether the cursor is in a code block, where a
+    /// dropped file goes in by its place only (`cursor_in_code` of the egui
+    /// facade).
+    #[must_use]
+    pub fn cursor_in_code(&self) -> bool {
+        cursor_in_code(self.rope(), self.editor.cursor(), self.blocks)
+    }
+
     /// M-09.14: pastes `markup` as it is; markup of several lines stands on
     /// lines of its own, with blank lines around it.
     pub fn paste_markup(&mut self, markup: &str) {
@@ -560,8 +608,15 @@ impl FacadeEdit<'_> {
             self.gathered.request = Some(tool);
             return;
         };
+        self.apply_format(&format);
+    }
+
+    /// UC-005 A2, BR-005: applies `format` at the selection, in the markup
+    /// of the note's format, as the egui window applies the answers of the
+    /// link and image dialogs (`SourceView::apply_format`).
+    pub fn apply_format(&mut self, format: &Format) {
         let text = self.editor.text();
-        let edit = apply_format(&text, self.format, self.editor.selection_bytes(), &format);
+        let edit = apply_format(&text, self.format, self.editor.selection_bytes(), format);
         let change = Change {
             start: edit.range.start,
             old_end: edit.range.end,

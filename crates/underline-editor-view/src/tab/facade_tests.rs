@@ -15,7 +15,7 @@ use underline_editor_core::keys::InputMode as KeysInputMode;
 use underline_markup::NoteFormat;
 
 use super::*;
-use crate::editor_view::{ClipAction, KeyName};
+use crate::editor_view::{ClipAction, ClipContentView, Insertion, KeyName};
 use crate::facade_view::{BlockView, FacadeAt, FacadeInput, FacadePatch, GapView, RowsView};
 use crate::CachedViews;
 
@@ -156,6 +156,22 @@ impl Facade {
         plain: bool,
         text: Option<&str>,
     ) -> (Option<String>, FacadePatch) {
+        let content = text.map(|text| ClipContentView {
+            text: Some(text.to_owned()),
+            ..ClipContentView::default()
+        });
+        let clipped = self.clipboard_with(at, action, plain, content.as_ref());
+        (clipped.copied, clipped.handled.patch)
+    }
+
+    /// Copy, cut or paste `content` at the selection `at`, all of the answer.
+    fn clipboard_with(
+        &mut self,
+        at: FacadeAt,
+        action: ClipAction,
+        plain: bool,
+        content: Option<&ClipContentView>,
+    ) -> FacadeClipped {
         let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
         let call = FacadeCall {
             note: "Home",
@@ -164,8 +180,7 @@ impl Facade {
             earlier,
             views: &mut self.views,
         };
-        let (copied, handled) = self.tab.facade_clipboard(call, action, plain, text);
-        (copied, handled.patch)
+        self.tab.facade_clipboard(call, action, plain, content)
     }
 
     fn input(&mut self, input: FacadeInput) -> FacadePatch {
@@ -837,4 +852,121 @@ fn q46_nano_ctrl_k_on_the_last_block_as_in_egui() {
     assert_eq!(cut.place, "Ln 3, Col 1");
     f.key_with(KeyName::U, true, false);
     assert_eq!(f.text(), "One.\n\nThree.\nTwo.\n\n");
+}
+
+impl Facade {
+    /// Puts `insertion` in at the window's selection; the patch is taken in.
+    fn insert(&mut self, insertion: Insertion) -> FacadePatch {
+        let at = self.at();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: "Home",
+            at,
+            mac: false,
+            earlier,
+            views: &mut self.views,
+        };
+        let patch = self.tab.facade_insert(call, insertion).patch;
+        self.take(patch)
+    }
+}
+
+/// UC-005 A17, M-09.14 (TC-005-26): HTML of other programs comes as the
+/// markup the backend made of it; Ctrl+Shift+V types the plain text; HTML
+/// that kept nothing pastes nothing.
+#[test]
+fn uc005_a17_m09_14_html_pastes_as_markup() {
+    let mut f = Facade::new("html", "One\n\nTwo\n");
+    f.click_after("Two");
+    let content = ClipContentView {
+        text: Some("Install\nUse bold".into()),
+        markup: Some("## Install\n\nUse **bold**".into()),
+        image: false,
+    };
+    let clipped = f.clipboard_with(f.at(), ClipAction::Paste, false, Some(&content));
+    assert!(!clipped.image);
+    f.take(clipped.handled.patch);
+    // On lines of its own, as egui pastes markup of several lines.
+    assert_eq!(f.text(), "One\n\nTwo\n\n## Install\n\nUse **bold**\n\n");
+
+    let mut plain = Facade::new("plain", "One\n");
+    plain.click_after("One");
+    let clipped = plain.clipboard_with(plain.at(), ClipAction::Paste, true, Some(&content));
+    plain.take(clipped.handled.patch);
+    assert!(plain.text().starts_with("OneInstall"), "{:?}", plain.text());
+
+    let mut empty = Facade::new("empty", "One\n");
+    empty.click_after("One");
+    let nothing = ClipContentView {
+        text: Some("x".into()),
+        markup: Some(String::new()),
+        image: false,
+    };
+    let clipped = empty.clipboard_with(empty.at(), ClipAction::Paste, false, Some(&nothing));
+    empty.take(clipped.handled.patch);
+    assert_eq!(empty.text(), "One\n");
+}
+
+/// UC-005 BR-011, M-09.14: copying in the facade gives the markup and the
+/// HTML of the selection; a paste of an image alone is left to the backend.
+#[test]
+fn uc005_br011_m10_6_facade_copy_gives_html_and_an_image_is_left() {
+    let mut f = Facade::new("copy", "Use **bold** here\n");
+    let at = FacadeAt {
+        rev: f.window.rev,
+        anchor: 0,
+        head: 12,
+    };
+    let clipped = f.clipboard_with(at, ClipAction::Copy, false, None);
+    assert_eq!(clipped.copied.as_deref(), Some("Use **bold**"));
+    assert_eq!(
+        clipped.html.as_deref(),
+        Some("<p>Use <strong>bold</strong></p>")
+    );
+    f.take(clipped.handled.patch);
+
+    f.click_after("here");
+    let picture = ClipContentView {
+        text: None,
+        markup: None,
+        image: true,
+    };
+    let clipped = f.clipboard_with(f.at(), ClipAction::Paste, false, Some(&picture));
+    assert!(clipped.image);
+    f.take(clipped.handled.patch);
+    assert_eq!(f.text(), "Use **bold** here\n");
+}
+
+/// UC-005 A2, A9 step 2, M-10.3, M-10.5: the dialogs' answers and dropped
+/// files go in at the facade's cursor; the blocks follow.
+#[test]
+fn uc005_a2_a9_m10_3_m10_5_insertions_in_the_facade() {
+    let mut f = Facade::new("insert", "Read this\n\n```\ncode\n```\n");
+    f.click_after("Read");
+    f.insert(Insertion::Link {
+        address: "https://x.org".into(),
+        label: None,
+    });
+    assert!(
+        f.text()
+            .starts_with("Read[https://x.org](https://x.org) this"),
+        "{:?}",
+        f.text()
+    );
+
+    f.click_after("code");
+    f.insert(Insertion::Dropped {
+        place: "a b.png".into(),
+        image: true,
+    });
+    f.insert(Insertion::Text { text: " ".into() });
+    assert!(f.text().contains("codea b.png \n```"), "{:?}", f.text());
+
+    let mut g = Facade::new("image", "Text\n");
+    g.click_after("Text");
+    g.insert(Insertion::Dropped {
+        place: "photo.png".into(),
+        image: true,
+    });
+    assert_eq!(g.text(), "Text\n\n![](photo.png)\n");
 }

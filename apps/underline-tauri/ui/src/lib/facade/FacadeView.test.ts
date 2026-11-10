@@ -160,6 +160,9 @@ function backendWith(opened: FacadeState): FacadeBackend & {
   fold: ReturnType<typeof vi.fn>;
   input: ReturnType<typeof vi.fn>;
   clipboard: ReturnType<typeof vi.fn>;
+  pasteImage: ReturnType<typeof vi.fn>;
+  insert: ReturnType<typeof vi.fn>;
+  copySelection: ReturnType<typeof vi.fn>;
   keys: ReturnType<typeof vi.fn>;
   readClipboard: ReturnType<typeof vi.fn>;
   writeClipboard: ReturnType<typeof vi.fn>;
@@ -170,7 +173,11 @@ function backendWith(opened: FacadeState): FacadeBackend & {
     select: vi.fn(async () => 'Ln 3, Col 2'),
     fold: vi.fn(async () => PATCH),
     input: vi.fn(async () => FACADE_PATCH),
-    clipboard: vi.fn(async () => FACADE_PATCH),
+    clipboard: vi.fn(async () => ({ patch: FACADE_PATCH, image: null })),
+    pasteImage: vi.fn(async () => FACADE_PATCH),
+    insert: vi.fn(async () => FACADE_PATCH),
+    copySelection: vi.fn(async () => {}),
+    textHash: () => null,
     keys: vi.fn(async () => null),
     readClipboard: vi.fn(async () => 'from the clipboard'),
     writeClipboard: vi.fn(async () => {}),

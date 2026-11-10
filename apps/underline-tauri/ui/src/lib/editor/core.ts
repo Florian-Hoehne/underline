@@ -8,6 +8,7 @@ import init, { initSync, WasmMirror, WasmTab } from '../wasm/pkg/underline_edito
 import type {
   BlocksView,
   ClipAction,
+  ClipContentView,
   Clipped,
   EditorInput,
   EditorPatch,
@@ -19,9 +20,11 @@ import type {
   FacadeState,
   FigureView,
   FormatName,
+  Insertion,
   KeysStatusView,
   RemoteApplied,
   RowsView,
+  CopyOnSelectView,
   SyncAnswer,
   SyncBatch,
   TabViews,
@@ -72,6 +75,10 @@ type Tab = Pick<
   | 'fold'
   | 'keysStatus'
   | 'clipboard'
+  | 'copyOnSelect'
+  | 'overCopied'
+  | 'insert'
+  | 'facadeInsert'
   | 'facadeState'
   | 'facadeHead'
   | 'facadeInput'
@@ -243,9 +250,33 @@ export class EditorCore {
     return this.#json((tab) => tab.keysStatus(JSON.stringify(vim)));
   }
 
-  /** Copy, cut, or paste the clipboard's `text` in the source view. */
-  clipboard(action: ClipAction, text: string | null): Clipped<EditorPatch> {
-    return this.#json((tab) => tab.clipboard(JSON.stringify(action), text));
+  /** Copy, cut, or paste what the clipboard holds (`content`) in the source view. */
+  clipboard(action: ClipAction, content: ClipContentView | null): Clipped<EditorPatch> {
+    return this.#json((tab) => tab.clipboard(JSON.stringify(action), JSON.stringify(content)));
+  }
+
+  /**
+   * M-10.7, FR-031: the selection to put on the clipboard, once per
+   * selection, when copy on select is `on`; and whether the copied
+   * selection is gone (`forget`).
+   */
+  copyOnSelect(on: boolean): CopyOnSelectView {
+    return this.#json((tab) => tab.copyOnSelect(on));
+  }
+
+  /** BR-011: the selection is the one copy on select copied. */
+  overCopied(): boolean {
+    return this.#call((tab) => tab.overCopied());
+  }
+
+  /** M-10.3 to M-10.6: puts `insertion` in at the source view's selection. */
+  insert(insertion: Insertion): EditorPatch {
+    return this.#json((tab) => tab.insert(JSON.stringify(insertion)));
+  }
+
+  /** M-10.3 to M-10.6: puts `insertion` in at the facade's selection `at`. */
+  facadeInsert(at: FacadeAt, insertion: Insertion): FacadePatch {
+    return this.#json((tab) => tab.facadeInsert(JSON.stringify(at), JSON.stringify(insertion)));
   }
 
   facadeState(): FacadeState {
@@ -272,10 +303,15 @@ export class EditorCore {
     at: FacadeAt,
     action: ClipAction,
     plain: boolean,
-    text: string | null,
+    content: ClipContentView | null,
   ): Clipped<FacadePatch> {
     return this.#json((tab) =>
-      tab.facadeClipboard(JSON.stringify(at), JSON.stringify(action), plain, text),
+      tab.facadeClipboard(
+        JSON.stringify(at),
+        JSON.stringify(action),
+        plain,
+        JSON.stringify(content),
+      ),
     );
   }
 

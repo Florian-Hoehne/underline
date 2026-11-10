@@ -88,7 +88,11 @@ fn adr025_no_call_panics_with_arguments_that_do_not_fit() {
             for a in OFFSETS {
                 for h in OFFSETS {
                     let _ = core.select(rev, a, h);
-                    let _ = core.clipboard("\"cut\"", None);
+                    let _ = core.clipboard("\"cut\"", "null");
+                    let _ = core.copy_on_select(true);
+                    let _ = core.insert(
+                        &json!({ "kind": "dropped", "place": "😀.png", "image": true }).to_string(),
+                    );
                     let _ = core.select(rev, h, a);
                     let _ = core.input(&json!({ "kind": "text", "text": "😀\r\n" }).to_string());
                 }
@@ -139,8 +143,12 @@ fn adr025_no_call_panics_with_arguments_that_do_not_fit() {
                     ] {
                         let _ = core.facade_input(&at, &input.to_string(), &rows, Some("😀"));
                     }
-                    let _ = core.facade_clipboard(&at, "\"cut\"", false, None);
-                    let _ = core.facade_clipboard(&at, "\"paste\"", false, Some("a\r\n😀"));
+                    let _ = core.facade_clipboard(&at, "\"cut\"", false, "null");
+                    let pasted = json!({ "text": "a\r\n😀", "markup": "# a\r\n\r\n😀", "image": false });
+                    let _ = core.facade_clipboard(&at, "\"paste\"", false, &pasted.to_string());
+                    let _ = core.facade_insert(&at, &json!({ "kind": "link", "address": "a b", "label": null }).to_string());
+                    let _ = core.facade_insert(&at, &json!({ "kind": "text", "text": "\r\n" }).to_string());
+                    let _ = core.copy_on_select(true);
                 }
             }
         }
@@ -184,10 +192,21 @@ fn adr025_wrong_json_is_an_error() {
             );
         }
         if wrong != "\"copy\"" {
-            assert!(core.clipboard(wrong, None).is_err(), "action {wrong}");
+            assert!(core.clipboard(wrong, "null").is_err(), "action {wrong}");
             assert!(
-                core.facade_clipboard(&at, wrong, false, None).is_err(),
+                core.facade_clipboard(&at, wrong, false, "null").is_err(),
                 "facade action {wrong}"
+            );
+        }
+        if wrong != "null" {
+            assert!(
+                core.clipboard("\"paste\"", wrong).is_err(),
+                "content {wrong}"
+            );
+            assert!(core.insert(wrong).is_err(), "insertion {wrong}");
+            assert!(
+                core.facade_insert(&at, wrong).is_err(),
+                "facade insertion {wrong}"
             );
         }
     }
@@ -257,7 +276,7 @@ fn adr025_random_calls_never_panic() {
                     }
                     4 => {
                         let at = json!({ "rev": rev, "anchor": a, "head": h }).to_string();
-                        let _ = core.facade_clipboard(&at, "\"cut\"", false, None);
+                        let _ = core.facade_clipboard(&at, "\"cut\"", false, "null");
                     }
                     _ => {
                         let _ = core.fold(random.below(20));

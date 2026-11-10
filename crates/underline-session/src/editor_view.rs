@@ -3,7 +3,7 @@
 //! its former path, and what only the session knows of a tab (its
 //! properties, the question before closing).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use underline_editor_view::editor_view::*;
 
@@ -46,4 +46,43 @@ pub struct CloseQuestion {
     pub what: String,
     /// Why, for "Changes could not be stored: {error}".
     pub error: String,
+}
+
+/// M-10.5, UC-005 A9: files dragged over the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum DragName {
+    /// They came into the window.
+    Over,
+    /// They left it without a drop.
+    Left,
+    /// They were dropped while no note is shown.
+    NoNote,
+}
+
+/// UC-005 A9 to A13, A19, M-10.4, M-10.5: what putting a file into a note
+/// gave the window: something to insert at the cursor, the question about
+/// a large file, or nothing (the status bar says why).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EmbedAnswer {
+    /// Inserts `insertion` at the cursor.
+    Insert {
+        /// What goes into the text.
+        insertion: Insertion,
+    },
+    /// A19: the file is larger than 10 MB; the image dialog asks whether to
+    /// copy it or only to link to where it is.
+    Large {
+        /// The file as the user gave it; "Link to its place" links to it.
+        path: String,
+        /// "{file} has N MB. Copy it into the workspace, or only link to
+        /// where it is (it is then not part of the workspace and not pushed
+        /// with git)?"
+        question: String,
+    },
+    /// Nothing is inserted; the status bar says why.
+    Refused,
 }

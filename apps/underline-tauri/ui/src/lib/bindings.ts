@@ -127,6 +127,58 @@ export const commands = {
 	 */
 	clipWriteText: (text: string) => typedError<null, UiError>(__TAURI_INVOKE("clip_write_text", { text })),
 	/**
+	 *  UC-005 A17, A18, M-08.6, M-09.14, M-10.7: what a paste in the tab of
+	 *  `note` takes from the system clipboard (ADR-014): its text, its HTML as
+	 *  markup of the format `rich` (the facade; `null` in the source view and
+	 *  with Ctrl+Shift+V), and whether it holds an image alone. Over the
+	 *  selection copy on select copied (`over_copied`) it is what the clipboard
+	 *  held before (BR-011).
+	 */
+	clipRead: (note: string, rich: FormatName | null, overCopied: boolean) => typedError<ClipContentView, UiError>(__TAURI_INVOKE("clip_read", { note, rich, overCopied })),
+	/**
+	 *  M-08.6, M-09.14, M-10.7, BR-011: puts copied markup on the system
+	 *  clipboard, with the HTML of the facade's selection for other programs.
+	 *  With `keep_before` (the first copy of a selection by copy on select),
+	 *  what the clipboard held is kept first for pasting over the selection.
+	 */
+	clipWrite: (note: string, text: string, html: string | null, keepBefore: boolean) => typedError<null, UiError>(__TAURI_INVOKE("clip_write", { note, text, html, keepBefore })),
+	/**
+	 *  UC-005 A18, BR-014, M-10.6: stores the image the clipboard holds (over
+	 *  the copied selection: the one it held before, as `clip_read`) as a PNG
+	 *  next to the note of `note`; the status says "Pasted image stored as
+	 *  {name}" or why not. The name to insert, `null` when nothing was stored.
+	 *  Encoding and writing run without the session.
+	 */
+	clipStoreImage: (note: string, overCopied: boolean) => typedError<string | null, UiError>(__TAURI_INVOKE("clip_store_image", { note, overCopied })),
+	/**
+	 *  BR-011, M-10.7: the selection copy on select copied in the tab of `note`
+	 *  is gone; what the clipboard held before it is let go.
+	 */
+	clipForget: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("clip_forget", { note })),
+	/**
+	 *  UC-005 A2, A9 to A11, A19, M-10.4: the answer of the image dialog: puts
+	 *  the file `path` into the note of `note`, copied next to it from outside
+	 *  the workspace; `allow_large` after "Copy" for a file over 10 MB. The
+	 *  file is copied without the session.
+	 */
+	edEmbed: (note: string, path: string, allowLarge: boolean) => typedError<EmbedAnswer, UiError>(__TAURI_INVOKE("ed_embed", { note, path, allowLarge })),
+	/**
+	 *  UC-005 A9 to A13, M-10.5: what was dropped on the window (`paths`), for
+	 *  the tab of `note`, one answer per item with a space between them; the
+	 *  files are copied without the session.
+	 */
+	edDrop: (note: string, paths: string[]) => typedError<EmbedAnswer[], UiError>(__TAURI_INVOKE("ed_drop", { note, paths })),
+	/**
+	 *  UC-005 A9, M-10.5: files are dragged over the window, left it, or were
+	 *  dropped with no note shown; the status bar says so.
+	 */
+	edDrag: (state: DragName) => typedError<null, UiError>(__TAURI_INVOKE("ed_drag", { state })),
+	/**
+	 *  M-10.3, UC-005 A2: the link dialog chose the note `target`: the link to
+	 *  it from the note of `note`, relative, with its title.
+	 */
+	edNoteLink: (note: string, target: string) => typedError<Insertion, UiError>(__TAURI_INVOKE("ed_note_link", { note, target })),
+	/**
 	 *  M-21.4, UC-005 A14 step 3: "Close anyway": Underline ends without the
 	 *  changes that could not be stored. What can be stored is stored once
 	 *  more, and the app state is written, when the app exits.
@@ -290,9 +342,27 @@ export type ClipAction =
 "paste";
 
 /**
- *  M-08.6, M-09.14, ADR-025: what copying, cutting or pasting in the
- *  webview's editor gives: the markup for the clipboard, if any, and the
- *  patch.
+ *  UC-005 A17, A18, ADR-014: what the clipboard holds, as the backend read
+ *  it for a paste (`clip_read`). Over the selection copy on select made it
+ *  is what the clipboard held before (BR-011).
+ */
+export type ClipContentView = {
+	/**  The plain text, with `\n` line endings; `None` without text. */
+	text: string | null,
+	/**
+	 *  The HTML of other programs as markup of the note's format
+	 *  (`html_to_markup`), when the facade asked for it; empty when the
+	 *  HTML held nothing the format keeps.
+	 */
+	markup: string | null,
+	/**  An image and nothing else (a screenshot). */
+	image: boolean,
+};
+
+/**
+ *  M-08.6, M-09.14, M-10.6, ADR-025: what copying, cutting or pasting in
+ *  the webview's editor gives: the markup for the clipboard, if any, with
+ *  the HTML of the facade's selection, and the patch.
  */
 export type Clipped<P> = {
 	/**
@@ -300,6 +370,17 @@ export type Clipped<P> = {
 	 *  or when pasting.
 	 */
 	copied: string | null,
+	/**
+	 *  UC-005 BR-011: the facade's selection as HTML, for other programs,
+	 *  put on the clipboard with `copied`; `None` in the source view.
+	 */
+	html: string | null,
+	/**
+	 *  UC-005 A18, M-10.6: the paste found only an image; the window has
+	 *  the backend store it next to the note and inserts it then
+	 *  ([`Insertion::Image`]).
+	 */
+	image: boolean,
 	/**  The patch for the view. */
 	patch: P,
 };
@@ -337,6 +418,17 @@ export type CodeColors = {
 	styles: SpanStyle[],
 };
 
+/**  FR-031, BR-011: what copy on select asks of the backend after an input. */
+export type CopyOnSelectView = {
+	/**  The selection to put on the clipboard, if any. */
+	copy: SelectionCopy | null,
+	/**
+	 *  The copied selection is gone: the backend lets go of what the
+	 *  clipboard held before it.
+	 */
+	forget: boolean,
+};
+
 /**  The stage the Create dialog goes to (M-21.2, UC-001). */
 export type CreateAnswer = 
 /**
@@ -359,6 +451,15 @@ path: string;
 problem: string; 
 /**  A1, A2: the directory that holds files, to open it instead. */
 offer: string | null };
+
+/**  M-10.5, UC-005 A9: files dragged over the window. */
+export type DragName = 
+/**  They came into the window. */
+"over" | 
+/**  They left it without a drop. */
+"left" | 
+/**  They were dropped while no note is shown. */
+"noNote";
 
 /**  The editing view a tab shows its note in (UC-004 BR-003). */
 export type EditingViewName = 
@@ -473,6 +574,32 @@ export type EditorState = {
 	/**  FR-026: the status of the Nano keys; `None` in the other modes. */
 	keys: KeysStatusView | null,
 };
+
+/**
+ *  UC-005 A9 to A13, A19, M-10.4, M-10.5: what putting a file into a note
+ *  gave the window: something to insert at the cursor, the question about
+ *  a large file, or nothing (the status bar says why).
+ */
+export type EmbedAnswer = 
+/**  Inserts `insertion` at the cursor. */
+{ kind: "insert"; 
+/**  What goes into the text. */
+insertion: Insertion } | 
+/**
+ *  A19: the file is larger than 10 MB; the image dialog asks whether to
+ *  copy it or only to link to where it is.
+ */
+{ kind: "large"; 
+/**  The file as the user gave it; "Link to its place" links to it. */
+path: string; 
+/**
+ *  "{file} has N MB. Copy it into the workspace, or only link to
+ *  where it is (it is then not part of the workspace and not pushed
+ *  with git)?"
+ */
+question: string } | 
+/**  Nothing is inserted; the status bar says why. */
+{ kind: "refused" };
 
 /**  ADR-025: what the backend made of the facade's blocks, by content. */
 export type EnrichEvent = EnrichView;
@@ -724,6 +851,47 @@ export type HighlightView = {
 	/**  The looks the spans refer to. */
 	styles: SpanStyle[],
 };
+
+/**
+ *  UC-005 A2, A9 to A13, A18: what goes into the note at the cursor,
+ *  replacing the selection, in the markup of the note's format.
+ */
+export type Insertion = 
+/**
+ *  M-10.3: a link to `address`; its text is `label`, else the
+ *  selection, else the address.
+ */
+{ kind: "link"; 
+/**  The web address or the place of a note. */
+address: string; 
+/**  The link's text. */
+label: string | null } | 
+/**  M-10.6: a picture at `place`, on a paragraph of its own. */
+{ kind: "image"; 
+/**  Its place, relative to the note. */
+place: string } | 
+/**
+ *  M-10.4, A9 to A11: a file put into the note: a picture when
+ *  `image`, else a link labelled with its file name.
+ */
+{ kind: "file"; 
+/**  Its place, relative to the note, with `/`. */
+place: string; 
+/**  Whether it is inserted as a picture (BR-012). */
+image: boolean } | 
+/**
+ *  M-10.5, A9 step 2: a dropped file: as [`Insertion::File`], but in a
+ *  code block only its place.
+ */
+{ kind: "dropped"; 
+/**  Its place, relative to the note, with `/`. */
+place: string; 
+/**  Whether it is inserted as a picture (BR-012). */
+image: boolean } | 
+/**  M-10.5: text as it is, such as the space between dropped items. */
+{ kind: "text"; 
+/**  The text. */
+text: string };
 
 /**  One command of the status line: its keys and what it does. */
 export type KeyHintView = {
@@ -1123,6 +1291,19 @@ export type SectionsView = {
 	rev: number,
 	/**  The sections, in order. */
 	sections: SectionView[],
+};
+
+/**  FR-031, BR-011: a selection copy on select puts on the clipboard. */
+export type SelectionCopy = {
+	/**  The selected markup. */
+	text: string,
+	/**  The facade's selection as HTML; `None` in the source view. */
+	html: string | null,
+	/**
+	 *  The first copy since the selection was made: the backend keeps what
+	 *  the clipboard held before, for pasting over the selection.
+	 */
+	first: boolean,
 };
 
 /**  One setting of UC-010 BR-001, named as in the settings file. */

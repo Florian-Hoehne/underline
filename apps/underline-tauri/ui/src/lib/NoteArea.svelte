@@ -15,17 +15,31 @@
   Feature F4 adds, as in egui:
   - M-10.2: the formatting toolbar after the switch, one button per
     function with its hint; a button puts the keyboard back into the text.
-    Link and Image ask first; their dialogs come with feature F6.
+    Link and Image ask first (feature F6).
   - M-12: the minimap beside the source view or the facade (F5a), unless
     switched off or the editor is narrower than 240 px.
   - M-11.4: the status line under the editor.
+
+  Feature F6 adds, as in egui:
+  - M-10.3, M-10.4: the dialogs "Insert link" and "Insert image" of Link
+    and Image (editor/inserting.svelte.ts), above the central area, not
+    modal; their answer goes in at the cursor of the note shown.
+  - M-10.5: files dropped on the window go into the note shown, at the
+    place under the pointer (editor/drop.ts).
+  - M-10.7: copy on select follows the setting (editor/clipboard.ts).
 -->
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { EditingViewName, EditorCommandName, ToolName } from './bindings';
   import FacadeView from './facade/FacadeView.svelte';
   import EditorStatus from './EditorStatus.svelte';
   import { EDITOR_FAILED } from './editor/sync';
   import { activeSourceView } from './editor/active';
+  import { setCopyOnSelect } from './editor/clipboard';
+  import { listenDrops } from './editor/drop';
+  import { Inserting, type InsertTarget } from './editor/inserting.svelte';
+  import InsertImageDialog from './InsertImageDialog.svelte';
+  import InsertLinkDialog from './InsertLinkDialog.svelte';
   import { nextRegion } from './focus';
   import { EditorInfo } from './editor/info.svelte';
   import type { InputModeName } from './editor/keys';
@@ -50,9 +64,6 @@
     todosActive ? undefined : shell.tabs.tabs.find((tab) => tab.note === shell.tabs.active),
   );
 
-  /** Q-14: the functions that ask first, without their dialogs until F6. */
-  const ASKS_FIRST: ReadonlySet<ToolName> = new Set(['link', 'image']);
-
   /** What the status line and the minimap show of the source view. */
   const info = new EditorInfo();
   const settings = $derived(shell.settings);
@@ -76,6 +87,57 @@
     };
   });
   const withMinimap = $derived(minimapShown(settings?.showMinimap ?? false, editorWidth));
+
+  /** The note shown and its view, for the dialogs' answers and drops. */
+  function insertTarget(): InsertTarget | null {
+    const tab = activeTab;
+    if (!tab) {
+      return null;
+    }
+    if (tab.view === 'facade') {
+      const facade = info.facade;
+      return facade && facade.note === tab.note ? { note: tab.note, editor: facade } : null;
+    }
+    const source = activeSourceView();
+    return source && source.note === tab.note ? { note: tab.note, editor: source } : null;
+  }
+
+  /** M-10.3 to M-10.5: the Link and Image dialogs and dropped files. */
+  const inserting = new Inserting(insertTarget, (message) => shell.editorFailed(message));
+
+  // UC-005 A2: Link and Image ask first; the request opens their dialog.
+  $effect(() => {
+    const asked = info.request;
+    if (asked !== null) {
+      info.request = null;
+      inserting.ask(asked);
+    }
+  });
+
+  // M-10.7: copy on select follows the setting.
+  $effect(() => {
+    setCopyOnSelect(settings?.copyOnSelect ?? true);
+  });
+
+  // M-10.5: files dropped on the window.
+  onMount(() => {
+    let stop: (() => void) | null = null;
+    let gone = false;
+    listenDrops((event) => void inserting.drop(event)).then(
+      (unlisten) => {
+        if (gone) {
+          unlisten();
+        } else {
+          stop = unlisten;
+        }
+      },
+      (error: unknown) => console.error('Dropping files is not available', error),
+    );
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  });
 
   let area = $state<HTMLElement | null>(null);
 
@@ -201,13 +263,11 @@
             <span class="separator" aria-hidden="true"></span>
             <div class="tools" role="group" aria-label="Formatting">
               {#each tools as tool (tool.tool)}
-                <!-- Q-14: Link and Image ask first; their dialogs come with F6. -->
                 <button
                   type="button"
                   class="tool"
                   title={tool.hint}
                   aria-label={tool.hint}
-                  disabled={ASKS_FIRST.has(tool.tool)}
                   onclick={() => useTool(tool.tool)}>{tool.label}</button
                 >
               {/each}
@@ -274,6 +334,26 @@
     <p class="hint">Select or create a note.</p>
   {/if}
 </section>
+{#key inserting.dialog}
+  {#if inserting.dialog?.kind === 'link'}
+    <InsertLinkDialog
+      notes={shell.overview}
+      busy={inserting.busy}
+      onAddress={(address) => void inserting.address(address)}
+      onNote={(note) => void inserting.note(note)}
+      onClose={() => inserting.close()}
+    />
+  {:else if inserting.dialog?.kind === 'image'}
+    <InsertImageDialog
+      large={inserting.dialog.large}
+      busy={inserting.busy}
+      onFile={(path) => void inserting.file(path)}
+      onCopy={() => void inserting.copyLarge()}
+      onLinkPlace={() => void inserting.linkPlace()}
+      onClose={() => inserting.close()}
+    />
+  {/if}
+{/key}
 
 <style>
   .note-area {

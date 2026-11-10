@@ -14,10 +14,11 @@ const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/golden/calls.json");
 /// flags or plain strings (`core.ts` stringifies the same ones).
 fn json_args(call: &str) -> &'static [usize] {
     match call {
-        "input" | "keysStatus" | "clipboard" => &[0],
-        "apply" => &[1],
+        "input" | "keysStatus" | "insert" => &[0],
+        "apply" | "clipboard" => &[0, 1],
         "facadeInput" => &[0, 1, 2],
-        "facadeClipboard" => &[0, 1],
+        "facadeInsert" => &[0, 1],
+        "facadeClipboard" => &[0, 1, 3],
         _ => &[],
     }
 }
@@ -72,15 +73,19 @@ fn dispatch(core: &mut Core, call: &str, args: &[Value]) -> Value {
             .map(Some),
         "fold" => core.fold(num(args, 0)).map(Some),
         "keysStatus" => core.keys_status(&arg(0)).map(Some),
-        "clipboard" => core
-            .clipboard(&arg(0), str_arg(args, 1).as_deref())
-            .map(Some),
+        "clipboard" => core.clipboard(&arg(0), &arg(1)).map(Some),
+        "copyOnSelect" => core.copy_on_select(flag(0)).map(Some),
+        "overCopied" => Ok(Some(
+            serde_json::to_string(&core.over_copied()).expect("a flag"),
+        )),
+        "insert" => core.insert(&arg(0)).map(Some),
+        "facadeInsert" => core.facade_insert(&arg(0), &arg(1)).map(Some),
         "facadeState" => core.facade_state().map(Some),
         "facadeInput" => core
             .facade_input(&arg(0), &arg(1), &arg(2), str_arg(args, 3).as_deref())
             .map(Some),
         "facadeClipboard" => core
-            .facade_clipboard(&arg(0), &arg(1), flag(2), str_arg(args, 3).as_deref())
+            .facade_clipboard(&arg(0), &arg(1), flag(2), &arg(3))
             .map(Some),
         "facadeKeys" => core.facade_keys().map(Some),
         "views" => core.views(args[0].as_f64().expect("a time")).map(Some),
@@ -163,9 +168,29 @@ fn source_md() -> Value {
         run.call("views", json!([1400.0]));
         run.call("input", json!([key("ArrowDown", false, false)]));
         run.call("input", json!([key("Home", false, true)]));
+        run.call("copyOnSelect", json!([true]));
+        run.call("overCopied", json!([]));
+        run.call("copyOnSelect", json!([true]));
         run.call("clipboard", json!(["copy", null]));
         run.call("clipboard", json!(["cut", null]));
-        let pasted = run.call("clipboard", json!(["paste", "pasted\nline"]));
+        run.call("copyOnSelect", json!([true]));
+        run.call(
+            "clipboard",
+            json!(["paste", { "text": null, "markup": null, "image": true }]),
+        );
+        let pasted = run.call(
+            "clipboard",
+            json!(["paste", { "text": "pasted\nline", "markup": "**pasted**", "image": false }]),
+        );
+        run.call(
+            "insert",
+            json!([{ "kind": "dropped", "place": "a b.png", "image": true }]),
+        );
+        run.call("insert", json!([{ "kind": "text", "text": " " }]));
+        run.call(
+            "insert",
+            json!([{ "kind": "link", "address": "Plan.md", "label": "Plan" }]),
+        );
         run.call(
             "apply",
             json!([rev(&pasted["patch"]), [{ "from": 0, "to": 0, "insert": "V", "newStep": true }], 1, 1, false]),
@@ -210,6 +235,10 @@ fn facade(name: &str, text: &str, format: &str, at: u32) -> Value {
         run.call(
             "facadeClipboard",
             json!([{ "rev": 0, "anchor": 0, "head": 0 }, "shred", false, null]),
+        );
+        run.call(
+            "facadeInsert",
+            json!([{ "rev": 0, "anchor": 0, "head": 0 }, { "kind": "x" }]),
         );
         let at_of = |out: &Value, anchor: u32, head: u32| json!({ "rev": rev(out), "anchor": anchor, "head": head });
         let out = run.call(
@@ -259,14 +288,27 @@ fn facade(name: &str, text: &str, format: &str, at: u32) -> Value {
         let markup = copied["copied"].clone();
         let out = run.call(
             "facadeClipboard",
-            json!([at_of(&copied["patch"], head, head), "paste", false, markup]),
+            json!([at_of(&copied["patch"], head, head), "paste", false, { "text": markup, "markup": null, "image": false }]),
         )["patch"]
             .clone();
         let here = u32::try_from(out["head"].as_u64().unwrap()).unwrap();
-        run.call(
+        let out = run.call(
             "facadeClipboard",
-            json!([at_of(&out, here, here), "paste", true, "*plain*"]),
+            json!([at_of(&out, here, here), "paste", true, { "text": "*plain*", "markup": "**html**", "image": false }]),
+        )["patch"]
+            .clone();
+        let here = u32::try_from(out["head"].as_u64().unwrap()).unwrap();
+        let out = run.call(
+            "facadeClipboard",
+            json!([at_of(&out, here, here), "paste", false, { "text": "html", "markup": "## From\n\n*html*", "image": false }]),
+        )["patch"]
+            .clone();
+        let here = u32::try_from(out["head"].as_u64().unwrap()).unwrap();
+        let out = run.call(
+            "facadeInsert",
+            json!([at_of(&out, here, here), { "kind": "image", "place": "Plan-2026-11-10-0930.png" }]),
         );
+        run.call("copyOnSelect", json!([true]));
         run.call(
             "facadeInput",
             json!([at_of(&out, 0, 0), { "kind": "tool", "tool": "bold" }, null, null]),

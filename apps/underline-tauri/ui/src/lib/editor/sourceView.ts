@@ -10,7 +10,13 @@
 //   Nano keys (M-11.3), the toolbar keys (M-10.2) and the folding keys
 //   (M-08.8).
 // - Copy, cut and paste go through the core and the backend's clipboard
-//   (M-08.6).
+//   (M-08.6, `clipboard.ts`): copying puts the markup there, a paste
+//   inserts plain text, and an image alone is stored next to the note and
+//   inserted as a picture (M-10.6). A finished selection is copied at once
+//   while copy on select is on (M-10.7).
+// - What the link and image dialogs answer and what is dropped on the
+//   window goes in at the cursor through the core (`insert`, M-10.3 to
+//   M-10.5); a drop first puts the cursor under the pointer (`placeAt`).
 // - A click places the cursor, a drag or Shift+click extends the selection,
 //   as CodeMirror does it; a double or triple click is a single click, as in
 //   egui (M-08.3). The selection is then given to the core.
@@ -46,6 +52,7 @@ import {
 import { EditorView, drawSelection, type ViewUpdate } from '@codemirror/view';
 import {
   type ClipAction,
+  type Insertion,
   type EditorCommandName,
   type EditorInput,
   type EditorPatch,
@@ -60,6 +67,8 @@ import {
   type UiError,
   type VimState,
 } from '../bindings';
+import type { CursorMark } from '../facade/active';
+import { onPointerReleased, type Clipboarded } from './clipboard';
 import { folding, sectionsField, setSections } from './folding';
 import { foundField, foundRanges, setFound } from './found';
 import { colorField, setColors } from './highlight';
@@ -83,7 +92,23 @@ async function loadVim(): Promise<VimModule> {
 export interface EditorBackend {
   open(note: string): Promise<EditorStateView>;
   input(note: string, input: EditorInput): Promise<EditorPatch>;
-  clipboard(note: string, action: ClipAction): Promise<EditorPatch>;
+  /**
+   * M-08.6, M-09.14: copy, cut or paste through the system clipboard; with
+   * `imageOnly` (Vim outside insert mode) a paste takes only an image.
+   */
+  clipboard(
+    note: string,
+    action: ClipAction,
+    imageOnly?: boolean,
+  ): Promise<Clipboarded<EditorPatch>>;
+  /** M-10.6: stores the clipboard's image next to the note and inserts it. */
+  pasteImage(note: string, over: boolean): Promise<EditorPatch | null>;
+  /** M-10.3 to M-10.5: puts `insertion` in at the selection. */
+  insert(note: string, insertion: Insertion): Promise<EditorPatch>;
+  /** M-10.7: the selection, once settled, goes to the clipboard (copy on select). */
+  copySelection(note: string): Promise<void>;
+  /** M-10.5: the hash of the note's text in the window's core; `null` without one. */
+  textHash(note: string): string | null;
   /** Sets the selection; gives the place for the status line. */
   select(note: string, rev: number, anchor: number, head: number): Promise<string>;
   viewport(note: string, from: number, to: number): Promise<void>;
@@ -314,6 +339,8 @@ export class SourceView {
   #listeners = new Set<(change: ViewChange) => void>();
   /** ADR-025: lets the core's listener go. */
   #detach: (() => void) | null = null;
+  /** M-10.7: stops waiting for the mouse buttons to be let go. */
+  #unwatchPointer: (() => void) | null = null;
   /** Measuring (`bench.ts`): when an input's handling began and its patch was in. */
   probe: ((start: number, patched: number) => void) | null = null;
 
@@ -337,6 +364,20 @@ export class SourceView {
       scrollTo: scrolled.get(state.note),
     });
     this.view.scrollDOM.addEventListener('scroll', this.#scrolled, { passive: true });
+    // A paste is the view's before the Vim keys see it: `codemirror-vim`
+    // would enter insert mode and paste there (A-66); the Vim command line
+    // keeps the webview's paste.
+    this.view.dom.addEventListener('paste', this.#pasteFirst, true);
+    // M-10.7: a selection made with the mouse is copied once it is let go,
+    // after the selection reached the core.
+    this.#unwatchPointer = onPointerReleased(() => {
+      if (this.view.hasFocus) {
+        this.#enqueue(async () => {
+          await this.#backend.copySelection(this.note);
+          return null;
+        });
+      }
+    });
     this.#attach();
     this.#modeStarted();
     this.#options.onPlace?.(state.place);
@@ -436,6 +477,52 @@ export class SourceView {
     this.focus();
   }
 
+  /**
+   * M-10.3 to M-10.5: puts `insertion` in at the cursor, after the inputs
+   * before it; resolves once it is shown.
+   */
+  insert(insertion: Insertion): Promise<void> {
+    this.#enqueue(() => this.#backend.insert(this.note, insertion));
+    return this.#queue.then(() => undefined);
+  }
+
+  /**
+   * M-10.5, UC-005 A9: puts the cursor at the place under the point `x`,
+   * `y` (CSS pixels of the window), where something is dropped; false when
+   * the point is not over the text, as egui's `place_cursor_at`.
+   */
+  placeAt(x: number, y: number): boolean {
+    const box = this.view.contentDOM.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
+      return false;
+    }
+    const at = this.view.posAtCoords({ x, y });
+    if (at === null) {
+      return false;
+    }
+    this.view.dispatch({ selection: { anchor: at }, userEvent: 'select.pointer' });
+    return true;
+  }
+
+  /** M-10.5: where the cursor is, once the inputs before it are in. */
+  async mark(): Promise<CursorMark | null> {
+    await this.settled();
+    const hash = this.#backend.textHash(this.note);
+    if (this.#destroyed || hash === null) {
+      return null;
+    }
+    return { head: this.view.state.selection.main.head, hash };
+  }
+
+  /** M-10.5: the cursor back to `mark`, when the text is still the same. */
+  back(mark: CursorMark): void {
+    if (this.#destroyed || this.#backend.textHash(this.note) !== mark.hash) {
+      return;
+    }
+    const at = Math.min(mark.head, this.view.state.doc.length);
+    this.view.dispatch({ selection: { anchor: at }, userEvent: 'select.pointer' });
+  }
+
   /** ADR-025: the core's changes, sections and hits reach the view here. */
   #attach(): void {
     this.#detach?.();
@@ -505,12 +592,14 @@ export class SourceView {
     }
     this.#destroyed = true;
     this.#detach?.();
+    this.#unwatchPointer?.();
     if (this.#viewportTimer !== null) {
       clearTimeout(this.#viewportTimer);
     }
     this.#unwatchVim?.();
     vimModule?.dropVimKeys(this.view);
     this.view.scrollDOM.removeEventListener('scroll', this.#scrolled);
+    this.view.dom.removeEventListener('paste', this.#pasteFirst, true);
     this.#listeners.clear();
     scrolled.set(this.note, this.view.scrollSnapshot());
     this.view.destroy();
@@ -589,8 +678,8 @@ export class SourceView {
         mousedown: (event, view) => this.#onMouseDown(event, view),
         copy: (event) => this.#onClipboard(event, 'copy'),
         cut: (event) => this.#onClipboard(event, 'cut'),
-        paste: (event) => this.#onClipboard(event, 'paste'),
-        // Files are dropped with feature F6; text is not dropped or dragged.
+        // Files come through the window's drop event (M-10.5, `drop.ts`);
+        // text is not dropped or dragged (FR-034 open, D-15).
         drop: (event) => this.#refuse(event),
         dragstart: (event) => this.#refuse(event),
         // The egui editor has no context menu.
@@ -686,7 +775,20 @@ export class SourceView {
 
   #onClipboard(event: ClipboardEvent, action: ClipAction): boolean {
     event.preventDefault();
-    this.#enqueue(() => this.#backend.clipboard(this.note, action));
+    // As egui's Vim keys: outside insert mode a paste brings no text (that
+    // is `p`); an image alone still comes (A-66).
+    const imageOnly =
+      action === 'paste' && this.#mode === 'Vim' && !vimModule?.vimInserting(this.view);
+    this.#enqueue(async () => {
+      const done = await this.#backend.clipboard(this.note, action, imageOnly);
+      if (done.image) {
+        // M-10.6: the image goes in once the backend stored it, after this
+        // patch is shown.
+        const { over } = done.image;
+        this.#enqueue(() => this.#backend.pasteImage(this.note, over));
+      }
+      return done.patch;
+    });
     return true;
   }
 
@@ -778,6 +880,15 @@ export class SourceView {
   }
 
   #scrolled = (): void => this.#notify('scroll');
+
+  /** M-08.6, M-10.6: a paste into the text, taken before anyone else sees it. */
+  #pasteFirst = (event: ClipboardEvent): void => {
+    if (!(event.target instanceof Node) || !this.view.contentDOM.contains(event.target)) {
+      return;
+    }
+    event.stopPropagation();
+    this.#onClipboard(event, 'paste');
+  };
 
   /** Sends the changes and the selection the user made, after the inputs before them. */
   #scheduleSync(): void {

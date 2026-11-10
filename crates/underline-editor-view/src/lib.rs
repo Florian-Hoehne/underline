@@ -32,6 +32,6 @@ pub mod views;
 
 pub use cached::{CachedViews, CODE_COLORS_KEPT};
 pub use tab::{
-    blocks_views, fold_key, gap_view, indicator, keys_status, EditorTab, FacadeCall, FacadeModel,
-    Handled, Versioned, FOUND_EVERY_MS,
+    blocks_views, fold_key, gap_view, indicator, keys_status, EditorTab, FacadeCall, FacadeClipped,
+    FacadeModel, Handled, Versioned, FOUND_EVERY_MS,
 };

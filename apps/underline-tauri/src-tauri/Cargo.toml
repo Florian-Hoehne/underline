@@ -22,8 +22,8 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12", features = ["specta"] }
 parking_lot = "0.12"
-# ADR-014: the system clipboard, as in the egui app; text only for now.
-arboard = { version = "3.7", default-features = false }
+# ADR-014: the system clipboard, as in the egui app: text, HTML and images.
+arboard = { version = "3.7", default-features = false, features = ["image-data"] }
 # Typed bindings for the window (plan section 4). Release candidates: pinned
 # exactly, as tauri-specta asks.
 specta.workspace = true

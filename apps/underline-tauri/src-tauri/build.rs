@@ -23,6 +23,14 @@ fn main() {
         "app_request_close",
         "clip_read_text",
         "clip_write_text",
+        "clip_read",
+        "clip_write",
+        "clip_store_image",
+        "clip_forget",
+        "ed_embed",
+        "ed_drop",
+        "ed_drag",
+        "ed_note_link",
         "app_close_anyway",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))

@@ -12,8 +12,17 @@ use underline_markup::NoteFormat;
 
 use super::*;
 use crate::editor_view::{
-    EditorCommandName, EditorInput, KeyName, TextChange, ToolName, VimChange, VimModeName, VimState,
+    ClipContentView, CopyOnSelectView, EditorCommandName, EditorInput, Insertion, KeyName,
+    TextChange, ToolName, VimChange, VimModeName, VimState,
 };
+
+/// What the clipboard holds: `text` alone.
+fn clip(text: &str) -> ClipContentView {
+    ClipContentView {
+        text: Some(text.to_owned()),
+        ..ClipContentView::default()
+    }
+}
 
 fn text(text: &str) -> EditorInput {
     EditorInput::Text { text: text.into() }
@@ -110,10 +119,11 @@ fn m08_6_copy_and_cut_give_the_markup_and_paste_inserts_text() {
     assert_eq!(handled.patch.changes.len(), 1);
     assert_eq!(tab.editor.text(), "\n");
 
-    let pasted = tab.paste(Some("**pasted**"));
+    let (image, pasted) = tab.paste(Some(&clip("**pasted**")));
+    assert!(!image);
     assert_eq!(tab.editor.text(), "**pasted**\n");
     assert!(pasted.outcome.edited(), "the host marks the tab");
-    assert!(tab.paste(None).patch.changes.is_empty());
+    assert!(tab.paste(None).1.patch.changes.is_empty());
 }
 
 /// M-08.3: a selection made on an older revision is dropped.
@@ -441,12 +451,12 @@ fn m11_3_a_paste_into_the_open_nano_prompt_stays_out_of_the_note() {
     let mut tab = tab_with("ab\n", KeysInputMode::Nano);
     input(&mut tab, ctrl(KeyName::W));
 
-    let handled = tab.paste(Some("pasted"));
+    let (_, handled) = tab.paste(Some(&clip("pasted")));
 
     assert!(handled.patch.changes.is_empty());
     assert_eq!(tab.editor.text(), "ab\n");
     input(&mut tab, key(KeyName::Escape));
-    tab.paste(Some("x"));
+    tab.paste(Some(&clip("x")));
     assert_eq!(tab.editor.text(), "xab\n");
 }
 
@@ -551,4 +561,177 @@ fn uc004_br012_m08_8_folding_by_key_is_told_after_the_input() {
     tab.fold_line(0);
     let open = tab.sections_view("Home", 3000.0).unwrap();
     assert!(!open.sections[0].folded);
+}
+
+/// M-10.7, FR-031, BR-011 (TC-005-17): copy on select copies a finished
+/// selection once, asks the backend to keep the former content with its
+/// first copy, and pasting over exactly that selection is known; without a
+/// selection it is forgotten, and switched off nothing is copied.
+#[test]
+fn m10_7_copy_on_select_copies_a_selection_once() {
+    let mut tab = tab_with("One two three\n", KeysInputMode::Normal);
+    assert_eq!(
+        tab.copy_on_select(true, false),
+        CopyOnSelectView::default(),
+        "nothing selected"
+    );
+
+    tab.select(rev(&tab), 0, 3);
+    let copy = tab.copy_on_select(true, false).copy.expect("a copy");
+    assert_eq!(copy.text, "One");
+    assert_eq!(copy.html, None, "the source view copies the markup only");
+    assert!(copy.first);
+    assert_eq!(tab.own_markup.as_deref(), Some("One"));
+    assert_eq!(
+        tab.copy_on_select(true, false).copy,
+        None,
+        "once per selection"
+    );
+    assert!(tab.over_copied());
+
+    // A longer selection is copied again, the former content stays kept.
+    tab.select(rev(&tab), 0, 7);
+    let copy = tab.copy_on_select(true, false).copy.expect("a copy");
+    assert_eq!(copy.text, "One two");
+    assert!(!copy.first);
+
+    // Without a selection it is forgotten, and the backend lets go once.
+    tab.select(rev(&tab), 2, 2);
+    let done = tab.copy_on_select(true, false);
+    assert_eq!((done.copy, done.forget), (None, true));
+    assert!(!tab.copy_on_select(true, false).forget);
+    assert!(!tab.over_copied());
+    tab.select(rev(&tab), 0, 7);
+    assert!(!tab.over_copied());
+
+    // Switched off, nothing is copied.
+    let mut off = tab_with("One two\n", KeysInputMode::Normal);
+    off.select(rev(&off), 0, 3);
+    assert_eq!(off.copy_on_select(false, false).copy, None);
+    assert!(!off.over_copied());
+}
+
+/// M-10.7, BR-011: in the facade copy on select gives the HTML too.
+#[test]
+fn m10_7_copy_on_select_in_the_facade_gives_html() {
+    let mut tab = tab_with("Use **bold** here\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 0, 12);
+    let copy = tab.copy_on_select(true, true).copy.expect("a copy");
+    assert_eq!(copy.text, "Use **bold**");
+    assert_eq!(
+        copy.html.as_deref(),
+        Some("<p>Use <strong>bold</strong></p>")
+    );
+}
+
+/// M-08.6: copying and cutting in the source view remember the markup, so
+/// the facade pastes it back as markup (A-53, `copy` of egui).
+#[test]
+fn m08_6_copying_in_the_source_view_remembers_the_markup() {
+    let mut tab = tab_with("**a**\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 0, 5);
+    tab.copy();
+    assert_eq!(tab.own_markup.as_deref(), Some("**a**"));
+}
+
+/// UC-005 A17, A18, M-10.6: the source view pastes plain text, never the
+/// HTML's markup; an image alone is left to the backend, the text unchanged.
+#[test]
+fn uc005_a18_m10_6_an_image_alone_is_left_to_the_backend() {
+    let mut tab = tab_with("ab\n", KeysInputMode::Normal);
+    let html = ClipContentView {
+        text: Some("plain".into()),
+        markup: Some("**rich**".into()),
+        image: false,
+    };
+    let (image, _) = tab.paste(Some(&html));
+    assert!(!image);
+    assert_eq!(tab.editor.text(), "plainab\n");
+
+    let picture = ClipContentView {
+        text: None,
+        markup: None,
+        image: true,
+    };
+    let (image, handled) = tab.paste(Some(&picture));
+    assert!(image);
+    assert!(handled.patch.changes.is_empty());
+    assert_eq!(tab.editor.text(), "plainab\n");
+}
+
+/// UC-005 A2, M-10.3, M-10.4, M-10.6: the answers of the link and image
+/// dialogs and a pasted image go in as egui's `apply_format` puts them.
+#[test]
+fn uc005_a2_m10_3_m10_4_insertions_in_the_source_view() {
+    let mut tab = tab_with("See here\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 4, 8);
+    let handled = tab.source_insert(Insertion::Link {
+        address: "https://x.org".into(),
+        label: None,
+    });
+    assert!(handled.outcome.edited());
+    assert_eq!(tab.editor.text(), "See [here](https://x.org)\n");
+
+    let mut tab = tab_with("a\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 1, 1);
+    tab.source_insert(Insertion::Link {
+        address: "../Plan.md".into(),
+        label: Some("Plan".into()),
+    });
+    assert_eq!(tab.editor.text(), "a[Plan](../Plan.md)\n");
+
+    // A file that is no picture is a link with its file name.
+    let mut tab = tab_with("", KeysInputMode::Normal);
+    tab.source_insert(Insertion::File {
+        place: "docs/report.pdf".into(),
+        image: false,
+    });
+    assert_eq!(tab.editor.text(), "[report.pdf](docs/report.pdf)");
+
+    // A picture on a paragraph of its own.
+    let mut tab = tab_with("a\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 1, 1);
+    tab.source_insert(Insertion::Image {
+        place: "Plan-2026-11-10-0930.png".into(),
+    });
+    assert_eq!(tab.editor.text(), "a\n\n![](Plan-2026-11-10-0930.png)\n");
+}
+
+/// UC-005 A9 step 2, M-10.5: a dropped file goes in by its place only in a
+/// code block, else as a picture or a link; the space between dropped items
+/// is not escaped.
+#[test]
+fn uc005_a9_m10_5_a_dropped_file_in_a_code_block_is_its_place() {
+    let mut tab = tab_with("```\ncode\n```\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 8, 8);
+    tab.source_insert(Insertion::Dropped {
+        place: "photo.png".into(),
+        image: true,
+    });
+    tab.source_insert(Insertion::Text { text: " *".into() });
+    assert_eq!(tab.editor.text(), "```\ncodephoto.png *\n```\n");
+
+    let mut tab = tab_with("Text\n", KeysInputMode::Normal);
+    tab.select(rev(&tab), 4, 4);
+    tab.source_insert(Insertion::Dropped {
+        place: "photo.png".into(),
+        image: true,
+    });
+    assert_eq!(tab.editor.text(), "Text\n\n![](photo.png)\n");
+}
+
+/// Kann (review F6), Q-52: a link to a note with spaces and brackets in
+/// its place goes in as egui's `apply_format` writes it, in both formats.
+#[test]
+fn m10_3_a_link_with_spaces_and_brackets_as_egui_writes_it() {
+    let link = || Insertion::Link {
+        address: "../a b/Plan [v2].md".into(),
+        label: Some("Plan [v2]".into()),
+    };
+    let mut md = tab_with("", KeysInputMode::Normal);
+    md.source_insert(link());
+    assert_eq!(md.editor.text(), "[Plan [v2]](../a b/Plan [v2].md)");
+    let mut adoc = EditorTab::new("", NoteFormat::AsciiDoc);
+    adoc.source_insert(link());
+    assert_eq!(adoc.editor.text(), "link:../a b/Plan [v2].md[Plan [v2]]");
 }

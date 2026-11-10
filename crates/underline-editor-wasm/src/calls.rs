@@ -24,7 +24,7 @@ use serde::Serialize;
 use underline_editor_core::keys::InputMode as KeysInputMode;
 use underline_editor_core::sync::{Answer, Change, Client};
 use underline_editor_view::editor_view::{
-    ClipAction, Clipped, EditorInput, TabViews, VimChange, VimState,
+    ClipAction, ClipContentView, Clipped, EditorInput, Insertion, TabViews, VimChange, VimState,
 };
 use underline_editor_view::facade_view::{FacadeAt, FacadeInput, RowsView};
 use underline_editor_view::sync_view::{EnrichView, RemoteApplied, SyncAnswer, SyncBatch};
@@ -357,24 +357,66 @@ impl Core {
         json(&self.tab.source_keys_status(self.setting, vim))
     }
 
-    /// `Clipped<EditorPatch>` of copying, cutting or pasting `text` in the
-    /// source view (`action`: `ClipAction`).
+    /// `Clipped<EditorPatch>` of copying, cutting or pasting what the
+    /// clipboard holds (`content`: `ClipContentView | null`) in the source
+    /// view (`action`: `ClipAction`).
     ///
     /// # Errors
     ///
-    /// `action` is not a `ClipAction`.
-    pub fn clipboard(&mut self, action: &str, text: Option<&str>) -> Result<String, CallError> {
+    /// `action` is not a `ClipAction`, or `content` not a
+    /// `ClipContentView` or `null`.
+    pub fn clipboard(&mut self, action: &str, content: &str) -> Result<String, CallError> {
         let action: ClipAction = parse(action, "The clipboard action")?;
+        let content: Option<ClipContentView> = parse(content, "The clipboard's content")?;
         self.source_keys();
-        let (copied, patch) = match action {
-            ClipAction::Copy => self.tab.copy(),
+        let (copied, image, patch) = match action {
+            ClipAction::Copy => {
+                let (copied, patch) = self.tab.copy();
+                (copied, false, patch)
+            }
             ClipAction::Cut => {
                 let (copied, handled) = self.tab.cut();
-                (copied, handled.patch)
+                (copied, false, handled.patch)
             }
-            ClipAction::Paste => (None, self.tab.paste(text).patch),
+            ClipAction::Paste => {
+                let (image, handled) = self.tab.paste(content.as_ref());
+                (None, image, handled.patch)
+            }
         };
-        json(&Clipped { copied, patch })
+        json(&Clipped {
+            copied,
+            html: None,
+            image,
+            patch,
+        })
+    }
+
+    /// `CopyOnSelectView`: FR-031, M-10.7, copy on select (`on`) of the
+    /// view shown, once the selection settled.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn copy_on_select(&mut self, on: bool) -> Result<String, CallError> {
+        json(&self.tab.copy_on_select(on, self.facade))
+    }
+
+    /// BR-011: whether the selection is the one copy on select copied.
+    #[must_use]
+    pub fn over_copied(&self) -> bool {
+        self.tab.over_copied()
+    }
+
+    /// `EditorPatch` of putting `insertion` (`Insertion`) into the text at
+    /// the source view's selection (M-10.3 to M-10.6).
+    ///
+    /// # Errors
+    ///
+    /// `insertion` is not an `Insertion`.
+    pub fn insert(&mut self, insertion: &str) -> Result<String, CallError> {
+        let insertion: Insertion = parse(insertion, "The insertion")?;
+        self.source_keys();
+        json(&self.tab.source_insert(insertion).patch)
     }
 
     /// `FacadeState`: the whole facade, its blocks made when they are not
@@ -432,8 +474,9 @@ impl Core {
         json(&self.tab.facade_input(call, input, rows, clipboard).patch)
     }
 
-    /// `Clipped<FacadePatch>` of copying, cutting or pasting `text` in the
-    /// facade at the selection `at` (`FacadeAt`); `plain` pastes as typed.
+    /// `Clipped<FacadePatch>` of copying, cutting or pasting what the
+    /// clipboard holds (`content`: `ClipContentView | null`) in the facade
+    /// at the selection `at` (`FacadeAt`); `plain` pastes as typed.
     ///
     /// # Errors
     ///
@@ -443,10 +486,11 @@ impl Core {
         at: &str,
         action: &str,
         plain: bool,
-        text: Option<&str>,
+        content: &str,
     ) -> Result<String, CallError> {
         let at: FacadeAt = parse(at, "The selection")?;
         let action: ClipAction = parse(action, "The clipboard action")?;
+        let content: Option<ClipContentView> = parse(content, "The clipboard's content")?;
         self.facade_keys_mode();
         let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
         let call = FacadeCall {
@@ -456,11 +500,36 @@ impl Core {
             earlier,
             views: &mut self.views,
         };
-        let (copied, handled) = self.tab.facade_clipboard(call, action, plain, text);
+        let clipped = self
+            .tab
+            .facade_clipboard(call, action, plain, content.as_ref());
         json(&Clipped {
-            copied,
-            patch: handled.patch,
+            copied: clipped.copied,
+            html: clipped.html,
+            image: clipped.image,
+            patch: clipped.handled.patch,
         })
+    }
+
+    /// `FacadePatch` of putting `insertion` (`Insertion`) into the text at
+    /// the facade's selection `at` (`FacadeAt`, M-10.3 to M-10.6).
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    pub fn facade_insert(&mut self, at: &str, insertion: &str) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        let insertion: Insertion = parse(insertion, "The insertion")?;
+        self.facade_keys_mode();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: &self.note,
+            at,
+            mac: self.mac,
+            earlier,
+            views: &mut self.views,
+        };
+        json(&self.tab.facade_insert(call, insertion).patch)
     }
 
     /// `BlocksView[]`: the facade's blocks take what the backend sent of

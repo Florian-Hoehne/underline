@@ -763,7 +763,7 @@ impl Session {
     }
 
     /// UC-002 step 7: the note overview, recently opened first (BR-008).
-    fn refresh_overview(&mut self) {
+    pub(super) fn refresh_overview(&mut self) {
         let Some(open) = &mut self.open else {
             return;
         };

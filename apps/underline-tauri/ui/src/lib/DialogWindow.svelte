@@ -23,10 +23,12 @@
     busy?: boolean;
     /** Changes with every stage of the dialog, which takes the focus anew. */
     step?: string;
+    /** The id of the text that describes the dialog, for screen readers. */
+    describedBy?: string;
     children: Snippet;
   };
 
-  let { title, onClose, busy = false, step = '', children }: Props = $props();
+  let { title, onClose, busy = false, step = '', describedBy, children }: Props = $props();
 
   let frame = $state<HTMLElement | null>(null);
   const headingId = `dialog-${Math.random().toString(36).slice(2)}`;
@@ -100,6 +102,7 @@
   class="dialog"
   role="dialog"
   aria-labelledby={headingId}
+  aria-describedby={describedBy}
   aria-busy={busy}
   tabindex="-1"
   bind:this={frame}

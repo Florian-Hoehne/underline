@@ -62,7 +62,7 @@ fn tab_in<'a>(open: &'a mut Option<OpenWorkspace>, note: &NoteId) -> Result<&'a 
     Ok(tab)
 }
 
-fn not_open(note: &NoteId) -> UiError {
+pub(super) fn not_open(note: &NoteId) -> UiError {
     UiError::new(
         UiErrorKind::Invalid,
         format!("The tab {} is not open", note.title()),

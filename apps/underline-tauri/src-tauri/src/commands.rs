@@ -15,14 +15,15 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::SystemTime;
 
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_specta::Event as _;
 use underline_core::NoteId;
 use underline_session::{
-    CloseQuestion, CreateAnswer, EditingViewName, MirrorView, NewWorkspaceRequest, OpenAnswer,
-    Session, SettingName, StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError,
-    UiErrorKind,
+    clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, DragName, EditingViewName,
+    EmbedAnswer, FormatName, Insertion, MirrorView, NewWorkspaceRequest, OpenAnswer, Session,
+    SettingName, StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -234,13 +235,20 @@ pub async fn tab_activate(
 pub async fn tab_close(
     session: State<'_, SharedSession>,
     waker: State<'_, Waker>,
+    clipboard: State<'_, SharedClipboard>,
     note: String,
     force: bool,
 ) -> Result<Option<CloseQuestion>, UiError> {
-    on_session(&session, &waker, move |session| {
-        session.close_tab(&NoteId::from_relative(&note), force)
+    let id = NoteId::from_relative(&note);
+    let question = on_session(&session, &waker, move |session| {
+        session.close_tab(&id, force)
     })
-    .await
+    .await?;
+    if question.is_none() {
+        // BR-011: what copy on select kept for the tab goes with it.
+        clipboard.lock().forget(&note);
+    }
+    Ok(question)
 }
 
 /// M-10.9, UC-005 BR-009: stores the note of the tab at once; the status
@@ -348,6 +356,163 @@ pub async fn clip_write_text(
 ) -> Result<(), UiError> {
     let clipboard = Arc::clone(&clipboard);
     blocking(move || clipboard.lock().write_text(&text)).await
+}
+
+/// UC-005 A17, A18, M-08.6, M-09.14, M-10.7: what a paste in the tab of
+/// `note` takes from the system clipboard (ADR-014): its text, its HTML as
+/// markup of the format `rich` (the facade; `null` in the source view and
+/// with Ctrl+Shift+V), and whether it holds an image alone. Over the
+/// selection copy on select copied (`over_copied`) it is what the clipboard
+/// held before (BR-011).
+#[tauri::command]
+#[specta::specta]
+pub async fn clip_read(
+    clipboard: State<'_, SharedClipboard>,
+    note: String,
+    rich: Option<FormatName>,
+    over_copied: bool,
+) -> Result<ClipContentView, UiError> {
+    let clipboard = Arc::clone(&clipboard);
+    blocking(move || {
+        let read = clipboard.lock().read_for_paste(&note, over_copied);
+        clipboard_view(read.text, read.html.as_deref(), read.image, rich)
+    })
+    .await
+}
+
+/// BR-011, M-10.7: the selection copy on select copied in the tab of `note`
+/// is gone; what the clipboard held before it is let go.
+#[tauri::command]
+#[specta::specta]
+pub async fn clip_forget(
+    clipboard: State<'_, SharedClipboard>,
+    note: String,
+) -> Result<(), UiError> {
+    clipboard.lock().forget(&note);
+    Ok(())
+}
+
+/// M-08.6, M-09.14, M-10.7, BR-011: puts copied markup on the system
+/// clipboard, with the HTML of the facade's selection for other programs.
+/// With `keep_before` (the first copy of a selection by copy on select),
+/// what the clipboard held is kept first for pasting over the selection.
+#[tauri::command]
+#[specta::specta]
+pub async fn clip_write(
+    clipboard: State<'_, SharedClipboard>,
+    note: String,
+    text: String,
+    html: Option<String>,
+    keep_before: bool,
+) -> Result<(), UiError> {
+    let clipboard = Arc::clone(&clipboard);
+    blocking(move || {
+        let mut clipboard = clipboard.lock();
+        if keep_before {
+            clipboard.keep_before(&note);
+        }
+        clipboard.write(&text, html.as_deref());
+    })
+    .await
+}
+
+/// UC-005 A18, BR-014, M-10.6: stores the image the clipboard holds (over
+/// the copied selection: the one it held before, as `clip_read`) as a PNG
+/// next to the note of `note`; the status says "Pasted image stored as
+/// {name}" or why not. The name to insert, `null` when nothing was stored.
+/// Encoding and writing run without the session.
+#[tauri::command]
+#[specta::specta]
+pub async fn clip_store_image(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    clipboard: State<'_, SharedClipboard>,
+    note: String,
+    over_copied: bool,
+) -> Result<Option<String>, UiError> {
+    let id = NoteId::from_relative(&note);
+    let plan = read_session(&session, move |session| session.embed_plan(&id)).await??;
+    let clipboard = Arc::clone(&clipboard);
+    let stored = blocking(move || {
+        let image = clipboard.lock().take_pasted_image(&note, over_copied)?;
+        Some(plan.store_image(image.width, image.height, &image.rgba, SystemTime::now()))
+    })
+    .await?;
+    let Some(stored) = stored else {
+        // The clipboard changed meanwhile and holds no image any more.
+        return Ok(None);
+    };
+    on_session(&session, &waker, move |session| {
+        session.finish_pasted_image(stored)
+    })
+    .await
+}
+
+/// UC-005 A2, A9 to A11, A19, M-10.4: the answer of the image dialog: puts
+/// the file `path` into the note of `note`, copied next to it from outside
+/// the workspace; `allow_large` after "Copy" for a file over 10 MB. The
+/// file is copied without the session.
+#[tauri::command]
+#[specta::specta]
+pub async fn ed_embed(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    path: String,
+    allow_large: bool,
+) -> Result<EmbedAnswer, UiError> {
+    let id = NoteId::from_relative(&note);
+    let plan = read_session(&session, move |session| session.embed_plan(&id)).await??;
+    let done = blocking(move || plan.embed(&path, allow_large)).await?;
+    let answers = on_session(&session, &waker, move |session| session.finish_embed(done)).await?;
+    Ok(answers.into_iter().next().unwrap_or(EmbedAnswer::Refused))
+}
+
+/// UC-005 A9 to A13, M-10.5: what was dropped on the window (`paths`), for
+/// the tab of `note`, one answer per item with a space between them; the
+/// files are copied without the session.
+#[tauri::command]
+#[specta::specta]
+pub async fn ed_drop(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    paths: Vec<String>,
+) -> Result<Vec<EmbedAnswer>, UiError> {
+    let id = NoteId::from_relative(&note);
+    let plan = read_session(&session, move |session| session.embed_plan(&id)).await??;
+    let done = blocking(move || plan.drop_items(&paths)).await?;
+    on_session(&session, &waker, move |session| session.finish_embed(done)).await
+}
+
+/// UC-005 A9, M-10.5: files are dragged over the window, left it, or were
+/// dropped with no note shown; the status bar says so.
+#[tauri::command]
+#[specta::specta]
+pub async fn ed_drag(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    state: DragName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| session.drag(state)).await
+}
+
+/// M-10.3, UC-005 A2: the link dialog chose the note `target`: the link to
+/// it from the note of `note`, relative, with its title.
+#[tauri::command]
+#[specta::specta]
+pub async fn ed_note_link(
+    session: State<'_, SharedSession>,
+    note: String,
+    target: String,
+) -> Result<Insertion, UiError> {
+    read_session(&session, move |session| {
+        session.note_link(
+            &NoteId::from_relative(&note),
+            &NoteId::from_relative(&target),
+        )
+    })
+    .await?
 }
 
 /// M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the
@@ -542,7 +707,7 @@ mod tests {
 
     use super::{Closer, SharedClipboard, SharedSession};
     use crate::bindings;
-    use crate::clipboard::SystemClipboard;
+    use crate::clipboard::{ClipContent, ClipImage, SystemClipboard};
     use crate::ticker::Waker;
 
     /// Every command, by its Rust name; keep in step with `bindings::builder`
@@ -564,6 +729,14 @@ mod tests {
         "ed_viewport",
         "clip_read_text",
         "clip_write_text",
+        "clip_read",
+        "clip_write",
+        "clip_store_image",
+        "clip_forget",
+        "ed_embed",
+        "ed_drop",
+        "ed_drag",
+        "ed_note_link",
         "app_close_anyway",
         "ed_sync",
         "ed_resync",
@@ -881,6 +1054,198 @@ mod tests {
                 .as_deref(),
             Some("yanked")
         );
+    }
+
+    /// UC-005 A17, A18, BR-011, M-09.14, M-10.6, M-10.7: the clipboard
+    /// commands of feature F6: markup with HTML is written and read back,
+    /// the HTML as markup for the facade; copy on select keeps the former
+    /// content; an image alone is stored next to the note.
+    #[test]
+    fn uc005_a18_m10_6_m10_7_the_clipboard_with_html_images_and_copy_on_select() {
+        let dir = temp_dir("clipboard-f6");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let write = |text: &str, html: Value, keep: bool| {
+            mock.invoke(
+                "clip_write",
+                json!({ "note": "Home", "text": text, "html": html, "keepBefore": keep }),
+            )
+            .unwrap();
+        };
+        let read = |rich: Value, over: bool| {
+            mock.invoke(
+                "clip_read",
+                json!({ "note": "Home", "rich": rich, "overCopied": over }),
+            )
+            .unwrap()
+        };
+        write("**a**", json!("<p><b>a</b></p>"), false);
+        assert_eq!(
+            read(json!("Markdown"), false),
+            json!({ "text": "**a**", "markup": "**a**", "image": false })
+        );
+        assert_eq!(
+            read(Value::Null, false),
+            json!({ "text": "**a**", "markup": null, "image": false })
+        );
+        write("selected", Value::Null, true);
+        assert_eq!(read(Value::Null, true)["text"], json!("**a**"));
+        assert_eq!(read(Value::Null, false)["text"], json!("selected"));
+
+        mock.app
+            .state::<SharedClipboard>()
+            .lock()
+            .hold(ClipContent {
+                text: None,
+                html: None,
+                image: Some(ClipImage {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![0, 0, 255, 255],
+                }),
+            });
+        assert_eq!(
+            read(json!("Markdown"), false),
+            json!({ "text": null, "markup": null, "image": true })
+        );
+        let name = mock
+            .invoke(
+                "clip_store_image",
+                json!({ "note": "Home", "overCopied": false }),
+            )
+            .unwrap();
+        let name = name.as_str().expect("a name").to_owned();
+        assert!(
+            name.starts_with("Home-") && name.ends_with(".png"),
+            "{name}"
+        );
+        assert!(root.join(&name).exists());
+        assert_eq!(mock.status(), format!("Pasted image stored as {name}"));
+    }
+
+    /// UC-005 A9 to A12, M-10.3 to M-10.5: the image dialog's file, the
+    /// dropped items and the link dialog's note.
+    #[test]
+    fn uc005_a9_m10_3_m10_4_m10_5_embed_drop_and_link() {
+        let dir = temp_dir("embed");
+        let root = workspace_with(&dir, "notes", &["Home", "Ideas"]);
+        std::fs::write(dir.join("photo.png"), b"png").unwrap();
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        let photo = dir.join("photo.png").display().to_string();
+
+        let embedded = mock
+            .invoke(
+                "ed_embed",
+                json!({ "note": "Home", "path": photo, "allowLarge": false }),
+            )
+            .unwrap();
+        assert_eq!(
+            embedded,
+            json!({ "kind": "insert", "insertion": { "kind": "file", "place": "photo.png", "image": true } })
+        );
+        assert!(root.join("photo.png").exists());
+
+        mock.invoke("ed_drag", json!({ "state": "over" })).unwrap();
+        assert_eq!(
+            mock.status(),
+            "Drop to insert at the place under the pointer"
+        );
+        let dropped = mock
+            .invoke(
+                "ed_drop",
+                json!({ "note": "Home", "paths": ["https://x.org", photo] }),
+            )
+            .unwrap();
+        assert_eq!(dropped.as_array().map(Vec::len), Some(3));
+        assert_eq!(dropped[2]["insertion"]["kind"], json!("dropped"));
+        let none = mock
+            .invoke("ed_drop", json!({ "note": "Home", "paths": [] }))
+            .unwrap();
+        assert_eq!(none, json!([]));
+        assert_eq!(mock.status(), "This cannot be dropped into a note");
+
+        let link = mock
+            .invoke("ed_note_link", json!({ "note": "Home", "target": "Ideas" }))
+            .unwrap();
+        assert_eq!(
+            link,
+            json!({ "kind": "link", "address": "Ideas.md", "label": "Ideas" })
+        );
+        assert!(mock
+            .invoke(
+                "ed_embed",
+                json!({ "note": "Nowhere", "path": photo, "allowLarge": false })
+            )
+            .is_err());
+    }
+
+    /// UC-005 A19 (review F6): `ed_embed` asks about a file over 10 MB and
+    /// copies it with `allowLarge`.
+    #[test]
+    fn uc005_a19_ed_embed_asks_about_a_large_file_and_copies_it_when_allowed() {
+        let dir = temp_dir("embed-large");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let big = dir.join("film.png");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(11 * 1024 * 1024)
+            .unwrap();
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        let path = big.display().to_string();
+
+        let asked = mock
+            .invoke(
+                "ed_embed",
+                json!({ "note": "Home", "path": path, "allowLarge": false }),
+            )
+            .unwrap();
+        assert_eq!(asked["kind"], json!("large"));
+        assert!(asked["question"].as_str().unwrap().contains("has 11 MB"));
+        assert!(!root.join("film.png").exists());
+        let copied = mock
+            .invoke(
+                "ed_embed",
+                json!({ "note": "Home", "path": path, "allowLarge": true }),
+            )
+            .unwrap();
+        assert_eq!(copied["insertion"]["place"], json!("film.png"));
+        assert!(root.join("film.png").exists());
+    }
+
+    /// BR-011 (review F6): the content kept for a copied selection goes when
+    /// the window says the selection is gone, and when the tab closes.
+    #[test]
+    fn m10_7_the_kept_content_goes_with_the_selection_or_the_tab() {
+        let dir = temp_dir("clip-forget");
+        let root = workspace_with(&dir, "notes", &["Home", "Ideas"]);
+        let mock = Mock::new(Some(root), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        mock.invoke("tab_open", json!({ "note": "Ideas" })).unwrap();
+        let clipboard = || mock.app.state::<SharedClipboard>();
+        let keep = |note: &str| {
+            clipboard().lock().write("former", None);
+            mock.invoke(
+                "clip_write",
+                json!({ "note": note, "text": "selected", "html": null, "keepBefore": true }),
+            )
+            .unwrap();
+        };
+        let before = |note: &str| clipboard().lock().content(note, true).text;
+
+        keep("Home");
+        assert_eq!(before("Home").as_deref(), Some("former"));
+        mock.invoke("clip_forget", json!({ "note": "Home" }))
+            .unwrap();
+        assert_eq!(before("Home").as_deref(), Some("selected"));
+
+        keep("Ideas");
+        mock.invoke("tab_close", json!({ "note": "Ideas", "force": false }))
+            .unwrap();
+        assert_eq!(before("Ideas").as_deref(), Some("selected"));
     }
 
     /// M-07.2: `tab_set_view` switches the view of a tab and remembers it

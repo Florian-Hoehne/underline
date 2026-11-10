@@ -21,7 +21,7 @@ mod reparse;
 mod rules;
 mod splice;
 
-pub use edit::{gap_at, Dirty, FacadeEdit, FacadeTarget, Gap, Gathered, Rows};
+pub use edit::{cursor_in_code, gap_at, Dirty, FacadeEdit, FacadeTarget, Gap, Gathered, Rows};
 pub use refresh::{
     captions, carry_spans, moved_indices, refresh, Before, MakeViews, Part, Refreshed,
 };

@@ -5,6 +5,7 @@
 mod diagrams;
 pub(crate) use diagrams::SvgDiagrams;
 mod editing;
+mod embed;
 mod facade;
 mod sync;
 mod tab;
@@ -12,6 +13,7 @@ mod tab;
 mod window;
 mod workspace;
 
+pub use self::embed::{EmbedDone, EmbedPlan};
 pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 

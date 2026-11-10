@@ -127,8 +127,8 @@ describe('M-08 source view (UC-005)', () => {
 
   it('M-08.6 pasting reads the system clipboard through the backend', async () => {
     const handlers = mockHandlers(NOTES);
-    const read = vi.fn(() => 'pasted ');
-    await workbench(NOTES, { ...handlers, clip_read_text: read });
+    const read = vi.fn(() => ({ text: 'pasted ', markup: null, image: false }));
+    await workbench(NOTES, { ...handlers, clip_read: read });
     const field = await textField();
 
     const paste = new Event('paste', { bubbles: true, cancelable: true });

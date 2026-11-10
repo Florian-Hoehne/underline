@@ -1,7 +1,8 @@
 // M-11.4, M-12: what the parts around the source view (or the facade) show of it: the place
 // of the cursor and the status of the input mode for the status line, the
 // view itself for the minimap, and a toolbar function that asks first (the
-// Link and Image dialogs of feature F6). The source view fills it in.
+// Link and Image dialogs of feature F6, `inserting.svelte.ts`). The source
+// view and the facade fill it in.
 
 import type { KeysStatusView, ToolName } from '../bindings';
 import type { ActiveFacade } from '../facade/active';
@@ -22,8 +23,8 @@ export class EditorInfo {
   /** M-12: what the minimap shows: the source view or the facade. */
   minimap = $state.raw<MinimapSource | null>(null);
   /**
-   * UC-005 A2: the toolbar function waiting for its dialog (feature F6
-   * opens the Link and Image dialogs from here).
+   * UC-005 A2: the toolbar function waiting for its dialog; `NoteArea`
+   * opens the Link or Image dialog and clears it.
    */
   request = $state<ToolName | null>(null);
 }

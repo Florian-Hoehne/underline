@@ -29,8 +29,8 @@ use underline_markup::formatting::apply_format;
 use underline_markup::NoteFormat;
 
 use crate::editor_view::{
-    revision, units, ClipAction, EditorInput, EditorPatch, EditorState, FoundView, KeyName,
-    KeysStatusView, TextChange, ToolName, VimChange, VimModeName, VimState,
+    revision, units, ClipAction, ClipContentView, EditorInput, EditorPatch, EditorState, FoundView,
+    KeyName, KeysStatusView, TextChange, ToolName, VimChange, VimModeName, VimState,
 };
 use crate::facade_view::{
     BlockView, BlocksView, FacadeAt, FacadeInput, FacadePatch, FacadeState, GapView, RowsView,
@@ -264,6 +264,10 @@ pub struct EditorTab {
     /// which pasting in the facade brings back as markup (`own_markup` of
     /// egui).
     pub own_markup: Option<String>,
+    /// FR-031, BR-011: the selection copy on select put on the clipboard
+    /// (chars), while it is the selection; pasting over it brings what the
+    /// clipboard held before (`copied_selection` of egui).
+    pub(crate) copied_selection: Option<Range<usize>>,
     pub(crate) folds: Folds,
     /// The revision and the search of the hits the window was told of last.
     found_told: Option<(u64, Option<String>)>,
@@ -283,6 +287,7 @@ impl EditorTab {
             keys: Keys::default(),
             facade: FacadeModel::default(),
             own_markup: None,
+            copied_selection: None,
             folds: Folds::default(),
             found_told: None,
             found_at: None,
@@ -593,16 +598,19 @@ impl EditorTab {
     }
 
     /// M-08.6, ADR-014: copying gives the selected markup for the clipboard,
-    /// `None` with nothing selected.
-    #[must_use]
-    pub fn copy(&self) -> (Option<String>, EditorPatch) {
+    /// `None` with nothing selected; the tab remembers it, so pasting it in
+    /// the facade brings it back as markup (M-09.14, `copy` of egui).
+    pub fn copy(&mut self) -> (Option<String>, EditorPatch) {
         let text = Some(self.editor.selected_text()).filter(|t| !t.is_empty());
+        if let Some(text) = &text {
+            self.own_markup = Some(text.clone());
+        }
         let base = self.editor.revision();
         (text, self.patch(base, &Outcome::default()))
     }
 
     /// M-08.6: cutting gives the selected markup for the clipboard and takes
-    /// it out of the text.
+    /// it out of the text; the tab remembers it as [`Self::copy`] does.
     pub fn cut(&mut self) -> (Option<String>, Handled<EditorPatch>) {
         let base = self.editor.revision();
         let (text, outcome) = self.editor.cut();
@@ -610,31 +618,39 @@ impl EditorTab {
             outcome,
             ..Done::default()
         };
-        (
-            Some(text).filter(|t| !t.is_empty()),
-            self.handled(base, done),
-        )
+        let text = Some(text).filter(|t| !t.is_empty());
+        if let Some(text) = &text {
+            self.own_markup = Some(text.clone());
+        }
+        (text, self.handled(base, done))
     }
 
-    /// M-08.6: pasting inserts `text`, the plain text of the clipboard;
-    /// nothing without one. A paste ends a run of Nano cuts, as in egui
-    /// (BR-010), and the open search prompt takes it (M-11.3).
-    pub fn paste(&mut self, text: Option<&str>) -> Handled<EditorPatch> {
+    /// M-08.6, UC-005 A17, A18: pasting in the source view inserts the plain
+    /// text of the clipboard (`content`); nothing without one. A paste ends
+    /// a run of Nano cuts, as in egui (BR-010), and the open search prompt
+    /// takes it (M-11.3). An image alone is not inserted here: the patch
+    /// says so (`.1`), and the window has the backend store it (M-10.6).
+    pub fn paste(&mut self, content: Option<&ClipContentView>) -> (bool, Handled<EditorPatch>) {
+        let base = self.editor.revision();
+        let text = match pasted(content, false, None) {
+            Pasted::Image => return (true, self.handled(base, Done::default())),
+            Pasted::Text(text) | Pasted::Markup(text) => Some(text),
+            Pasted::Nothing => None,
+        };
         let (through, _) = self.keys.handle(
             vec![()],
             |()| Some(KeyInput::Paste),
             &mut SourceKeys::new(&mut self.editor),
         );
-        let base = self.editor.revision();
         let outcome = text
             .filter(|_| !through.is_empty())
-            .map(|text| self.editor.type_text(text))
+            .map(|text| self.editor.type_text(&text))
             .unwrap_or_default();
         let done = Done {
             outcome,
             ..Done::default()
         };
-        self.handled(base, done)
+        (false, self.handled(base, done))
     }
 
     /// M-08.3: the mouse (or the window's Vim keys) put the cursor and the
@@ -918,28 +934,31 @@ impl EditorTab {
         self.facade_finish(call, before, gathered)
     }
 
-    /// M-09.14, M-08.6: copy, cut or paste in the facade at the selection
-    /// `call.at`. Copying and cutting give the selected markup for the
-    /// clipboard (the first of the answer), which pasting it brings back as
-    /// markup; any other text is pasted as typed, escaped, and so is
-    /// everything with `plain` (Ctrl+Shift+V). `text` is the clipboard's
-    /// text.
+    /// M-09.14, M-08.6, M-10.6: copy, cut or paste in the facade at the
+    /// selection `call.at`. Copying and cutting give the selected markup for
+    /// the clipboard with its HTML (UC-005 BR-011), and pasting that markup
+    /// brings it back as markup; HTML of other programs comes as markup of
+    /// the note's format (A17); any other text is pasted as typed, escaped,
+    /// and so is everything with `plain` (Ctrl+Shift+V). `content` is what
+    /// the clipboard holds; an image alone is not inserted here, the answer
+    /// says so (`image`).
     pub fn facade_clipboard<M: MakeViews<View = BlockView>>(
         &mut self,
         call: FacadeCall<'_, M>,
         action: ClipAction,
         plain: bool,
-        text: Option<&str>,
-    ) -> (Option<String>, Handled<FacadePatch>) {
+        content: Option<&ClipContentView>,
+    ) -> FacadeClipped {
         self.take_selection(call.at);
         let before = Before::of(&self.editor, self.facade.blocks.len());
         let mut gathered = Gathered::default();
-        let mut copied = None;
+        let (mut copied, mut html, mut image) = (None, None, false);
         match action {
             ClipAction::Copy | ClipAction::Cut => {
                 let selected = self.editor.selected_text();
                 if !selected.is_empty() {
                     self.own_markup = Some(selected.clone());
+                    html = Some(self.selection_html());
                     if action == ClipAction::Cut {
                         let range = self.editor.selection();
                         self.with_edit(&mut gathered, (None, None), |edit, _| {
@@ -949,30 +968,42 @@ impl EditorTab {
                     copied = Some(selected);
                 }
             }
-            ClipAction::Paste => {
-                let own = self.own_markup.clone();
-                self.with_edit(&mut gathered, (None, None), |edit, keys| {
-                    // A paste ends a run of Nano cuts; Vim's normal mode
-                    // drops it, as in egui.
-                    let through = keys
-                        .handle(
-                            vec![()],
-                            |()| Some(KeyInput::Paste),
-                            &mut FacadeTarget { edit: &mut *edit },
-                        )
-                        .0;
-                    let Some(text) = text.filter(|_| !through.is_empty()) else {
-                        return;
-                    };
-                    if !plain && own.as_deref() == Some(text) {
-                        edit.paste_markup(text);
-                    } else {
-                        edit.type_text(text);
-                    }
-                });
-            }
+            ClipAction::Paste => match pasted(content, !plain, self.own_markup.as_deref()) {
+                Pasted::Image => image = true,
+                Pasted::Nothing => {}
+                Pasted::Text(text) => self.facade_paste(&mut gathered, &text, false),
+                Pasted::Markup(markup) => self.facade_paste(&mut gathered, &markup, true),
+            },
         }
-        (copied, self.facade_finish(call, before, gathered))
+        FacadeClipped {
+            copied,
+            html,
+            image,
+            handled: self.facade_finish(call, before, gathered),
+        }
+    }
+
+    /// M-09.14: pastes `text` in the facade: as markup, or typed.
+    fn facade_paste(&mut self, gathered: &mut Gathered, text: &str, markup: bool) {
+        self.with_edit(gathered, (None, None), |edit, keys| {
+            // A paste ends a run of Nano cuts; Vim's normal mode drops it,
+            // as in egui.
+            let through = keys
+                .handle(
+                    vec![()],
+                    |()| Some(KeyInput::Paste),
+                    &mut FacadeTarget { edit: &mut *edit },
+                )
+                .0;
+            if through.is_empty() {
+                return;
+            }
+            if markup {
+                edit.paste_markup(text);
+            } else {
+                edit.type_text(text);
+            }
+        });
     }
 
     /// The patch after a facade input that started at `before`, with the
@@ -1053,6 +1084,10 @@ impl EditorTab {
         )
     }
 }
+
+mod insert;
+pub use insert::FacadeClipped;
+use insert::{pasted, Pasted};
 
 #[cfg(test)]
 mod facade_tests;

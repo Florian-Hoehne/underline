@@ -141,6 +141,8 @@ const FLUSH_AT_MOST = 3000;
 export class TabCore {
   readonly note: string;
   readonly core: EditorCore;
+  /** The note's format (M-09.14: pasted HTML becomes its markup). */
+  readonly format: FormatName;
   listener: CoreListener | null = null;
   #scheduled = false;
   #viewsScheduled = false;
@@ -152,9 +154,10 @@ export class TabCore {
   /** The tab closed: everything stops, silently. */
   #closed = false;
 
-  constructor(note: string, core: EditorCore) {
+  constructor(note: string, core: EditorCore, format: FormatName = 'Markdown') {
     this.note = note;
     this.core = core;
+    this.format = format;
   }
 
   /** Whether the core can still be used. */
@@ -440,8 +443,9 @@ class Cores {
 
   async #make(note: string, mac: boolean, generation: number): Promise<TabCore> {
     const [, mirror] = await Promise.all([loadEditorCore(), ipc.mirror(note)]);
-    const core = EditorCore.open(note, mirror.text, mirror.format as FormatName, mac);
-    const tab = new TabCore(note, core);
+    const format = mirror.format as FormatName;
+    const core = EditorCore.open(note, mirror.text, format, mac);
+    const tab = new TabCore(note, core, format);
     if (generation < this.#droppedBelow) {
       // Its workspace was left while it opened.
       tab.close();

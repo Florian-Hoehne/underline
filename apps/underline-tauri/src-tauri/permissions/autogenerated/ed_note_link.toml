@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ed-note-link"
+description = "Enables the ed_note_link command without any pre-configured scope."
+commands.allow = ["ed_note_link"]
+
+[[permission]]
+identifier = "deny-ed-note-link"
+description = "Denies the ed_note_link command without any pre-configured scope."
+commands.deny = ["ed_note_link"]

@@ -17,8 +17,13 @@
     autocorrect and autocapitalisation are off.
   - M-09.11: after Enter the cursor may stand on empty lines before a block
     (the core's "gap"); they are drawn as such.
-  - M-09.14: copy and cut give the markup, paste goes through the core;
-    Ctrl/Cmd+Shift+V pastes plain text. HTML comes with feature F6.
+  - M-09.14: copy and cut give the markup and its HTML, paste goes through
+    the core: HTML of other programs as markup, Ctrl/Cmd+Shift+V plain
+    text, an image alone stored next to the note (M-10.6). A finished
+    selection is copied at once while copy on select is on (M-10.7).
+  - M-10.3 to M-10.5: the link and image dialogs' answers and dropped
+    files go in at the cursor (`insert`); a drop first puts the cursor
+    under the pointer (`placeAt`).
   - M-11.2, M-11.3: Vim and Nano are the editor core's (A-01: not
     `codemirror-vim`); a line is a block.
   - Virtualized (ADR-024): only the blocks near the part in view are in the
@@ -61,17 +66,19 @@
     FacadePatch,
     FacadeState,
     GapView,
+    Insertion,
     KeysStatusView,
     Platform,
     RowsView,
     SectionView,
     ToolName,
   } from '../bindings';
+  import { onPointerReleased } from '../editor/clipboard';
   import type { EditorInfo } from '../editor/info.svelte';
   import type { InputModeName, KeysState } from '../editor/keys';
   import type { MinimapChange, MinimapSource } from '../editor/minimap';
   import { tabId } from '../tabs';
-  import { setActiveFacade, type ActiveFacade } from './active';
+  import { setActiveFacade, type ActiveFacade, type CursorMark } from './active';
   import { type FacadeBackend } from './backend';
   import { wasmFacadeBackend } from './wasmBackend';
   import Block from './Block.svelte';
@@ -703,7 +710,82 @@
 
   /** M-09.14: copy, cut or paste through the backend. */
   function clipboardAction(action: ClipAction, plain: boolean) {
-    enqueue(performance.now(), () => backend.clipboard(note, at(), action, plain));
+    const start = performance.now();
+    enqueue(start, async () => {
+      const done = await backend.clipboard(note, at(), action, plain);
+      if (done.image) {
+        // M-10.6: the image goes in once the backend stored it, after this
+        // patch is in place.
+        const { over } = done.image;
+        enqueue(start, () => backend.pasteImage(note, at(), over));
+      }
+      return done.patch;
+    });
+  }
+
+  /** M-10.3 to M-10.5: puts `insertion` in at the cursor; resolves once shown. */
+  function insert(insertion: Insertion): Promise<void> {
+    enqueue(performance.now(), () => backend.insert(note, at(), insertion));
+    return queue.then(() => undefined);
+  }
+
+  /**
+   * M-10.5, UC-005 A9: the cursor to the place under the point `x`, `y`
+   * (CSS pixels of the window), where something is dropped; false when the
+   * point is not over the drawn text, as egui's `place_cursor_at`.
+   */
+  function placeAt(x: number, y: number): boolean {
+    if (!content) {
+      return false;
+    }
+    const box = content.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
+      return false;
+    }
+    const point = caretAt(x, y);
+    const offset = point ? offsetOf(point.node, point.offset) : null;
+    if (offset === null) {
+      return false;
+    }
+    selections++;
+    anchor = offset;
+    head = offset;
+    gap = null;
+    sendSelection();
+    void tick().then(() => placeSelection(offset, offset));
+    return true;
+  }
+
+  /** M-10.5: where the cursor is, once the inputs before it are in. */
+  async function mark(): Promise<CursorMark | null> {
+    await queue;
+    const hash = backend.textHash(note);
+    return destroyed || hash === null ? null : { head, hash };
+  }
+
+  /** M-10.5: the cursor back to `mark`, when the text is still the same. */
+  function back(to: CursorMark) {
+    if (destroyed || backend.textHash(note) !== to.hash) {
+      return;
+    }
+    selections++;
+    anchor = to.head;
+    head = to.head;
+    gap = null;
+    sendSelection();
+    void tick().then(() => placeSelection(to.head, to.head));
+  }
+
+  /** The DOM place under the point, as the webview finds it. */
+  function caretAt(x: number, y: number): { node: Node; offset: number } | null {
+    const position = document.caretPositionFromPoint?.(x, y);
+    if (position) {
+      return { node: position.offsetNode, offset: position.offset };
+    }
+    const range = (
+      document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null }
+    ).caretRangeFromPoint?.(x, y);
+    return range ? { node: range.startContainer, offset: range.startOffset } : null;
   }
 
   /** Sends the selection the user made, after the inputs before it. */
@@ -1052,7 +1134,11 @@
     }
   }
 
-  /** Drops and drags are refused; dropping files comes with feature F6. */
+  /**
+   * Drops and drags of the webview are refused: files come through the
+   * window's drop event (M-10.5, `editor/drop.ts`); text is not dropped
+   * (FR-034 open, D-15).
+   */
   function refuse(event: Event) {
     event.preventDefault();
   }
@@ -1190,6 +1276,10 @@
     focus: () => void focusCursor(),
     tool,
     settled: () => queue,
+    insert,
+    placeAt,
+    mark,
+    back,
   };
 
   onMount(() => {
@@ -1200,6 +1290,15 @@
       info.keys = null;
     }
     document.addEventListener('selectionchange', onSelectionChange);
+    // M-10.7: a selection made with the mouse is copied once it is let go,
+    // after the selection reached the core.
+    const unwatchPointer = onPointerReleased(() => {
+      if (content && document.activeElement === content) {
+        queue = queue.then(() =>
+          backend.copySelection(note).catch((error: unknown) => onError(message(error))),
+        );
+      }
+    });
     void open().then(async () => {
       if (destroyed || !scroller) {
         return;
@@ -1223,6 +1322,7 @@
       backend.leave(note, detach && !loading ? { version, blocks } : null);
       detach?.();
       document.removeEventListener('selectionchange', onSelectionChange);
+      unwatchPointer();
       resizes?.disconnect();
       if (relayoutFrame !== null) {
         cancelAnimationFrame(relayoutFrame);

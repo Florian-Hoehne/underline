@@ -12,11 +12,13 @@ import {
   type FacadeInput,
   type FacadePatch,
   type FacadeState,
+  type Insertion,
   type KeysStatusView,
   type Platform,
   type RowsView,
   type UiError,
 } from '../bindings';
+import type { Clipboarded } from '../editor/clipboard';
 import type { CoreListener } from '../editor/sync';
 import type { InputModeName } from '../editor/keys';
 
@@ -42,8 +44,25 @@ export interface FacadeBackend {
     rows: RowsView | null,
     clipboard: string | null,
   ): Promise<FacadePatch>;
-  /** M-09.14: copy, cut or paste (`plain`: as typed) at the selection `at`. */
-  clipboard(note: string, at: FacadeAt, action: ClipAction, plain: boolean): Promise<FacadePatch>;
+  /**
+   * M-09.14: copy, cut or paste (`plain`: as typed) at the selection `at`
+   * through the system clipboard: copying gives the markup and its HTML, a
+   * paste HTML of other programs as markup.
+   */
+  clipboard(
+    note: string,
+    at: FacadeAt,
+    action: ClipAction,
+    plain: boolean,
+  ): Promise<Clipboarded<FacadePatch>>;
+  /** M-10.6: stores the clipboard's image next to the note and inserts it at `at`. */
+  pasteImage(note: string, at: FacadeAt, over: boolean): Promise<FacadePatch | null>;
+  /** M-10.3 to M-10.5: puts `insertion` in at the selection `at`. */
+  insert(note: string, at: FacadeAt, insertion: Insertion): Promise<FacadePatch>;
+  /** M-10.7: the selection, once settled, goes to the clipboard (copy on select). */
+  copySelection(note: string): Promise<void>;
+  /** M-10.5: the hash of the note's text in the window's core; `null` without one. */
+  textHash(note: string): string | null;
   /** M-11.4: the status of the Vim or Nano keys in the facade. */
   keys(note: string): Promise<KeysStatusView | null>;
   /** M-11.2: the system clipboard's text, for Vim's `"+`. */

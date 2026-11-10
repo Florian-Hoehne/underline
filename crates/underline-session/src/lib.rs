@@ -40,6 +40,7 @@
 //! `specta` feature, so TypeScript bindings can be generated from them.
 
 pub mod assets;
+mod clip;
 mod editor_view;
 mod error;
 mod event;
@@ -51,11 +52,13 @@ mod start;
 mod sync_view;
 mod workspace_view;
 
+pub use clip::clipboard_view;
 pub use editor_view::{
-    ClipAction, Clipped, CloseQuestion, EditorCommandName, EditorInput, EditorPatch, EditorState,
-    FoundView, HighlightView, KeyHintView, KeyName, KeysStatusView, NotePropertiesView,
-    SectionView, SectionsView, SpanStyle, TabPropertiesView, TabViews, TextChange, ToolName,
-    ToolView, VimChange, VimModeName, VimState,
+    ClipAction, ClipContentView, Clipped, CloseQuestion, CopyOnSelectView, DragName,
+    EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FoundView,
+    HighlightView, Insertion, KeyHintView, KeyName, KeysStatusView, NotePropertiesView,
+    SectionView, SectionsView, SelectionCopy, SpanStyle, TabPropertiesView, TabViews, TextChange,
+    ToolName, ToolView, VimChange, VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
@@ -64,7 +67,10 @@ pub use facade_view::{
     FacadePatch, FacadeState, FigureView, GapView, RowsView, RunView, TableView,
 };
 pub use palette::PaletteView;
-pub use session::{CreatePlan, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session, Synced};
+pub use session::{
+    CreatePlan, EmbedDone, EmbedPlan, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session,
+    Synced,
+};
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,
     USER_SETTINGS_POLL,

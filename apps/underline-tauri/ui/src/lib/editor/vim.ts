@@ -154,9 +154,17 @@ function install(): void {
       read.then(
         (text) => {
           register.took(text ?? '');
-          this.continuePaste(cm, actionArgs, vimState, text ?? '', register);
+          // The put comes after the key's operation ended. Run it as one of
+          // the Vim keys' own operations, as the key would have: otherwise a
+          // visual selection is taken for one made outside Vim, and its
+          // ends, from before the put, no longer fit the text (app-tester
+          // F6: `<C-v>j"+p` broke the Vim keys).
+          cm.operation(() => {
+            (cm as unknown as { curOp: { isVimOp?: boolean } }).curOp.isVimOp = true;
+            this.continuePaste(cm, actionArgs, vimState, text ?? '', register);
+          });
         },
-        () => undefined,
+        (error: unknown) => console.error('The clipboard could not be read', error),
       );
       return;
     }

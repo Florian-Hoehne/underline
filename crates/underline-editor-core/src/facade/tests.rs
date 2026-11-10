@@ -553,3 +553,20 @@ fn m10_1_undo_after_deleting_the_whole_note() {
     });
     assert_eq!(note.text(), "");
 }
+
+/// UC-005 A9 step 2, M-10.5: the cursor is in a code block where the facade
+/// places it: in the block that ends at it or after it, else the last one.
+#[test]
+fn uc005_a9_m10_5_the_cursor_in_a_code_block() {
+    let text = "Text\n\n```\ncode\n```\n";
+    let rope = Rope::from_str(text);
+    let (blocks, _) = parse_all(text, NoteFormat::Markdown);
+    let at = |needle: &str| text.find(needle).unwrap() + needle.len();
+    assert!(!cursor_in_code(&rope, at("Text"), &blocks));
+    assert!(cursor_in_code(&rope, at("code"), &blocks));
+    assert!(
+        cursor_in_code(&rope, text.len(), &blocks),
+        "after the last block"
+    );
+    assert!(!cursor_in_code(&rope, 0, &[]), "no blocks");
+}

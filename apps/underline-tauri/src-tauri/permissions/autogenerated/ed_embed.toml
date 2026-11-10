@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ed-embed"
+description = "Enables the ed_embed command without any pre-configured scope."
+commands.allow = ["ed_embed"]
+
+[[permission]]
+identifier = "deny-ed-embed"
+description = "Denies the ed_embed command without any pre-configured scope."
+commands.deny = ["ed_embed"]

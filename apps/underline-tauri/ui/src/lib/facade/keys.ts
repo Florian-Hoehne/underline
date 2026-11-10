@@ -14,9 +14,9 @@
 // - Text, also Vim's commands such as `dd`, comes as `beforeinput`.
 // - Up, Down, Home and End need the layout: the window measures where the
 //   cursor would go and sends it along (`rows`).
-// - Link (Ctrl+K) and Image (Ctrl+Shift+I) ask first; their dialogs come with
-//   feature F6, so until then their keys do nothing (Q-14). Nano's Ctrl+K
-//   still cuts the line.
+// - Link (Ctrl+K) and Image (Ctrl+Shift+I) ask first: the core answers with
+//   a request, which opens their dialog (feature F6). Nano's Ctrl+K cuts the
+//   line.
 
 import type { FacadeInput, KeyName } from '../bindings';
 import type { KeysState } from '../editor/keys';
@@ -123,7 +123,6 @@ export function routeFacadeKey(
     command &&
     letter !== null &&
     (event.shiftKey ? TOOL_SHIFT_KEYS.has(letter) : TOOL_KEYS.has(letter));
-  const asksFirst = tool && (event.shiftKey ? letter === 'I' : letter === 'K');
   const ctrl = event.ctrlKey || (mac && event.metaKey);
 
   if (state.mode === 'Nano') {
@@ -167,7 +166,7 @@ export function routeFacadeKey(
     return send(bracket);
   }
   if (tool) {
-    return asksFirst ? 'swallow' : send(letter as KeyName);
+    return send(letter as KeyName);
   }
   if (letter !== null && command && WITH_COMMAND.has(letter)) {
     return send(letter as KeyName);

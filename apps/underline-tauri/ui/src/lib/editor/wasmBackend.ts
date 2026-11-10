@@ -2,9 +2,11 @@
 // backend when the text lives in the window: every input is answered by the
 // editor's core in the WASM (`core.ts`, `sync.ts`), in the same task as the
 // key, and its edits go to the backend after the frame. Only the colours
-// (`ed_viewport`) and the system clipboard stay commands of the backend.
+// (`ed_viewport`), the system clipboard (`clipboard.ts`) and storing files
+// and images stay commands of the backend.
 
 import { commands, type UiError } from '../bindings';
+import { copyOnSelect, readForPaste, storePastedImage, writeCopy } from './clipboard';
 import type { EditorBackend } from './sourceView';
 import { coreOf, openCore, type TabCore } from './sync';
 
@@ -27,7 +29,10 @@ function tabOf(note: string): TabCore {
   return tab;
 }
 
-/** Runs an input on the core of `note`; its edits and views follow. */
+/**
+ * Runs an input on the core of `note`; its edits and views follow, and a
+ * selection it left goes to the clipboard (M-10.7).
+ */
 function input<T>(note: string, work: (tab: TabCore) => T): Promise<T> {
   try {
     const tab = tabOf(note);
@@ -35,6 +40,7 @@ function input<T>(note: string, work: (tab: TabCore) => T): Promise<T> {
     tab.core.setView(false);
     const answer = work(tab);
     tab.afterInput();
+    copyOnSelect(tab).catch((error: unknown) => console.error('Copy on select failed', error));
     return Promise.resolve(answer);
   } catch (error) {
     return Promise.reject(error);
@@ -58,14 +64,36 @@ export function wasmBackend(mac: boolean): EditorBackend {
       return state;
     },
     input: (note, editorInput) => input(note, (tab) => tab.core.input(editorInput)),
-    clipboard: async (note, action) => {
-      const text = action === 'paste' ? await readClipboard() : null;
-      const clipped = await input(note, (tab) => tab.core.clipboard(action, text));
-      if (clipped.copied !== null) {
-        await writeClipboard(clipped.copied);
+    clipboard: async (note, action, imageOnly = false) => {
+      if (action !== 'paste') {
+        const clipped = await input(note, (tab) => tab.core.clipboard(action, null));
+        if (clipped.copied !== null) {
+          await writeCopy(note, clipped.copied, clipped.html);
+        }
+        return { patch: clipped.patch, image: null };
       }
-      return clipped.patch;
+      // M-08.6, UC-005 A17: plain text; over the copied selection what the
+      // clipboard held before (BR-011).
+      const tab = tabOf(note);
+      const over = tab.core.overCopied();
+      const read = await readForPaste(tab, false, over);
+      const pictureAlone = read.image && read.text === null;
+      if (imageOnly && !pictureAlone) {
+        // Nothing for Vim outside insert mode: the view and its selection
+        // (a visual block, say) stay as they are.
+        return { patch: null, image: null };
+      }
+      const content = imageOnly ? { text: null, markup: null, image: true } : read;
+      const clipped = await input(note, (core) => core.core.clipboard('paste', content));
+      return { patch: clipped.patch, image: clipped.image ? { over } : null };
     },
+    pasteImage: async (note, over) => {
+      const picture = await storePastedImage(tabOf(note), over);
+      return picture ? input(note, (tab) => tab.core.insert(picture)) : null;
+    },
+    insert: (note, insertion) => input(note, (tab) => tab.core.insert(insertion)),
+    copySelection: (note) => copyOnSelect(coreOf(note)),
+    textHash: (note) => coreOf(note)?.core.hash() ?? null,
     select: (note, rev, anchor, head) => input(note, (tab) => tab.core.select(rev, anchor, head)),
     viewport: async (note, from, to) => {
       await unwrap(commands.edViewport(note, from, to));

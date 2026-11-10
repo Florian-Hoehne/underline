@@ -18,13 +18,23 @@
 // the same revisions, transforms and hashes. `window.__ulMock` lets a test
 // change a note as the backend would: `backendEdit` (as an agent) and
 // `outsideChange` (as another program).
+//
+// Feature F6: the system clipboard is a fake one with text, HTML and an
+// image (`setClipboard`, `clipboardContent`); its HTML becomes markup by a
+// rough stand-in for `html_to_markup`. Files to put into a note come from a
+// small fake world outside the workspace (`FAKE_OUTSIDE`), and
+// `dragEnter`/`drop` deliver dragged files as Tauri would.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
   commands,
   CreateAnswer,
+  DragName,
   EditingViewName,
+  EmbedAnswer,
+  FormatName,
+  Insertion,
   NewWorkspaceRequest,
   OpenAnswer,
   OverviewItem,
@@ -41,6 +51,7 @@ import type {
   SyncBatch,
 } from './bindings';
 import { loadEditorCore, MirrorCore } from './editor/core';
+import { mockDrop, useMockDrops } from './editor/drop';
 import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
 import palettes from './palettes.generated.json';
 
@@ -85,6 +96,30 @@ export type MockHandlers = {
   }) => Promise<Ok<typeof commands.edViewport>>;
   clip_read_text: () => Ok<typeof commands.clipReadText>;
   clip_write_text: (args: { text: string }) => Ok<typeof commands.clipWriteText>;
+  clip_read: (args: {
+    note: string;
+    rich: FormatName | null;
+    overCopied: boolean;
+  }) => Ok<typeof commands.clipRead>;
+  clip_write: (args: {
+    note: string;
+    text: string;
+    html: string | null;
+    keepBefore: boolean;
+  }) => Ok<typeof commands.clipWrite>;
+  clip_store_image: (args: {
+    note: string;
+    overCopied: boolean;
+  }) => Promise<Ok<typeof commands.clipStoreImage>>;
+  ed_embed: (args: {
+    note: string;
+    path: string;
+    allowLarge: boolean;
+  }) => Promise<Ok<typeof commands.edEmbed>>;
+  ed_drop: (args: { note: string; paths: string[] }) => Promise<Ok<typeof commands.edDrop>>;
+  ed_drag: (args: { state: DragName }) => Promise<Ok<typeof commands.edDrag>>;
+  clip_forget: (args: { note: string }) => Ok<typeof commands.clipForget>;
+  ed_note_link: (args: { note: string; target: string }) => Ok<typeof commands.edNoteLink>;
   app_close_anyway: () => Ok<typeof commands.appCloseAnyway>;
   ed_mirror: (args: { note: string }) => Promise<Ok<typeof commands.edMirror>>;
   ed_sync: (args: { note: string; batch: SyncBatch }) => Promise<Ok<typeof commands.edSync>>;
@@ -113,6 +148,41 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
   '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE],
   '/home/user/Letters': ['Draft'],
 };
+
+/**
+ * F6: files outside the workspaces by path, with their size in bytes; a
+ * size of -1 is a folder. Over 10 MB a file is asked about (UC-005 A19).
+ */
+export const FAKE_OUTSIDE: Readonly<Record<string, number>> = {
+  '/home/user/Pictures': -1,
+  '/home/user/Pictures/photo.png': 48_000,
+  '/home/user/Pictures/poster.png': 12 * 1024 * 1024,
+  '/home/user/Pictures/banner.png': 11 * 1024 * 1024,
+  '/home/user/Documents/report.pdf': 120_000,
+};
+
+/** What the fake system clipboard holds (F6). */
+export type MockClipboard = { text: string | null; html: string | null; image: boolean };
+
+/**
+ * A rough stand-in for `html_to_markup` (Markdown only): headings, bold,
+ * italic, list items and paragraphs; every other tag goes. The real rules
+ * are tested in Rust.
+ */
+export function mockHtmlToMarkup(html: string): string {
+  return html
+    .replace(
+      /<h([1-6])[^>]*>(.*?)<\/h\1>/gis,
+      (_, level: string, text: string) => `${'#'.repeat(Number(level))} ${text}\n\n`,
+    )
+    .replace(/<(b|strong)[^>]*>(.*?)<\/\1>/gis, '**$2**')
+    .replace(/<(i|em)[^>]*>(.*?)<\/\1>/gis, '*$2*')
+    .replace(/<li[^>]*>(.*?)<\/li>/gis, '- $1\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 /** The palettes of all themes, as the backend exports them. */
 export const PALETTES: readonly PaletteView[] = palettes;
@@ -242,7 +312,12 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
       await setStatus(wikiStatus(url));
       return null;
     },
-    ...workspaceHandlers(start, setStatus, () => settings),
+    ...workspaceHandlers(
+      start,
+      setStatus,
+      () => settings,
+      () => status,
+    ),
   };
 }
 
@@ -254,6 +329,7 @@ function workspaceHandlers(
   start: MockStart,
   setStatus: (text: string) => Promise<void>,
   settings: () => SettingsView,
+  status: () => string = () => '',
 ): Pick<
   MockHandlers,
   | 'ws_start'
@@ -269,6 +345,14 @@ function workspaceHandlers(
   | 'ed_viewport'
   | 'clip_read_text'
   | 'clip_write_text'
+  | 'clip_read'
+  | 'clip_write'
+  | 'clip_store_image'
+  | 'ed_embed'
+  | 'ed_drop'
+  | 'ed_drag'
+  | 'clip_forget'
+  | 'ed_note_link'
   | 'app_close_anyway'
   | 'ed_mirror'
   | 'ed_sync'
@@ -327,7 +411,51 @@ function workspaceHandlers(
   const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** The test that made the mock ended (`dispose`). */
   let disposed = false;
-  let clipboard: string | null = null;
+  let clipboard: MockClipboard = { text: null, html: null, image: false };
+  /** BR-011: per note, what the clipboard held before copy on select. */
+  const before = new Map<string, MockClipboard>();
+  /** How many images were pasted, for their names. */
+  let pastedImages = 0;
+  /** The folder of `note` in the workspace, with a slash, or nothing. */
+  const folderOf = (note: string) =>
+    note.includes('/') ? note.slice(0, note.lastIndexOf('/') + 1) : '';
+  /** The place of the workspace file `place` relative to the note `note`. */
+  const relativeTo = (note: string, place: string) => {
+    const from = folderOf(note).split('/').filter(Boolean);
+    const to = place.split('/');
+    let common = 0;
+    while (common < from.length && common < to.length - 1 && from[common] === to[common]) {
+      common += 1;
+    }
+    return [...from.slice(common).map(() => '..'), ...to.slice(common)].join('/');
+  };
+  const IMAGE = /\.(png|jpe?g|gif|svg|webp)$/i;
+  /** UC-005 A9 to A13, A19: `embed_file` over the fake world. */
+  const embed = async (note: string, path: string, allowLarge: boolean): Promise<EmbedAnswer> => {
+    const image = IMAGE.test(path);
+    if (root && path.startsWith(`${root}/`)) {
+      const place = relativeTo(note, path.slice(root.length + 1));
+      return { kind: 'insert', insertion: { kind: 'file', place, image } };
+    }
+    const size = FAKE_OUTSIDE[path];
+    if (size === undefined) {
+      await setStatus(`${path} cannot be read: No such file or directory (os error 2)`);
+      return { kind: 'refused' };
+    }
+    if (size < 0) {
+      await setStatus(`${path} is a folder; folders cannot be put into a note`);
+      return { kind: 'refused' };
+    }
+    if (size > 10 * 1024 * 1024 && !allowLarge) {
+      return {
+        kind: 'large',
+        path,
+        question: `${path} has ${Math.floor(size / (1024 * 1024))} MB. Copy it into the workspace, or only link to where it is (it is then not part of the workspace and not pushed with git)?`,
+      };
+    }
+    const place = path.split('/').at(-1) ?? path;
+    return { kind: 'insert', insertion: { kind: 'file', place, image } };
+  };
   const textOf = (note: string): string => texts.get(note) ?? fakeNoteText(note);
   /** ADR-025: the backend's mirror of each note a window's core holds. */
   const mirrors = new Map<string, MirrorCore>();
@@ -637,11 +765,82 @@ function workspaceHandlers(
       await emit('tabs', tabsView());
       return null;
     },
-    clip_read_text: () => clipboard,
+    clip_read_text: () => clipboard.text,
     clip_write_text: ({ text }) => {
-      clipboard = text;
+      clipboard = { text, html: null, image: false };
       return null;
     },
+    clip_read: ({ note, rich, overCopied }) => {
+      const content = (overCopied ? before.get(note) : undefined) ?? clipboard;
+      return {
+        text: content.text || null,
+        markup: rich !== null && content.html !== null ? mockHtmlToMarkup(content.html) : null,
+        image: content.image && content.text === null && content.html === null,
+      };
+    },
+    clip_write: ({ note, text, html, keepBefore }) => {
+      if (keepBefore) {
+        before.set(note, clipboard);
+      }
+      clipboard = { text, html, image: false };
+      return null;
+    },
+    clip_store_image: async ({ note, overCopied }) => {
+      const content = (overCopied ? before.get(note) : undefined) ?? clipboard;
+      if (!content.image) {
+        return null;
+      }
+      pastedImages += 1;
+      const name = `${title(note).replace(/ /g, '-')}-2026-11-10-1200${pastedImages > 1 ? `-${pastedImages}` : ''}.png`;
+      await setStatus(`Pasted image stored as ${name}`);
+      return name;
+    },
+    ed_embed: async ({ note, path, allowLarge }) => embed(note, path, allowLarge),
+    ed_drop: async ({ note, paths }) => {
+      if (paths.length === 0) {
+        await setStatus('This cannot be dropped into a note');
+        return [];
+      }
+      const answers: EmbedAnswer[] = [];
+      for (const [n, path] of paths.entries()) {
+        if (n > 0) {
+          answers.push({ kind: 'insert', insertion: { kind: 'text', text: ' ' } });
+        }
+        if (/^(https?:\/\/|mailto:)/.test(path)) {
+          answers.push({ kind: 'insert', insertion: { kind: 'link', address: path, label: null } });
+          continue;
+        }
+        const answer = await embed(note, path, false);
+        if (answer.kind === 'insert' && answer.insertion.kind === 'file') {
+          const { place, image } = answer.insertion;
+          const dropped: Insertion = { kind: 'dropped', place, image };
+          answers.push({ kind: 'insert', insertion: dropped });
+        } else {
+          answers.push(answer);
+        }
+      }
+      return answers;
+    },
+    ed_drag: async ({ state }) => {
+      const hint = 'Drop to insert at the place under the pointer';
+      if (state === 'over') {
+        await setStatus(hint);
+      } else if (state === 'noNote') {
+        await setStatus('Open a note to drop files into it');
+      } else if (status() === hint) {
+        await setStatus('');
+      }
+      return null;
+    },
+    clip_forget: ({ note }) => {
+      before.delete(note);
+      return null;
+    },
+    ed_note_link: ({ note, target }) => ({
+      kind: 'link',
+      address: relativeTo(note, `${target}.md`),
+      label: title(target),
+    }),
     ed_viewport: async ({ note, from, to }) => {
       const mirror = mirrors.get(note);
       const lines = (mirror?.text() ?? textOf(note)).split('\n').slice(from, to);
@@ -734,6 +933,13 @@ function workspaceHandlers(
       return rev;
     },
     mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    setClipboard: (content) => {
+      clipboard = { text: null, html: null, image: false, ...content };
+    },
+    clipboardContent: () => ({ ...clipboard }),
+    dragEnter: () => mockDrop({ type: 'enter' }),
+    dragLeave: () => mockDrop({ type: 'leave' }),
+    drop: (paths, x, y) => mockDrop({ type: 'drop', paths, x, y }),
     dispose: () => {
       for (const timer of saveTimers.values()) {
         clearTimeout(timer);
@@ -759,6 +965,16 @@ export type MockHooks = {
   outsideChange(note: string, text: string): Promise<number | null>;
   /** The backend's text of `note`, if a window's core holds it. */
   mirrorText(note: string): string | null;
+  /** F6: the system clipboard holds `content` now (unset parts are empty). */
+  setClipboard(content: Partial<MockClipboard>): void;
+  /** F6: what the system clipboard holds. */
+  clipboardContent(): MockClipboard;
+  /** M-10.5: files are dragged into the window. */
+  dragEnter(): void;
+  /** M-10.5: they leave it without a drop. */
+  dragLeave(): void;
+  /** M-10.5: `paths` are dropped at `x`, `y` (CSS pixels of the window). */
+  drop(paths: string[], x: number, y: number): void;
   /** The test ended: no timer of the mock outlives it. */
   dispose(): void;
 };
@@ -803,6 +1019,7 @@ export function insideTauri(): boolean {
  */
 export function installMockBackend(handlers: Partial<MockHandlers> = mockHandlers()): void {
   (globalThis as unknown as { __ulMock?: MockHooks }).__ulMock = handlers.__hooks;
+  useMockDrops();
   mockIPC(
     (cmd, args) => {
       if (cmd in handlers) {

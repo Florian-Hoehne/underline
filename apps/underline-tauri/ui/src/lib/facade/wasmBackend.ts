@@ -4,9 +4,11 @@
 // the key; its edits go to the backend after the frame. The blocks' code
 // colours and figures come from the backend (`ed-enrich`), until then the
 // core shows what the backend shows while it works; the system clipboard
-// stays a command of the backend.
+// (`editor/clipboard.ts`) and storing files and images stay commands of the
+// backend.
 
 import { commands, type BlockView, type UiError } from '../bindings';
+import { copyOnSelect, readForPaste, storePastedImage, writeCopy } from '../editor/clipboard';
 import { coreOf, openCore, type TabCore } from '../editor/sync';
 import { setEditingView, type FacadeBackend } from './backend';
 
@@ -37,7 +39,10 @@ const shown = new Set<string>();
  */
 let kept: { tab: TabCore; version: number; blocks: BlockView[] } | null = null;
 
-/** Runs an input on the core of `note`; its edits and views follow. */
+/**
+ * Runs an input on the core of `note`; its edits and views follow, and a
+ * selection it left goes to the clipboard (M-10.7).
+ */
 function input<T>(note: string, work: (tab: TabCore) => T): Promise<T> {
   try {
     const tab = tabOf(note);
@@ -48,6 +53,7 @@ function input<T>(note: string, work: (tab: TabCore) => T): Promise<T> {
     }
     const answer = work(tab);
     tab.afterInput();
+    copyOnSelect(tab).catch((error: unknown) => console.error('Copy on select failed', error));
     return Promise.resolve(answer);
   } catch (error) {
     return Promise.reject(error);
@@ -91,13 +97,32 @@ export function wasmFacadeBackend(mac: boolean): FacadeBackend {
     input: (note, at, facadeInput, rows, clipboard) =>
       input(note, (tab) => tab.core.facadeInput(at, facadeInput, rows, clipboard)),
     clipboard: async (note, at, action, plain) => {
-      const text = action === 'paste' ? await readClipboard() : null;
-      const clipped = await input(note, (tab) => tab.core.facadeClipboard(at, action, plain, text));
-      if (clipped.copied !== null) {
-        await writeClipboard(clipped.copied);
+      if (action !== 'paste') {
+        const clipped = await input(note, (tab) =>
+          tab.core.facadeClipboard(at, action, plain, null),
+        );
+        if (clipped.copied !== null) {
+          await writeCopy(note, clipped.copied, clipped.html);
+        }
+        return { patch: clipped.patch, image: null };
       }
-      return clipped.patch;
+      // UC-005 A17: HTML as markup unless Ctrl+Shift+V; over the copied
+      // selection what the clipboard held before (BR-011).
+      const tab = tabOf(note);
+      const over = tab.core.overCopied();
+      const content = await readForPaste(tab, !plain, over);
+      const clipped = await input(note, (core) =>
+        core.core.facadeClipboard(at, 'paste', plain, content),
+      );
+      return { patch: clipped.patch, image: clipped.image ? { over } : null };
     },
+    pasteImage: async (note, at, over) => {
+      const picture = await storePastedImage(tabOf(note), over);
+      return picture ? input(note, (tab) => tab.core.facadeInsert(at, picture)) : null;
+    },
+    insert: (note, at, insertion) => input(note, (tab) => tab.core.facadeInsert(at, insertion)),
+    copySelection: (note) => copyOnSelect(coreOf(note)),
+    textHash: (note) => coreOf(note)?.core.hash() ?? null,
     keys: async (note) => tabOf(note).core.facadeKeys(),
     readClipboard,
     writeClipboard,

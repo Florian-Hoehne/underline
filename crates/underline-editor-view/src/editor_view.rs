@@ -571,9 +571,9 @@ pub struct HighlightView {
     pub styles: Vec<SpanStyle>,
 }
 
-/// M-08.6, M-09.14, ADR-025: what copying, cutting or pasting in the
-/// webview's editor gives: the markup for the clipboard, if any, and the
-/// patch.
+/// M-08.6, M-09.14, M-10.6, ADR-025: what copying, cutting or pasting in
+/// the webview's editor gives: the markup for the clipboard, if any, with
+/// the HTML of the facade's selection, and the patch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
@@ -581,8 +581,100 @@ pub struct Clipped<P> {
     /// The markup for the system clipboard; `None` with nothing selected
     /// or when pasting.
     pub copied: Option<String>,
+    /// UC-005 BR-011: the facade's selection as HTML, for other programs,
+    /// put on the clipboard with `copied`; `None` in the source view.
+    pub html: Option<String>,
+    /// UC-005 A18, M-10.6: the paste found only an image; the window has
+    /// the backend store it next to the note and inserts it then
+    /// ([`Insertion::Image`]).
+    pub image: bool,
     /// The patch for the view.
     pub patch: P,
+}
+
+/// UC-005 A17, A18, ADR-014: what the clipboard holds, as the backend read
+/// it for a paste (`clip_read`). Over the selection copy on select made it
+/// is what the clipboard held before (BR-011).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct ClipContentView {
+    /// The plain text, with `\n` line endings; `None` without text.
+    pub text: Option<String>,
+    /// The HTML of other programs as markup of the note's format
+    /// (`html_to_markup`), when the facade asked for it; empty when the
+    /// HTML held nothing the format keeps.
+    pub markup: Option<String>,
+    /// An image and nothing else (a screenshot).
+    pub image: bool,
+}
+
+/// FR-031, BR-011: a selection copy on select puts on the clipboard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionCopy {
+    /// The selected markup.
+    pub text: String,
+    /// The facade's selection as HTML; `None` in the source view.
+    pub html: Option<String>,
+    /// The first copy since the selection was made: the backend keeps what
+    /// the clipboard held before, for pasting over the selection.
+    pub first: bool,
+}
+
+/// FR-031, BR-011: what copy on select asks of the backend after an input.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct CopyOnSelectView {
+    /// The selection to put on the clipboard, if any.
+    pub copy: Option<SelectionCopy>,
+    /// The copied selection is gone: the backend lets go of what the
+    /// clipboard held before it.
+    pub forget: bool,
+}
+
+/// UC-005 A2, A9 to A13, A18: what goes into the note at the cursor,
+/// replacing the selection, in the markup of the note's format.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Insertion {
+    /// M-10.3: a link to `address`; its text is `label`, else the
+    /// selection, else the address.
+    Link {
+        /// The web address or the place of a note.
+        address: String,
+        /// The link's text.
+        label: Option<String>,
+    },
+    /// M-10.6: a picture at `place`, on a paragraph of its own.
+    Image {
+        /// Its place, relative to the note.
+        place: String,
+    },
+    /// M-10.4, A9 to A11: a file put into the note: a picture when
+    /// `image`, else a link labelled with its file name.
+    File {
+        /// Its place, relative to the note, with `/`.
+        place: String,
+        /// Whether it is inserted as a picture (BR-012).
+        image: bool,
+    },
+    /// M-10.5, A9 step 2: a dropped file: as [`Insertion::File`], but in a
+    /// code block only its place.
+    Dropped {
+        /// Its place, relative to the note, with `/`.
+        place: String,
+        /// Whether it is inserted as a picture (BR-012).
+        image: bool,
+    },
+    /// M-10.5: text as it is, such as the space between dropped items.
+    Text {
+        /// The text.
+        text: String,
+    },
 }
 
 /// M-08.8, M-12.2, ADR-025: what the webview's editor tells its view after

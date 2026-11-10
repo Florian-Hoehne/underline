@@ -26,6 +26,14 @@
     "allow-app-request-close",
     "allow-clip-read-text",
     "allow-clip-write-text",
+    "allow-clip-read",
+    "allow-clip-write",
+    "allow-clip-store-image",
+    "allow-clip-forget",
+    "allow-ed-embed",
+    "allow-ed-drop",
+    "allow-ed-drag",
+    "allow-ed-note-link",
     "allow-app-close-anyway"
   ]
 }

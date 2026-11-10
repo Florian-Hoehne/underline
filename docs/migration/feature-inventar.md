@@ -222,7 +222,7 @@ Reihenfolge von links nach rechts:
   - Left/Right gehen je sichtbares Zeichen, auch über Blockgrenzen.
   - Up/Down gehen je Zeile, dann in den Nachbarblock. Home/End gehen an Zeilenanfang/-ende.
   - *Kein PageUp/PageDown, kein Ctrl+Home/End, Tab tut nichts.*
-- [ ] **M-09.14** Einfügen:
+- [~] **M-09.14** Einfügen:
   - HTML wird zu Markup (`html_to_markup`). Ctrl+Shift+V fügt reinen Text ein, escaped.
   - Underlines eigene Kopien kommen als Markup zurück.
   - Mehrzeiliges Markup bekommt Leerzeilen davor und danach.
@@ -246,28 +246,28 @@ Reihenfolge von links nach rechts:
   - Heading Ctrl+Shift+H, List Ctrl+Shift+L, Quote Ctrl+Shift+Q, Image Ctrl+Shift+I, Table Ctrl+Shift+T.
   - Inline-Formate schalten um (ein zweites Mal entfernt das Format). Zeilenformate setzen Präfixe, je Format die
     passenden Marker.
-- [ ] **M-10.3** Dialog Link:
+- [~] **M-10.3** Dialog Link:
   - Feld „Web address:“ (fokussiert) und Filter „Or a note of the workspace:“ mit bis zu 50 Treffern
     (Gross-/Kleinschreibung egal, max. 160 px hoch).
   - Eine gewählte Notiz wird als relativer Link mit ihrem Titel eingefügt. „Insert“/Enter fügt die Adresse ohne
     Label ein.
   - *Kein Escape.*
-- [ ] **M-10.4** Dialog Bild:
+- [~] **M-10.4** Dialog Bild:
   - Pfad eintippen unter „Image file:“, dann „Insert“/Enter.
   - Dateien über 10 MB → Rückfrage „{file} has N MB. Copy it into the workspace, or only link to where it is (it is
     then not part of the workspace and not pushed with git)?“ mit „Copy“, „Link to its place“, „Cancel“.
   - Ist der Name belegt → „Copied as {place}, since the name was taken“.
   - Andere Dateien als Bilder werden ein Link mit dem Dateinamen.
   - *Kein Dateidialog.*
-- [ ] **M-10.5** Drag & Drop von Dateien (FR-033):
+- [~] **M-10.5** Drag & Drop von Dateien (FR-033):
   - Während des Ziehens: Status „Drop to insert at the place under the pointer“.
   - Der Cursor geht an die Zeigerstelle. Die Datei wird kopiert (Ordner der Notiz) oder, wenn sie schon im Workspace
     liegt, verlinkt.
   - Mehrere Elemente werden durch Leerzeichen getrennt. Im Code-Block wird nur der Pfad eingefügt.
   - Ohne Pfad → „This cannot be dropped into a note“.
   - *Links aus dem Browser fallen heute nicht darunter (FR-034 offen, Q-07).*
-- [ ] **M-10.6** Ein eingefügtes Bild wird als PNG neben der Notiz gespeichert: „Pasted image stored as {name}“.
-- [ ] **M-10.7** Copy on select (FR-031/032):
+- [~] **M-10.6** Ein eingefügtes Bild wird als PNG neben der Notiz gespeichert: „Pasted image stored as {name}“.
+- [~] **M-10.7** Copy on select (FR-031/032):
   - Nach dem Loslassen der Maus wird die Auswahl kopiert; der alte Inhalt der Zwischenablage wird gemerkt.
   - Einfügen über genau dieser Auswahl fügt den alten Inhalt ein.
   - Abschaltbar.

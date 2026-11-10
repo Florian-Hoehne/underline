@@ -158,13 +158,42 @@ impl WasmTab {
         Ok(self.0.keys_status(vim)?)
     }
 
-    /// `Clipped<EditorPatch>` as JSON.
+    /// `Clipped<EditorPatch>` of `action` (`ClipAction`) with the clipboard's
+    /// `content` (`ClipContentView | null`), as JSON.
     ///
     /// # Errors
     ///
-    /// `action` is not a `ClipAction`.
-    pub fn clipboard(&mut self, action: &str, text: Option<String>) -> Result<String, JsError> {
-        Ok(self.0.clipboard(action, text.as_deref())?)
+    /// `action` is not a `ClipAction`, or `content` not a `ClipContentView`
+    /// or `null`.
+    pub fn clipboard(&mut self, action: &str, content: &str) -> Result<String, JsError> {
+        Ok(self.0.clipboard(action, content)?)
+    }
+
+    /// `CopyOnSelectView` of copy on select (`on`), as JSON.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = copyOnSelect)]
+    pub fn copy_on_select(&mut self, on: bool) -> Result<String, JsError> {
+        Ok(self.0.copy_on_select(on)?)
+    }
+
+    /// Whether the selection is the one copy on select copied.
+    #[wasm_bindgen(js_name = overCopied)]
+    #[must_use]
+    pub fn over_copied(&self) -> bool {
+        self.0.over_copied()
+    }
+
+    /// `EditorPatch` of `insertion` (`Insertion`) in the source view, as
+    /// JSON.
+    ///
+    /// # Errors
+    ///
+    /// `insertion` is not an `Insertion`.
+    pub fn insert(&mut self, insertion: &str) -> Result<String, JsError> {
+        Ok(self.0.insert(insertion)?)
     }
 
     /// `FacadeState` as JSON.
@@ -214,11 +243,20 @@ impl WasmTab {
         at: &str,
         action: &str,
         plain: bool,
-        text: Option<String>,
+        content: &str,
     ) -> Result<String, JsError> {
-        Ok(self
-            .0
-            .facade_clipboard(at, action, plain, text.as_deref())?)
+        Ok(self.0.facade_clipboard(at, action, plain, content)?)
+    }
+
+    /// `FacadePatch` of `insertion` (`Insertion`) at the selection `at`
+    /// (`FacadeAt`), as JSON.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    #[wasm_bindgen(js_name = facadeInsert)]
+    pub fn facade_insert(&mut self, at: &str, insertion: &str) -> Result<String, JsError> {
+        Ok(self.0.facade_insert(at, insertion)?)
     }
 
     /// `BlocksView[]` of the backend's colours and figures (`EnrichView`

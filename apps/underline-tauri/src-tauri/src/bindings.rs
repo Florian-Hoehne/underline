@@ -13,8 +13,9 @@ use specta_typescript::Typescript;
 use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use underline_session::{
-    ClipAction, Clipped, EditorInput, EditorPatch, EditorState, FacadeAt, FacadeInput, FacadePatch,
-    FacadeState, PaletteView, RemoteApplied, RowsView, TabViews, VimChange, VimState,
+    ClipAction, Clipped, CopyOnSelectView, EditorInput, EditorPatch, EditorState, FacadeAt,
+    FacadeInput, FacadePatch, FacadeState, PaletteView, RemoteApplied, RowsView, TabViews,
+    VimChange, VimState,
 };
 
 use crate::commands;
@@ -62,6 +63,14 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::app_request_close,
             commands::clip_read_text,
             commands::clip_write_text,
+            commands::clip_read,
+            commands::clip_write,
+            commands::clip_store_image,
+            commands::clip_forget,
+            commands::ed_embed,
+            commands::ed_drop,
+            commands::ed_drag,
+            commands::ed_note_link,
             commands::app_close_anyway
         ])
         .events(collect_events![
@@ -90,6 +99,7 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .typ::<RowsView>()
         .typ::<Clipped<EditorPatch>>()
         .typ::<Clipped<FacadePatch>>()
+        .typ::<CopyOnSelectView>()
         .typ::<TabViews>()
         .typ::<RemoteApplied>()
         .disable_serde_phases()

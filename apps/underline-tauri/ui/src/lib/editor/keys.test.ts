@@ -67,9 +67,12 @@ describe('M-11, M-10.2, M-08.8 keys by input mode', () => {
 
   it('M-10.2 the toolbar keys need the command key, with Shift where the hint says', () => {
     expect(send(routeKey(key('b', { ctrlKey: true }), false, 1))).toMatchObject({ key: 'B' });
-    // Q-14: Link and Image do nothing until their dialogs come (F6).
-    expect(routeKey(key('K', { ctrlKey: true }), false, 1)).toBe('swallow');
-    expect(routeKey(key('I', { ctrlKey: true, shiftKey: true }), false, 1)).toBe('swallow');
+    // F6: Link and Image go to the core, which asks for their dialogs.
+    expect(send(routeKey(key('K', { ctrlKey: true }), false, 1))).toMatchObject({ key: 'K' });
+    expect(send(routeKey(key('I', { ctrlKey: true, shiftKey: true }), false, 1))).toMatchObject({
+      key: 'I',
+      shift: true,
+    });
     expect(send(routeKey(key('i', { ctrlKey: true }), false, 1))).toMatchObject({ key: 'I' });
     expect(send(routeKey(key('H', { ctrlKey: true, shiftKey: true }), false, 1))).toMatchObject({
       key: 'H',

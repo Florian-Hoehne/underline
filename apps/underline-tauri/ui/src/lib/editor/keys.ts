@@ -15,9 +15,9 @@
 //   here: in insert mode as in Normal; in the other modes only the toolbar
 //   and folding keys, and the editing keys are swallowed so that Tab, for
 //   example, never leaves the text (M-08.10).
-// - Link (Ctrl+K) and Image (Ctrl+Shift+I) ask first; their dialogs come
-//   with feature F6, so until then their keys do nothing (Q-14). Nano's
-//   Ctrl+K still cuts the line.
+// - Link (Ctrl+K) and Image (Ctrl+Shift+I) ask first: the core answers
+//   with a request, which opens their dialog (feature F6). Nano's Ctrl+K
+//   cuts the line.
 
 import type { EditorInput, KeyName } from '../bindings';
 
@@ -141,8 +141,7 @@ export function routeKey(
     command &&
     letter !== null &&
     (event.shiftKey ? TOOL_SHIFT_KEYS.has(letter) : TOOL_KEYS.has(letter));
-  const asksFirst = tool && (event.shiftKey ? letter === 'I' : letter === 'K');
-  const toolRoute = (): KeyRoute => (asksFirst ? 'swallow' : send(letter as KeyName));
+  const toolRoute = (): KeyRoute => send(letter as KeyName);
 
   if (state.mode === 'Nano') {
     const ctrl = event.ctrlKey || (mac && event.metaKey);

@@ -35,14 +35,16 @@ describe('M-09.13 the keys of the facade', () => {
     expect(routeFacadeKey(key('Enter', { metaKey: true }), true)).toBe('enlarge');
   });
 
-  it('M-10.1, M-10.2, M-08.8 command keys: undo, toolbar, folding; Link and Image wait for F6', () => {
+  it('M-10.1, M-10.2, M-08.8 command keys: undo, toolbar, folding; Link and Image ask (F6)', () => {
     expect(routeFacadeKey(key('z', { ctrlKey: true }), false)).toMatchObject({
       send: { key: 'Z', ctrl: true },
     });
     expect(routeFacadeKey(key('b', { metaKey: true }), true)).toMatchObject({
       send: { key: 'B', meta: true },
     });
-    expect(routeFacadeKey(key('k', { ctrlKey: true }), false)).toBe('swallow');
+    expect(routeFacadeKey(key('k', { ctrlKey: true }), false)).toMatchObject({
+      send: { key: 'K', ctrl: true },
+    });
     expect(routeFacadeKey(key('{', { ctrlKey: true, shiftKey: true }), false)).toMatchObject({
       send: { key: 'BracketLeft' },
     });
