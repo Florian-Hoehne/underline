@@ -103,6 +103,24 @@ impl NoteSaver {
     pub fn own_writes(&self) -> &OwnWrites {
         &self.own
     }
+
+    /// What stores a note at once, like [`NoteSaver::save_now`], apart from
+    /// the saver: it can be used while the session is let go.
+    pub fn writer(&self) -> NoteWriter {
+        NoteWriter(self.own.clone())
+    }
+}
+
+/// Stores notes atomically at once, as [`NoteSaver::save_now`] does,
+/// recording them as Underline's own writes.
+#[derive(Debug, Clone)]
+pub struct NoteWriter(OwnWrites);
+
+impl NoteWriter {
+    /// Stores `text` at `path` now, atomically.
+    pub fn save_now(&self, path: &Path, text: &str) -> Result<(), String> {
+        store(&self.0, path, text)
+    }
 }
 
 fn store(own: &OwnWrites, path: &Path, text: &str) -> Result<(), String> {

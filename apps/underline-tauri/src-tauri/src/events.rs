@@ -5,8 +5,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    BlocksView, CloseQuestion, Event, FoundView, HighlightView, OverviewItem, SectionsView,
-    SettingsView, StatusView, TabPropertiesView, TabsView, TextReplaced, WorkspaceView,
+    BlocksView, ChangedView, CloseQuestion, EnrichView, Event, FlushView, FoundView, HighlightView,
+    OverviewItem, SectionsView, SettingsView, StatusView, TabPropertiesView, TabsView,
+    TextReplaced, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -74,6 +75,22 @@ pub struct PropertiesEvent(pub Option<TabPropertiesView>);
 #[tauri_specta(event_name = "close-question")]
 pub struct CloseQuestionEvent(pub CloseQuestion);
 
+/// ADR-025: the backend changed the text of a note; the window fetches the
+/// change with `ed_sync`.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "ed-changed")]
+pub struct ChangedEvent(pub ChangedView);
+
+/// ADR-025: the window sends its edits now, even none.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "ed-flush")]
+pub struct FlushEvent(pub FlushView);
+
+/// ADR-025: what the backend made of the facade's blocks, by content.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "ed-enrich")]
+pub struct EnrichEvent(pub EnrichView);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -90,6 +107,9 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Found(found) => FoundEvent(found).emit(app),
             Event::Properties(properties) => PropertiesEvent(properties).emit(app),
             Event::Blocks(blocks) => BlocksEvent(blocks).emit(app),
+            Event::Changed(changed) => ChangedEvent(changed).emit(app),
+            Event::Flush(flush) => FlushEvent(flush).emit(app),
+            Event::Enrich(enrich) => EnrichEvent(*enrich).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

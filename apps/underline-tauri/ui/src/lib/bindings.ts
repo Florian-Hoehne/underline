@@ -164,6 +164,25 @@ export const commands = {
 	 */
 	edKeysStatus: (note: string, vim: VimState | null) => typedError<KeysStatusView | null, UiError>(__TAURI_INVOKE("ed_keys_status", { note, vim })),
 	/**
+	 *  ADR-025: the window's edits made on revision `batch.base` (none to
+	 *  fetch the backend's changes); the answer carries the backend's changes
+	 *  since, the new revision and its hash.
+	 * 
+	 *  Synchronous like `ed_input`: it runs on the main thread in the order the
+	 *  window sent it. The window has at most one batch of a note on its way
+	 *  (`docs/migration/variante-b.md` section 3.3), so order would hold as an
+	 *  async command too; synchronous keeps it simple, and the work under the
+	 *  session is small (the edits, the transform over the backend's changes
+	 *  since, the hash). A copy to keep (UC-004 A9, rare) is written after the
+	 *  session is let go.
+	 */
+	edSync: (note: string, batch: SyncBatch) => typedError<SyncAnswer, UiError>(__TAURI_INVOKE("ed_sync", { note, batch })),
+	/**
+	 *  ADR-025: the window's copy of the text went apart from the backend's;
+	 *  the window's `text` is taken.
+	 */
+	edResync: (note: string, text: string) => typedError<SyncAnswer, UiError>(__TAURI_INVOKE("ed_resync", { note, text })),
+	/**
 	 *  M-11.2, A-01: the registers `"+` and `"*` of the window's Vim keys read
 	 *  the system clipboard (ADR-014) as plain text; `null` without text.
 	 */
@@ -185,6 +204,9 @@ export const commands = {
 export const events = {
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
 	edBlocks: makeEvent<BlocksEvent, BlocksEvent>("ed-blocks"),
+	edChanged: makeEvent<ChangedEvent, ChangedEvent>("ed-changed"),
+	edEnrich: makeEvent<EnrichEvent, EnrichEvent>("ed-enrich"),
+	edFlush: makeEvent<FlushEvent, FlushEvent>("ed-flush"),
 	edFound: makeEvent<FoundEvent, FoundEvent>("ed-found"),
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
 	edReplaced: makeEvent<TextReplacedEvent, TextReplacedEvent>("ed-replaced"),
@@ -313,6 +335,23 @@ export type CellAlignName =
 "center" | 
 /**  Right. */
 "right";
+
+/**
+ *  ADR-025: the backend changed the text of a note; the window fetches the
+ *  change with `ed_sync`.
+ */
+export type ChangedEvent = ChangedView;
+
+/**
+ *  `ed-changed`: the backend changed the text of `note`; the window fetches
+ *  the change with its next `ed_sync`.
+ */
+export type ChangedView = {
+	/**  The note, by its id. */
+	note: string,
+	/**  The backend's revision now. */
+	rev: number,
+};
 
 /**  The clipboard keys of the source view (M-08.6, ADR-014). */
 export type ClipAction = 
@@ -508,6 +547,30 @@ export type EditorState = {
 	keys: KeysStatusView | null,
 };
 
+/**  ADR-025: what the backend made of the facade's blocks, by content. */
+export type EnrichEvent = EnrichView;
+
+/**
+ *  `ed-enrich`: what the backend made of the facade's blocks of `note`, by
+ *  their content (section 2.3): the colours of code (`colors_key`), the
+ *  figures of diagrams (`diagram_key`) and of images (by their target,
+ *  without the caption). `clear` drops what was sent before (another theme).
+ */
+export type EnrichView = {
+	/**  The note, by its id. */
+	note: string,
+	/**  The backend's revision the entries were made at. */
+	rev: number,
+	/**  What was sent before is dropped first. */
+	clear: boolean,
+	/**  The colours of code by key; `None` when nothing in it is coloured. */
+	colors: ([string, CodeColors | null])[],
+	/**  The figures of diagrams by key. */
+	diagrams: ([string, FigureView])[],
+	/**  The figures of images by target. */
+	images: ([string, FigureView])[],
+};
+
 /**
  *  UC-005, ADR-024: the selection the facade shows when it sends an input,
  *  in web units of the revision `rev`; the input applies there.
@@ -650,6 +713,18 @@ export type FigureView = {
 	unreadable: string | null,
 	/**  "Figure n. {caption}" below the picture. */
 	caption: string | null,
+};
+
+/**  ADR-025: the window sends its edits now, even none. */
+export type FlushEvent = FlushView;
+
+/**
+ *  `ed-flush`: the window sends its edits now, even none, for `note` or for
+ *  every open note (before an agent's change, before closing).
+ */
+export type FlushView = {
+	/**  The note, or `None` for all. */
+	note: string | null,
 };
 
 /**  A note format as the Create dialog names it (UC-001 BR-001). */
@@ -988,6 +1063,30 @@ export type Platform =
 /**  M-16.2: the properties of the active tab's note; `null` without one. */
 export type PropertiesEvent = TabPropertiesView | null;
 
+/**  A change of the backend. */
+export type RemoteChange = 
+/**
+ *  Edits one after the other; `sealed` makes them an undo step of their
+ *  own (an agent's change, UC-019 BR-007).
+ */
+{ kind: "edits"; 
+/**  The edits. */
+edits: SyncEdit[]; 
+/**  Whether they are an undo step of their own. */
+sealed: boolean } | 
+/**  The text is replaced, as after a change from outside (UC-004 A7). */
+{ kind: "reload"; 
+/**  The new text. */
+text: string };
+
+/**  A change of the backend with its revision. */
+export type RemoteOp = {
+	/**  The revision the change made. */
+	rev: number,
+	/**  The change. */
+	change: RemoteChange,
+};
+
 /**
  *  M-09.13: where the cursor goes one row up or down, or to the start or
  *  the end of its row, as the window lays the cursor's block out; web
@@ -1188,6 +1287,42 @@ export type StatusEvent = StatusView;
 export type StatusView = {
 	/**  The text, as the egui app shows it; empty when there is none. */
 	text: string,
+};
+
+/**  The backend's answer to `ed_sync` and `ed_resync`. */
+export type SyncAnswer = {
+	/**  The revision of the backend's text now. */
+	rev: number,
+	/**  The hash of that text (FNV-1a, 16 hex digits). */
+	hash: string,
+	/**  The backend's changes the window has not had, in order. */
+	remote: RemoteOp[],
+	/**  The window must send its whole text (`ed_resync`). */
+	resync: boolean,
+};
+
+/**
+ *  The window's edits since revision `base`, sent after the frame
+ *  (`ed_sync`); none to fetch the backend's changes.
+ */
+export type SyncBatch = {
+	/**  The revision the edits were made on. */
+	base: number,
+	/**  The edits, one after the other. */
+	edits: SyncEdit[],
+};
+
+/**
+ *  One edit: at char `at`, `remove` chars are replaced by `insert`. The
+ *  edits of a list apply one after the other.
+ */
+export type SyncEdit = {
+	/**  Where the edit starts, in chars. */
+	at: number,
+	/**  How many chars it removes. */
+	remove: number,
+	/**  What it puts in their place. */
+	insert: string,
 };
 
 /**  M-16.2: the properties section of the tool panel for the active tab. */

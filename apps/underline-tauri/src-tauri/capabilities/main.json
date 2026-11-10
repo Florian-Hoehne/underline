@@ -31,6 +31,8 @@
     "allow-ed-apply",
     "allow-ed-fold",
     "allow-ed-keys-status",
+    "allow-ed-sync",
+    "allow-ed-resync",
     "allow-clip-read-text",
     "allow-clip-write-text",
     "allow-app-close-anyway"

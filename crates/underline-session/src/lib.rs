@@ -44,6 +44,7 @@ mod palette;
 mod session;
 mod settings;
 mod start;
+mod sync_view;
 mod workspace_view;
 
 pub use editor_view::{
@@ -60,13 +61,17 @@ pub use facade_view::{
 };
 pub use palette::PaletteView;
 pub use session::{
-    CreatePlan, FacadeBuilt, FacadePrep, OpenPlan, PreparedCreate, PreparedOpen, Session,
+    CreatePlan, FacadeBuilt, FacadePrep, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session,
+    Synced,
 };
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingName, SettingsState, SettingsView,
     USER_SETTINGS_POLL,
 };
 pub use start::{Platform, StartInfo};
+pub use sync_view::{
+    ChangedView, EnrichView, FlushView, RemoteChange, RemoteOp, SyncAnswer, SyncBatch, SyncEdit,
+};
 pub use workspace_view::{
     CreateAnswer, EditingViewName, FormatName, NewWorkspaceRequest, OpenAnswer, OpenOffer,
     OverviewItem, StartOpened, TabView, TabsView, TodoTabView, WorkspaceSnapshot, WorkspaceView,

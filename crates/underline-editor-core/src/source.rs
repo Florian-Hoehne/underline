@@ -295,6 +295,18 @@ impl SourceEditor {
         self.anchor = self.cursor;
     }
 
+    /// ADR-025: records every edit of the text from now on, for
+    /// [`SourceEditor::take_edits`].
+    pub fn record_edits(&mut self) {
+        self.doc.record_edits();
+    }
+
+    /// ADR-025: the edits since the last call, in order, in chars of the
+    /// text just before each; none unless they are recorded.
+    pub fn take_edits(&mut self) -> Vec<Edit> {
+        self.doc.take_edits()
+    }
+
     /// UC-019 BR-007: the next edit is not undone together with the last.
     pub fn seal(&mut self) {
         self.doc.seal();

@@ -28,6 +28,8 @@ fn main() {
         "ed_apply",
         "ed_fold",
         "ed_keys_status",
+        "ed_sync",
+        "ed_resync",
         "clip_read_text",
         "clip_write_text",
         "app_close_anyway",

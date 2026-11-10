@@ -22,7 +22,7 @@ use underline_session::{
     ClipAction, CloseQuestion, CreateAnswer, EditingViewName, EditorInput, EditorPatch,
     EditorState, FacadeAt, FacadeInput, FacadePatch, FacadeState, KeysStatusView,
     NewWorkspaceRequest, OpenAnswer, RowsView, Session, SettingName, StartInfo, StartOpened,
-    UiError, UiErrorKind, VimChange, VimState,
+    SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind, VimChange, VimState,
 };
 
 use crate::clipboard::SystemClipboard;
@@ -403,6 +403,59 @@ pub fn ed_input(
         .editor_input(&NoteId::from_relative(&note), input);
     waker.wake();
     patch
+}
+
+/// UC-004 A9: writes the copy a sync asked for, after the session was let
+/// go, and puts the outcome in the status line.
+fn keep_copy(session: &SharedSession, synced: Synced) -> SyncAnswer {
+    if let Some(copy) = &synced.copy {
+        let written = copy.write();
+        session.lock().copy_kept(copy, written);
+    }
+    synced.answer
+}
+
+/// ADR-025: the window's edits made on revision `batch.base` (none to
+/// fetch the backend's changes); the answer carries the backend's changes
+/// since, the new revision and its hash.
+///
+/// Synchronous like `ed_input`: it runs on the main thread in the order the
+/// window sent it. The window has at most one batch of a note on its way
+/// (`docs/migration/variante-b.md` section 3.3), so order would hold as an
+/// async command too; synchronous keeps it simple, and the work under the
+/// session is small (the edits, the transform over the backend's changes
+/// since, the hash). A copy to keep (UC-004 A9, rare) is written after the
+/// session is let go.
+#[tauri::command]
+#[specta::specta]
+pub fn ed_sync(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    batch: SyncBatch,
+) -> Result<SyncAnswer, UiError> {
+    let synced = session
+        .lock()
+        .editor_sync(&NoteId::from_relative(&note), &batch);
+    waker.wake();
+    Ok(keep_copy(&session, synced?))
+}
+
+/// ADR-025: the window's copy of the text went apart from the backend's;
+/// the window's `text` is taken.
+#[tauri::command]
+#[specta::specta]
+pub fn ed_resync(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    text: String,
+) -> Result<SyncAnswer, UiError> {
+    let synced = session
+        .lock()
+        .editor_resync(&NoteId::from_relative(&note), &text);
+    waker.wake();
+    Ok(keep_copy(&session, synced?))
 }
 
 /// M-08.3: the mouse (or the window's Vim keys) set the cursor and the

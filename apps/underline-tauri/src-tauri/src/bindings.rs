@@ -16,8 +16,9 @@ use underline_session::{Clipped, EditorPatch, FacadePatch, PaletteView, TabViews
 
 use crate::commands;
 use crate::events::{
-    BlocksEvent, CloseQuestionEvent, FoundEvent, HighlightEvent, OverviewEvent, PropertiesEvent,
-    SectionsEvent, SettingsEvent, StatusEvent, TabsEvent, TextReplacedEvent, WorkspaceEvent,
+    BlocksEvent, ChangedEvent, CloseQuestionEvent, EnrichEvent, FlushEvent, FoundEvent,
+    HighlightEvent, OverviewEvent, PropertiesEvent, SectionsEvent, SettingsEvent, StatusEvent,
+    TabsEvent, TextReplacedEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -64,6 +65,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ed_apply,
             commands::ed_fold,
             commands::ed_keys_status,
+            commands::ed_sync,
+            commands::ed_resync,
             commands::clip_read_text,
             commands::clip_write_text,
             commands::app_close_anyway
@@ -80,7 +83,10 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             FoundEvent,
             BlocksEvent,
             PropertiesEvent,
-            CloseQuestionEvent
+            CloseQuestionEvent,
+            ChangedEvent,
+            FlushEvent,
+            EnrichEvent
         ])
         // ADR-025: what crosses only between the window and the editor's
         // WASM (`ui/src/lib/editor/core.ts`).

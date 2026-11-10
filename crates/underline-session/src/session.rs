@@ -6,10 +6,12 @@ mod diagrams;
 pub(crate) use diagrams::SvgDiagrams;
 mod editing;
 mod facade;
+mod sync;
 mod tab;
 mod workspace;
 
 pub use self::facade::{FacadeBuilt, FacadePrep};
+pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
 use std::path::{Path, PathBuf};
@@ -86,6 +88,12 @@ pub struct Session {
     /// Tabs whose text was replaced by the session itself, such as after a
     /// change from outside (UC-004 A7); the window asks for it again.
     replaced: Vec<NoteId>,
+    /// ADR-025: tabs whose mirror the backend changed; the window is told
+    /// to fetch the change (`ed-changed`).
+    changed: Vec<NoteId>,
+    /// ADR-025: the window is asked to send its edits now (`ed-flush`), for
+    /// one note or for all.
+    flushes: Vec<Option<NoteId>>,
     /// Wakes the tick when a background service has news.
     wake: Wake,
     /// The open workspace (UC-002).
@@ -174,6 +182,8 @@ impl Session {
             colors: None,
             colors_coming: None,
             replaced: Vec::new(),
+            changed: Vec::new(),
+            flushes: Vec::new(),
             wake: Wake::default(),
             open: None,
             diagrams: None,
@@ -344,6 +354,7 @@ impl Session {
                 events.push(Event::Properties(properties));
             }
         }
+        events.extend(self.sync_events());
         for note in std::mem::take(&mut self.replaced) {
             let rev = self
                 .open

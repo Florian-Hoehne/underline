@@ -79,7 +79,7 @@ pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
 pub use properties::{format_local_time, format_size, NoteProperties};
 pub use rename::{NoteMove, Rename};
-pub use saver::{NoteSaver, OwnWrites, SaveJob, SaveResult};
+pub use saver::{NoteSaver, NoteWriter, OwnWrites, SaveJob, SaveResult};
 pub use search::{
     found_lines, lower, search_notes, FoundLine, FoundNote, Query, SearchRequest, SearchResult,
     Searcher, Texts, LINE_CONTEXT, SHOWN_PLACES,

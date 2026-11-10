@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use underline_core::{Autosave, EditingView, NoteFormat, NoteProperties, NoteSaver};
+use underline_editor_core::sync::{apply_remote, Change, ChangeSet, Server, Touched};
 use underline_editor_view::EditorTab;
 use underline_facade::highlight::DocumentHighlight;
 
@@ -28,6 +29,13 @@ pub(super) struct Tab {
     /// blocks, as the window will hold it (ADR-025; the note's format is
     /// its `format`).
     pub(super) edit: EditorTab,
+    /// ADR-025: the backend's copy of the text, with its revisions: what is
+    /// stored and highlighted, what agents and renames change. Until the
+    /// window holds the text (step B5) it is always `edit`'s text.
+    pub(super) mirror: Server,
+    /// A window synced its edits with `ed_sync`; a reload then waits for it
+    /// to confirm (`docs/migration/variante-b.md` section 3.6).
+    pub(super) window_synced: bool,
     /// When the text is stored next (UC-005 BR-001).
     pub(super) autosave: Autosave,
     /// A background save of this tab is running.
@@ -83,7 +91,13 @@ impl Tab {
             path,
             title,
             editing_view,
-            edit: EditorTab::new(&body, format),
+            edit: {
+                let mut edit = EditorTab::new(&body, format);
+                edit.editor.record_edits();
+                edit
+            },
+            mirror: Server::new(&body),
+            window_synced: false,
             autosave: Autosave::default(),
             saving: false,
             saving_text: None,
@@ -141,7 +155,7 @@ impl Tab {
             return Ok(());
         }
         let started = Instant::now();
-        let text = self.edit.editor.text();
+        let text = self.mirror.text();
         match saver.save_now(&self.path, &text) {
             Ok(()) => {
                 self.on_disk = text;
@@ -167,19 +181,61 @@ impl Tab {
         !was_unstored
     }
 
-    /// The highlighting follows the changes of an input (ADR-010).
-    pub(super) fn highlight_edited(&mut self, changes: &[underline_editor_core::Applied]) {
+    /// The highlighting follows the changes of the mirror (ADR-010): each
+    /// at its line of the text just before it.
+    pub(super) fn highlight_touched(&mut self, touched: &[Touched]) {
         let Some(highlight) = &mut self.highlight else {
             return;
         };
-        let lines = self.edit.editor.document().len_lines();
-        for change in changes {
-            if change.history {
-                highlight.invalidate_from(change.line, lines);
-            } else {
-                highlight.edited(change.line, change.added_lines, lines);
+        let lines = self.mirror.rope().len_lines();
+        for change in touched {
+            highlight.edited(change.line, change.added_lines, lines);
+        }
+    }
+
+    /// ADR-025: the edits the session's own editor made (variant A) go to
+    /// the mirror as the window's; the highlighting follows. Whether there
+    /// were any.
+    pub(super) fn sync_local(&mut self) -> bool {
+        let changes: Vec<Change> = self
+            .edit
+            .editor
+            .take_edits()
+            .iter()
+            .map(Change::from)
+            .collect();
+        if changes.is_empty() {
+            return false;
+        }
+        match self.mirror.local_edit(&changes) {
+            Ok(touched) => self.highlight_touched(&touched),
+            Err(error) => {
+                // Never expected: the two copies are alike. The editor's text
+                // wins, as the window's does (section 3.10).
+                eprintln!("ADR-025: the mirror of {} went apart ({error})", self.title);
+                let resynced = self.mirror.resync(&self.edit.editor.text());
+                self.highlight_touched(&resynced.touched);
             }
         }
+        true
+    }
+
+    /// ADR-025: a change of the mirror (`set`, in chars of the text both
+    /// had) goes to the session's own editor too, as egui applies a change
+    /// of the backend; `sealed` makes it an undo step of its own. Should the
+    /// set not fit the editor's text (never expected: they are alike), the
+    /// editor takes the mirror's text whole.
+    pub(super) fn follow_mirror(&mut self, set: &ChangeSet, sealed: bool) {
+        match apply_remote(&mut self.edit.editor, set, sealed) {
+            Ok(outcome) => self.edit.refold_after(&outcome),
+            Err(error) => {
+                eprintln!("ADR-025: the editor of {} went apart ({error})", self.title);
+                let text = self.mirror.text();
+                self.edit.reload(&text);
+            }
+        }
+        // The mirror has it already.
+        self.edit.editor.take_edits();
     }
 
     /// Shows `text` from outside instead (UC-004 A7): the cursor stays at
@@ -188,6 +244,11 @@ impl Tab {
         // M-08.8: the folded sections stay folded where they are now.
         self.edit.set_now(super::editing::millis(Instant::now()));
         self.edit.reload(&text);
+        self.mirror.reload(&text);
+        if !self.window_synced {
+            // Variant A: the session's editor has the text at once.
+            self.mirror.confirm_reload();
+        }
         self.on_disk = text;
         self.highlight = None;
         self.highlight_told = None;

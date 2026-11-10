@@ -1,7 +1,23 @@
-//! ADR-025: what the webview and the backend share to keep their two copies
-//! of a note's text alike. So far the hash both sides compute the same way,
-//! whatever the platform or the Rust version: FNV-1a with 64 bits
-//! (`docs/migration/variante-b.md`, sections 2.3 and 3.10).
+//! ADR-025: what keeps the webview's and the backend's copies of an open
+//! note's text alike (`docs/migration/variante-b.md`, section 3): the edits
+//! as sets over a text in chars of the rope ([`ChangeSet`], [`Change`]),
+//! transformed over each other with the backend's first at the same place;
+//! the backend's mirror with its revisions ([`Server`]); the webview's side
+//! ([`Client`]); a backend change applied to the window's editor as egui
+//! does ([`apply_remote`]); and the hash both sides compute the same way,
+//! whatever the platform or the Rust version: FNV-1a with 64 bits.
+
+mod apply;
+#[cfg(test)]
+mod cases;
+mod changeset;
+mod client;
+mod server;
+
+pub use apply::{apply_remote, shifted};
+pub use changeset::{Change, ChangeSet, OutOfRange};
+pub use client::{Client, Desync, Incoming};
+pub use server::{Answer, Batch, Received, Remote, Resynced, Server, Touched, KEPT};
 
 /// The FNV-1a offset basis for 64 bits.
 const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -71,6 +87,14 @@ impl Fnv1a {
 #[must_use]
 pub fn hash(text: &str) -> String {
     Fnv1a::new().bytes(text.as_bytes()).hex()
+}
+
+/// [`hash`] of the text of `rope`, taken chunk by chunk without copying it.
+#[must_use]
+pub fn hash_rope(rope: &ropey::Rope) -> String {
+    rope.chunks()
+        .fold(Fnv1a::new(), |hash, chunk| hash.bytes(chunk.as_bytes()))
+        .hex()
 }
 
 #[cfg(test)]

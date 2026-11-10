@@ -23,8 +23,9 @@ use std::sync::{Arc, Mutex};
 
 use underline_core::{EditingView, NoteId};
 use underline_editor_core::facade::splices;
-use underline_editor_view::views::diagram_language;
+use underline_editor_view::views::{colors_key, diagram_key, diagram_language};
 use underline_editor_view::{blocks_views, FacadeModel, Versioned};
+use underline_facade::blocks::BlockKind;
 use underline_facade::highlight::HighlightSet;
 
 use self::build::{diagram_figure, Built, Context, Job, Looks};
@@ -33,7 +34,8 @@ use super::diagrams::SvgDiagrams;
 use super::tab::Tab;
 use super::Session;
 use crate::assets::{percent_decode, request_path, Asset, AssetError, AssetPlan};
-use crate::facade_view::{BlockView, FacadeState};
+use crate::facade_view::{BlockView, CodeColors, FacadeState, FigureView};
+use crate::sync_view::EnrichView;
 use crate::workspace_view::EditingViewName;
 use crate::{Event, UiError, UiErrorKind};
 
@@ -66,6 +68,22 @@ pub(super) struct Facade {
     /// Code blocks sent without their colours, which the tick makes
     /// (ADR-024).
     recolor: Vec<usize>,
+    /// ADR-025: what the window was sent of the blocks' colours and
+    /// figures (`ed-enrich`).
+    sent: Sent,
+}
+
+/// ADR-025: what the window was sent of the facade's colours and figures,
+/// by their keys, and in which look.
+#[derive(Debug, Default)]
+struct Sent {
+    looks: Option<Looks>,
+    /// The version of the views looked at last, so the tick looks again
+    /// only after they changed.
+    version: Option<u32>,
+    colors: HashMap<String, Option<CodeColors>>,
+    diagrams: HashMap<String, FigureView>,
+    images: HashMap<String, FigureView>,
 }
 
 /// What making the views needs of the session.
@@ -159,10 +177,98 @@ impl Facade {
         model.versioned(changes)
     }
 
+    /// ADR-025, `docs/migration/variante-b.md` section 2.3: what the backend
+    /// made of the blocks of `model` (the colours of code, the figures of
+    /// diagrams and images, by their content) that the window was not sent
+    /// yet, in `looks`; `None` when there is nothing new. Code whose colours
+    /// are still to come is left out.
+    fn enrich(&mut self, model: &FacadeModel, looks: Looks, dark: bool) -> Option<Enriched> {
+        if self.looks != Some(looks) || model.parsed.is_none() {
+            // The views are not made in this look yet.
+            return None;
+        }
+        let clear = self.sent.looks != Some(looks);
+        if !clear && self.sent.version == Some(model.version) {
+            return None;
+        }
+        if clear {
+            self.sent = Sent {
+                looks: Some(looks),
+                ..Sent::default()
+            };
+        }
+        let mut out = Enriched {
+            clear,
+            ..Enriched::default()
+        };
+        for (index, (block, view)) in model.blocks.iter().zip(&model.views).enumerate() {
+            let code = || {
+                view.runs
+                    .iter()
+                    .map(|r| r.text.as_str())
+                    .collect::<String>()
+            };
+            match &block.kind {
+                BlockKind::Code { language } => match diagram_language(&block.kind) {
+                    Some(diagram) => {
+                        let (Some(figure), key) =
+                            (&view.figure, diagram_key(diagram, &code(), dark))
+                        else {
+                            continue;
+                        };
+                        if self.sent.diagrams.get(&key) != Some(figure) {
+                            self.sent.diagrams.insert(key.clone(), figure.clone());
+                            out.diagrams.push((key, figure.clone()));
+                        }
+                    }
+                    None => {
+                        if !looks.1 || self.recolor.contains(&index) {
+                            continue;
+                        }
+                        let key = colors_key(looks.0.label(), language, &code());
+                        if self.sent.colors.get(&key) != Some(&view.colors) {
+                            self.sent.colors.insert(key.clone(), view.colors.clone());
+                            out.colors.push((key, view.colors.clone()));
+                        }
+                    }
+                },
+                BlockKind::Image { target, .. } => {
+                    let Some(figure) = &view.figure else {
+                        continue;
+                    };
+                    let figure = FigureView {
+                        caption: None,
+                        ..figure.clone()
+                    };
+                    if self.sent.images.get(target) != Some(&figure) {
+                        self.sent.images.insert(target.clone(), figure.clone());
+                        out.images.push((target.clone(), figure));
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.sent.version = Some(model.version);
+        let any = out.clear
+            || !out.colors.is_empty()
+            || !out.diagrams.is_empty()
+            || !out.images.is_empty();
+        any.then_some(out)
+    }
+
     /// Whether the facade is shown.
     pub(super) fn shown(&self) -> bool {
         self.shown
     }
+}
+
+/// What [`Facade::enrich`] found new.
+#[derive(Debug, Default)]
+struct Enriched {
+    clear: bool,
+    colors: Vec<(String, Option<CodeColors>)>,
+    diagrams: Vec<(String, FigureView)>,
+    images: Vec<(String, FigureView)>,
 }
 
 /// What making views needs of the session and the tab.
@@ -434,6 +540,16 @@ impl Session {
                     parsed,
                     facade.recolored(&mut tab.edit.facade, &ctx),
                 ));
+            }
+            if let Some(found) = facade.enrich(&tab.edit.facade, tools.looks, tools.dark) {
+                out.push(Event::Enrich(Box::new(EnrichView {
+                    note: note.as_str().to_owned(),
+                    rev: tab.mirror.rev(),
+                    clear: found.clear,
+                    colors: found.colors,
+                    diagrams: found.diagrams,
+                    images: found.images,
+                })));
             }
         }
         tab.facade = Some(facade);

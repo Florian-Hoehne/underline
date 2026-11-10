@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::editor_view::{FoundView, HighlightView, SectionsView, TabPropertiesView};
 use crate::facade_view::BlocksView;
+use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::SettingsView;
 
@@ -58,4 +59,10 @@ pub enum Event {
     Properties(Option<TabPropertiesView>),
     /// Blocks of the active tab's facade changed (M-09, ADR-024).
     Blocks(BlocksView),
+    /// ADR-025: the backend changed the mirror of a note (`ed-changed`).
+    Changed(ChangedView),
+    /// ADR-025: the window is to send its edits now (`ed-flush`).
+    Flush(FlushView),
+    /// ADR-025: what the backend made of the facade's blocks (`ed-enrich`).
+    Enrich(Box<EnrichView>),
 }

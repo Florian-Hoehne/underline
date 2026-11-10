@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ed-resync"
+description = "Enables the ed_resync command without any pre-configured scope."
+commands.allow = ["ed_resync"]
+
+[[permission]]
+identifier = "deny-ed-resync"
+description = "Denies the ed_resync command without any pre-configured scope."
+commands.deny = ["ed_resync"]

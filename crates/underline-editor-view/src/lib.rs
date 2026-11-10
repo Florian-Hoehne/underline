@@ -6,7 +6,8 @@
 //! (`underline-editor-core`), the folds of the sections ([`folds`]), the
 //! hits of the Nano search, and the views of the facade's blocks
 //! ([`views`]), made in the webview from what the backend sent
-//! ([`CachedViews`]).
+//! ([`CachedViews`]); and what the two exchange to keep their copies of the
+//! text alike ([`sync_view`]).
 //!
 //! Offsets are web units (`underline_editor_core::utf16`); revisions and
 //! offsets are `u32`, as TypeScript numbers carry them exactly. The data
@@ -25,6 +26,7 @@ mod cached;
 pub mod editor_view;
 pub mod facade_view;
 pub mod folds;
+pub mod sync_view;
 mod tab;
 pub mod views;
 

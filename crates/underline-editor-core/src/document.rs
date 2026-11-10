@@ -23,6 +23,9 @@ pub struct Document {
     revision: u64,
     /// The next edit starts an undo step of its own.
     sealed: bool,
+    /// ADR-025: the edits applied since they were last taken, when they are
+    /// recorded ([`Document::record_edits`]).
+    journal: Option<Vec<Edit>>,
 }
 
 impl Document {
@@ -40,8 +43,25 @@ impl Document {
         Self {
             rope: Rope::from_str(text),
             revision: self.revision + 1,
+            journal: self.journal.as_ref().map(|_| Vec::new()),
             ..Self::default()
         }
+    }
+
+    /// ADR-025: records every edit from now on (typing, undo, redo), for
+    /// [`Document::take_edits`]; the text a document is replaced by
+    /// ([`Document::replaced_by`]) is no edit and starts the record anew.
+    pub fn record_edits(&mut self) {
+        self.journal.get_or_insert_with(Vec::new);
+    }
+
+    /// ADR-025: the edits applied since the last call, in order, each in
+    /// chars of the text just before it; none when they are not recorded.
+    pub fn take_edits(&mut self) -> Vec<Edit> {
+        self.journal
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// The text as a rope.
@@ -155,6 +175,9 @@ impl Document {
         self.rope.remove(edit.at..edit.at + removed);
         self.rope.insert(edit.at, &edit.inserted);
         self.revision += 1;
+        if let Some(journal) = &mut self.journal {
+            journal.push(edit.clone());
+        }
         edit
     }
 }
@@ -252,5 +275,25 @@ mod tests {
         assert_eq!(doc.text(), "abcd");
         doc.undo();
         assert_eq!(doc.text(), "ab");
+    }
+
+    /// ADR-025: a recorded document gives every edit once, undo and redo
+    /// included; a replaced text starts the record anew.
+    #[test]
+    fn adr025_recorded_edits_are_given_once() {
+        let mut doc = Document::new("ab");
+        doc.replace(0..0, "x");
+        doc.record_edits();
+        doc.replace(1..2, "Y");
+        doc.undo();
+
+        let edits = doc.take_edits();
+        assert_eq!(edits.len(), 2);
+        assert_eq!((edits[0].at, edits[0].removed.as_str()), (1, "a"));
+        assert_eq!((edits[1].at, edits[1].inserted.as_str()), (1, "a"));
+        assert!(doc.take_edits().is_empty());
+        let mut replaced = doc.replaced_by("new");
+        replaced.replace(0..0, "!");
+        assert_eq!(replaced.take_edits().len(), 1, "still recorded");
     }
 }

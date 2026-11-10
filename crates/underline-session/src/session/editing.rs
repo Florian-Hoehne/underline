@@ -79,8 +79,9 @@ fn tab_in<'a>(open: &'a mut Option<OpenWorkspace>, note: &NoteId) -> Result<&'a 
 /// the tab's mark changed is returned.
 pub(super) fn after_input(tab: &mut Tab, outcome: &Outcome, unstored: &mut bool) -> bool {
     let mut marked = false;
-    if outcome.edited() {
-        tab.highlight_edited(&outcome.changes);
+    // ADR-025: the mirror takes the edits, and the highlighting follows it.
+    let edited = tab.sync_local();
+    if outcome.edited() || edited {
         marked = tab.changed(Instant::now());
     }
     *unstored = tab.autosave.is_unstored();
@@ -99,6 +100,15 @@ fn not_open(note: &NoteId) -> UiError {
         UiErrorKind::Invalid,
         format!("The tab {} is not open", note.title()),
     )
+}
+
+/// The text of `line` of `rope` with its line ending; empty past the end.
+fn rope_line(rope: &ropey::Rope, line: usize) -> String {
+    if line < rope.len_lines() {
+        rope.line(line).to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// `#rrggbb` of an RGBA colour.
@@ -426,7 +436,7 @@ impl Session {
         };
         for (_, tab) in open.tabs.iter_mut() {
             if !tab.saving && tab.autosave.is_due(now) {
-                let text = tab.edit.editor.text();
+                let text = tab.mirror.text();
                 tab.saving_text = Some(text.clone());
                 self.saver.save(SaveJob {
                     path: tab.path.clone(),
@@ -590,7 +600,7 @@ impl Session {
             return None;
         }
         let rev = tab.edit.editor.revision();
-        let lines = tab.edit.editor.document().len_lines();
+        let lines = tab.mirror.rope().len_lines();
         let wanted = tab.viewport.clone()?;
         let shown = wanted.start.min(lines)..wanted.end.min(lines);
         let format = tab.edit.format;
@@ -600,11 +610,11 @@ impl Session {
             highlight
         });
         let (foreground, _) = highlight.colors();
-        let doc = tab.edit.editor.document();
+        let doc = tab.mirror.rope();
         let deadline = Some(now + COLORING_BUDGET);
         let mut colored: Vec<Arc<Vec<Span>>> = Vec::with_capacity(shown.len());
         for line in shown.clone() {
-            if let Some(spans) = highlight.spans_by(line, |i| doc.line(i), deadline) {
+            if let Some(spans) = highlight.spans_by(line, |i| rope_line(doc, i), deadline) {
                 colored.push(spans);
             } else {
                 // Out of time: the next tick goes on where this one stopped.
@@ -617,7 +627,7 @@ impl Session {
             rev,
             &shown,
             &colored,
-            |i| doc.line_text(i),
+            |i| rope_line(doc, i).trim_end_matches(['\n', '\r']).to_owned(),
             foreground,
         );
         tab.highlight_told = Some((rev, wanted));

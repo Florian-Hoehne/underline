@@ -567,6 +567,84 @@ Jeder Schritt ist ein Commit mit allen Prüfungen aus `CLAUDE.md`; Muss-Findings
 - **Uhr:** Ein Tab hat genau einen Taktgeber: in der Session `millis`, im Webview `performance.now()`. Eine frühere
   Zeit drosselt nicht erneut (Test `adr025_an_earlier_time_does_not_throttle_anew`).
 
+### 7.3 Umsetzung B4a und B4b (2026-11-10): Stand und Abweichungen
+
+- **`ChangeSet`** (`editor-core::sync`):
+  - Die Form folgt ot.js/CodeMirror: Behalten, Einfügen, Löschen in Zeichen; ein Einfügen steht vor einem Löschen an
+    derselben Stelle.
+  - `transform(a, b)` gibt `a` Vorrang bei Gleichstand. Der Server ruft es mit seiner Änderung als `a` auf; so ergibt
+    sich die Regel „Backend links“ von 3.5.
+  - Die Zeilen der Tabelle in 3.5 stehen als Test `adr025_transform_follows_the_table` in beiden Reihenfolgen.
+- **`Server`:**
+  - `receive` nimmt Stapel, `backend_edit` und `local_edit` nehmen Zeichen, dazu gibt es `reload`, `confirm_reload`
+    und `resync`. `KEPT` = 1024 Revisionen.
+  - Ein Stapel auf einer unbekannten oder künftigen Revision, oder einer, der nicht passt, ändert nichts und antwortet
+    mit `resync`.
+- **`Client`:**
+  - Mit `local`, `ring`, `take_outbox`, `acknowledge` und `reset`.
+  - Nach einem angewandten Reload klingelt der Client selbst (`pull`), damit das Backend den Reload bestätigt bekommt
+    und Agenten nicht dauerhaft `Busy` hören. Das ist eine Ergänzung zu 3.6.
+- **`apply_remote`** wendet eine Backend-Änderung wie egui auf einen `SourceEditor` an: Siegel bei Agenten,
+  Cursorregel `shifted`, kein Scrollen.
+- **Neu im Editor-Kern: das Edit-Journal von `Document`** (`record_edits`/`take_edits`, in `SourceEditor`
+  durchgereicht).
+  - Damit gehen die Änderungen des Session-Editors (Variante A) als lokale Stapel an den Spiegel.
+  - In B5 liefert es dem `Client` die lokalen Edits des WASM-Editors.
+  - Das Journal ist nur eingeschaltet, wo es abgeholt wird; die egui-App bleibt unberührt.
+- **Session (B4b):**
+  - `Tab` hält `mirror: Server`. Speichern, Autosave und Highlighting lesen den Spiegel; die Invalidierung kommt aus
+    `Touched`.
+  - Bis B5 folgt der Session-Editor (`tab.edit`) dem Spiegel (`follow_mirror`), und alle A-Commands schicken ihre
+    Edits über das Journal als lokalen Stapel. Beide Texte sind immer gleich; jeder Sync-Test prüft das.
+  - `window_synced`: Solange kein Fenster mit `ed_sync` synchronisiert hat, bestätigt die Session einen Reload sofort.
+  - `backend_edit` nimmt Byte-Bereiche wie egui. Ein Byte mitten in einem Zeichen zählt ab dessen Anfang, wie
+    `apply_edits`.
+  - `request_flush` gibt es schon; aufgerufen wird es erst ab B4c (Schliessen) und F14 (Agenten).
+  - `ed-changed` kommt zusätzlich zu `ed-replaced`, weil die Ansichten von Variante A nur dieses kennen.
+- **`ed-enrich`:**
+  - Das Event führt `diagrams` und `images` als getrennte Listen statt einer Liste `figures` (2.3), weil die Schlüssel
+    verschieden sind.
+  - In B4b leitet der Tick die Einträge aus den Views ab, die das Backend für die Facade gebaut hat. Das geschieht nur,
+    solange die Facade gezeigt wird, und nur, wenn sich die Views oder der Look geändert haben.
+  - Code, dessen Farben noch ausstehen (`recolor`), wird ausgelassen. Ein neuer Look (Theme, Farben bereit) sendet mit
+    `clear` alles neu.
+  - Ab B5 rechnet das Backend die Einträge ohne eigene Views.
+- **Busy für Agenten:** `Server::reload_unconfirmed` steht bereit; der Agentenpfad (F14) fragt es ab.
+
+**Nachtrag nach dem Review von B4a/B4b:**
+
+- **Übersprungener Reload:** Wer einen Reload wegen ungesendeter Edits überspringt, klingelt danach selbst (`pull`). Ein
+  Puffer, der sich zu nichts aufhebt (x tippen, x löschen), holt den Reload so trotzdem.
+- **Rücknahme eines Reloads:**
+  - Ein Stapel nimmt einen Reload nur zurück, wenn seine Edits zusammen etwas ändern.
+  - Als Kopie bleibt der Text, den der Spiegel zuletzt hatte: der neueste von aussen samt allem, was das Backend
+    danach daran tat. Nichts, was der Autosave gespeichert haben kann, geht ohne Kopie verloren.
+  - `receive` plant zuerst (`plan`) und ändert erst danach etwas.
+- **Resync über einen unbestätigten Reload:** Der Text des Spiegels wird ebenfalls als A9-Kopie behalten, mit
+  demselben Status (`Resynced::outside`).
+- **Kopie ausserhalb des Locks:**
+  - Die Session gibt die Kopie als `KeepCopy` zurück (`Synced`). `ed_sync` und `ed_resync` schreiben sie, nachdem die
+    Session freigegeben ist, über `NoteWriter` (neu in `underline-core`, wie `NoteSaver::save_now`).
+  - Danach setzt `Session::copy_kept` den Status.
+  - Die Commands bleiben synchron. Die Reihenfolge hielte auch asynchron, weil je Notiz höchstens ein Stapel unterwegs
+    ist.
+- **Hash:** FNV läuft über die Chunks des Ropes (`hash_rope`), ohne den Text zu kopieren.
+- **`apply_remote`** prüft die Länge und gibt einen `Result` zurück. Passt ein Satz nicht, übernimmt der Session-Editor
+  den Text des Spiegels ganz.
+- **`backend_edit`** weist Byte-Bereiche hinter dem Ende, rückwärts, in falscher Reihenfolge oder mitten in einem
+  Zeichen als `Invalid` ab. Das ist strenger als egui, das dort rundet.
+- **`Client::failed`:** Das Fenster ruft es bei jedem Fehler von `ed_sync` auf. Der Stapel kommt zurück in den Puffer
+  und geht mit der nächsten Outbox erneut auf derselben Revision.
+  - Kam er doch an und nur die Antwort ging verloren, wendet ihn das Backend doppelt an. Der Hash merkt das, und der
+    Resync mit dem Fenstertext stellt es richtig.
+- **Tests:**
+  - TP1 und `compose` als Eigenschaftstests (je 20'000 zufällige Sätze).
+  - Der Zufallslauf deckt zusätzlich ab: Kürzen auf `KEPT` mit Refused und Resync, `local_edit`, Backend-Edits an
+    mehreren Stellen, Undo/Redo im Fenster, Puffer, die sich zu nichts aufheben, verlorene Stapel.
+  - Nach jedem Schritt gilt im Zufallslauf: Fenstertext = Schatten + unterwegs + Puffer.
+  - Ein Stapel auf `floor` wird angenommen.
+  - Nachträglich gefärbter Code kommt über `ed-enrich` an.
+
 ## 8. Risiken und offene Fragen (für `offene-fragen.md`)
 
 1. **Agent und ungesendete Tasten (UC-019 BR-004):**
