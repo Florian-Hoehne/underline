@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 underline-core.workspace = true
+underline-markup.workspace = true
 syntect.workspace = true
 comrak.workspace = true
 thiserror.workspace = true

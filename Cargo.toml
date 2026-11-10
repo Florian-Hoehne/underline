@@ -7,6 +7,7 @@ members = [
     "crates/underline-editor",
     "crates/underline-editor-core",
     "crates/underline-facade",
+    "crates/underline-markup",
     "crates/underline-mcp",
     "crates/underline-session",
     "crates/underline-wiki",
@@ -39,6 +40,7 @@ syntect = { version = "5.3", default-features = false, features = ["default-synt
 underline-editor = { path = "crates/underline-editor" }
 underline-editor-core = { path = "crates/underline-editor-core" }
 underline-facade = { path = "crates/underline-facade" }
+underline-markup = { path = "crates/underline-markup" }
 underline-session = { path = "crates/underline-session" }
 # Specta v2 is a release candidate: pinned exactly, as tauri-specta asks.
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }

@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+underline-markup.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 serde_norway.workspace = true

@@ -5,9 +5,9 @@
 
 use std::ops::Range;
 
+use crate::NoteFormat;
 use comrak::nodes::{AstNode, ListType, NodeValue, TableAlignment};
 use comrak::{parse_document, Arena, Options};
-use underline_core::NoteFormat;
 
 /// How a piece of text looks in the facade.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]

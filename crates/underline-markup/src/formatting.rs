@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use underline_core::NoteFormat;
+use crate::NoteFormat;
 
 /// A function of the formatting toolbar.
 #[derive(Debug, Clone, PartialEq, Eq)]

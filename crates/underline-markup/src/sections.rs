@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use underline_core::NoteFormat;
+use crate::NoteFormat;
 
 /// Names a section so that it stays the same section while other parts of
 /// the note change: the text of its heading line and how many headings with

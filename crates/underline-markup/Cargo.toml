@@ -1,0 +1,14 @@
+[package]
+name = "underline-markup"
+description = "Note formats and the facade parser of Underline: blocks, sections, and formatting of Markdown and AsciiDoc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Nothing here touches files, threads, clocks, or the network: this crate builds
+# for wasm32-unknown-unknown too (ADR-025, docs/migration/plan.md section 17).
+[dependencies]
+serde.workspace = true
+comrak.workspace = true

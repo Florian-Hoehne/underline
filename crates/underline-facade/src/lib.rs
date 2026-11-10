@@ -5,18 +5,18 @@
 //! into blocks with source spans (comrak for Markdown, an own parser for
 //! AsciiDoc) is added with the use cases that edit notes in the facade.
 
-mod asciidoc;
-pub mod blocks;
 pub mod clip;
 pub mod diagram;
 pub mod export;
-pub mod formatting;
 pub mod highlight;
 pub mod images;
 pub mod index;
 pub mod rename;
-pub mod sections;
 pub mod themes;
+
+// The pure parser moved to `underline-markup` (ADR-025); its modules stay
+// reachable under their former paths.
+pub use underline_markup::{blocks, formatting, sections};
 
 use underline_core::NoteFormat;
 

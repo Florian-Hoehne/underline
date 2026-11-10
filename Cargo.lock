@@ -8318,6 +8318,7 @@ dependencies = [
  "serde_norway",
  "similar",
  "thiserror 1.0.69",
+ "underline-markup",
 ]
 
 [[package]]
@@ -8374,7 +8375,16 @@ dependencies = [
  "typst-layout",
  "typst-pdf",
  "underline-core",
+ "underline-markup",
  "ureq",
+]
+
+[[package]]
+name = "underline-markup"
+version = "0.1.0"
+dependencies = [
+ "comrak",
+ "serde",
 ]
 
 [[package]]
