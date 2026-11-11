@@ -6,9 +6,9 @@
 //! rules of the facade with its blocks ([`facade`], ADR-025), and the hash
 //! the webview and the backend compare their texts by ([`sync`]).
 //!
-//! It was moved out of the egui widget `underline-editor`, which now builds
-//! on it, so that the same logic can run elsewhere as well
-//! (`docs/migration/plan.md`, sections 1.2, 3, and 6). The crate depends on
+//! It was moved out of the former egui editor widget, so that the same
+//! logic could run in the webview (`docs/migration/plan.md`, sections 1.2,
+//! 3, and 6). The crate depends on
 //! no UI toolkit and builds for `wasm32-unknown-unknown`; keys come in as
 //! its own [`KeyInput`], which each UI makes from its events.
 

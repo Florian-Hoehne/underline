@@ -1,12 +1,12 @@
 //! M-08.8, UC-004 BR-012: folding the sections of a note, per tab, so both
 //! views share it.
 //!
-//! Ported from `underline-editor`'s `source_view.rs` (`sections`, `hidden`,
-//! `toggle_fold`, `fold_key`, `unfold_at_cursor`). The sections come from
-//! the facade engine (`underline_markup::sections`) and are kept as lines:
-//! the egui widget keeps the bytes of the sections and turns them into
-//! lines when it lays out the text; here the lines are worked out once when
-//! the sections are found.
+//! Ported from the former egui widget's `source_view.rs` (`sections`,
+//! `hidden`, `toggle_fold`, `fold_key`, `unfold_at_cursor`). The sections
+//! come from the facade engine (`underline_markup::sections`) and are kept
+//! as lines: the egui widget kept the bytes of the sections and turned them
+//! into lines when it laid out the text; here the lines are worked out once
+//! when the sections are found.
 //!
 //! The sections are found again after the input that changed the text, off
 //! the keystroke (ADR-024): at most every [`SECTIONS_EVERY_MS`] while the

@@ -69,8 +69,10 @@ Follow the accepted ones; a proposed one becomes binding once the user accepts i
 
 ## Code conventions
 
-- Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-facade`,
-  `crates/underline-editor`, `crates/underline-wiki`, `crates/underline-mcp`); `apps/underline-desktop` only wires them to the window and the command line.
+- Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-markup`,
+  `crates/underline-facade`, `crates/underline-editor-core`, `crates/underline-editor-view`,
+  `crates/underline-editor-wasm`, `crates/underline-session`, `crates/underline-wiki`, `crates/underline-mcp`);
+  `apps/underline-tauri` only wires them to the window and the command line.
 - Unit tests sit next to the code in `#[cfg(test)] mod tests`.
 - Errors are typed with `thiserror` in the library crates.
 
@@ -88,8 +90,8 @@ checklist is `docs/migration/feature-inventar.md` (IDs `M-xx.y`), and deviations
   - Editor logic without egui in `crates/underline-editor-core` (also builds for `wasm32-unknown-unknown`).
   - Source view on CodeMirror 6 with `@replit/codemirror-vim`. The facade is an own `contenteditable` driven by
     the Rust editor core.
-- **Legacy:** `apps/underline-desktop` and `crates/underline-editor` (egui) stay unchanged as the reference until the
-  user confirms parity. Nothing is deleted before that.
+- **Legacy:** the user confirmed parity; the egui app (`apps/underline-desktop`) and the egui editor widget
+  (`crates/underline-editor`) are removed. Their code stays in the git history before the cutover.
 - **Tools:** Node comes from nvm, so run `source ~/.nvm/nvm.sh` first. On Linux, Tauri needs `pkg-config`,
   `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`, `libgtk-3-dev`, `librsvg2-dev`, `libxdo-dev` and `libssl-dev`.
 - **Start:** `cd apps/underline-tauri && cargo tauri dev`, or `npm run tauri dev` in `apps/underline-tauri/ui`.

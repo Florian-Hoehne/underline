@@ -21,7 +21,8 @@ Grundlage ist [feature-inventar.md](feature-inventar.md). Je Feature fortgeschri
   Dateimanager und Zwischenablage fremder Programme (Q-49), das echte Fenster per Tastatur-Automation (kein
   `xdotool` unter Wayland). Die Flüsse sind gegen das Mock-Backend (Playwright) und in Rust-Tests mit echten
   Dateien und Git-Repositories geprüft; das echte Fenster nur stichprobenweise (Schliessen, Agent, Start, Bundles).
-- **Legacy:** `apps/underline-desktop` und `crates/underline-editor` sind unverändert. Geteilte Crates
+- **Legacy:** `apps/underline-desktop` und `crates/underline-editor` blieben bis zur Bestätigung der Parität durch
+  den Benutzer (2026-11-11) unverändert und sind seither entfernt (Cutover). Geteilte Crates
   (`underline-core`, `-facade`, `-markup`, `-mcp`, `-wiki`) wurden nur verhaltensgleich geändert (Verschieben mit
   Re-Export, rein additive Funktionen, ein nachgewiesen gleichwertiger ASCII-Pfad der Wortsuche).
 - **Vor dem Entfernen des alten UI-Codes** braucht es die Bestätigung der Parität durch den Benutzer und die

@@ -1,6 +1,6 @@
 [package]
 name = "underline-tauri"
-description = "Underline desktop app on Tauri 2 (migration from the egui app)"
+description = "Underline desktop app for Linux, Windows and macOS, on Tauri 2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

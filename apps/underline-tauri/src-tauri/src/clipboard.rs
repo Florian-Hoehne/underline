@@ -1,8 +1,7 @@
 //! The system clipboard of the window (ADR-014, M-08.6, M-09.14, M-10.6,
-//! M-10.7), through `arboard`, as the egui app uses it
-//! (`crates/underline-editor/src/clipboard.rs`): plain text, HTML with a
-//! plain-text alternative, and images. The commands read and write it
-//! without holding the session.
+//! M-10.7), through `arboard`, as the former egui app used it: plain text,
+//! HTML with a plain-text alternative, and images. The commands read and
+//! write it without holding the session.
 //!
 //! Copy on select (FR-031, BR-011) keeps what the clipboard held before a
 //! selection was copied, one per note, so pasting over that selection

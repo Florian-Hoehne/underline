@@ -9,7 +9,12 @@ together with an AI agent.
 
 | Path | What it holds |
 | --- | --- |
-| `apps/underline-desktop` | The `underline` binary: the desktop window (egui/eframe) and the `mcp` subcommand |
+| `apps/underline-tauri/src-tauri` | The desktop app on Tauri 2 (binary `underline-tauri`): a thin layer of commands and events over `underline-session`, and the `mcp` subcommand |
+| `apps/underline-tauri/ui` | The window's frontend: Svelte 5, TypeScript and Vite; the source view on CodeMirror 6 |
+| `crates/underline-session` | The workspace session without a user interface: tabs, saving, background services, and the tick that sends the window its events |
+| `crates/underline-editor-core` | Editor logic without a user interface: the text as a rope with undo, Vim and Nano keys, toolbar functions, facade editing; builds for WebAssembly too |
+| `crates/underline-editor-view` | The editor's tab as the window holds it: what the window and the editor core exchange in the source view and the facade |
+| `crates/underline-editor-wasm` | The editor's tab compiled to WebAssembly for the webview |
 | `crates/underline-core` | Workspaces (directories of `.md` and `.adoc` notes in any folder, minus hidden and git-ignored ones), settings in `underline.yaml`, the state between starts (per workspace in a hidden `.underline/` folder that git ignores by itself), atomic writes, git through the installed `git` |
 | `crates/underline-markup` | Note formats and the facade parser: blocks, sections, and formatting of Markdown and AsciiDoc; builds for WebAssembly too |
 | `crates/underline-facade` | Facade engine: one format module per note format (Markdown, AsciiDoc) |
@@ -18,16 +23,22 @@ together with an AI agent.
 
 ## Build and run
 
-Install Rust with [rustup](https://rustup.rs). On Linux the window needs the
-usual X11 or Wayland development libraries.
+Install Rust with [rustup](https://rustup.rs), the Tauri CLI (`cargo install tauri-cli --version "^2"`), and
+Node.js with npm. The editor's core runs in the webview as WebAssembly, so add the target with
+`rustup target add wasm32-unknown-unknown` and the `wasm-bindgen` CLI in the version `Cargo.lock` pins
+(`cargo install wasm-bindgen-cli --version <pinned> --locked --root .tools`; `npm run wasm` in
+`apps/underline-tauri/ui` names the version). On Linux, Tauri needs `pkg-config`, `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`,
+`libgtk-3-dev`, `librsvg2-dev`, `libxdo-dev` and `libssl-dev`.
 
 ```sh
-cargo run --bin underline                # open the last opened workspace, or choose one; "Open workspace…" (UC-002) and "New workspace…" (UC-001)
-cargo run --bin underline -- ~/notes     # open another workspace
-cargo run --bin underline -- mcp ~/notes # serve the workspace to an AI agent over MCP stdio
+cd apps/underline-tauri/ui && npm ci && cd ..
+cargo tauri dev                 # open the last opened workspace, or choose one; "Open workspace…" (UC-002) and "New workspace…" (UC-001)
+cargo tauri dev -- -- ~/notes   # open another workspace
+cargo tauri build               # bundles: AppImage and deb on Linux, NSIS on Windows, dmg on macOS
+underline-tauri mcp ~/notes     # the built binary serves the workspace to an AI agent over MCP stdio
 ```
 
-To use it from an MCP client, register the command `underline mcp <workspace dir>`
+To use it from an MCP client, register the command `underline-tauri mcp <workspace dir>`
 as a stdio server.
 
 ## Development process
@@ -51,6 +62,9 @@ Start with `docs/vision.md`, then run `/requirements`, `/entity-model`, `/use-ca
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo check --target wasm32-unknown-unknown -p underline-markup -p underline-editor-core -p underline-editor-view -p underline-editor-wasm
+# frontend, in apps/underline-tauri/ui:
+npm run lint && npm run format:check && npm run check && npm test && npm run build
 ```
 
 CI runs the same checks on Linux, Windows and macOS.
