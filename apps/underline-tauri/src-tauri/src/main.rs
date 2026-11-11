@@ -1,11 +1,12 @@
-//! Underline on Tauri 2 (migration from the egui app, M-01).
+//! Underline on Tauri 2 (M-01).
 //!
-//! `underline-tauri [WORKSPACE_DIR]` opens the window and hands the directory
+//! `underline [WORKSPACE_DIR]` opens the window and hands the directory
 //! to it (M-01.1, UC-002 A1/A2).
-//! `underline-tauri mcp [WORKSPACE_DIR]` serves the workspace to an AI agent
+//! `underline mcp [WORKSPACE_DIR]` serves the workspace to an AI agent
 //! over MCP on stdin and stdout, without a window (M-01.2). MCP install writes
 //! the path of the running binary into the agent tools' configuration, so this
-//! binary must understand `mcp` just like the egui app.
+//! binary understands `mcp` and carries the egui app's name `underline`:
+//! entries the egui app installed keep working (plan section 3).
 
 mod assets;
 mod bindings;
@@ -42,9 +43,9 @@ const FLUSH_AT_THE_LATEST: Duration = Duration::from_secs(1);
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Cli {
-    /// `underline-tauri [DIR]`: open the window.
+    /// `underline [DIR]`: open the window.
     Window { given: Option<PathBuf> },
-    /// `underline-tauri mcp [DIR]`: serve the workspace over MCP.
+    /// `underline mcp [DIR]`: serve the workspace over MCP.
     Mcp { given: Option<PathBuf> },
 }
 

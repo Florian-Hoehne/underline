@@ -9,7 +9,7 @@ together with an AI agent.
 
 | Path | What it holds |
 | --- | --- |
-| `apps/underline-tauri/src-tauri` | The desktop app on Tauri 2 (binary `underline-tauri`): a thin layer of commands and events over `underline-session`, and the `mcp` subcommand |
+| `apps/underline-tauri/src-tauri` | The desktop app on Tauri 2 (binary `underline`): a thin layer of commands and events over `underline-session`, and the `mcp` subcommand |
 | `apps/underline-tauri/ui` | The window's frontend: Svelte 5, TypeScript and Vite; the source view on CodeMirror 6 |
 | `crates/underline-session` | The workspace session without a user interface: tabs, saving, background services, and the tick that sends the window its events |
 | `crates/underline-editor-core` | Editor logic without a user interface: the text as a rope with undo, Vim and Nano keys, toolbar functions, facade editing; builds for WebAssembly too |
@@ -35,10 +35,10 @@ cd apps/underline-tauri/ui && npm ci && cd ..
 cargo tauri dev                 # open the last opened workspace, or choose one; "Open workspace…" (UC-002) and "New workspace…" (UC-001)
 cargo tauri dev -- -- ~/notes   # open another workspace
 cargo tauri build               # bundles: AppImage and deb on Linux, NSIS on Windows, dmg on macOS
-underline-tauri mcp ~/notes     # the built binary serves the workspace to an AI agent over MCP stdio
+underline mcp ~/notes           # the built binary serves the workspace to an AI agent over MCP stdio
 ```
 
-To use it from an MCP client, register the command `underline-tauri mcp <workspace dir>`
+To use it from an MCP client, register the command `underline mcp <workspace dir>`
 as a stdio server.
 
 ## Development process

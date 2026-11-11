@@ -232,7 +232,7 @@ mod tests {
         assert!(
             checked_in(BINDINGS_PATH) == generated.replace("\r\n", "\n"),
             "{BINDINGS_PATH} is outdated: run `UNDERLINE_UPDATE_BINDINGS=1 cargo test -p \
-             underline-tauri bindings` or start a debug build of the app, then commit the file"
+             underline bindings` or start a debug build of the app, then commit the file"
         );
     }
 
@@ -246,7 +246,7 @@ mod tests {
         assert!(
             checked_in(PALETTES_PATH) == palettes_json(),
             "{PALETTES_PATH} is outdated: run `UNDERLINE_UPDATE_BINDINGS=1 cargo test -p \
-             underline-tauri bindings` or start a debug build of the app, then commit the file"
+             underline bindings` or start a debug build of the app, then commit the file"
         );
     }
 }

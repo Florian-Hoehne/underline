@@ -1,5 +1,5 @@
 //! M-01.2, ADR-002, ADR-017, ADR-018 (feature F14): the Tauri binary keeps
-//! the `mcp` subcommand. `underline-tauri mcp <dir>` serves the workspace
+//! the `mcp` subcommand. `underline mcp <dir>` serves the workspace
 //! to an agent over MCP on stdin and stdout, end to end with the real
 //! binary: it writes notes itself while no window runs (UC-017 A5), and
 //! hands its changes to the running window when one does (ADR-018), which
@@ -18,8 +18,7 @@ use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
 use underline_session::{Session, SettingsState};
 
 fn scratch(name: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("underline-tauri-mcp-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("underline-mcp-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -49,7 +48,7 @@ struct Mcp {
 
 impl Mcp {
     fn start(home: &Path, root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_underline-tauri"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_underline"))
             .arg("mcp")
             .arg(root)
             .env("HOME", home)

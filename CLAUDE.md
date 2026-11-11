@@ -76,15 +76,15 @@ Follow the accepted ones; a proposed one becomes binding once the user accepts i
 - Unit tests sit next to the code in `#[cfg(test)] mod tests`.
 - Errors are typed with `thiserror` in the library crates.
 
-## Migration to Tauri 2 (branch `migration/tauri`)
+## Tauri 2 app (migrated from egui, branch `migration/tauri`)
 
-The window moves from egui to Tauri 2 (ADR-020 to ADR-023). The plan is in `docs/migration/plan.md`. The parity
-checklist is `docs/migration/feature-inventar.md` (IDs `M-xx.y`), and deviations go into
-`docs/migration/paritaet.md`.
+The window moved from egui to Tauri 2 (ADR-020 to ADR-025); the cutover is done. The plan is in
+`docs/migration/plan.md`. The parity checklist is `docs/migration/feature-inventar.md` (IDs `M-xx.y`), and
+deviations go into `docs/migration/paritaet.md`.
 
 - **Stack:**
-  - Tauri 2 backend in `apps/underline-tauri/src-tauri`, binary `underline-tauri` (renamed to `underline` at
-    cutover; it keeps the `mcp` subcommand).
+  - Tauri 2 backend in `apps/underline-tauri/src-tauri`, package and binary `underline` (the egui app's name, so
+    installed MCP entries keep working; `underline mcp <dir>` serves a workspace over MCP).
   - Svelte 5 + TypeScript + Vite frontend in `apps/underline-tauri/ui`.
   - Orchestration without UI in `crates/underline-session`.
   - Editor logic without egui in `crates/underline-editor-core` (also builds for `wasm32-unknown-unknown`).

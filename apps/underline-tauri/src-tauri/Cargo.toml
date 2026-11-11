@@ -1,5 +1,5 @@
 [package]
-name = "underline-tauri"
+name = "underline"
 description = "Underline desktop app for Linux, Windows and macOS, on Tauri 2"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "underline-tauri"
+name = "underline"
 path = "src/main.rs"
 
 [build-dependencies]
