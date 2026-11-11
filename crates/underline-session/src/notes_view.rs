@@ -182,4 +182,10 @@ pub enum StatusOffer {
     /// UC-007 A4, M-14.3: "Undo" right after deleting a note
     /// (`note_undo_delete`).
     UndoDelete,
+    /// UC-020 A5, M-04.6: "Undo" before the report "Deleted todo {name}"
+    /// (`todo_undo`).
+    UndoTodoDelete,
+    /// UC-021 step 8, M-04.6: "Undo" before the report "Marked todo {name}
+    /// done/open" (`todo_undo`).
+    UndoTodoMark,
 }

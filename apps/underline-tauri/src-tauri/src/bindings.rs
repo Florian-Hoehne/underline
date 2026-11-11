@@ -23,7 +23,7 @@ use crate::events::{
     AgentMarksEvent, AgentsEvent, ChangedEvent, ChangesEvent, CloseQuestionEvent, ConflictEvent,
     DeletedEvent, DiffEvent, EnrichEvent, FlushEvent, GitBarEvent, HighlightEvent, IndexesEvent,
     OverviewEvent, PropertiesEvent, SearchEvent, SettingsEvent, SettingsWindowEvent, StatusEvent,
-    TabsEvent, TodoConflictsEvent, WorkspaceEvent,
+    TabsEvent, TodoConflictsEvent, TodosEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -114,7 +114,19 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::conflict_abort,
             commands::todo_conflict_resolve,
             commands::agents_set_access,
-            commands::agents_section
+            commands::agents_section,
+            commands::todo_create,
+            commands::todo_change,
+            commands::todo_mark,
+            commands::todo_delete,
+            commands::todo_undo,
+            commands::todo_open_link,
+            commands::todo_candidates,
+            commands::todo_month,
+            commands::todo_list_show,
+            commands::todo_list_close,
+            commands::todo_list_set,
+            commands::ws_switch_anyway
         ])
         .events(collect_events![
             StatusEvent,
@@ -138,7 +150,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             ConflictEvent,
             TodoConflictsEvent,
             AgentsEvent,
-            AgentMarksEvent
+            AgentMarksEvent,
+            TodosEvent
         ])
         // ADR-025: what crosses only between the window and the editor's
         // WASM (`ui/src/lib/editor/core.ts`).

@@ -11,6 +11,7 @@ use crate::notes_view::{DeletedNoteView, StatusOffer};
 use crate::remote_view::{ConflictBarView, GitBarView, TodoConflictView};
 use crate::search_view::SearchView;
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
+use crate::todos_view::TodosView;
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
 use crate::{SettingsView, SettingsWindowView};
 
@@ -85,9 +86,15 @@ pub enum Event {
     Conflict(Option<ConflictBarView>),
     /// M-19.10, UC-020 A10: the todos in conflict.
     TodoConflicts(Vec<TodoConflictView>),
+    /// M-16.3, M-18, M-04.5, M-06.5 (UC-020, UC-021): the todos of the
+    /// open workspace; boxed, as it holds every todo.
+    Todos(Box<TodosView>),
     /// M-04.4, M-17.1, M-17.2: the agents entry of the status bar and the
     /// head of the section "Agents" of the settings.
     Agents(AgentsView),
     /// M-17.6: the agent cursors in the open notes.
     AgentMarks(Vec<AgentMarksView>),
+    /// Review F15: "Changes not stored" before another workspace opens,
+    /// as the todos of this one cannot be stored.
+    CloseQuestion(crate::CloseQuestion),
 }

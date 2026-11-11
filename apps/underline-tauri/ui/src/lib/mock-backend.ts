@@ -103,9 +103,21 @@
 // status with "Open"), and change todos (`agentTodo`). The agents entry of
 // the status bar changes the user's access; the section "Agents" installs
 // into fake tools (`agentTool` sets how one stands), never into files.
+//
+// Feature F15 (`mock-todos.ts`): the todos of each fake workspace, the
+// section "Todos", the tab "Todos" with its sort and filter, the overdue
+// todos and the undo of the status bar. `/home/user/Notes` starts with an
+// overdue todo, a critical one with four notes, one linked to a note that
+// no longer exists and a done one; `/home/user/Work` with none. The hooks
+// change a todo from outside (`todoOutside`, shown after 300 ms, as the
+// backend's look of the second), as an agent (`agentTodo` with a todo),
+// make the todo files unwritable (`todoWriteFails`; cleared, what was not
+// stored is stored half a second later) or a file unreadable
+// (`todoUnreadable`), and list the todos (`todos`).
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { MockAgents, levelOf, type MockToolState } from './mock-agents';
+import { MockTodos, mockCalendar, type MockTodo } from './mock-todos';
 import { emit } from '@tauri-apps/api/event';
 import type {
   commands,
@@ -123,6 +135,10 @@ import type {
   ConflictBarView,
   GitBarView,
   TodoConflictView,
+  TodoAnswer,
+  TodoChange,
+  TodoFilterName,
+  TodoSortName,
   CommitAnswer,
   CreateNoteAnswer,
   DeletedNoteView,
@@ -357,6 +373,29 @@ export type MockHandlers = {
   agents_section: (args: {
     action: AgentAction | null;
   }) => Promise<Ok<typeof commands.agentsSection>>;
+  todo_create: (args: { title: string }) => Promise<Ok<typeof commands.todoCreate>>;
+  todo_change: (args: {
+    number: number;
+    change: TodoChange;
+  }) => Promise<Ok<typeof commands.todoChange>>;
+  todo_mark: (args: { number: number; done: boolean }) => Promise<Ok<typeof commands.todoMark>>;
+  todo_delete: (args: { number: number }) => Promise<Ok<typeof commands.todoDelete>>;
+  todo_undo: () => Promise<Ok<typeof commands.todoUndo>>;
+  todo_open_link: (args: { link: string }) => Promise<Ok<typeof commands.todoOpenLink>>;
+  todo_candidates: (args: {
+    number: number;
+    query: string;
+  }) => Promise<Ok<typeof commands.todoCandidates>>;
+  todo_month: (args: { day: string | null; step: number }) => Ok<typeof commands.todoMonth>;
+  todo_list_show: (args: {
+    filter: TodoFilterName | null;
+  }) => Promise<Ok<typeof commands.todoListShow>>;
+  todo_list_close: () => Promise<Ok<typeof commands.todoListClose>>;
+  ws_switch_anyway: () => Promise<Ok<typeof commands.wsSwitchAnyway>>;
+  todo_list_set: (args: {
+    sort: TodoSortName;
+    filter: TodoFilterName;
+  }) => Promise<Ok<typeof commands.todoListSet>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
@@ -943,6 +982,18 @@ function workspaceHandlers(
   | 'todo_conflict_resolve'
   | 'agents_set_access'
   | 'agents_section'
+  | 'todo_create'
+  | 'todo_change'
+  | 'todo_mark'
+  | 'todo_delete'
+  | 'todo_undo'
+  | 'todo_open_link'
+  | 'todo_candidates'
+  | 'todo_month'
+  | 'todo_list_show'
+  | 'todo_list_close'
+  | 'todo_list_set'
+  | 'ws_switch_anyway'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -998,6 +1049,19 @@ function workspaceHandlers(
   const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** The test that made the mock ended (`dispose`). */
   let disposed = false;
+  /** F15: the todos of the fake workspaces and the tab "Todos". */
+  const todos = new MockTodos();
+  const todoTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** F15: runs `work` after `ms`, unless the mock was taken down. */
+  const later = (ms: number, work: () => Promise<void> | void) => {
+    const timer = setTimeout(() => {
+      todoTimers.delete(timer);
+      if (!disposed) {
+        void work();
+      }
+    }, ms);
+    todoTimers.add(timer);
+  };
   let clipboard: MockClipboard = { text: null, html: null, image: false };
   /** BR-011: per note, what the clipboard held before copy on select. */
   const before = new Map<string, MockClipboard>();
@@ -1440,6 +1504,35 @@ function workspaceHandlers(
     } catch {
       // The mock was taken down meanwhile (a test ended).
     }
+  };
+  /** F15: the todos, as the backend's tick sends them. */
+  const sendTodos = async () => {
+    if (disposed || root === null) {
+      return;
+    }
+    const list = todos.list(root);
+    try {
+      await emit(
+        'todos',
+        todos.view(root, files[root] ?? [], list.open && list.active ? null : active),
+      );
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
+  };
+  /** F15: what a todo command did: the status with its offer, and the todos. */
+  const todoDone = async (done: {
+    answer: TodoAnswer;
+    status?: string;
+    offer?: 'delete' | 'mark';
+  }): Promise<TodoAnswer> => {
+    if (done.status !== undefined) {
+      const offer =
+        done.offer === 'delete' ? 'undoTodoDelete' : done.offer === 'mark' ? 'undoTodoMark' : null;
+      await setStatus(done.status, offer);
+    }
+    await sendTodos();
+    return done.answer;
   };
   /** UC-011 A3: a text changed; the changes and the diff follow soon. */
   const gitAgain = () => {
@@ -1893,7 +1986,7 @@ function workspaceHandlers(
       saveError: saveErrors.get(tab.note) ?? null,
     })),
     active,
-    todoList: { open: false, active: false },
+    todoList: { open: todos.list(root).open, active: todos.list(root).active },
   });
   const properties = (): TabPropertiesView | null =>
     active === null
@@ -1938,6 +2031,8 @@ function workspaceHandlers(
         const quietly =
           quiet.delete(note) ||
           (undo !== null && status() === undo.status) ||
+          // F15: so does a todo's report with its "Undo".
+          todos.offer(root, status()) !== null ||
           exportKept() ||
           // F13: a git report stays (like A-113).
           (gitReport !== null && status() === gitReport);
@@ -2044,6 +2139,7 @@ function workspaceHandlers(
       await emit('properties', properties());
       await sendIndexes();
       await sendGit();
+      await sendTodos();
       if (settingsSaid !== undefined) {
         const said = settingsSaid;
         settingsSaid = undefined;
@@ -2201,6 +2297,8 @@ function workspaceHandlers(
   const viewed = (note: string) => {
     if (root) {
       lastOpened[root] = { ...lastOpened[root], [note]: ++clock };
+      // F15, UC-021 step 6: the note shows; the tab "Todos" stays open.
+      todos.list(root).active = false;
     }
   };
   const openTab = (note: string) => {
@@ -2277,10 +2375,31 @@ function workspaceHandlers(
         .filter((n) => n.startsWith(prefix))
         .map((n) => n.slice(prefix.length));
     }
+    // F15 review: todos that cannot be stored are asked about first.
+    if (await askBeforeSwitch({ dir, created: false })) {
+      return { kind: 'done' };
+    }
     switchTo(dir);
     await sendAll();
     await setStatus(`Opened ${dir}`);
     return { kind: 'done' };
+  };
+  /** F15 review: the workspace that opens after "Close anyway". */
+  let switchWaiting: { dir: string; created: boolean } | null = null;
+  /** Asks "Changes not stored" when todos of the open workspace cannot be stored. */
+  const askBeforeSwitch = async (waiting: { dir: string; created: boolean }) => {
+    const failures = root === null ? [] : todos.settle(root);
+    if (failures.length === 0) {
+      return false;
+    }
+    switchWaiting = waiting;
+    await emit('close-question', {
+      tab: null,
+      what: `the workspace ${root?.split('/').at(-1) ?? ''}`,
+      error: failures.join('; '),
+      switching: true,
+    });
+    return true;
   };
 
   const checkNew = (path: string): CreateAnswer => {
@@ -2380,6 +2499,9 @@ function workspaceHandlers(
       }
       const dir = checked.directory;
       files[dir] = ['Home'];
+      if (await askBeforeSwitch({ dir, created: true })) {
+        return { stage: 'done' };
+      }
       switchTo(dir);
       openTab('Home');
       await sendAll();
@@ -2449,7 +2571,7 @@ function workspaceHandlers(
       const failure = store(note);
       if (failure && !force) {
         await sendAll();
-        return { tab: note, what: `the tab ${title(note)}`, error: failure };
+        return { tab: note, what: `the tab ${title(note)}`, error: failure, switching: false };
       }
       clearTimeout(saveTimers.get(note));
       texts.delete(note);
@@ -3289,10 +3411,85 @@ function workspaceHandlers(
       await setReport('The sync was aborted; the workspace is as before it');
       return null;
     },
-    todo_conflict_resolve: async ({ number }) => {
+    ws_switch_anyway: async () => {
+      const waiting = switchWaiting;
+      switchWaiting = null;
+      if (waiting === null) {
+        return null;
+      }
+      if (root !== null) {
+        todos.giveUp(root);
+      }
+      switchTo(waiting.dir);
+      if (waiting.created) {
+        openTab('Home');
+      }
+      await sendAll();
+      await setStatus(
+        waiting.created ? `Workspace created in ${waiting.dir}` : `Opened ${waiting.dir}`,
+      );
+      return null;
+    },
+    todo_create: async ({ title }) =>
+      root === null ? { kind: 'failed' } : todoDone(todos.create(root, title)),
+    todo_change: async ({ number, change }) =>
+      root === null
+        ? { kind: 'done' }
+        : todoDone(todos.change(root, number, change, files[root] ?? [])),
+    todo_mark: async ({ number, done }) =>
+      root === null ? { kind: 'done' } : todoDone(todos.mark(root, number, done)),
+    todo_delete: async ({ number }) =>
+      root === null ? { kind: 'failed' } : todoDone(todos.delete(root, number)),
+    todo_undo: async () => {
+      const done = root === null ? null : todos.undo(root, status());
+      return done === null ? { kind: 'done' } : todoDone(done);
+    },
+    todo_open_link: async ({ link }) => {
+      const note = MockTodos.find(root ? (files[root] ?? []) : [], link);
+      if (note === undefined) {
+        await setStatus(`The note ${link} no longer exists; remove the link with ×`);
+      } else {
+        openTab(note);
+        await sendAll();
+      }
+      return null;
+    },
+    todo_candidates: async ({ number, query }) =>
+      root === null
+        ? { notes: [], none: null }
+        : todos.candidates(root, files[root] ?? [], number, query),
+    todo_month: ({ day, step }) => mockCalendar(day, step),
+    todo_list_show: async ({ filter }) => {
+      const list = todos.list(root);
+      list.open = true;
+      list.active = true;
+      if (filter !== null) {
+        list.filter = filter;
+      }
+      await sendAll();
+      return null;
+    },
+    todo_list_close: async () => {
+      const list = todos.list(root);
+      list.open = false;
+      list.active = false;
+      await sendAll();
+      return null;
+    },
+    todo_list_set: async ({ sort, filter }) => {
+      const list = todos.list(root);
+      list.sort = sort;
+      list.filter = filter;
+      await sendTodos();
+      return null;
+    },
+    todo_conflict_resolve: async ({ number, mine }) => {
       const state = remoteOf();
       if (!state?.todos.some((t) => t.number === number)) {
         return null;
+      }
+      if (root !== null) {
+        todos.resolve(root, number, mine);
       }
       state.todos = state.todos.filter((t) => t.number !== number);
       state.conflicts = state.conflicts.filter((c) => c.path !== `.todos/${number}.yaml`);
@@ -3427,9 +3624,37 @@ function workspaceHandlers(
       await reportAgentChange(name, 'created', note);
       return `created ${note}`;
     },
-    agentTodo: async (name, change) => {
+    agentTodo: async (name, change, todo) => {
+      // UC-020 A8: the agent's change shows within a second, the status names it.
+      if (todo !== undefined && root !== null) {
+        todos.outside(root, todo);
+        later(300, sendTodos);
+      }
       await setStatus(`${name} ${change}`);
     },
+    todoOutside: (todo, at) => {
+      const place = at ?? root;
+      if (place !== null) {
+        todos.outside(place, todo);
+        later(300, sendTodos);
+      }
+    },
+    todoWriteFails: (reason) => {
+      todos.writeFails = reason;
+      if (reason === null) {
+        // M-18.9: the look of the second stores what was not stored.
+        later(500, async () => {
+          if (todos.retry(root)) {
+            await sendTodos();
+          }
+        });
+      }
+    },
+    todoUnreadable: (lines) => {
+      todos.unreadable = [...lines];
+      later(300, sendTodos);
+    },
+    todos: () => (root === null ? [] : todos.of(root).map((t) => ({ ...t }))),
     agentTool: (tool, state) => {
       agents.tools[tool] = state;
     },
@@ -3516,6 +3741,10 @@ function workspaceHandlers(
         clearTimeout(marksTimer);
         marksTimer = null;
       }
+      for (const timer of todoTimers) {
+        clearTimeout(timer);
+      }
+      todoTimers.clear();
       disposed = true;
     },
   };
@@ -3550,8 +3779,26 @@ export type MockHooks = {
   agentChange(name: string, note: string, oldText: string, newText: string): Promise<string>;
   /** F14, UC-019 A1: the agent `name` creates `note` with `text`; the agent's answer. */
   agentCreate(name: string, note: string, text: string): Promise<string>;
-  /** F14, UC-020 A8: the agent `name` changed a todo (`change`, such as "created todo #3"). */
-  agentTodo(name: string, change: string): Promise<void>;
+  /**
+   * F14, UC-020 A8: the agent `name` changed a todo (`change`, such as
+   * "created todo #3"); F15: with `todo`, that todo is created or changed so.
+   */
+  agentTodo(
+    name: string,
+    change: string,
+    todo?: Partial<MockTodo> & { number: number },
+  ): Promise<void>;
+  /**
+   * F15, UC-020 A7: another program or a sync creates or changes a todo of
+   * the open workspace (or of `root`); the window shows it 300 ms later.
+   */
+  todoOutside(todo: Partial<MockTodo> & { number: number }, root?: string): void;
+  /** F15, UC-020 A9: the todo files cannot be written (`reason`), or can again (`null`). */
+  todoWriteFails(reason: string | null): void;
+  /** F15, M-18.1: lines for todo files that cannot be read (empty: none). */
+  todoUnreadable(lines: string[]): void;
+  /** F15: the todos of the open workspace as stored. */
+  todos(): MockTodo[];
   /** F14, M-17.2: how the fake agent tool `tool` stands from now on. */
   agentTool(tool: AgentToolName, state: MockToolState): void;
   /** F10, UC-010 A5: another program sets `key` in a settings file (`null` removes it). */

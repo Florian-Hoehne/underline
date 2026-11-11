@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-todo-month"
+description = "Enables the todo_month command without any pre-configured scope."
+commands.allow = ["todo_month"]
+
+[[permission]]
+identifier = "deny-todo-month"
+description = "Denies the todo_month command without any pre-configured scope."
+commands.deny = ["todo_month"]

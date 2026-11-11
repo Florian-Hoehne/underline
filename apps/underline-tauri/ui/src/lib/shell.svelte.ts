@@ -1,14 +1,16 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
 // `deleted`, `tabs`, `properties`, `indexes`, `changes`, `diff`, `git-bar`,
-// `conflict`, `todo-conflicts` and `close-question` events (ADR-022); the editor's
+// `conflict`, `todo-conflicts`, `todos` and `close-question` events (ADR-022); the editor's
 // `ed-highlight` goes to the source view shown now, `ed-changed`,
 // `ed-flush` and `ed-enrich` to the editor cores (ADR-025, `editor/sync.ts`),
 // plus the UI state that is not stored (M-22.4): the Open and Create
 // dialogs, the note dialogs (M-14), the question before closing, "Open web
 // address" (M-07.3), the commit box with "Your name for commits" and
 // "Discard changes" (M-19), the branch menu, "Abort the sync" and the
-// place chosen in the conflict bar (M-19.6 to M-19.10), the
+// place chosen in the conflict bar (M-19.6 to M-19.10), the todo shown with
+// its fields, the row chosen in the tab "Todos", the title typed for a new
+// todo and the calendar "Choose a day" (M-18), the
 // loading state and the panels' widths while they are dragged. The text of the notes is not here: each
 // open note's editor core holds it (ADR-025). No domain logic lives here:
 // every change goes to the backend, which answers with an event or with the
@@ -37,6 +39,13 @@ import {
   type SideName,
   type SyncModeName,
   type TodoConflictView,
+  type CalendarView,
+  type TodoAnswer,
+  type TodoCandidatesView,
+  type TodoChange,
+  type TodoFilterName,
+  type TodoSortName,
+  type TodosView,
   type CommitAnswer,
   type CreateAnswer,
   type DiffView,
@@ -300,6 +309,9 @@ const NO_TABS: TabsView = { tabs: [], active: null, todoList: { open: false, act
  */
 const NO_AGENTS: AgentsView = { menu: null, head: [], workspace: false };
 
+/** M-18.3: the calendar "Choose a day", for which field of which todo, and the month shown. */
+export type TodoCalendar = { field: 'due' | 'scheduled'; todo: number; month: CalendarView };
+
 /** M-17.6: no agent cursor in a note. */
 const NO_MARKS: AgentMarkView[] = [];
 
@@ -402,6 +414,31 @@ export class Shell {
   conflictPlace = $state(0);
   /** M-19.10, UC-020 A10: the todos in conflict. */
   todoConflicts = $state.raw<TodoConflictView[]>([]);
+  /**
+   * M-16.3, M-18, M-04.5 (UC-020, UC-021): the todos of the open workspace
+   * as the backend sent them last; `null` before they were read.
+   */
+  todos = $state.raw<TodosView | null>(null);
+  /** M-18.3: the todo shown with its fields in the section "Todos" (egui's `open`). */
+  todoShown = $state<number | null>(null);
+  /** M-18.3: why a field of the todo shown was not taken (egui's `edit.problem`). */
+  todoProblem = $state<string | null>(null);
+  /** UX review F15: the kind of change `todoProblem` is about (its field is marked invalid). */
+  todoProblemField = $state<TodoChange['kind'] | null>(null);
+  /** M-18.1, M-18.6: the title typed for a new todo, shared by both fields as in egui. */
+  todoNewTitle = $state('');
+  /** UC-020 A3: why the new todo was not created. */
+  todoNewProblem = $state<string | null>(null);
+  /** M-18.7 (UC-021 BR-008): the row chosen in the tab "Todos". */
+  todoChosen = $state<number | null>(null);
+  /** M-18.3: the calendar "Choose a day", while open. */
+  todoCalendar = $state.raw<TodoCalendar | null>(null);
+  /** M-18.3: the day chosen in the calendar last; the field of that todo shows it. */
+  todoDayPicked = $state.raw<{ todo: number; field: 'due' | 'scheduled'; day: string } | null>(
+    null,
+  );
+  /** Grows when a todo is shown from the tab "Todos"; the section scrolls to it. */
+  todoShownAsked = $state(0);
   /**
    * M-04.4, M-17.1, M-17.2 (UC-017): the agents entry of the status bar and
    * the head of the section "Agents" of the settings.
@@ -571,6 +608,13 @@ export class Shell {
           }
           // M-21.3: the find field closes; the search starts anew there.
           this.search.workspaceChanged();
+          // M-18: the todos were of the workspace left.
+          this.todos = null;
+          this.todoShown = null;
+          this.todoProblem = null;
+          this.todoChosen = null;
+          this.todoCalendar = null;
+          this.todoNewProblem = null;
         }
         this.workspace = event.payload;
         // A note of the same name in another workspace is another text.
@@ -615,6 +659,10 @@ export class Shell {
       }),
       events.todoConflicts.listen((event) => {
         this.todoConflicts = event.payload;
+      }),
+      // M-16.3, M-18, M-04.5: the todos.
+      events.todos.listen((event) => {
+        this.#takeTodos(event.payload);
       }),
       // The editor's events are listened to here, once for the window, and
       // handed to the source view shown now: listening per view left events
@@ -900,6 +948,7 @@ export class Shell {
           tab: note,
           what: `the tab ${title}`,
           error: handOverFailed(failure),
+          switching: false,
         };
         return false;
       }
@@ -2036,6 +2085,12 @@ export class Shell {
     this.closeQuestion = null;
     if (question?.tab) {
       await this.closeTab(question.tab, true);
+    } else if (question?.switching) {
+      // F15 review: the other workspace opens without the todos not stored.
+      const result = await this.#serial(() => commands.wsSwitchAnyway());
+      if (result.status === 'error') {
+        this.#fail('ws_switch_anyway', result.error);
+      }
     } else if (question) {
       const result = await commands.appCloseAnyway();
       if (result.status === 'error') {
@@ -2091,6 +2146,225 @@ export class Shell {
     if (Math.abs(Math.round(shown) - stored) > 1) {
       await this.quickSetting('overview_width', String(overviewWidthWithin(shown)));
     }
+  }
+
+  /** UC-020 A7: the todos as they are now; a todo gone is not shown any more. */
+  #takeTodos(todos: TodosView): void {
+    this.todos = todos;
+    const there = (number: number | null) =>
+      number !== null && todos.todos.some((todo) => todo.number === number);
+    if (!there(this.todoShown)) {
+      this.todoShown = null;
+      this.todoProblem = null;
+    }
+    if (this.todoCalendar !== null && this.todoCalendar.todo !== this.todoShown) {
+      this.todoCalendar = null;
+    }
+  }
+
+  /** M-18.1, M-18.6 (UC-020 steps 3–4, A3): creates a todo from the title typed. */
+  async createTodo(): Promise<void> {
+    const answer = await this.#todo('todo_create', () => commands.todoCreate(this.todoNewTitle));
+    if (answer?.kind === 'done') {
+      this.todoNewTitle = '';
+      this.todoNewProblem = null;
+    } else if (answer?.kind === 'problem') {
+      this.todoNewProblem = answer.problem;
+    }
+  }
+
+  /** M-18.1: what is typed for a new todo. */
+  editNewTodo(title: string): void {
+    this.todoNewTitle = title;
+  }
+
+  /** M-18.3: a click on the title of a todo shows its fields, or hides them again. */
+  toggleTodo(number: number): void {
+    this.todoShown = this.todoShown === number ? null : number;
+    this.todoProblem = null;
+    this.todoProblemField = null;
+    this.todoCalendar = null;
+  }
+
+  /** M-18.8 (UC-021 A4): the title of a row shows the todo in the section "Todos". */
+  showTodo(number: number): void {
+    this.todoChosen = number;
+    this.todoShown = number;
+    this.todoProblem = null;
+    this.todoProblemField = null;
+    this.todoCalendar = null;
+    this.todoShownAsked += 1;
+  }
+
+  /** M-18.7: the row chosen with the arrow keys. */
+  chooseTodo(number: number | null): void {
+    this.todoChosen = number;
+  }
+
+  /**
+   * M-18.2 to M-18.4 (UC-020 steps 5–10, A1, A2, A4): a change of the todo
+   * `number`; a title or day that is not taken is said under the fields.
+   */
+  async changeTodo(number: number, change: TodoChange): Promise<TodoAnswer | null> {
+    const answer = await this.#todo('todo_change', () => commands.todoChange(number, change));
+    if (this.todoShown !== number) {
+      return answer;
+    }
+    if (answer?.kind === 'problem') {
+      this.todoProblem = answer.problem;
+      this.todoProblemField = change.kind;
+    } else if (answer?.kind === 'done') {
+      this.todoProblem = null;
+      this.todoProblemField = null;
+    }
+    return answer;
+  }
+
+  /** M-18.7, M-18.8 (UC-021 steps 7–8): marked done or open again in the tab "Todos". */
+  async markTodo(number: number, done: boolean): Promise<TodoAnswer | null> {
+    return this.#todo('todo_mark', () => commands.todoMark(number, done));
+  }
+
+  /** M-18.5 (UC-020 A5): "Delete", without asking. */
+  async deleteTodo(number: number): Promise<boolean> {
+    const answer = await this.#todo('todo_delete', () => commands.todoDelete(number));
+    if (answer?.kind === 'done' && this.todoShown === number) {
+      this.todoShown = null;
+      this.todoProblem = null;
+      this.todoCalendar = null;
+    }
+    return answer?.kind === 'done';
+  }
+
+  /** The done state of todo `number` as shown now. */
+  todoDone(number: number): boolean {
+    return this.todos?.todos.find((todo) => todo.number === number)?.done ?? false;
+  }
+
+  /** M-04.6: "Undo" of the status bar after a todo was deleted or marked. */
+  async undoTodo(): Promise<void> {
+    await this.#todo('todo_undo', () => commands.todoUndo());
+  }
+
+  /** M-18.4, M-18.8 (UC-020 step 8, A6): a linked note opens, or is said to be missing. */
+  async openTodoLink(link: string): Promise<void> {
+    const result = await this.#serial(() => commands.todoOpenLink(link));
+    if (result.status === 'error') {
+      this.#fail('todo_open_link', result.error);
+    }
+  }
+
+  /** M-18.4 (UC-020 A1): the notes "Link a note…" offers for `query`. */
+  async todoCandidates(number: number, query: string): Promise<TodoCandidatesView | null> {
+    const result = await commands.todoCandidates(number, query);
+    if (result.status === 'error') {
+      this.#fail('todo_candidates', result.error);
+      return null;
+    }
+    return result.data;
+  }
+
+  /** M-18.3: "Pick" opens the calendar on the month of the day set, else of today. */
+  async openTodoCalendar(
+    field: 'due' | 'scheduled',
+    todo: number,
+    day: string | null,
+  ): Promise<void> {
+    const month = await this.#month(day, 0);
+    if (month !== null) {
+      this.todoCalendar = { field, todo, month };
+    }
+  }
+
+  /** M-18.3: ◀ and ▶ of the calendar. */
+  async moveTodoCalendar(step: number): Promise<void> {
+    const calendar = this.todoCalendar;
+    if (calendar === null) {
+      return;
+    }
+    const month = await this.#month(calendar.month.month, step);
+    if (month !== null && this.todoCalendar === calendar) {
+      this.todoCalendar = { ...calendar, month };
+    }
+  }
+
+  /** M-18.3: a day chosen in the calendar (`null`: "No day") is stored at once. */
+  async chooseTodoDay(day: string | null): Promise<void> {
+    const calendar = this.todoCalendar;
+    if (calendar === null) {
+      return;
+    }
+    this.todoCalendar = null;
+    const text = day ?? '';
+    this.todoDayPicked = { todo: calendar.todo, field: calendar.field, day: text };
+    await this.changeTodo(
+      calendar.todo,
+      calendar.field === 'due' ? { kind: 'due', day: text } : { kind: 'scheduled', day: text },
+    );
+  }
+
+  /** M-18.3: the calendar closes without a choice. */
+  closeTodoCalendar(): void {
+    this.todoCalendar = null;
+  }
+
+  /**
+   * M-06.5, M-04.5 (UC-021 step 1, A2): "Open list", the tab "Todos" or the
+   * overdue todos of the status bar (with the filter "Open") show the tab.
+   */
+  async showTodoList(filter: TodoFilterName | null = null): Promise<void> {
+    const result = await this.#serial(() => commands.todoListShow(filter));
+    if (result.status === 'error') {
+      this.#fail('todo_list_show', result.error);
+    }
+  }
+
+  /** M-06.5: "×" or a middle click closes the tab "Todos". */
+  async closeTodoList(): Promise<void> {
+    const result = await this.#serial(() => commands.todoListClose());
+    if (result.status === 'error') {
+      this.#fail('todo_list_close', result.error);
+    }
+  }
+
+  /** M-18.6, M-18.8 (UC-021 steps 3–4, A1, BR-007): the sort and the filter of the tab. */
+  async setTodoList(sort: TodoSortName, filter: TodoFilterName): Promise<void> {
+    const result = await commands.todoListSet(sort, filter);
+    if (result.status === 'error') {
+      this.#fail('todo_list_set', result.error);
+    }
+  }
+
+  async #month(day: string | null, step: number): Promise<CalendarView | null> {
+    const result = await commands.todoMonth(day, step);
+    if (result.status === 'error') {
+      this.#fail('todo_month', result.error);
+      return null;
+    }
+    return result.data;
+  }
+
+  /** A todo command; `null` when it failed (said in the status bar). */
+  async #todo(
+    command: string,
+    call: () => Promise<{ status: 'ok'; data: TodoAnswer } | { status: 'error'; error: UiError }>,
+  ): Promise<TodoAnswer | null> {
+    try {
+      const result = await call();
+      if (result.status === 'error') {
+        this.#fail(command, result.error);
+        return null;
+      }
+      return result.data;
+    } catch (error) {
+      this.#fail(command, { kind: 'internal', message: String(error) });
+      return null;
+    }
+  }
+
+  /** M-06.5: the tab "Todos" is the active one; it shows in place of a note. */
+  get todoListShown(): boolean {
+    return this.tabs.todoList.open && this.tabs.todoList.active;
   }
 
   /** Stops listening to the backend. */

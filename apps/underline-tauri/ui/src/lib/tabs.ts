@@ -9,6 +9,9 @@ export function tabId(note: string): string {
   return `tab-${encodeURIComponent(note)}`;
 }
 
+/** M-06.5: the element id of the tab "Todos"; no note tab has it (`tabId`). */
+export const TODO_TAB_ID = 'todo-list-tab';
+
 /** The element id of the active note's area. */
 export const NOTE_PANEL_ID = 'note-panel';
 

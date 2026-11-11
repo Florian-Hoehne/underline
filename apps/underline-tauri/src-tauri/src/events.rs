@@ -8,7 +8,7 @@ use underline_session::{
     AgentMarksView, AgentsView, ChangedView, ChangesView, CloseQuestion, ConflictBarView,
     DeletedNoteView, DiffView, EnrichView, Event, FlushView, GitBarView, HighlightView,
     IndexesView, OverviewItem, SearchView, SettingsView, SettingsWindowView, StatusView,
-    TabPropertiesView, TabsView, TodoConflictView, WorkspaceView,
+    TabPropertiesView, TabsView, TodoConflictView, TodosView, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -121,6 +121,12 @@ pub struct ConflictEvent(pub Option<ConflictBarView>);
 #[tauri_specta(event_name = "todo-conflicts")]
 pub struct TodoConflictsEvent(pub Vec<TodoConflictView>);
 
+/// M-16.3, M-18, M-04.5, M-06.5 (UC-020, UC-021): the todos of the open
+/// workspace: the section "Todos", the tab "Todos" and the overdue todos.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "todos")]
+pub struct TodosEvent(pub TodosView);
+
 /// M-04.4, M-17.1, M-17.2 (UC-017): the agents entry of the status bar and
 /// the head of the section "Agents" of the settings.
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
@@ -157,8 +163,10 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::GitBar(bar) => GitBarEvent(bar).emit(app),
             Event::Conflict(bar) => ConflictEvent(bar).emit(app),
             Event::TodoConflicts(todos) => TodoConflictsEvent(todos).emit(app),
+            Event::Todos(todos) => TodosEvent(*todos).emit(app),
             Event::Agents(agents) => AgentsEvent(agents).emit(app),
             Event::AgentMarks(marks) => AgentMarksEvent(marks).emit(app),
+            Event::CloseQuestion(question) => CloseQuestionEvent(question).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

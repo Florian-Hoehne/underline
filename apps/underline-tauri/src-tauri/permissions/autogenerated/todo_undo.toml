@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-todo-undo"
+description = "Enables the todo_undo command without any pre-configured scope."
+commands.allow = ["todo_undo"]
+
+[[permission]]
+identifier = "deny-todo-undo"
+description = "Denies the todo_undo command without any pre-configured scope."
+commands.deny = ["todo_undo"]

@@ -16,8 +16,11 @@
   "Delete…" and "Export…  Ctrl+Shift+E" ("Cmd+Shift+E" on macOS, inventory
   D-11 fixed); it also opens with Shift+F10 or the context menu key (A-80).
 
-  A later feature adds the tab "Todos (N)" (M-06.5, F15). Until then a tab "Todos" that was active is remembered,
-  but no note tab shows as active.
+  M-06.5 (feature F15, UC-021 BR-006): while the todo list is open, the
+  one tab "Todos (N)" follows the note tabs, N the open todos ("Todos"
+  until they were read). A click shows it in place of the note; "×", a
+  middle click or Delete closes it. Opening a note makes its tab the active
+  one; the tab "Todos" stays open. While it is active, no note tab is.
 
   The active tab scrolls into view. After a tab closed with the keyboard,
   the keyboard goes to the tab now at its place, else to the one left of
@@ -27,23 +30,30 @@
   import { tick } from 'svelte';
   import ContextMenu, { asksForMenu, menuPlace, type MenuEntry } from './ContextMenu.svelte';
   import type { Shell } from './shell.svelte';
-  import { focusTabAt, markDescription, NOTE_PANEL_ID, tabId } from './tabs';
+  import { focusTabAt, markDescription, NOTE_PANEL_ID, TODO_TAB_ID, tabId } from './tabs';
 
   type Props = { shell: Shell };
 
   let { shell }: Props = $props();
 
   /** M-06.5: while the tab "Todos" is active, no note tab is. */
-  const active = $derived(
-    shell.tabs.todoList.open && shell.tabs.todoList.active ? null : shell.tabs.active,
-  );
+  const todosActive = $derived(shell.tabs.todoList.open && shell.tabs.todoList.active);
+  const active = $derived(todosActive ? null : shell.tabs.active);
+  /** The tab "Todos" stands for itself in `reachable`. */
+  const TODOS = '\u0000todos';
   /** The tab in the Tab sequence: the active one, else the first. */
-  const reachable = $derived(active ?? shell.tabs.tabs[0]?.note ?? null);
+  const reachable = $derived(
+    todosActive
+      ? TODOS
+      : (active ?? shell.tabs.tabs[0]?.note ?? (shell.tabs.todoList.open ? TODOS : null)),
+  );
+  /** M-06.5: "Todos (N)". */
+  const todosLabel = $derived(shell.todos === null ? 'Todos' : `Todos (${shell.todos.openCount})`);
 
   let bar = $state<HTMLElement | null>(null);
 
   $effect(() => {
-    if (active === null || !bar) {
+    if ((active === null && !todosActive) || !bar) {
       return;
     }
     // The whole tab, its "×" too.
@@ -111,9 +121,27 @@
     }
   }
 
+  /** M-06.5: closes the tab "Todos"; with `moveFocus` the keyboard moves on. */
+  async function closeTodos(moveFocus: boolean) {
+    const at = tabButtons().findIndex((tab) => tab.id === TODO_TAB_ID);
+    await shell.closeTodoList();
+    if (!moveFocus) {
+      return;
+    }
+    await tick();
+    focusTabAt(at);
+  }
+
+  function onTodosAuxClick(event: MouseEvent) {
+    if (event.button === 1) {
+      event.preventDefault();
+      void closeTodos(false);
+    }
+  }
+
   /** Arrow keys, Home and End move among the tabs; Delete closes one. */
-  function onKey(event: KeyboardEvent, note: string) {
-    if (asksForMenu(event)) {
+  function onKey(event: KeyboardEvent, note: string | null) {
+    if (note !== null && asksForMenu(event)) {
       const tab = shell.tabs.tabs.find((t) => t.note === note);
       openMenu(event, note, tab?.title ?? note);
       return;
@@ -131,7 +159,11 @@
       tabs[(to + tabs.length) % tabs.length]?.focus();
     } else if (event.key === 'Delete') {
       event.preventDefault();
-      void close(note, true);
+      if (note === null) {
+        void closeTodos(true);
+      } else {
+        void close(note, true);
+      }
     }
   }
 </script>
@@ -173,6 +205,37 @@
         >
       </div>
     {/each}
+    {#if shell.tabs.todoList.open}
+      <div class="tab" class:active={todosActive} role="presentation">
+        <button
+          type="button"
+          role="tab"
+          id={TODO_TAB_ID}
+          class="label"
+          aria-selected={todosActive}
+          aria-controls={todosActive ? NOTE_PANEL_ID : undefined}
+          tabindex={reachable === TODOS ? 0 : -1}
+          aria-keyshortcuts="Delete"
+          onclick={() => {
+            if (!todosActive) {
+              void shell.showTodoList();
+            }
+          }}
+          onkeydown={(event) => onKey(event, null)}
+          onmousedown={onMouseDown}
+          onauxclick={onTodosAuxClick}>{todosLabel}</button
+        >
+        <button
+          type="button"
+          class="close"
+          tabindex="-1"
+          aria-label="Close Todos"
+          onmousedown={onMouseDown}
+          onauxclick={onTodosAuxClick}
+          onclick={() => closeTodos(true)}>×</button
+        >
+      </div>
+    {/if}
   </div>
 </div>
 {#if menu}

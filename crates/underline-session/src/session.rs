@@ -19,6 +19,7 @@ mod remote;
 mod search;
 mod sync;
 mod tab;
+mod todos;
 #[cfg(test)]
 mod window;
 mod workspace;
@@ -37,6 +38,7 @@ pub use self::git::{
 pub use self::links::Followed;
 pub use self::remote::CLOSING_SYNC_AT_MOST;
 pub use self::sync::{KeepCopy, Synced};
+pub use self::todos::{calendar_view, TodoDone, TodoJob, TODOS_EVERY};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
 use std::path::{Path, PathBuf};
@@ -164,6 +166,8 @@ pub struct Session {
     /// UC-016 to UC-019: the agents connected, their requests and cursors,
     /// and the section "Agents" of the settings (feature F14).
     agents: agents::Agents,
+    /// UC-020, UC-021: the todos of the open workspace (feature F15).
+    todos: todos::TodoState,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -284,6 +288,7 @@ impl Session {
             saves_paused: std::collections::BTreeSet::new(),
             git_report: None,
             agents: agents::Agents::new(),
+            todos: todos::TodoState::default(),
             views_dirty: false,
             told,
         };
@@ -425,6 +430,8 @@ impl Session {
         // ADR-018, ADR-025: agents' changes of open notes, before the
         // autosave, which stores them.
         self.agents_tick(now);
+        // UC-020 A7, A9: the todos every second (M-18.9).
+        self.todos_tick(now);
         self.autosave(now);
         if let Err(err) = self.state.write_if_due(now) {
             self.status = err.to_string();
@@ -437,6 +444,7 @@ impl Session {
         events.extend(self.search_events());
         events.extend(self.git_events(now));
         events.extend(self.conflict_events());
+        events.extend(self.todos_event());
         events.extend(self.git_bar_event(now));
         events.extend(self.agent_marks_event(now));
         events
@@ -519,6 +527,9 @@ impl Session {
         }
         events.extend(self.sync_events());
         events.extend(self.agents_event());
+        if let Some(question) = self.todos.question.take() {
+            events.push(Event::CloseQuestion(question));
+        }
         // UC-007 A4: the undo is offered while the report of the deletion
         // shows; another report ends it.
         if self.undo_delete.as_ref().is_some_and(|offer| {
@@ -526,7 +537,9 @@ impl Session {
         }) {
             self.undo_delete = None;
         }
-        let offer = self.undo_delete.as_ref().map(|_| StatusOffer::UndoDelete);
+        let undo_note = self.undo_delete.as_ref().map(|_| StatusOffer::UndoDelete);
+        // M-04.6: the undo of a deleted or marked todo, likewise.
+        let offer = self.todo_offer().or(undo_note);
         // M-04.8: "Open" and "Show" of the exports reported, likewise.
         let (exports, error) = self.export_offers();
         let busy = self.exporting();
@@ -580,6 +593,7 @@ impl Session {
             || self.export_status_kept()
             || self.git_report.as_deref() == Some(self.status.as_str())
             || self.agent_report_kept()
+            || self.todo_report_kept()
     }
 
     /// The settings' messages become the status, the last one wins.

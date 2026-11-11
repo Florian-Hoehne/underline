@@ -73,6 +73,18 @@ fn main() {
         "todo_conflict_resolve",
         "agents_set_access",
         "agents_section",
+        "todo_create",
+        "todo_change",
+        "todo_mark",
+        "todo_delete",
+        "todo_undo",
+        "todo_open_link",
+        "todo_candidates",
+        "todo_month",
+        "todo_list_show",
+        "todo_list_close",
+        "todo_list_set",
+        "ws_switch_anyway",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

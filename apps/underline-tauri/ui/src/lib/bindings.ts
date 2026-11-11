@@ -456,6 +456,63 @@ export const commands = {
 	 *  without the session.
 	 */
 	agentsSection: (action: AgentAction | null) => typedError<AgentsSectionView, UiError>(__TAURI_INVOKE("agents_section", { action })),
+	/**
+	 *  M-18.1, M-18.6 (UC-020 steps 3–4, A3): creates a todo titled `title`;
+	 *  a title that is empty or too long is answered as a problem for the
+	 *  field, whose text stays.
+	 */
+	todoCreate: (title: string) => typedError<TodoAnswer, UiError>(__TAURI_INVOKE("todo_create", { title })),
+	/**
+	 *  M-18.2 to M-18.4 (UC-020 steps 5–10, A1, A2, A4, A9): `change` made to
+	 *  the todo `number`; a title or day that is not allowed is answered as a
+	 *  problem for the fields.
+	 */
+	todoChange: (number: number, change: TodoChange) => typedError<TodoAnswer, UiError>(__TAURI_INVOKE("todo_change", { number, change })),
+	/**
+	 *  M-18.7, M-18.8 (UC-021 steps 7–8): the todo `number` marked done or open
+	 *  again in the tab "Todos"; the status bar reports it with "Undo".
+	 */
+	todoMark: (number: number, done: boolean) => typedError<TodoAnswer, UiError>(__TAURI_INVOKE("todo_mark", { number, done })),
+	/**
+	 *  M-18.5 (UC-020 A5): deletes the todo `number` without asking; the status
+	 *  bar reports it with "Undo".
+	 */
+	todoDelete: (number: number) => typedError<TodoAnswer, UiError>(__TAURI_INVOKE("todo_delete", { number })),
+	/**
+	 *  M-04.6 (UC-020 A5 step 2, UC-021 step 8): "Undo" of the status bar after
+	 *  a todo was deleted or marked.
+	 */
+	todoUndo: () => typedError<TodoAnswer, UiError>(__TAURI_INVOKE("todo_undo")),
+	/**
+	 *  M-18.4, M-18.8 (UC-020 step 8, A6, UC-021 step 5, BR-008): opens the
+	 *  linked note `link`, or says it no longer exists.
+	 */
+	todoOpenLink: (link: string) => typedError<null, UiError>(__TAURI_INVOKE("todo_open_link", { link })),
+	/**  M-18.4 (UC-020 A1): the notes "Link a note…" offers for `query`. */
+	todoCandidates: (number: number, query: string) => typedError<TodoCandidatesView, UiError>(__TAURI_INVOKE("todo_candidates", { number, query })),
+	/**
+	 *  M-18.3 (UC-020 BR-003): the month of the calendar "Choose a day": that
+	 *  of `day` (today without one), `step` months on.
+	 */
+	todoMonth: (day: string | null, step: number) => typedError<CalendarView, UiError>(__TAURI_INVOKE("todo_month", { day, step })),
+	/**
+	 *  M-06.5, M-04.5 (UC-021 step 1, A2): shows the tab "Todos"; with
+	 *  `filter`, that filter.
+	 */
+	todoListShow: (filter: TodoFilterName | null) => typedError<null, UiError>(__TAURI_INVOKE("todo_list_show", { filter })),
+	/**  M-06.5: closes the tab "Todos". */
+	todoListClose: () => typedError<null, UiError>(__TAURI_INVOKE("todo_list_close")),
+	/**
+	 *  M-18.6, M-18.8 (UC-021 steps 3–4, A1, BR-005, BR-007): the sort and the
+	 *  filter of the tab "Todos", kept for the workspace.
+	 */
+	todoListSet: (sort: TodoSortName, filter: TodoFilterName) => typedError<null, UiError>(__TAURI_INVOKE("todo_list_set", { sort, filter })),
+	/**
+	 *  Review F15: "Close anyway" of "Changes not stored" before another
+	 *  workspace opens: the todos that cannot be stored are given up and that
+	 *  workspace opens.
+	 */
+	wsSwitchAnyway: () => typedError<null, UiError>(__TAURI_INVOKE("ws_switch_anyway")),
 };
 
 /** Events */
@@ -481,6 +538,7 @@ export const events = {
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
 	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
 	todoConflicts: makeEvent<TodoConflictsEvent, TodoConflictsEvent>("todo-conflicts"),
+	todos: makeEvent<TodosEvent, TodosEvent>("todos"),
 	workspace: makeEvent<WorkspaceEvent, WorkspaceEvent>("workspace"),
 };
 
@@ -835,6 +893,31 @@ export type BranchView = {
 	detached: boolean,
 };
 
+/**  One day of the calendar "Choose a day" (M-18.3). */
+export type CalendarDayView = {
+	/**  The day, `YYYY-MM-DD`, sent back when it is chosen. */
+	day: string,
+	/**  Its number in the month. */
+	label: number,
+	/**  It is today, shown in bold. */
+	today: boolean,
+};
+
+/**
+ *  M-18.3, UC-020 BR-003: a month of the calendar "Choose a day", Monday
+ *  first.
+ */
+export type CalendarView = {
+	/**  The month and year, such as "November 2026". */
+	title: string,
+	/**  The first day of the month, `YYYY-MM-DD`, sent back with ◀ and ▶. */
+	month: string,
+	/**  How many empty places come before the first day (0 for Monday). */
+	lead: number,
+	/**  The days of the month. */
+	days: CalendarDayView[],
+};
+
 /**  How the text of a table column is aligned (M-09.5). */
 export type CellAlignName = 
 /**  Left. */
@@ -1022,6 +1105,12 @@ export type CloseQuestion = {
 	what: string,
 	/**  Why, for "Changes could not be stored: {error}". */
 	error: string,
+	/**
+	 *  Review F15: "Close anyway" opens the other workspace without the
+	 *  todos that cannot be stored (`ws_switch_anyway`); `what` is then
+	 *  "the workspace {name}".
+	 */
+	switching: boolean,
 };
 
 /**
@@ -2897,7 +2986,17 @@ export type StatusOffer =
  *  UC-007 A4, M-14.3: "Undo" right after deleting a note
  *  (`note_undo_delete`).
  */
-"undoDelete";
+"undoDelete" | 
+/**
+ *  UC-020 A5, M-04.6: "Undo" before the report "Deleted todo {name}"
+ *  (`todo_undo`).
+ */
+"undoTodoDelete" | 
+/**
+ *  UC-021 step 8, M-04.6: "Undo" before the report "Marked todo {name}
+ *  done/open" (`todo_undo`).
+ */
+"undoTodoMark";
 
 /**  The status message of the status bar (M-04.7). */
 export type StatusView = {
@@ -3114,6 +3213,84 @@ export type TextChange = {
 	insert: string,
 };
 
+/**
+ *  M-18.4: the note of the active tab, which a todo can link
+ *  ("Link {title}").
+ */
+export type TodoActiveNoteView = {
+	/**  The note. */
+	note: string,
+	/**  "Link {title}". */
+	linkLabel: string,
+};
+
+/**  What a todo command answers. */
+export type TodoAnswer = 
+/**  Done; a new todo's field is emptied. */
+{ kind: "done" } | 
+/**
+ *  UC-020 A3, M-18.3: why it was not done, shown under the field, whose
+ *  text stays.
+ */
+{ kind: "problem"; 
+/**  egui's text, such as "a todo needs a title". */
+problem: string } | 
+/**  It failed; the status bar says why, the field keeps its text. */
+{ kind: "failed" };
+
+/**  M-18.4, UC-020 A1: a note "Link a note…" offers. */
+export type TodoCandidateView = {
+	/**  The note, sent back to link it. */
+	note: string,
+	/**  The note as the overview's place names it (`Projects/Road map`). */
+	label: string,
+};
+
+/**  M-18.4, UC-020 A1: what "Link a note…" offers for the text typed. */
+export type TodoCandidatesView = {
+	/**  Up to 8 notes whose title holds the text, not linked yet. */
+	notes: TodoCandidateView[],
+	/**  "No note matches" when none does and something was typed. */
+	none: string | null,
+};
+
+/**
+ *  M-18.3, M-18.4, M-18.2 (UC-020 steps 5 to 10, A1, A2, A4): a change of
+ *  one todo, made to the todo as it is shown.
+ */
+export type TodoChange = 
+/**  The title typed (A3: 1 to 200 characters). */
+{ kind: "title"; 
+/**  What was typed. */
+title: string } | 
+/**
+ *  The due day typed (`YYYY-MM-DD`), or chosen in the calendar; empty
+ *  for none.
+ */
+{ kind: "due"; 
+/**  What was typed. */
+day: string } | 
+/**  The scheduled day, likewise. */
+{ kind: "scheduled"; 
+/**  What was typed. */
+day: string } | 
+/**  The urgency chosen. */
+{ kind: "urgency"; 
+/**  The urgency. */
+urgency: UrgencyName } | 
+/**  The checkbox of the section: done or open again (steps 9, 10, A4). */
+{ kind: "done"; 
+/**  Done. */
+done: boolean } | 
+/**  Links the note `note` (step 7, A1). */
+{ kind: "link"; 
+/**  The note, as listed. */
+note: string } | 
+/**  Removes the link `link` (A2). */
+{ kind: "unlink"; 
+/**  The link, as stored. */
+link: string };
+
 /**  M-19.10, UC-020 A10: a row of a todo in conflict. */
 export type TodoConflictRowView = {
 	/**  "Title", "Due", "Scheduled", "Urgency", "Status" or "Notes". */
@@ -3139,12 +3316,149 @@ export type TodoConflictView = {
 /**  M-19.10, UC-020 A10: the todos in conflict after a sync. */
 export type TodoConflictsEvent = TodoConflictView[];
 
+/**  UC-021 BR-003: which todos the tab "Todos" shows. */
+export type TodoFilterName = 
+/**  "Open", the default. */
+"open" | 
+/**  "Done". */
+"done" | 
+/**  "All". */
+"all";
+
+/**  M-18.4, UC-020 step 8, A6: a note a todo links to. */
+export type TodoLinkView = {
+	/**
+	 *  The link as stored (`Projects/Plan`), shown at the pointer and sent
+	 *  back to open or remove it.
+	 */
+	link: string,
+	/**  The note's title (`Plan`). */
+	title: string,
+	/**  The note is in the workspace; else the todo shows it "(missing)". */
+	exists: boolean,
+};
+
+/**  UC-021 BR-001, BR-002: the order of the tab "Todos". */
+export type TodoSortName = 
+/**  "Due date". */
+"due" | 
+/**  "Urgency". */
+"urgency";
+
 /**  The tab "Todos" (M-06.5, UC-021 BR-005), as it is remembered. */
 export type TodoTabView = {
 	/**  The tab is open. */
 	open: boolean,
 	/**  The tab is the active one; no note tab is then. */
 	active: boolean,
+};
+
+/**
+ *  M-18.6, M-18.8 (UC-021): the tab "Todos": its sort, its filter and its
+ *  rows in their order.
+ */
+export type TodoTableView = {
+	/**  The sort chosen (BR-001, BR-002), kept for the workspace. */
+	sort: TodoSortName,
+	/**  The filter chosen (BR-003), kept for the workspace. */
+	filter: TodoFilterName,
+	/**  The numbers of the rows, in the order of the sort. */
+	rows: number[],
+	/**
+	 *  A3: "No open todos. Type a title above to create one.", "No done
+	 *  todos." or "No todos. Type a title above to create one." when no
+	 *  todo is shown.
+	 */
+	empty: string | null,
+	/**  The heading of the column "Done": empty under "Open". */
+	doneHeading: string,
+};
+
+/**  M-18.2, M-18.3, M-18.8: one todo, as the section and the tab show it. */
+export type TodoView = {
+	/**  The number (`#12`), sent back with every change. */
+	number: number,
+	/**  The title. */
+	title: string,
+	/**  How it is named in messages and for screen readers: `#12 Title`. */
+	name: string,
+	/**  The urgency, which colours the title. */
+	urgency: UrgencyName,
+	/**  "Low", "Normal", "High" or "Critical". */
+	urgencyLabel: string,
+	/**  Done, shown struck through. */
+	done: boolean,
+	/**  The due day, `YYYY-MM-DD`. */
+	due: string | null,
+	/**  The scheduled day, `YYYY-MM-DD`. */
+	scheduled: string | null,
+	/**
+	 *  M-18.8, UC-021 A2: "{due}  1 day overdue" or "{due}  N days
+	 *  overdue", in the error colour; `None` when it is not overdue.
+	 */
+	overdue: string | null,
+	/**  M-18.3, UC-020 BR-003: "The scheduled day is after the due day." */
+	scheduledAfterDue: boolean,
+	/**  The notes it links to, in order. */
+	links: TodoLinkView[],
+	/**  M-18.8, UC-021 BR-009: "+N" after the first two notes of a row. */
+	moreLinks: string | null,
+	/**  UC-021 BR-009: "Plan, Ideas +2", shown at the pointer on "+N". */
+	linksSummary: string,
+	/**
+	 *  It links to the note of the active tab; "Link {title}" is not
+	 *  offered then.
+	 */
+	linksActive: boolean,
+	/**  M-18.5: "created YYYY-MM-DD HH:MM" or "done YYYY-MM-DD HH:MM". */
+	stamp: string,
+	/**  M-18.8: the column "Done": "YYYY-MM-DD HH:MM" while done. */
+	doneAt: string | null,
+	/**
+	 *  M-18.2, UC-020 A9: why the last change could not be stored; the
+	 *  todo shows "not stored" with it at the pointer.
+	 */
+	unstored: string | null,
+};
+
+/**
+ *  M-16.3, M-18, M-04.5, M-06.5 (UC-020, UC-021): the todos of the open
+ *  workspace: the section "Todos", the tab "Todos" and the overdue todos.
+ */
+export type TodosEvent = TodosView;
+
+/**
+ *  M-16.3, M-18, M-04.5 (UC-020, UC-021): the todos of the open workspace,
+ *  as read last, with the changes not stored yet.
+ */
+export type TodosView = {
+	/**  M-18.1: "Todos (N)", N the open todos. */
+	heading: string,
+	/**  M-06.5: how many todos are open, for the tab "Todos (N)". */
+	openCount: number,
+	/**  Every todo, by number. */
+	todos: TodoView[],
+	/**
+	 *  M-18.1: the open todos in the section's order: by due day, those
+	 *  without one last, then by number.
+	 */
+	open: number[],
+	/**  M-18.1: the done todos, by number ("Done (N)"). */
+	done: number[],
+	/**  M-18.1: one line per todo file that cannot be read. */
+	unreadable: string[],
+	/**
+	 *  M-04.5, UC-021 A2: "1 todo overdue" or "N todos overdue"; `None`
+	 *  while none is.
+	 */
+	overdue: string | null,
+	/**
+	 *  M-18.4: the note of the active note tab; `None` while none is, or
+	 *  while the tab "Todos" is the active one.
+	 */
+	activeNote: TodoActiveNoteView | null,
+	/**  M-18.6, M-18.8: the tab "Todos". */
+	table: TodoTableView,
 };
 
 /**  M-10.2, FR-023: a function of the formatting toolbar. */
@@ -3222,6 +3536,17 @@ export type UiErrorKind =
 "invalid" | 
 /**  A failure the user cannot act on. */
 "internal";
+
+/**  UC-020 BR-001: how pressing a todo is. */
+export type UrgencyName = 
+/**  Shown in the weak colour. */
+"low" | 
+/**  Shown in the text colour. */
+"normal" | 
+/**  Shown in egui's orange. */
+"high" | 
+/**  Shown in egui's red. */
+"critical";
 
 /**
  *  A-01: one change the window's Vim keys made, like [`TextChange`], and

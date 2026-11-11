@@ -1,7 +1,8 @@
 // M-01.6, FR-022: the window in the colours of the theme in effect. The
 // backend sends the theme's palette (`PaletteView`); this module turns it
 // into CSS custom properties on <html>. Every colour comes from the palette,
-// none is computed here.
+// none is computed here, except egui's fixed colours of the todos
+// (`TODO_COLORS`), which are in no palette.
 
 import type { PaletteView } from './bindings';
 
@@ -94,6 +95,20 @@ function luminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/**
+ * M-18.2, M-18.8, M-04.5 (feature F15): egui's fixed colours of the todos,
+ * which no palette holds: the urgency High (egui's orange 220, 140, 20),
+ * Critical (210, 50, 50) and the overdue todos (`error_fg_color`). As the
+ * conflict colour of F13, each is darker on light themes and lighter on
+ * dark ones, so text in it reaches 4.5:1 on the bars and in fields of every
+ * theme (NFR-010, A-178). They are set as `--ui-urgency-high`,
+ * `--ui-urgency-critical` and `--ui-overdue`.
+ */
+export const TODO_COLORS = {
+  light: { urgencyHigh: '#8f4b00', urgencyCritical: '#a81c1c', overdue: '#a80000' },
+  dark: { urgencyHigh: '#f5b456', urgencyCritical: '#ff9c9c', overdue: '#ff9c9c' },
+} as const;
+
 /** `codeBackground` → `code-background`. */
 function kebab(name: string): string {
   return name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
@@ -120,6 +135,9 @@ export function applyPalette(
     } else if (Array.isArray(value)) {
       value.forEach((colour, at) => style.setProperty(`--palette-${kebab(field)}-${at}`, colour));
     }
+  }
+  for (const [role, colour] of Object.entries(TODO_COLORS[palette.dark ? 'dark' : 'light'])) {
+    style.setProperty(`--ui-${kebab(role)}`, colour);
   }
   root.dataset.scheme = palette.dark ? 'dark' : 'light';
   root.dataset.theme = palette.theme;

@@ -244,6 +244,7 @@ describe('ADR-025 the window side of the sync', () => {
         tab: null,
         what: 'Underline',
         error: 'Underline could not hand your latest edits over to be stored: the backend is busy',
+        switching: false,
       },
     ]);
   }, 10_000);

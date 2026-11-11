@@ -8431,6 +8431,7 @@ dependencies = [
  "ropey",
  "serde",
  "serde_json",
+ "serde_norway",
  "specta",
  "thiserror 1.0.69",
  "underline-core",

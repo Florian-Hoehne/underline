@@ -26,11 +26,13 @@
   M-16.4 (feature F12): in a git workspace the commit box, "Changes (N)"
   and "Diff" (GitChanges.svelte) follow the properties, before the
   outline, as in egui. Without an active note tab the panel shows only
-  them (egui shows the changes without an open note too).
+  them and the todos (egui shows them without an open note too).
 
-  A later feature adds the todos (M-16.3, F15) between the properties and
-  the git changes, as in egui. Until then, the todos in conflict after a
-  sync stand there alone (M-19.10, feature F13, A-146).
+  M-16.3 (feature F15): the section "Todos" (TodoSection.svelte) between
+  the properties and the git changes, as in egui, with the todos in
+  conflict after a sync at its top (M-19.10, Q-100). It shows with a note
+  tab active, without one, and beside the tab "Todos" (A-176); "Link
+  {title}" links only the note of an active note tab.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -38,7 +40,7 @@
   import { activeSourceView } from './editor/active';
   import { activeFacade } from './facade/active';
   import GitChanges from './GitChanges.svelte';
-  import TodoConflicts from './TodoConflicts.svelte';
+  import TodoSection from './TodoSection.svelte';
   import { toolPanelWidthWithin, type Shell } from './shell.svelte';
 
   type Props = { shell: Shell };
@@ -152,9 +154,7 @@
         {/if}
       </details>
     {/if}
-    {#if shell.todoConflicts.length > 0}
-      <TodoConflicts {shell} conflicts={shell.todoConflicts} />
-    {/if}
+    <TodoSection {shell} />
     <GitChanges {shell} onShow={show} />
     {#if lists && noteShown}
       {#each sections as section (section.title)}

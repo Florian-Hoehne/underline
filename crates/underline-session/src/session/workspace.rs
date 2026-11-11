@@ -38,6 +38,25 @@ use crate::workspace_view::{
     StartOpened, TabView, TabsView, TodoTabView, WorkspaceSnapshot, WorkspaceView,
 };
 
+/// Review F15: a workspace that opens once the user gave up the todos of
+/// the open one that cannot be stored.
+pub(in crate::session) enum SwitchWaiting {
+    /// UC-002: one chosen in the Open dialog.
+    Open(Workspace),
+    /// UC-001: one just created.
+    Create(Workspace),
+}
+
+impl std::fmt::Debug for SwitchWaiting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (kind, workspace) = match self {
+            Self::Open(w) => ("Open", w),
+            Self::Create(w) => ("Create", w),
+        };
+        f.debug_tuple(kind).field(&workspace.root()).finish()
+    }
+}
+
 /// The status when the system delivers no change events (ADR-011).
 const POLLING_STATUS: &str = "Changes from outside may show up later in the note overview; this system delivers no change events";
 
@@ -52,7 +71,7 @@ pub(super) struct OpenWorkspace {
     /// Grows with every change of `overview`, so only a change is sent.
     pub(super) overview_generation: u64,
     /// UC-021 BR-005: the tab "Todos", its sort and filter.
-    todo_list: TodoListState,
+    pub(super) todo_list: TodoListState,
     /// M-05.6, UC-007 A5: the deleted notes, most recently deleted first.
     pub(super) deleted: Vec<DeletedNote>,
     /// Grows with every change of `deleted`, so only a change is sent.
@@ -490,9 +509,58 @@ impl Session {
             );
             return OpenAnswer::Done;
         }
+        // Review F15: todos that cannot be stored are asked about.
+        if !self.todos_settled(SwitchWaiting::Open(workspace)) {
+            return OpenAnswer::Done;
+        }
+        let Some(SwitchWaiting::Open(workspace)) = self.todos.switch_waiting.take() else {
+            return OpenAnswer::Done;
+        };
+        self.open_switched(workspace);
+        OpenAnswer::Done
+    }
+
+    /// Review F15: the last attempt to store the todos before `waiting`
+    /// opens, which waits for it; `false` when some cannot be stored, and
+    /// "Changes not stored" asks whether to open it without them.
+    fn todos_settled(&mut self, waiting: SwitchWaiting) -> bool {
+        self.todos.switch_waiting = Some(waiting);
+        let Err(failures) = self.todos_settle() else {
+            return true;
+        };
+        let name = self
+            .workspace_root()
+            .map(workspace_name)
+            .unwrap_or_default();
+        self.todos.question = Some(crate::CloseQuestion {
+            tab: None,
+            what: format!("the workspace {name}"),
+            error: failures.join("; "),
+            switching: true,
+        });
+        false
+    }
+
+    /// Review F15: "Close anyway" of "Changes not stored" before another
+    /// workspace opens: the todos that cannot be stored are given up and
+    /// the workspace waiting opens. Nothing happens without one waiting.
+    pub fn switch_anyway(&mut self) {
+        let Some(waiting) = self.todos.switch_waiting.take() else {
+            return;
+        };
+        self.give_up_todos();
+        match waiting {
+            SwitchWaiting::Open(workspace) => self.open_switched(workspace),
+            SwitchWaiting::Create(workspace) => self.create_switched(workspace),
+        }
+    }
+
+    /// UC-002 steps 5–9: `workspace` becomes the open one, and the status
+    /// says so.
+    fn open_switched(&mut self, workspace: Workspace) {
         self.switch_to(workspace);
         let Some(open) = &self.open else {
-            return OpenAnswer::Done;
+            return;
         };
         let workspace = &open.workspace;
         let mut messages = vec![format!("Opened {}", workspace.root().display())];
@@ -509,7 +577,16 @@ impl Session {
         // In the egui app the settings' messages reach the status one frame
         // later, so they win.
         self.take_settings_messages();
-        OpenAnswer::Done
+    }
+
+    /// UC-001 step 6: the created `workspace` opens with its Home note.
+    fn create_switched(&mut self, workspace: Workspace) {
+        let root = display(workspace.root());
+        self.switch_to(workspace);
+        self.open_note(&NoteId::from_title(HOME_TITLE));
+        self.refresh_overview();
+        self.status = format!("Workspace created in {root}");
+        self.take_settings_messages();
     }
 
     /// M-21.3, UC-001 step 6, UC-002 steps 5–8: makes `workspace` the open
@@ -547,6 +624,13 @@ impl Session {
         // UC-014, UC-015: the syncs and the conflicts of a git workspace.
         self.track_remote(&root);
         self.track_conflicts(&root);
+        // UC-020, UC-021 (review F15): a last attempt to store the todos of
+        // the workspace left (`todos_settled` asked before), then the todos
+        // of this one.
+        if let Err(failures) = self.todos_settle() {
+            eprintln!("UC-020 A9: {}", failures.join("; "));
+        }
+        self.track_todos(&root);
         self.branches_listed = None;
         self.saves_paused.clear();
         self.settings.open_workspace(&root, &self.git);
@@ -681,12 +765,14 @@ impl Session {
     pub fn finish_create(&mut self, prepared: PreparedCreate) -> CreateAnswer {
         match prepared.created {
             Ok(workspace) => {
-                let root = display(workspace.root());
-                self.switch_to(workspace);
-                self.open_note(&NoteId::from_title(HOME_TITLE));
-                self.refresh_overview();
-                self.status = format!("Workspace created in {root}");
-                self.take_settings_messages();
+                // Review F15: todos that cannot be stored are asked about;
+                // the workspace is created, and opens after "Close anyway".
+                if self.todos_settled(SwitchWaiting::Create(workspace)) {
+                    if let Some(SwitchWaiting::Create(workspace)) = self.todos.switch_waiting.take()
+                    {
+                        self.create_switched(workspace);
+                    }
+                }
                 CreateAnswer::Done
             }
             // A1 after the check of step 5: the directory filled up meanwhile.

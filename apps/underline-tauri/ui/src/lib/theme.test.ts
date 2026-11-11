@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PALETTES } from './mock-backend';
-import { applyPalette, CONTRAST_PAIRS, contrast, shellColors } from './theme';
+import { applyPalette, CONTRAST_PAIRS, contrast, shellColors, TODO_COLORS } from './theme';
 
 describe('M-01.6 theme palettes', () => {
   it('has all 11 themes', () => {
@@ -55,6 +55,46 @@ describe('M-01.6 theme palettes', () => {
       expect(root.style.getPropertyValue('--palette-mode-colors-3')).toBe(palette.modeColors[3]);
       expect(root.dataset.scheme).toBe(palette.dark ? 'dark' : 'light');
       expect(root.dataset.theme).toBe(palette.theme);
+    },
+  );
+
+  // F15 (M-18.2, M-18.8, M-04.5): egui's fixed todo colours as text on the
+  // bars, in fields and on the chosen cell's neighbours, in every theme.
+  it.each(PALETTES.map((p) => [p.theme, p] as const))(
+    'NFR-010 %s reaches 4.5:1 with the todo colours',
+    (_, palette) => {
+      const colours = TODO_COLORS[palette.dark ? 'dark' : 'light'];
+      const failures = Object.entries(colours).flatMap(([role, colour]) =>
+        (['panel', 'background'] as const)
+          .filter((bg) => contrast(colour, palette[bg]) < 4.5)
+          .map((bg) => `${role} on ${bg}: ${contrast(colour, palette[bg]).toFixed(2)}`),
+      );
+
+      expect(failures).toEqual([]);
+      const root = document.createElement('html');
+      applyPalette(palette, root);
+      expect(root.style.getPropertyValue('--ui-urgency-critical')).toBe(colours.urgencyCritical);
+    },
+  );
+
+  // Review F15: the weak texts of the todos (`--todo-weak`, 35 % hint, 65 %
+  // text in sRGB) reach 4.5:1 on the bars and in fields of every theme.
+  it.each(PALETTES.map((p) => [p.theme, p] as const))(
+    'NFR-010 %s reaches 4.5:1 with the weak texts of the todos',
+    (_, palette) => {
+      const channel = (hex: string, at: number) => parseInt(hex.slice(at, at + 2), 16);
+      const mixed =
+        '#' +
+        [1, 3, 5]
+          .map((at) =>
+            Math.round(channel(palette.weak, at) * 0.35 + channel(palette.foreground, at) * 0.65)
+              .toString(16)
+              .padStart(2, '0'),
+          )
+          .join('');
+
+      expect(contrast(mixed, palette.panel)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(mixed, palette.background)).toBeGreaterThanOrEqual(4.5);
     },
   );
 });

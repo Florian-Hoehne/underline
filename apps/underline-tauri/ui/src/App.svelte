@@ -36,6 +36,9 @@
   workspace (as egui); the menu stands at the bottom left. "Abort the sync"
   (M-19.10) floats above the central area like the other dialogs.
 
+  M-18.3 (feature F15): the calendar "Choose a day" floats above the
+  central area like the other dialogs.
+
   M-20.1 (UC-010 BR-006): Ctrl+, (Cmd+, on macOS) opens the settings window
   or closes it, wherever the keyboard is, before the editors see the key.
   The window floats above the central area, not modal, like egui's.
@@ -64,6 +67,7 @@
   import OpenWebDialog from './lib/OpenWebDialog.svelte';
   import Overview from './lib/Overview.svelte';
   import StatusBar from './lib/StatusBar.svelte';
+  import TodoCalendar from './lib/TodoCalendar.svelte';
   import TopBar from './lib/TopBar.svelte';
   import type { Shell } from './lib/shell.svelte';
 
@@ -147,8 +151,10 @@
     }
     event.preventDefault();
     event.stopPropagation();
-    // egui exports the note of the active tab; with none, the key does nothing.
-    if (shell.tabs.active !== null) {
+    // egui exports the note of the active tab; with none, the key does
+    // nothing. Q-88 (F15, A-177): nor while the tab "Todos" is the active
+    // one, as F2, since no note shows.
+    if (shell.tabs.active !== null && !shell.todoListShown) {
       void shell.startExport(shell.tabs.active);
     }
   }
@@ -275,6 +281,9 @@
         lines={shell.approximated.lines}
       />
     {/if}
+    {#if shell.todoCalendar !== null}
+      <TodoCalendar {shell} calendar={shell.todoCalendar} />
+    {/if}
     {#if shell.settingsOpen}
       <SettingsWindow {shell} />
     {/if}
@@ -304,6 +313,9 @@
     onAgentLevel={(level) => void shell.setAgentAccess(level)}
     onAgentSettings={() => void shell.openSettings('workspace')}
     onOpenAgentNote={(note) => void shell.openAgentNote(note)}
+    overdue={shell.workspace === null ? null : (shell.todos?.overdue ?? null)}
+    onOverdue={() => void shell.showTodoList('open')}
+    onUndoTodo={() => void shell.undoTodo()}
   />
 </div>
 

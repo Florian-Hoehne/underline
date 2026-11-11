@@ -46,6 +46,10 @@ pub struct CloseQuestion {
     pub what: String,
     /// Why, for "Changes could not be stored: {error}".
     pub error: String,
+    /// Review F15: "Close anyway" opens the other workspace without the
+    /// todos that cannot be stored (`ws_switch_anyway`); `what` is then
+    /// "the workspace {name}".
+    pub switching: bool,
 }
 
 /// M-10.5, UC-005 A9: files dragged over the window.

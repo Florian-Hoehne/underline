@@ -138,6 +138,7 @@ impl Session {
                 tab: Some(note.as_str().to_owned()),
                 what: format!("the tab {}", note.title()),
                 error,
+                switching: false,
             });
         }
         if let Some(open) = &mut self.open {
@@ -152,11 +153,19 @@ impl Session {
     /// (A14 step 3). With a remote, a last sync follows
     /// ([`Session::closing_sync`], UC-014 A9).
     pub fn request_close(&mut self) -> Option<CloseQuestion> {
-        let failures = self.flush_all().err()?;
+        let mut failures = self.flush_all().err().unwrap_or_default();
+        // Review F15: the todos not stored are asked about too.
+        if let Err(todos) = self.todos_settle() {
+            failures.extend(todos);
+        }
+        if failures.is_empty() {
+            return None;
+        }
         Some(CloseQuestion {
             tab: None,
             what: "Underline".to_owned(),
             error: failures.join("; "),
+            switching: false,
         })
     }
 
@@ -169,6 +178,9 @@ impl Session {
     /// What could not be stored or written, one text each, for the log.
     pub fn end(&mut self) -> Result<(), Vec<String>> {
         let mut problems = self.flush_all().err().unwrap_or_default();
+        if let Err(todos) = self.todos_settle() {
+            problems.extend(todos);
+        }
         if let Err(err) = self.write_state_now() {
             problems.push(err.to_string());
         }

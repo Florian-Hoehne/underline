@@ -36,6 +36,14 @@
   - M-04.9: after an agent created or changed notes that are not open, up
     to three buttons "Open" or "Open {title}", the newest first, right of
     the text, as long as that report shows (UC-019 BR-010).
+
+  Feature F15 (UC-020, UC-021):
+  - M-04.5: after the agents entry, "1 todo overdue" or "N todos overdue"
+    in red (hover "Open the todo list"), which shows the tab "Todos" with
+    the filter "Open" (UC-021 A2, BR-004).
+  - M-04.6: "Undo" before the text while it reports a deleted todo
+    ("Deleted todo {name}", UC-020 A5) or a todo marked in the list
+    ("Marked todo {name} done/open", UC-021 step 8), as in egui.
 -->
 <script lang="ts">
   import type {
@@ -87,6 +95,12 @@
     onAgentSettings?: () => void;
     /** M-04.9: "Open" of a note an agent changed. */
     onOpenAgentNote?: (note: string) => void;
+    /** M-04.5: "N todos overdue"; `null` while none is. */
+    overdue?: string | null;
+    /** M-04.5: the overdue todos show the tab "Todos". */
+    onOverdue?: () => void;
+    /** M-04.6: "Undo" of a deleted or marked todo. */
+    onUndoTodo?: () => void;
   };
 
   let {
@@ -109,7 +123,13 @@
     onAgentLevel,
     onAgentSettings,
     onOpenAgentNote,
+    overdue = null,
+    onOverdue,
+    onUndoTodo,
   }: Props = $props();
+
+  /** M-04.6: the undo of a todo stands before the text, as in egui. */
+  const undoTodo = $derived(offer === 'undoTodoDelete' || offer === 'undoTodoMark');
 
   /** M-17.1: where the agents menu opens, while it is open. */
   let agentsMenu = $state<{ x: number; y: number } | null>(null);
@@ -179,7 +199,7 @@
   const shows = $derived(exports.some((e) => e.show));
   /** For screen readers, after the text (new, as "Undo available", A-83). */
   const offered = $derived(
-    offer === 'undoDelete'
+    offer !== null
       ? '. Undo available'
       : opens && shows
         ? '. Open and Show available'
@@ -258,6 +278,15 @@
         onClose={closeAgentsMenu}
       />
     {/if}
+  {/if}
+  {#if overdue}
+    <button type="button" class="overdue" title="Open the todo list" onclick={() => onOverdue?.()}
+      >{overdue}</button
+    >
+  {/if}
+  {#if undoTodo}
+    <!-- egui: before the report, so a long report does not push it away. -->
+    <button type="button" class="ui-button undo" onclick={() => onUndoTodo?.()}>Undo</button>
   {/if}
   {#if error}
     <span class="sign" aria-hidden="true">⚠</span>
@@ -384,6 +413,25 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* M-04.5: egui's small button in the error colour; without the button
+     fill, which Nord's red would not stand out from (A-178), and with an
+     outline in the same colour. */
+  .overdue {
+    flex: none;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+    font: inherit;
+    color: var(--ui-overdue);
+    cursor: pointer;
+    background: transparent;
+    border: 1px solid var(--ui-overdue);
+    border-radius: var(--radius);
+  }
+
+  .overdue:hover {
+    background: color-mix(in srgb, var(--ui-overdue) 15%, transparent);
   }
 
   /* UC-015 BR-005: egui's conflict orange, as the letter C (Q-91). */

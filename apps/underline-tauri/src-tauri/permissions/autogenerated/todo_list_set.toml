@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-todo-list-set"
+description = "Enables the todo_list_set command without any pre-configured scope."
+commands.allow = ["todo_list_set"]
+
+[[permission]]
+identifier = "deny-todo-list-set"
+description = "Denies the todo_list_set command without any pre-configured scope."
+commands.deny = ["todo_list_set"]

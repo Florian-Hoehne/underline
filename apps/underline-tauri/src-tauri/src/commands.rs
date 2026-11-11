@@ -25,6 +25,10 @@ use underline_session::{
     branch_name_view, CommitAnswer, CommitJob, DiscardQuestion, CLOSING_SYNC_AT_MOST,
 };
 use underline_session::{
+    calendar_view, CalendarView, TodoAnswer, TodoCandidatesView, TodoChange, TodoFilterName,
+    TodoJob, TodoSortName,
+};
+use underline_session::{
     clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, CreateNoteAnswer, DeleteAnswer,
     DeleteQuestion, DragName, EditingViewName, EmbedAnswer, FormatName, Insertion, LinkAnswer,
     MirrorView, NewNoteRequest, NewNoteStart, NewWorkspaceRequest, OpenAnswer, RenameAnswer,
@@ -1617,6 +1621,196 @@ pub async fn agents_section(
     .await
 }
 
+/// Runs a todo job without the session and lets the session take in what it
+/// did (UC-020: no todo file is read or written while the session is held).
+async fn run_todo(
+    session: &State<'_, SharedSession>,
+    waker: &State<'_, Waker>,
+    job: Option<TodoJob>,
+) -> Result<TodoAnswer, UiError> {
+    let Some(job) = job else {
+        return Ok(TodoAnswer::Done);
+    };
+    let done = blocking(move || job.run()).await?;
+    on_session(session, waker, move |session| session.todo_finish(done)).await
+}
+
+/// M-18.1, M-18.6 (UC-020 steps 3–4, A3): creates a todo titled `title`;
+/// a title that is empty or too long is answered as a problem for the
+/// field, whose text stays.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_create(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    title: String,
+) -> Result<TodoAnswer, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.todo_create_start(&title)
+    })
+    .await?;
+    match job {
+        Ok(job) => run_todo(&session, &waker, Some(job)).await,
+        Err(answer) => Ok(answer),
+    }
+}
+
+/// M-18.2 to M-18.4 (UC-020 steps 5–10, A1, A2, A4, A9): `change` made to
+/// the todo `number`; a title or day that is not allowed is answered as a
+/// problem for the fields.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_change(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    number: u32,
+    change: TodoChange,
+) -> Result<TodoAnswer, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.todo_change_start(number, change)
+    })
+    .await?;
+    match job {
+        Ok(job) => run_todo(&session, &waker, Some(job)).await,
+        Err(answer) => Ok(answer),
+    }
+}
+
+/// M-18.7, M-18.8 (UC-021 steps 7–8): the todo `number` marked done or open
+/// again in the tab "Todos"; the status bar reports it with "Undo".
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_mark(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    number: u32,
+    done: bool,
+) -> Result<TodoAnswer, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.todo_mark_start(number, done)
+    })
+    .await?;
+    run_todo(&session, &waker, job).await
+}
+
+/// M-18.5 (UC-020 A5): deletes the todo `number` without asking; the status
+/// bar reports it with "Undo".
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_delete(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    number: u32,
+) -> Result<TodoAnswer, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.todo_delete_start(number)
+    })
+    .await?;
+    run_todo(&session, &waker, job).await
+}
+
+/// M-04.6 (UC-020 A5 step 2, UC-021 step 8): "Undo" of the status bar after
+/// a todo was deleted or marked.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_undo(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<TodoAnswer, UiError> {
+    let job = on_session(&session, &waker, Session::todo_undo_start).await?;
+    run_todo(&session, &waker, job).await
+}
+
+/// M-18.4, M-18.8 (UC-020 step 8, A6, UC-021 step 5, BR-008): opens the
+/// linked note `link`, or says it no longer exists.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_open_link(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    link: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.todo_open_link(&link);
+    })
+    .await
+}
+
+/// M-18.4 (UC-020 A1): the notes "Link a note…" offers for `query`.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_candidates(
+    session: State<'_, SharedSession>,
+    number: u32,
+    query: String,
+) -> Result<TodoCandidatesView, UiError> {
+    read_session(&session, move |session| {
+        session.todo_candidates(number, &query)
+    })
+    .await
+}
+
+/// M-18.3 (UC-020 BR-003): the month of the calendar "Choose a day": that
+/// of `day` (today without one), `step` months on.
+#[tauri::command]
+#[specta::specta]
+pub fn todo_month(day: Option<String>, step: i32) -> Result<CalendarView, UiError> {
+    Ok(calendar_view(day.as_deref(), step))
+}
+
+/// M-06.5, M-04.5 (UC-021 step 1, A2): shows the tab "Todos"; with
+/// `filter`, that filter.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_list_show(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    filter: Option<TodoFilterName>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.show_todo_list(filter);
+    })
+    .await
+}
+
+/// M-06.5: closes the tab "Todos".
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_list_close(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, Session::close_todo_list).await
+}
+
+/// M-18.6, M-18.8 (UC-021 steps 3–4, A1, BR-005, BR-007): the sort and the
+/// filter of the tab "Todos", kept for the workspace.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_list_set(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    sort: TodoSortName,
+    filter: TodoFilterName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.set_todo_list(sort, filter);
+    })
+    .await
+}
+
+/// Review F15: "Close anyway" of "Changes not stored" before another
+/// workspace opens: the todos that cannot be stored are given up and that
+/// workspace opens.
+#[tauri::command]
+#[specta::specta]
+pub async fn ws_switch_anyway(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, Session::switch_anyway).await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1712,6 +1906,20 @@ mod tests {
         "conflict_keep",
         "conflict_abort",
         "todo_conflict_resolve",
+        "agents_set_access",
+        "agents_section",
+        "todo_create",
+        "todo_change",
+        "todo_mark",
+        "todo_delete",
+        "todo_undo",
+        "todo_open_link",
+        "todo_candidates",
+        "todo_month",
+        "todo_list_show",
+        "todo_list_close",
+        "todo_list_set",
+        "ws_switch_anyway",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user
@@ -2730,5 +2938,84 @@ mod tests {
             std::fs::read_to_string(root.join("Home.md")).unwrap(),
             "# Home\n"
         );
+    }
+
+    /// UC-020, UC-021, M-18, M-04.5, M-04.6, M-06.5: the todo commands with
+    /// their arguments in camelCase as the window sends them; the files are
+    /// written without the session.
+    #[test]
+    fn uc020_uc021_m18_todo_commands_create_change_mark_delete_and_undo() {
+        let dir = temp_dir("todos");
+        let root = workspace_with(&dir, "notes", &["Home", "Plan"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let answer = mock
+            .invoke("todo_create", json!({ "title": "Ship it" }))
+            .unwrap();
+        assert_eq!(answer, json!({ "kind": "done" }));
+        assert_eq!(mock.status(), "Created todo #1 Ship it");
+        let answer = mock.invoke("todo_create", json!({ "title": " " })).unwrap();
+        assert_eq!(
+            answer,
+            json!({ "kind": "problem", "problem": "a todo needs a title" })
+        );
+        let answer = mock
+            .invoke(
+                "todo_change",
+                json!({ "number": 1, "change": { "kind": "due", "day": "2030-02-03" } }),
+            )
+            .unwrap();
+        assert_eq!(answer, json!({ "kind": "done" }));
+        mock.invoke(
+            "todo_change",
+            json!({ "number": 1, "change": { "kind": "link", "note": "Plan" } }),
+        )
+        .unwrap();
+        let file = std::fs::read_to_string(root.join(".todos/1.yaml")).unwrap();
+        assert!(file.contains("due: 2030-02-03"), "{file}");
+        assert!(file.contains("- Plan"), "{file}");
+
+        mock.invoke("todo_mark", json!({ "number": 1, "done": true }))
+            .unwrap();
+        assert_eq!(mock.status(), "Marked todo #1 Ship it done");
+        mock.invoke("todo_undo", json!({})).unwrap();
+        assert_eq!(mock.status(), "Todo #1 Ship it is as before");
+        mock.invoke("todo_delete", json!({ "number": 1 })).unwrap();
+        assert_eq!(mock.status(), "Deleted todo #1 Ship it");
+        assert!(!root.join(".todos/1.yaml").exists());
+        mock.invoke("todo_undo", json!({})).unwrap();
+        assert_eq!(mock.status(), "Todo #1 Ship it is back");
+
+        let found = mock
+            .invoke("todo_candidates", json!({ "number": 1, "query": "ho" }))
+            .unwrap();
+        assert_eq!(
+            found,
+            json!({ "notes": [{ "note": "Home", "label": "Home" }], "none": null })
+        );
+        let month = mock
+            .invoke("todo_month", json!({ "day": "2026-11-11", "step": 1 }))
+            .unwrap();
+        assert_eq!(month["title"], "December 2026");
+        mock.invoke("todo_open_link", json!({ "link": "Gone" }))
+            .unwrap();
+        assert_eq!(
+            mock.status(),
+            "The note Gone no longer exists; remove the link with ×"
+        );
+
+        mock.invoke("todo_list_show", json!({ "filter": "open" }))
+            .unwrap();
+        mock.invoke(
+            "todo_list_set",
+            json!({ "sort": "urgency", "filter": "all" }),
+        )
+        .unwrap();
+        let tabs = mock.app.state::<SharedSession>().lock().snapshot().tabs;
+        assert!(tabs.todo_list.open && tabs.todo_list.active);
+        mock.invoke("todo_list_close", json!({})).unwrap();
+        let tabs = mock.app.state::<SharedSession>().lock().snapshot().tabs;
+        assert!(!tabs.todo_list.open);
     }
 }

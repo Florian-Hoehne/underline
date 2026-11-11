@@ -803,7 +803,12 @@ export async function takeFlush(view: FlushView): Promise<void> {
     if (view.closing) {
       await ipc.requestClose(failure === null);
       if (failure !== null) {
-        reporter?.closeQuestion({ tab: null, what: 'Underline', error: handOverFailed(failure) });
+        reporter?.closeQuestion({
+          tab: null,
+          what: 'Underline',
+          error: handOverFailed(failure),
+          switching: false,
+        });
       }
     }
   }

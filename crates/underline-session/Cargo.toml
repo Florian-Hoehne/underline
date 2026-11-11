@@ -22,6 +22,8 @@ underline-wiki.workspace = true
 underline-mcp.workspace = true
 ropey.workspace = true
 serde.workspace = true
+# UC-020: a todo file is read again before it is written over (F15).
+serde_norway.workspace = true
 thiserror.workspace = true
 specta = { workspace = true, optional = true }
 

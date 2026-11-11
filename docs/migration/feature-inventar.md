@@ -81,9 +81,9 @@ Reihenfolge von links nach rechts:
   Die Begründung bzw. die Dateien stehen im Hover. Danach folgen „N to push“, „N to pull“ und der Button „Sync now“,
   deaktiviert während eines Syncs oder bei offenen Konflikten.
 - [~] **M-04.4** Agents-Menü (M-17.1).
-- [ ] **M-04.5** Rot „1 todo overdue“/„N todos overdue“ (Hover „Open the todo list“) öffnet den Todos-Tab mit Filter
+- [~] **M-04.5** Rot „1 todo overdue“/„N todos overdue“ (Hover „Open the todo list“) öffnet den Todos-Tab mit Filter
   Open.
-- [ ] **M-04.6** Undo für einen abgehakten Todo („Todo {name} is as before“) und für einen gelöschten Todo
+- [~] **M-04.6** Undo für einen abgehakten Todo („Todo {name} is as before“) und für einen gelöschten Todo
   („Todo {name} is back“). Beide stehen *vor* dem Text.
 - [x] **M-04.7** Text: Workspace-Pfad und Status, getrennt durch „  |  “.
 - [~] **M-04.8** Nach einem Export: „Open“ (Systemprogramm) und „Show“ (Fenster „Approximated blocks“).
@@ -114,7 +114,7 @@ Reihenfolge von links nach rechts:
   Übersicht neu.
 - [x] **M-06.3** Mittelklick oder „×“ schliesst den Tab. Vorher wird gespeichert; scheitert das, fragt M-21.2.
 - [ ] **M-06.4** Kontextmenü: „Rename…  F2“, „Delete…“, „Export…  Ctrl+Shift+E“.
-- [ ] **M-06.5** Todos-Tab „Todos (N)“, wenn die Liste offen ist. Schliessen mit „×“ oder Mittelklick. Das Öffnen
+- [~] **M-06.5** Todos-Tab „Todos (N)“, wenn die Liste offen ist. Schliessen mit „×“ oder Mittelklick. Das Öffnen
   einer Notiz deaktiviert ihn, lässt ihn aber offen.
 - [ ] **M-06.6** Höchstens 100 Tabs (`MAX_TABS`). Ein weiterer schliesst den am längsten unbenutzten Tab, Status
   „Closed the tab {t}, used longest ago“. *Speicherfehler werden dabei heute ignoriert (Defekt D-07).*
@@ -393,7 +393,7 @@ Reihenfolge von links nach rechts:
 
 - [ ] **M-16.1** Breite veränderbar (100–1000) und wird gespeichert, aber nur mit aktivem Tab.
 - [x] **M-16.2** Properties: Place, Format, Size, Last change, sonst „Not saved yet“.
-- [ ] **M-16.3** Abschnitt Todos (M-18.1).
+- [~] **M-16.3** Abschnitt Todos (M-18.1).
 - [~] **M-16.4** Commit / Changes / Diff (M-19), nur in Git-Workspaces.
 - [~] **M-16.5** Outline / Code / Figures (N):
   - Aus den Blöcken, gecacht je Revision.
@@ -437,38 +437,38 @@ Reihenfolge von links nach rechts:
 
 ## M-18 Todos (UC-020, UC-021)
 
-- [ ] **M-18.1** Abschnitt „Todos (N open)“:
+- [~] **M-18.1** Abschnitt „Todos (N open)“:
   - Oben: Todo-Konflikte, „Open list“ und das Feld „New todo“ (Enter legt an und behält den Fokus,
     „Created todo {name}“). Fehler NoTitle/LongTitle inline. Danach eine Zeile je unlesbarer Datei.
   - Offene Todos sortiert nach (ohne Frist zuletzt, Frist, Nummer), leer „No open todos“. Gruppe „Done (N)“
     zugeklappt.
-- [ ] **M-18.2** Zeile:
+- [~] **M-18.2** Zeile:
   - Checkbox.
   - Titel in Dringlichkeitsfarbe: Low schwach, Normal Text, High orange, Critical rot. Erledigte sind
     durchgestrichen.
   - „due {d}“.
   - „not stored“ mit dem Grund im Hover.
-- [ ] **M-18.3** Detail-Editor (Klick auf den Titel):
+- [~] **M-18.3** Detail-Editor (Klick auf den Titel):
   - Titel, Due und Scheduled (YYYY-MM-DD); gespeichert wird beim Verlassen des Feldes, Parsefehler stehen inline.
   - „Pick“ öffnet den Kalender „Choose a day“: ◀/▶, Montag zuerst, heute fett, „No day“. Die Wahl speichert sofort.
   - Urgency-Combo.
   - Warnung „The scheduled day is after the due day.“
-- [ ] **M-18.4** Notiz-Links:
+- [~] **M-18.4** Notiz-Links:
   - Ein vorhandener Link öffnet die Notiz. Ein fehlender zeigt „(missing)“ und „The note X no longer exists; remove
     the link with ×“.
   - „×“ entfernt den Link, „Link {active}“ verlinkt die aktive Notiz.
   - „Link a note…“ zeigt bis zu 8 Treffer, sonst „No note matches“.
-- [ ] **M-18.5** „Delete“ ohne Rückfrage: „Deleted todo {name}“ plus Undo. Angezeigt werden „created/done
+- [~] **M-18.5** „Delete“ ohne Rückfrage: „Deleted todo {name}“ plus Undo. Angezeigt werden „created/done
   YYYY-MM-DD HH:MM“.
-- [ ] **M-18.6** Todos-Tab:
+- [~] **M-18.6** Todos-Tab:
   - Filter (`TodoFilter::ALL`), Sortierung „Due date“/„Urgency“ und Feld „New todo“ (320 px).
   - Leertexte: „No open todos. Type a title above to create one.“, „No done todos.“, „No todos. Type a title above to
     create one.“
-- [ ] **M-18.7** Tasten im Todos-Tab (nur ohne fokussiertes Textfeld):
+- [~] **M-18.7** Tasten im Todos-Tab (nur ohne fokussiertes Textfeld):
   - Up/Down wählen.
   - Space hakt ab bzw. öffnet wieder: „Marked todo X done/open“ plus Undo.
   - Enter öffnet die erste verlinkte Notiz.
-- [ ] **M-18.8** Spalten des Todos-Tabs:
+- [~] **M-18.8** Spalten des Todos-Tabs:
   - Checkbox, „#N“, Titel.
   - Due: der Kopf sortiert; überfällig rot „{due}  N day(s) overdue“.
   - Urgency: der Kopf sortiert.
@@ -477,7 +477,7 @@ Reihenfolge von links nach rechts:
   - Done.
 
   Sortierung und Filter werden je Workspace gespeichert.
-- [ ] **M-18.9** Hintergrund (jede Sekunde): ungespeicherte Todos erneut versuchen, Änderungen per Fingerprint
+- [~] **M-18.9** Hintergrund (jede Sekunde): ungespeicherte Todos erneut versuchen, Änderungen per Fingerprint
   erkennen und neu laden, Konflikte nach einem Sync prüfen.
 
 ## M-19 Git (UC-011 bis UC-015)

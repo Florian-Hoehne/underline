@@ -42,6 +42,11 @@
     those of the find field instead in the note it finds in
     (`editor/sync.ts`, `setSearches`).
 
+  Feature F15 adds, as in egui (M-06.5, UC-021): while the tab "Todos" is
+  the active one, its list (TodoTable.svelte) stands in place of the note,
+  with the tool panel beside it; the panel also shows without an active
+  note tab, for the section "Todos" (M-16.3).
+
   Feature F13 adds, as in egui:
   - M-19.9: the conflict bar below the find field while the note holds
     places a sync left in conflict (ConflictBar.svelte), and "Abort the
@@ -77,6 +82,7 @@
   import Minimap from './Minimap.svelte';
   import SourceEditor from './SourceEditor.svelte';
   import TabBar from './TabBar.svelte';
+  import TodoTable from './TodoTable.svelte';
   import ToolPanel from './ToolPanel.svelte';
   import type { Shell } from './shell.svelte';
   import { NOTE_PANEL_ID, tabId } from './tabs';
@@ -552,13 +558,17 @@
       </div>
       <ToolPanel {shell} />
     </div>
-  {:else if !todosActive}
+  {:else if todosActive}
+    <!-- M-06.5, M-18.6 (UC-021): the tab "Todos" in place of a note. -->
+    <div class="note">
+      <TodoTable {shell} />
+      <ToolPanel {shell} />
+    </div>
+  {:else}
     <div class="note">
       <p class="hint">Select or create a note.</p>
-      <!-- M-16.4: egui shows the git changes without an open note too. -->
-      {#if shell.changes !== null}
-        <ToolPanel {shell} />
-      {/if}
+      <!-- M-16.3, M-16.4: egui shows the todos and the git changes without an open note too. -->
+      <ToolPanel {shell} />
     </div>
   {/if}
 </section>

@@ -5,8 +5,8 @@
   Urgency, Status, Notes; "–" for none, "(deleted)"), the fields that
   differ in bold, then "Keep mine" and "Take remote".
 
-  Until the section "Todos" comes with feature F15, they stand alone in the
-  tool panel, where it will be (A-146). For screen readers (UX review F13,
+  Since feature F15 they stand at the top of the section "Todos"
+  (TodoSection.svelte), as in egui (Q-100, A-146). For screen readers (UX review F13,
   new texts, Q-97) a field that differs says "(differs)", and the buttons
   name the todo ("Keep mine for todo #n", "Take remote for todo #n").
 -->

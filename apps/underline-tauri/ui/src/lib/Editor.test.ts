@@ -392,14 +392,24 @@ describe('M-06.3, M-21.4 "Changes not stored"', () => {
     const closeAnyway = vi.fn(handlers.app_close_anyway);
     await workbench(NOTES, { ...handlers, app_close_anyway: closeAnyway });
 
-    await emit('close-question', { tab: null, what: 'Underline', error: 'Home: disk full' });
+    await emit('close-question', {
+      tab: null,
+      what: 'Underline',
+      error: 'Home: disk full',
+      switching: false,
+    });
     let dialog = await screen.findByRole('dialog', { name: 'Changes not stored' });
     expect(dialog).toHaveTextContent('Close Underline anyway and lose these changes?');
     await fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(closeAnyway).not.toHaveBeenCalled();
 
-    await emit('close-question', { tab: null, what: 'Underline', error: 'Home: disk full' });
+    await emit('close-question', {
+      tab: null,
+      what: 'Underline',
+      error: 'Home: disk full',
+      switching: false,
+    });
     dialog = await screen.findByRole('dialog', { name: 'Changes not stored' });
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Close anyway' }));
 
@@ -510,7 +520,12 @@ describe('review F3: keyboard and screen readers', () => {
 
   it('a dialog keeps Tab and Shift+Tab inside', async () => {
     await workbench(NOTES);
-    await emit('close-question', { tab: null, what: 'Underline', error: 'Home: disk full' });
+    await emit('close-question', {
+      tab: null,
+      what: 'Underline',
+      error: 'Home: disk full',
+      switching: false,
+    });
     const dialog = await screen.findByRole('dialog', { name: 'Changes not stored' });
     const keep = within(dialog).getByRole('button', { name: 'Keep open' });
     const anyway = within(dialog).getByRole('button', { name: 'Close anyway' });

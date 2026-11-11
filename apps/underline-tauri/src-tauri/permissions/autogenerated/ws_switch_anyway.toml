@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ws-switch-anyway"
+description = "Enables the ws_switch_anyway command without any pre-configured scope."
+commands.allow = ["ws_switch_anyway"]
+
+[[permission]]
+identifier = "deny-ws-switch-anyway"
+description = "Denies the ws_switch_anyway command without any pre-configured scope."
+commands.deny = ["ws_switch_anyway"]

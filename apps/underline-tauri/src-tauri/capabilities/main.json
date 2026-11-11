@@ -75,6 +75,18 @@
     "allow-conflict-abort",
     "allow-todo-conflict-resolve",
     "allow-agents-set-access",
-    "allow-agents-section"
+    "allow-agents-section",
+    "allow-todo-create",
+    "allow-todo-change",
+    "allow-todo-mark",
+    "allow-todo-delete",
+    "allow-todo-undo",
+    "allow-todo-open-link",
+    "allow-todo-candidates",
+    "allow-todo-month",
+    "allow-todo-list-show",
+    "allow-todo-list-close",
+    "allow-todo-list-set",
+    "allow-ws-switch-anyway"
   ]
 }

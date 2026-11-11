@@ -52,7 +52,10 @@
 //! UC-019, M-04.4, M-04.9, M-17): the agents entry of the status bar, MCP
 //! install in the settings, the agent cursor, and the agents' changes
 //! through the window (ADR-018), which ask the window for its edits first
-//! (ADR-025).
+//! (ADR-025). Feature F15 adds the todos (UC-020, UC-021, M-04.5, M-04.6,
+//! M-06.5, M-16.3, M-18): the section "Todos" of the tool panel, the tab
+//! "Todos", the overdue todos and the undo of the status bar; the todo
+//! files are written and read without the session.
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -74,6 +77,7 @@ mod session;
 mod settings;
 mod start;
 mod sync_view;
+mod todos_view;
 mod workspace_view;
 
 pub use agents_view::{
@@ -122,6 +126,7 @@ pub use session::{
     branch_name_view, AbortJob, AbortOutcome, BranchesJob, BranchesListed, SwitchJob,
     SwitchOutcome, CLOSING_SYNC_AT_MOST,
 };
+pub use session::{calendar_view, TodoDone, TodoJob, TODOS_EVERY};
 pub use session::{AgentsDone, AgentsJob, SectionDone, SectionJob, FLUSH_AT_MOST, REQUESTS_EVERY};
 pub use session::{
     CommitJob, CommitOutcome, CreatePlan, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused,
@@ -138,6 +143,11 @@ pub use start::{Platform, StartInfo};
 pub use sync_view::{
     ChangedView, EnrichView, FlushView, MirrorView, RemoteApplied, RemoteChange, RemoteOp,
     SyncAnswer, SyncBatch, SyncEdit,
+};
+pub use todos_view::{
+    CalendarDayView, CalendarView, TodoActiveNoteView, TodoAnswer, TodoCandidateView,
+    TodoCandidatesView, TodoChange, TodoFilterName, TodoLinkView, TodoSortName, TodoTableView,
+    TodoView, TodosView, UrgencyName,
 };
 pub use workspace_view::{
     CreateAnswer, EditingViewName, FormatName, NewWorkspaceRequest, OpenAnswer, OpenOffer,
