@@ -51,6 +51,11 @@ fn main() {
         "search_set",
         "search_page",
         "search_open",
+        "export_start",
+        "export_choose",
+        "export_run",
+        "export_open",
+        "export_approximated",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

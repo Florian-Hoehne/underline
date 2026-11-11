@@ -41,7 +41,9 @@
 //! Feature F9 adds the search of the workspace for the search overlay
 //! (UC-008, M-13.1, M-13.3); the window's editor cores mark its words.
 //! Feature F10 adds what the settings window shows of "For me" and "This
-//! workspace" and the changes made in it (UC-010, M-20).
+//! workspace" and the changes made in it (UC-010, M-20). Feature F11 adds
+//! exporting a note (UC-009, M-15): the export runs without the session,
+//! and the status bar offers "Open" and "Show" after it (M-04.8).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -51,6 +53,7 @@ mod clip;
 mod editor_view;
 mod error;
 mod event;
+mod export_view;
 mod facade_view;
 mod notes_view;
 mod palette;
@@ -72,6 +75,10 @@ pub use editor_view::{
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
+pub use export_view::{
+    DialogOutcome, ExportAnswer, ExportChoice, ExportKindName, ExportKindsView, ExportOfferView,
+    ExportPlaceAnswer, ExportShown, ExportStart, TypedExportPath,
+};
 pub use facade_view::{
     BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeAt, FacadeInput,
     FacadePatch, FacadeState, FigureView, GapView, RowsView, RunView, TableView,
@@ -86,8 +93,8 @@ pub use search_view::{
     SearchView,
 };
 pub use session::{
-    CreatePlan, EmbedDone, EmbedPlan, Followed, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen,
-    Session, Synced,
+    CreatePlan, EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed,
+    KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session, Synced,
 };
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingChoiceView, SettingControlView,

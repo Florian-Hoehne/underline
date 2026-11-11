@@ -21,6 +21,11 @@
   open, Escape closes it wherever the keyboard is, as in egui; only a
   dialog that has the keyboard keeps its own Escape.
 
+  M-15.1 (UC-009 BR-008): Ctrl+Shift+E (Cmd+Shift+E on macOS) asks how to
+  export the note of the active tab, wherever the keyboard is, before the
+  editors see the key; "Export note" and "Approximated blocks" float above
+  the central area like the other dialogs (M-15.6).
+
   M-20.1 (UC-010 BR-006): Ctrl+, (Cmd+, on macOS) opens the settings window
   or closes it, wherever the keyboard is, before the editors see the key.
   The window floats above the central area, not modal, like egui's.
@@ -38,6 +43,8 @@
   import SearchOverlay from './lib/SearchOverlay.svelte';
   import SettingsWindow from './lib/SettingsWindow.svelte';
   import EmptyScreen from './lib/EmptyScreen.svelte';
+  import ExportDialog from './lib/ExportDialog.svelte';
+  import ApproximatedDialog from './lib/ApproximatedDialog.svelte';
   import NoteArea from './lib/NoteArea.svelte';
   import OpenDialog from './lib/OpenDialog.svelte';
   import OpenWebDialog from './lib/OpenWebDialog.svelte';
@@ -110,12 +117,36 @@
     }
   }
 
+  /** M-15.1, UC-009 BR-008: Ctrl+Shift+E (Cmd+Shift+E) exports the note of the active tab. */
+  function exportKey(event: KeyboardEvent) {
+    const mac = shell.platform === 'macos';
+    const command = mac ? event.metaKey : event.ctrlKey;
+    const other = mac ? event.ctrlKey : event.metaKey;
+    if (!command || other || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'e') {
+      return;
+    }
+    // Review F11: not while another dialog is open; "Export note" itself
+    // takes the keyboard again (startExport).
+    const dialog = document.querySelector('[role="dialog"]');
+    if (dialog !== null && shell.exporting === null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    // egui exports the note of the active tab; with none, the key does nothing.
+    if (shell.tabs.active !== null) {
+      void shell.startExport(shell.tabs.active);
+    }
+  }
+
   // Before the editors see it, as egui takes F2 first.
   onMount(() => {
     window.addEventListener('keydown', renameKey, true);
     window.addEventListener('keydown', searchKey, true);
     window.addEventListener('keydown', settingsKey, true);
+    window.addEventListener('keydown', exportKey, true);
     return () => {
+      window.removeEventListener('keydown', exportKey, true);
       window.removeEventListener('keydown', renameKey, true);
       window.removeEventListener('keydown', searchKey, true);
       window.removeEventListener('keydown', settingsKey, true);
@@ -175,6 +206,16 @@
     {#if shell.closeQuestion}
       <CloseQuestionDialog {shell} question={shell.closeQuestion} />
     {/if}
+    {#if shell.exporting !== null && shell.exporting.stage !== 'system'}
+      <ExportDialog {shell} dialog={shell.exporting} />
+    {/if}
+    {#if shell.approximated !== null}
+      <ApproximatedDialog
+        {shell}
+        title={shell.approximated.title}
+        lines={shell.approximated.lines}
+      />
+    {/if}
     {#if shell.settingsOpen}
       <SettingsWindow {shell} />
     {/if}
@@ -186,7 +227,12 @@
     root={shell.workspaceRoot}
     status={shell.status}
     offer={shell.statusOffer}
+    exports={shell.statusExports}
+    error={shell.statusError}
+    busy={shell.statusBusy}
     onUndo={() => void shell.undoDelete()}
+    onOpenExport={(index) => void shell.openExport(index)}
+    onShowApproximated={(index) => void shell.showApproximated(index)}
   />
 </div>
 

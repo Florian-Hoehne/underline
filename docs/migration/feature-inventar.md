@@ -86,7 +86,7 @@ Reihenfolge von links nach rechts:
 - [ ] **M-04.6** Undo für einen abgehakten Todo („Todo {name} is as before“) und für einen gelöschten Todo
   („Todo {name} is back“). Beide stehen *vor* dem Text.
 - [x] **M-04.7** Text: Workspace-Pfad und Status, getrennt durch „  |  “.
-- [ ] **M-04.8** Nach einem Export: „Open“ (Systemprogramm) und „Show“ (Fenster „Approximated blocks“).
+- [~] **M-04.8** Nach einem Export: „Open“ (Systemprogramm) und „Show“ (Fenster „Approximated blocks“).
 - [ ] **M-04.9** Nach Agent-Änderungen: bis zu 3 Buttons „Open“/„Open {title}“, die neueste zuerst.
 - [ ] **M-04.10** Undo nach dem Löschen einer Notiz. Das Angebot verschwindet, sobald sich der Status ändert.
 
@@ -374,20 +374,20 @@ Reihenfolge von links nach rechts:
 
 ## M-15 Export (UC-009)
 
-- [ ] **M-15.1** Auslöser:
+- [~] **M-15.1** Auslöser:
   - Ctrl+Shift+E oder das Tab-Menü → Auswahl der Art („Export {t} as:“, Up/Down/Enter, Escape).
   - Das Übersichtsmenü gibt die Art direkt vor.
   - Bei Konflikt verweigert.
-- [ ] **M-15.2** Speicherdialog des Systems „Export as {label}“:
+- [~] **M-15.2** Speicherdialog des Systems „Export as {label}“:
   - Start im letzten Export-Ordner (nur für die Sitzung), sonst Home. Dateiname = Notizname plus Endung, ein Filter.
   - Ohne Dialog ein Pfadfeld als Rückfall: „The file exists. Export again to replace it.“ → „Replace“.
-- [ ] **M-15.3** Die Notiz selbst und Dateien offener Tabs dürfen nicht überschrieben werden: „A note cannot be
+- [~] **M-15.3** Die Notiz selbst und Dateien offener Tabs dürfen nicht überschrieben werden: „A note cannot be
   replaced by an export; choose another place“.
-- [ ] **M-15.4** Inhalt ist der Tab-Text samt ungespeicherter Änderungen. Papier richtet sich nach dem Locale
+- [~] **M-15.4** Inhalt ist der Tab-Text samt ungespeicherter Änderungen. Papier richtet sich nach dem Locale
   (`LC_ALL`/`LC_PAPER`/`LANG`).
-- [ ] **M-15.5** Der Export läuft im Hintergrund: „Exporting {t}…“, dann „Exported {t} to {p}“ samt „; N block(s)
+- [~] **M-15.5** Der Export läuft im Hintergrund: „Exporting {t}…“, dann „Exported {t} to {p}“ samt „; N block(s)
   only approximated“ und „; missing: …“.
-- [ ] **M-15.6** Fenster „Approximated blocks“ mit einer Liste „Line N“.
+- [~] **M-15.6** Fenster „Approximated blocks“ mit einer Liste „Line N“.
 
 ## M-16 Werkzeugpanel rechts (FR-019, FR-041–043)
 

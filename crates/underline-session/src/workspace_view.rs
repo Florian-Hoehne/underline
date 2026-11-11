@@ -26,6 +26,9 @@ pub struct OverviewItem {
     pub note: String,
     /// The title, with the folder when the title occurs more than once.
     pub label: String,
+    /// The note's format, which names the kinds of export of its menu
+    /// (M-05.4, `StartInfo::export_kinds`).
+    pub format: FormatName,
 }
 
 /// The editing view a tab shows its note in (UC-004 BR-003).

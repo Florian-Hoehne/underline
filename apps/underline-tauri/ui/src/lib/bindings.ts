@@ -297,6 +297,44 @@ export const commands = {
 	 *  status says why).
 	 */
 	searchOpen: (note: string, place: FoundPlace | null) => typedError<SearchOpened | null, UiError>(__TAURI_INVOKE("search_open", { note, place })),
+	/**
+	 *  UC-009 step 1, BR-008, M-15.1: Ctrl+Shift+E or "Export…" of the tab
+	 *  menu: "Export {t} as:" with the kinds of export of the note. `null`
+	 *  without a workspace or for a note in conflict (the status says so).
+	 */
+	exportStart: (note: string) => typedError<ExportStart | null, UiError>(__TAURI_INVOKE("export_start", { note })),
+	/**
+	 *  UC-009 steps 2–3, A1, M-15.2, ADR-016: the system's save dialog "Export
+	 *  as {label}" for `note` as `kind`, starting in the folder of the last
+	 *  export (else the home folder) with the note's name. It runs on the
+	 *  blocking pool without the session, so the window and the tick go on
+	 *  while it is open. A chosen file is kept by the backend; the window then
+	 *  runs the export with `export_run` once its edits are sent. Without a
+	 *  dialog, the answer asks for the path in a field.
+	 */
+	exportChoose: (note: string, kind: ExportKindName) => typedError<ExportPlaceAnswer, UiError>(__TAURI_INVOKE("export_choose", { note, kind })),
+	/**
+	 *  UC-009 steps 4–5, A2 to A6, M-15.3 to M-15.5: exports `note` as `kind`
+	 *  to the file chosen in the dialog (`typed` is `null`) or typed in the
+	 *  field. The window's edits reached the backend first (`flushed`,
+	 *  ADR-025), so the tab's text with changes not yet saved is exported. The
+	 *  status says "Exporting {t}…" at once; the export is made and written
+	 *  on the blocking pool without the session (a PDF may take a while), then
+	 *  the status reports it.
+	 */
+	exportRun: (note: string, kind: ExportKindName, typed: TypedExportPath | null) => typedError<ExportAnswer, UiError>(__TAURI_INVOKE("export_run", { note, kind, typed })),
+	/**
+	 *  M-04.8, UC-009 step 5: "Open" of the status bar opens the export
+	 *  `index` it reports (from 0) with the system's program; nothing once
+	 *  another report took its place.
+	 */
+	exportOpen: (index: number) => typedError<null, UiError>(__TAURI_INVOKE("export_open", { index })),
+	/**
+	 *  M-04.8, M-15.6, UC-009 A2 step 3: "Show": the note and the lines of the
+	 *  blocks the export `index` the status reports only approximated, for the
+	 *  window "Approximated blocks"; `null` once another report took its place.
+	 */
+	exportApproximated: (index: number) => typedError<ExportShown | null, UiError>(__TAURI_INVOKE("export_approximated", { index })),
 };
 
 /** Events */
@@ -828,6 +866,140 @@ export type EnrichView = {
 	diagrams: ([string, FigureView])[],
 	/**  The figures of images by target. */
 	images: ([string, FigureView])[],
+};
+
+/**  The answer to running an export (UC-009 steps 4–5, A4, A5). */
+export type ExportAnswer = 
+/**  The export ran or could not be made; the status says which. */
+{ kind: "done" } | 
+/**
+ *  A5: the place is a note's file; the status says "A note cannot be
+ *  replaced by an export; choose another place", and the window asks
+ *  for the place again.
+ */
+{ kind: "askAgain" } | 
+/**
+ *  ADR-016, review F11: the path field stays with what the user typed
+ *  and says why: an empty path or a folder (new texts, A-117), a note
+ *  or a file of the workspace's own (A5, A-116), or why the export
+ *  failed (UC-009 A4).
+ */
+{ kind: "problem"; 
+/**  The text under the field. */
+problem: string } | 
+/**
+ *  The typed path holds a file: "The file exists. Export again to
+ *  replace it." The window's button then says "Replace".
+ */
+{ kind: "exists"; 
+/**  The text under the field. */
+problem: string; 
+/**
+ *  The path the user may now agree to replace; agreeing holds for
+ *  this path only (inventory D-03).
+ */
+path: string };
+
+/**
+ *  One kind of export with the name the user chooses it by ("AsciiDoc",
+ *  "HTML", "PDF"; egui's `ExportKind::label`).
+ */
+export type ExportChoice = {
+	/**  The kind. */
+	kind: ExportKindName,
+	/**  Its name. */
+	label: string,
+};
+
+/**  UC-009 step 1: what a note is exported to. */
+export type ExportKindName = 
+/**  The other note format (FR-014). */
+"otherFormat" | 
+/**  One HTML file (FR-015). */
+"html" | 
+/**  A PDF file (FR-016). */
+"pdf";
+
+/**
+ *  M-05.4: the kinds of export by the note's format, for the submenu
+ *  "Export" of the note overview; the window knows each note's format from
+ *  the overview.
+ */
+export type ExportKindsView = {
+	/**  Of a Markdown note: AsciiDoc, HTML, PDF. */
+	markdown: ExportChoice[],
+	/**  Of an AsciiDoc note: Markdown, HTML, PDF. */
+	asciiDoc: ExportChoice[],
+};
+
+/**
+ *  M-04.8: what the status bar offers for one export it reports: "Open"
+ *  and "Show", named by the note when several exports are reported
+ *  (A-120).
+ */
+export type ExportOfferView = {
+	/**  The title of the note exported. */
+	title: string,
+	/**
+	 *  "Open": the file can be opened with the system's program
+	 *  (`export_open`); not after a failure, nor for a file without the
+	 *  kind's extension (A-119).
+	 */
+	open: boolean,
+	/**  "Show": blocks were only approximated (`export_approximated`). */
+	show: boolean,
+};
+
+/**  The answer to asking where the export goes (UC-009 steps 2–3). */
+export type ExportPlaceAnswer = 
+/**
+ *  Nothing more: the user cancelled (A1), or the status says why the
+ *  note cannot be exported.
+ */
+{ kind: "done" } | 
+/**
+ *  The user chose a file in the system's dialog; the backend keeps it,
+ *  and the window runs the export once its edits are sent
+ *  (`export_run` without a typed path).
+ */
+{ kind: "chosen"; 
+/**
+ *  The chosen file, for the window to show nothing of: only for
+ *  tests and logs.
+ */
+path: string } | 
+/**
+ *  ADR-016: no dialog could be shown; the window "Export note" asks
+ *  for the path in a field.
+ */
+{ kind: "typed"; 
+/**  "Export {title} as {label} to:". */
+heading: string; 
+/**
+ *  The proposal: the folder of the last export, else the home
+ *  folder, and the note's name with the extension (BR-007).
+ */
+path: string };
+
+/**  M-15.6: what "Approximated blocks" lists. */
+export type ExportShown = {
+	/**  The title of the note exported, for the window's heading. */
+	title: string,
+	/**  The lines of the approximated blocks, from 1. */
+	lines: number[],
+};
+
+/**
+ *  UC-009 step 1, BR-008: the window "Export note" asks "Export {title}
+ *  as:" with the kinds of export, the first one chosen.
+ */
+export type ExportStart = {
+	/**  The note to export. */
+	note: string,
+	/**  Its title. */
+	title: string,
+	/**  The kinds, in egui's order. */
+	choices: ExportChoice[],
 };
 
 /**
@@ -1477,6 +1649,11 @@ export type OverviewItem = {
 	note: string,
 	/**  The title, with the folder when the title occurs more than once. */
 	label: string,
+	/**
+	 *  The note's format, which names the kinds of export of its menu
+	 *  (M-05.4, `StartInfo::export_kinds`).
+	 */
+	format: FormatName,
 };
 
 /**
@@ -2024,6 +2201,11 @@ export type StartInfo = {
 	tools: ToolView[],
 	/**  M-11.4: the input modes of the "Keys" choice, by name. */
 	inputModes: string[],
+	/**
+	 *  M-05.4: the kinds of export by note format, for the submenu
+	 *  "Export" of the note overview.
+	 */
+	exportKinds: ExportKindsView,
 };
 
 /**
@@ -2060,6 +2242,15 @@ export type StatusView = {
 	 *  deleting a note (UC-007 A4); it belongs to this text.
 	 */
 	offer: StatusOffer | null,
+	/**  M-04.8: "Open" and "Show" for each export the text reports. */
+	exports: ExportOfferView[],
+	/**
+	 *  UC-009 A4, review F11: the text reports a failure of an export; the
+	 *  bar marks it as an error, not by colour alone.
+	 */
+	error: boolean,
+	/**  Review F11: an export is running. */
+	busy: boolean,
 };
 
 /**  The backend's answer to `ed_sync` and `ed_resync`. */
@@ -2228,6 +2419,21 @@ export type ToolView = {
 	label: string,
 	/**  The hint shown on hover, with the key, such as "Bold (Ctrl+B)". */
 	hint: string,
+};
+
+/**
+ *  ADR-016: the path typed in the window "Export note" when no file dialog
+ *  could be shown.
+ */
+export type TypedExportPath = {
+	/**  The path in the field. */
+	path: string,
+	/**
+	 *  The path the user agreed to replace with "Replace" (the `path` of
+	 *  [`ExportAnswer::Exists`]); `None` before. It holds only while the
+	 *  field holds the same path (inventory D-03).
+	 */
+	replace: string | null,
 };
 
 /**

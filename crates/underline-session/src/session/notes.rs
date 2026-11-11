@@ -110,7 +110,7 @@ impl OpenNotes for OpenTexts {
 impl Session {
     /// UC-015 BR-007: whether the note `id` is in conflict. The conflicts
     /// come with feature F13 (`in_conflict`); until then no note is.
-    fn in_conflict(&self, _id: &NoteId) -> bool {
+    pub(super) fn in_conflict(&self, _id: &NoteId) -> bool {
         false
     }
 

@@ -91,7 +91,12 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ws_purge,
             commands::search_set,
             commands::search_page,
-            commands::search_open
+            commands::search_open,
+            commands::export_start,
+            commands::export_choose,
+            commands::export_run,
+            commands::export_open,
+            commands::export_approximated
         ])
         .events(collect_events![
             StatusEvent,

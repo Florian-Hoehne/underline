@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::{SettingsView, ToolView};
+use crate::{ExportKindsView, SettingsView, ToolView};
 
 /// The operating system the app runs on.
 ///
@@ -61,6 +61,9 @@ pub struct StartInfo {
     pub tools: Vec<ToolView>,
     /// M-11.4: the input modes of the "Keys" choice, by name.
     pub input_modes: Vec<String>,
+    /// M-05.4: the kinds of export by note format, for the submenu
+    /// "Export" of the note overview.
+    pub export_kinds: ExportKindsView,
 }
 
 #[cfg(test)]

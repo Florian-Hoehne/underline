@@ -11,6 +11,7 @@ mod assets;
 mod bindings;
 mod clipboard;
 mod commands;
+mod dialog;
 mod events;
 mod ticker;
 
@@ -25,7 +26,7 @@ use underline_core::Workspace;
 use underline_session::Session;
 
 use crate::clipboard::SystemClipboard;
-use crate::commands::{close_after_flush, Closer, SharedClipboard, SharedSession};
+use crate::commands::{close_after_flush, Closer, SaveDialog, SharedClipboard, SharedSession};
 use crate::events::emit_all;
 use crate::events::CloseQuestionEvent;
 use crate::ticker::Waker;
@@ -108,12 +109,16 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
     // UC-010 BR-004: the colours are made on a thread of their own, so
     // they are ready when the first note shows.
     session.warm_colors();
+    // UC-009 step 2, ADR-016: rfd's records tell a dialog that could not
+    // show from a cancelled one (inventory D-09).
+    dialog::install_logger();
     let app = tauri::Builder::default()
         .manage(SharedSession::new(Mutex::new(session)))
         // ADR-014: the source view copies and pastes through the system's
         // clipboard, kept open while the app runs.
         .manage(SharedClipboard::new(Mutex::new(SystemClipboard::new())))
         .manage(waker)
+        .manage(SaveDialog::new(dialog::ask_save))
         .invoke_handler(bindings.invoke_handler())
         // ADR-023: workspace images and diagrams reach the window only
         // through the app's own protocol.

@@ -9,10 +9,22 @@
   closes it and gives the keyboard back to the opener, Tab closes it. A
   click elsewhere closes it. Choosing an entry closes the menu first, then
   acts, so a dialog the entry opens takes the keyboard.
+
+  An entry may open a submenu (M-05.4: "Export", feature F11), as egui's
+  `menu_button`: pointing at it or clicking it opens the submenu beside it;
+  Right, Enter and Space open it with the keyboard on its first entry,
+  Left and Escape close it and give the keyboard back to the entry; Up,
+  Down, Home and End to another entry close it. Near the right edge of the
+  window it opens left of the menu.
 -->
 <script lang="ts" module>
-  /** One entry: its text, an optional key shown at the right, and what it does. */
-  export type MenuEntry = { label: string; shortcut?: string; action: () => void };
+  /**
+   * One entry: its text, an optional key shown at the right, and what it
+   * does; or its text and the entries of its submenu.
+   */
+  export type MenuEntry =
+    | { label: string; shortcut?: string; action: () => void }
+    | { label: string; entries: MenuEntry[] };
 
   /**
    * Where a menu opens for the event that asked for it: at the pointer, or
@@ -34,6 +46,7 @@
 
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import ContextMenu from './ContextMenu.svelte';
 
   type Props = {
     /** For screen readers, such as "Note Plan". */
@@ -44,15 +57,31 @@
     y: number;
     /** Closed without a choice; `back` gives the keyboard back to the opener. */
     onClose: (back: boolean) => void;
+    /** The first entry takes the keyboard when it opens (not for a submenu opened by pointing). */
+    autofocus?: boolean;
+    /** It is a submenu: Left closes it. */
+    nested?: boolean;
+    /**
+     * A submenu that does not fit right of its menu opens left of this
+     * edge (the menu's left edge), review F11.
+     */
+    flipAt?: number;
   };
 
-  let { label, entries, x, y, onClose }: Props = $props();
+  let { label, entries, x, y, onClose, autofocus = true, nested = false, flipAt }: Props = $props();
+
+  /** The open submenu: its entry's index, where it opens, and whether it takes the keyboard. */
+  let sub = $state<{ index: number; x: number; y: number; flip: number; focus: boolean } | null>(
+    null,
+  );
 
   let menu = $state<HTMLElement | null>(null);
   let left = $state(0);
   let top = $state(0);
 
-  const items = () => Array.from(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+  // Its own entries, not those of an open submenu inside it.
+  const items = () =>
+    Array.from(menu?.querySelectorAll<HTMLElement>(':scope > [role="menuitem"]') ?? []);
 
   onMount(() => {
     left = x;
@@ -61,10 +90,14 @@
       // It stays inside the window.
       const box = menu?.getBoundingClientRect();
       if (box) {
-        left = Math.max(4, Math.min(x, window.innerWidth - box.width - 4));
+        const fits = x + box.width <= window.innerWidth - 4;
+        const from = !fits && flipAt !== undefined ? flipAt - box.width : x;
+        left = Math.max(4, Math.min(from, window.innerWidth - box.width - 4));
         top = Math.max(4, Math.min(y, window.innerHeight - box.height - 4));
       }
-      items()[0]?.focus();
+      if (autofocus) {
+        items()[0]?.focus();
+      }
     });
     const outside = (event: PointerEvent) => {
       if (!menu?.contains(event.target as Node)) {
@@ -79,25 +112,109 @@
    * The keyboard goes back to the opener first, so a dialog the entry
    * opens gives it back there when it closes (app-tester F8).
    */
-  function choose(entry: MenuEntry) {
+  function choose(entry: MenuEntry, index: number) {
+    if ('entries' in entry) {
+      openSub(index, true);
+      return;
+    }
     onClose(true);
     entry.action();
+  }
+
+  /** Opens the submenu of the entry `index` beside it. */
+  function openSub(index: number, focus: boolean) {
+    const box = items()[index]?.getBoundingClientRect();
+    if (!box) {
+      return;
+    }
+    if (sub?.index === index) {
+      if (focus && !sub.focus) {
+        // Already open by pointing: the keyboard goes into it.
+        sub = null;
+        void tick().then(() => openSub(index, true));
+      }
+      return;
+    }
+    const flip = menu?.getBoundingClientRect().left ?? box.left;
+    sub = { index, x: box.right, y: box.top, flip, focus };
+  }
+
+  /** The submenu closed; `back` gives the keyboard back to its entry. */
+  function closeSub(back: boolean) {
+    const index = sub?.index;
+    sub = null;
+    if (back && index !== undefined) {
+      items()[index]?.focus();
+    }
+  }
+
+  /** A submenu's entries: choosing one closes this menu too, then acts. */
+  function subEntries(entry: MenuEntry): MenuEntry[] {
+    if (!('entries' in entry)) {
+      return [];
+    }
+    return entry.entries.map((child) =>
+      'entries' in child
+        ? child
+        : {
+            ...child,
+            action: () => {
+              onClose(true);
+              child.action();
+            },
+          },
+    );
+  }
+
+  /** Pointing at an entry opens its submenu, or closes another one. */
+  function onPoint(entry: MenuEntry, index: number) {
+    if ('entries' in entry) {
+      openSub(index, false);
+    } else if (sub !== null) {
+      sub = null;
+    }
   }
 
   function onKey(event: KeyboardEvent) {
     const all = items();
     const at = all.indexOf(document.activeElement as HTMLElement);
+    // Keys of an open submenu that it did not take are not this menu's.
+    if (at < 0 && sub !== null && event.key !== 'Tab') {
+      return;
+    }
     switch (event.key) {
+      case 'ArrowRight':
+      case 'Enter':
+      case ' ': {
+        const entry = entries[at];
+        if (entry === undefined || !('entries' in entry)) {
+          // Enter and Space click the entry itself.
+          return;
+        }
+        openSub(at, true);
+        break;
+      }
+      case 'ArrowLeft':
+        if (!nested) {
+          return;
+        }
+        onClose(true);
+        break;
+      // Moving to another entry closes an open submenu (review F11).
       case 'ArrowDown':
+        sub = null;
         all[(at + 1) % all.length]?.focus();
         break;
       case 'ArrowUp':
+        sub = null;
         all[(at - 1 + all.length) % all.length]?.focus();
         break;
       case 'Home':
+        sub = null;
         all[0]?.focus();
         break;
       case 'End':
+        sub = null;
         all.at(-1)?.focus();
         break;
       case 'Escape':
@@ -133,20 +250,51 @@
   onfocusout={onFocusOut}
   oncontextmenu={(event) => event.preventDefault()}
 >
-  {#each entries as entry (entry.label)}
-    <button
-      type="button"
-      role="menuitem"
-      tabindex="-1"
-      aria-keyshortcuts={entry.shortcut}
-      onclick={() => choose(entry)}
-    >
-      {entry.label}
-      {#if entry.shortcut}
-        <span class="shortcut" aria-hidden="true">{entry.shortcut}</span>
-      {/if}
-    </button>
+  {#each entries as entry, index (entry.label)}
+    {#if 'entries' in entry}
+      <button
+        type="button"
+        role="menuitem"
+        tabindex="-1"
+        aria-haspopup="menu"
+        aria-expanded={sub?.index === index}
+        onclick={() => choose(entry, index)}
+        onpointerenter={() => onPoint(entry, index)}
+      >
+        {entry.label}
+        <span class="shortcut" aria-hidden="true">▸</span>
+      </button>
+    {:else}
+      <button
+        type="button"
+        role="menuitem"
+        tabindex="-1"
+        aria-keyshortcuts={entry.shortcut}
+        onclick={() => choose(entry, index)}
+        onpointerenter={() => onPoint(entry, index)}
+      >
+        {entry.label}
+        {#if entry.shortcut}
+          <span class="shortcut" aria-hidden="true">{entry.shortcut}</span>
+        {/if}
+      </button>
+    {/if}
   {/each}
+  {#if sub !== null}
+    {@const opened = entries[sub.index]}
+    {#key `${sub.index}|${sub.focus}`}
+      <ContextMenu
+        label={opened.label}
+        entries={subEntries(opened)}
+        x={sub.x}
+        y={sub.y}
+        autofocus={sub.focus}
+        flipAt={sub.flip}
+        nested
+        onClose={closeSub}
+      />
+    {/key}
+  {/if}
 </div>
 
 <style>

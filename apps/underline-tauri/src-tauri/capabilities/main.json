@@ -53,6 +53,11 @@
     "allow-ws-purge",
     "allow-search-set",
     "allow-search-page",
-    "allow-search-open"
+    "allow-search-open",
+    "allow-export-start",
+    "allow-export-choose",
+    "allow-export-run",
+    "allow-export-open",
+    "allow-export-approximated"
   ]
 }

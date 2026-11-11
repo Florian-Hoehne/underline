@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
+use crate::export_view::ExportOfferView;
 use crate::notes_view::{DeletedNoteView, StatusOffer};
 use crate::search_view::SearchView;
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
@@ -20,6 +21,13 @@ pub struct StatusView {
     /// What the status bar offers beside the text, such as "Undo" after
     /// deleting a note (UC-007 A4); it belongs to this text.
     pub offer: Option<StatusOffer>,
+    /// M-04.8: "Open" and "Show" for each export the text reports.
+    pub exports: Vec<ExportOfferView>,
+    /// UC-009 A4, review F11: the text reports a failure of an export; the
+    /// bar marks it as an error, not by colour alone.
+    pub error: bool,
+    /// Review F11: an export is running.
+    pub busy: bool,
 }
 
 /// A change the window has to show.

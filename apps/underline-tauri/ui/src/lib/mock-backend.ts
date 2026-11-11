@@ -55,6 +55,18 @@
 // it (A6) or make the files unwritable (A7). `/home/user/Work` shares its
 // settings through git (BR-007). The notes of every fake workspace give
 // Markdown as their format.
+//
+// Feature F11: exporting a note (UC-009). The system's save dialog is a fake
+// one (`exportDialog`): it chooses a file (by default the proposed one),
+// is cancelled, or cannot show, which asks for the path in a field. The
+// export "writes" into a fake set of files (`exportedFiles`) after a short
+// wait (longer for a PDF); `/home/user/out/Plan.html` exists from the start,
+// to try replacing. Rough stand-ins: a table counts as an approximated block
+// of the other format, and an image whose place holds "missing" as missing
+// in HTML and PDF; `/home/user/locked` cannot be written. As in Rust, one
+// dialog at a time ("Choosing where to save {t}…"), reports of exports that
+// end together are kept, a failure is marked as an error, the status is
+// busy while one runs, and "Saved {t}" does not replace an export's status.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
@@ -62,6 +74,12 @@ import type {
   commands,
   CreateNoteAnswer,
   DeletedNoteView,
+  ExportAnswer,
+  ExportChoice,
+  ExportKindName,
+  ExportOfferView,
+  ExportPlaceAnswer,
+  TypedExportPath,
   NewNoteRequest,
   RenameAnswer,
   RestoreAnswer,
@@ -215,8 +233,38 @@ export type MockHandlers = {
     note: string;
     place: FoundPlace | null;
   }) => Promise<Ok<typeof commands.searchOpen>>;
+  export_start: (args: { note: string }) => Promise<Ok<typeof commands.exportStart>>;
+  export_choose: (args: {
+    note: string;
+    kind: ExportKindName;
+  }) => Promise<Ok<typeof commands.exportChoose>>;
+  export_run: (args: {
+    note: string;
+    kind: ExportKindName;
+    typed: TypedExportPath | null;
+  }) => Promise<Ok<typeof commands.exportRun>>;
+  export_open: (args: { index: number }) => Promise<Ok<typeof commands.exportOpen>>;
+  export_approximated: (args: { index: number }) => Ok<typeof commands.exportApproximated>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
+};
+
+/** F11: what the fake save dialog does (UC-009 step 2). */
+export type MockExportDialog =
+  { answer: 'choose'; path?: string } | { answer: 'cancel' } | { answer: 'unavailable' };
+
+/** F11: the kinds of export of a Markdown and an AsciiDoc note (`ExportKind::label`). */
+export const FAKE_EXPORT_KINDS: { markdown: ExportChoice[]; asciiDoc: ExportChoice[] } = {
+  markdown: [
+    { kind: 'otherFormat', label: 'AsciiDoc' },
+    { kind: 'html', label: 'HTML' },
+    { kind: 'pdf', label: 'PDF' },
+  ],
+  asciiDoc: [
+    { kind: 'otherFormat', label: 'Markdown' },
+    { kind: 'html', label: 'HTML' },
+    { kind: 'pdf', label: 'PDF' },
+  ],
 };
 
 /** F7: a note with a link of every kind, headings, code and figures. */
@@ -606,9 +654,15 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
   // F10: the settings files of the mock, the user's seeded from `start.settings`.
   const model = new MockSettings(userFileOf(start.settings ?? {}), PALETTES);
   let status = start.status ?? '';
-  const setStatus = async (text: string, offer: StatusOffer | null = null) => {
+  // F11: the exports' offers, error mark and busy state of the status.
+  const extra: MockStatusExtra = { exports: [], error: false, busy: false };
+  const setStatus = async (text: string, offer: StatusOffer | null = null, report = false) => {
     status = text;
-    await emit('status', { text, offer });
+    if (!report) {
+      extra.exports = [];
+      extra.error = false;
+    }
+    await emit('status', { text, offer, ...extra });
   };
   /** The window is told the settings in effect and what the settings window shows. */
   const sendSettings = async () => {
@@ -626,6 +680,7 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         themes: PALETTES.map((palette) => palette.theme),
         tools: [...FAKE_TOOLS],
         inputModes: ['Normal', 'Vim', 'Nano'],
+        exportKinds: FAKE_EXPORT_KINDS,
         ...info,
         settings: model.effective(),
         status,
@@ -652,9 +707,12 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
       await setStatus(wikiStatus(url));
       return null;
     },
-    ...workspaceHandlers(start, setStatus, model, sendSettings, () => status),
+    ...workspaceHandlers(start, setStatus, model, sendSettings, () => status, extra),
   };
 }
+
+/** F11: what the status says besides its text about exports. */
+type MockStatusExtra = { exports: ExportOfferView[]; error: boolean; busy: boolean };
 
 /** One note tab of the fake session. */
 type FakeTab = { note: string; view: EditingViewName };
@@ -662,10 +720,11 @@ type FakeTab = { note: string; view: EditingViewName };
 /** The workspace commands over the fake file system. */
 function workspaceHandlers(
   start: MockStart,
-  setStatus: (text: string, offer?: StatusOffer | null) => Promise<void>,
+  setStatus: (text: string, offer?: StatusOffer | null, report?: boolean) => Promise<void>,
   model: MockSettings,
   sendSettings: () => Promise<void>,
   status: () => string = () => '',
+  extra: MockStatusExtra = { exports: [], error: false, busy: false },
 ): Pick<
   MockHandlers,
   | 'ws_start'
@@ -711,6 +770,11 @@ function workspaceHandlers(
   | 'search_set'
   | 'search_page'
   | 'search_open'
+  | 'export_start'
+  | 'export_choose'
+  | 'export_run'
+  | 'export_open'
+  | 'export_approximated'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -751,6 +815,7 @@ function workspaceHandlers(
       )
       .map((note) => ({
         note,
+        format: 'Markdown' as const,
         label:
           count(title(note).toLowerCase()) > 1
             ? `${title(note)}  (${folder(note) ?? 'top folder'})`
@@ -1034,7 +1099,8 @@ function workspaceHandlers(
         const failure = store(note);
         // UC-006 A7: a save of a rename's links keeps its report; D-04
         // (fixed): "Saved" does not end an offer.
-        const quietly = quiet.delete(note) || (undo !== null && status() === undo.status);
+        const quietly =
+          quiet.delete(note) || (undo !== null && status() === undo.status) || exportKept();
         if (!failure && quietly) {
           void sendAll();
           return;
@@ -1172,6 +1238,60 @@ function workspaceHandlers(
   /** UC-004 BR-007: the system's program opens `target` (only recorded). */
   const openWithSystem = (target: string) => {
     opened.push(target);
+  };
+  /** F11: what the fake save dialog does next. */
+  let exportDialog: MockExportDialog = { answer: 'choose' };
+  /** F11: the files exports wrote, by path, with what they hold. */
+  const exported = new Map<string, string>([['/home/user/out/Plan.html', '<p>old</p>']]);
+  /** UC-009 BR-007: the folder of the last export, for this session. */
+  let lastExportFolder: string | null = null;
+  /** UC-009 step 3: the file chosen in the dialog, until the export runs. */
+  let exportChosen: { note: string; kind: ExportKindName; path: string } | null = null;
+  /** M-04.8: the reports the status shows, with the status they belong to (A-120). */
+  let exportReports: {
+    title: string;
+    target: string | null;
+    open: boolean;
+    approximated: number[];
+  }[] = [];
+  let reportsStatus = '';
+  /** The running exports' "Exporting {t}…", and the open dialog's "Choosing where to save {t}…". */
+  const exportsRunning: string[] = [];
+  let choosing: { status: string; before: string } | null = null;
+  /** D-04, A-113: an export's own status, which "Saved {t}" does not replace. */
+  const exportKept = () =>
+    choosing?.status === status() ||
+    exportsRunning.includes(status()) ||
+    (exportReports.length > 0 && reportsStatus === status());
+  const exportLabel = (kind: ExportKindName) =>
+    FAKE_EXPORT_KINDS.markdown.find((choice) => choice.kind === kind)?.label ?? kind;
+  const exportExtension = (kind: ExportKindName) =>
+    kind === 'otherFormat' ? 'adoc' : kind === 'html' ? 'html' : 'pdf';
+  const exportName = (note: string, kind: ExportKindName) =>
+    `${note.split('/').at(-1) ?? note}.${exportExtension(kind)}`;
+  const exportFolder = () => lastExportFolder ?? FAKE_HOME;
+  /** The fake folders a typed path may name (review F11). */
+  const isFolder = (path: string) =>
+    FAKE_OUTSIDE[path] === -1 ||
+    [FAKE_HOME, '/home/user/out', '/home/user/locked', ...Object.keys(files)].includes(
+      path.replace(/\/+$/, ''),
+    );
+  /** Whether `path` holds a file in the fake world. */
+  const fileExists = (path: string) =>
+    exported.has(path) ||
+    path in FAKE_OUTSIDE ||
+    (root !== null && (files[root] ?? []).some((note) => path === `${root}/${note}.md`));
+  /** A5, A-116: a note's file, `underline.yaml`, or anything under a dot folder of the workspace. */
+  const isWorkspaceFile = (path: string) => {
+    if (root === null || !path.startsWith(`${root}/`)) {
+      return false;
+    }
+    const inside = path.slice(root.length + 1);
+    return (
+      inside === 'underline.yaml' ||
+      inside.split('/').some((part) => part.startsWith('.')) ||
+      (files[root] ?? []).some((note) => inside === `${note}.md`)
+    );
   };
   /** UC-004 A2 to A4: a rough stand-in for `follow_link` over the fake notes. */
   const followLink = async (note: string, raw: string): Promise<LinkAnswer> => {
@@ -1827,6 +1947,170 @@ function workspaceHandlers(
       );
       return null;
     },
+    export_start: async ({ note }) => {
+      if (!root) {
+        return null;
+      }
+      return { note, title: title(note), choices: FAKE_EXPORT_KINDS.markdown };
+    },
+    export_choose: async ({ note, kind }): Promise<ExportPlaceAnswer> => {
+      // One dialog at a time (review F11).
+      if (!root || choosing !== null) {
+        return { kind: 'done' };
+      }
+      const asking = `Choosing where to save ${title(note)}…`;
+      choosing = { status: asking, before: status() };
+      // App-tester F11: the status before comes back whole after a cancel.
+      const beforeExtra = { exports: extra.exports, error: extra.error };
+      await setStatus(asking);
+      const dialog = exportDialog;
+      // The user takes a moment in the dialog.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const before = choosing.before;
+      choosing = null;
+      if (dialog.answer !== 'choose' && status() === asking) {
+        extra.exports = beforeExtra.exports;
+        extra.error = beforeExtra.error;
+        await setStatus(
+          before,
+          undo !== null && undo.status === before ? 'undoDelete' : null,
+          true,
+        );
+      }
+      if (dialog.answer === 'cancel') {
+        return { kind: 'done' };
+      }
+      if (dialog.answer === 'unavailable') {
+        return {
+          kind: 'typed',
+          heading: `Export ${title(note)} as ${exportLabel(kind)} to:`,
+          path: `${exportFolder()}/${exportName(note, kind)}`,
+        };
+      }
+      const path = dialog.path ?? `${exportFolder()}/${exportName(note, kind)}`;
+      exportChosen = { note, kind, path };
+      return { kind: 'chosen', path };
+    },
+    export_run: async ({ note, kind, typed }): Promise<ExportAnswer> => {
+      let path: string;
+      if (typed !== null) {
+        path = typed.path.trim();
+        if (path === '') {
+          return { kind: 'problem', problem: 'Enter the file to export to.' };
+        }
+        if (isFolder(path)) {
+          return { kind: 'problem', problem: `${path} is a folder. Enter a file name in it.` };
+        }
+      } else {
+        const chosen = exportChosen;
+        exportChosen = null;
+        if (chosen === null || chosen.note !== note || chosen.kind !== kind) {
+          return { kind: 'done' };
+        }
+        path = chosen.path;
+      }
+      if (!root) {
+        return { kind: 'done' };
+      }
+      if (isWorkspaceFile(path) || tabs.some((tab) => path === `${root}/${tab.note}.md`)) {
+        const refused = 'A note cannot be replaced by an export; choose another place';
+        await setStatus(refused);
+        return typed === null ? { kind: 'askAgain' } : { kind: 'problem', problem: refused };
+      }
+      // Only a file that may be replaced is asked about (app-tester F11).
+      if (typed !== null && fileExists(path) && typed.replace?.trim() !== path) {
+        return {
+          kind: 'exists',
+          problem: 'The file exists. Export again to replace it.',
+          path,
+        };
+      }
+      // BR-001: the tab's text with its changes not yet saved.
+      const text = mirrors.get(note)?.text() ?? textOf(note);
+      lastExportFolder = path.slice(0, Math.max(path.lastIndexOf('/'), 0)) || '/';
+      const running = `Exporting ${title(note)}…`;
+      exportsRunning.push(running);
+      extra.busy = true;
+      await setStatus(running);
+      await new Promise((resolve) => setTimeout(resolve, kind === 'pdf' ? 800 : 100));
+      exportsRunning.splice(exportsRunning.indexOf(running), 1);
+      extra.busy = exportsRunning.length > 0;
+      let line: string;
+      let failure: string | null = null;
+      let report: (typeof exportReports)[number];
+      if (path.startsWith('/home/user/locked/')) {
+        line = `${title(note)} could not be exported: Permission denied (os error 13)`;
+        failure = line;
+        report = { title: title(note), target: null, open: false, approximated: [] };
+      } else {
+        const lines = text.split('\n');
+        const approximated =
+          kind === 'otherFormat'
+            ? lines.flatMap((l, n) =>
+                l.startsWith('|') && !(lines[n - 1] ?? '').startsWith('|') ? [n + 1] : [],
+              )
+            : [];
+        const missing =
+          kind === 'otherFormat'
+            ? []
+            : [...text.matchAll(/!\[[^\]]*\]\(([^)]*missing[^)]*)\)/g)].map(
+                (m) => `the image ${m[1]} (No such file or directory (os error 2))`,
+              );
+        exported.set(path, text);
+        line = `Exported ${title(note)} to ${path}`;
+        if (approximated.length > 0) {
+          line += `; ${approximated.length === 1 ? '1 block' : `${approximated.length} blocks`} only approximated`;
+        }
+        if (missing.length > 0) {
+          line += `; missing: ${missing.join(', ')}`;
+        }
+        const extensions =
+          kind === 'otherFormat' ? ['md', 'adoc'] : kind === 'html' ? ['html', 'htm'] : ['pdf'];
+        const open = extensions.includes(path.split('.').at(-1)?.toLowerCase() ?? '');
+        report = { title: title(note), target: path, open, approximated };
+        // A6: an export into the workspace is a new note.
+        if (kind === 'otherFormat' && path.startsWith(`${root}/`) && path.endsWith('.adoc')) {
+          const added = path.slice(root.length + 1, -'.adoc'.length);
+          if (!(files[root] ?? []).includes(added)) {
+            files[root] = [...(files[root] ?? []), added];
+            await sendAll();
+          }
+        }
+      }
+      // A-120: reports of exports ending while earlier ones show are kept.
+      const shown = exportReports.length > 0 && reportsStatus === status();
+      if (!shown) {
+        exportReports = [];
+        extra.error = false;
+      }
+      exportReports.push(report);
+      reportsStatus = shown ? `${reportsStatus}\n${line}` : line;
+      if (exportReports.length > 3) {
+        exportReports.shift();
+        reportsStatus = reportsStatus.slice(reportsStatus.indexOf('\n') + 1);
+      }
+      extra.error ||= failure !== null;
+      extra.exports = exportReports.map((r) => ({
+        title: r.title,
+        open: r.open,
+        show: r.approximated.length > 0,
+      }));
+      await setStatus(reportsStatus, null, true);
+      return failure !== null && typed !== null
+        ? { kind: 'problem', problem: failure }
+        : { kind: 'done' };
+    },
+    export_open: async ({ index }) => {
+      const report = reportsStatus === status() ? exportReports[index] : undefined;
+      if (report?.open && report.target !== null) {
+        openWithSystem(report.target);
+      }
+      return null;
+    },
+    export_approximated: ({ index }) => {
+      const report = reportsStatus === status() ? exportReports[index] : undefined;
+      return report ? { title: report.title, lines: report.approximated } : null;
+    },
     link_open_web: async ({ open: answer }) => {
       const address = webAsked;
       webAsked = null;
@@ -1891,6 +2175,10 @@ function workspaceHandlers(
       keepFails = on;
     },
     openedWithSystem: () => [...opened],
+    exportDialog: (dialog) => {
+      exportDialog = dialog;
+    },
+    exportedFiles: () => Object.fromEntries(exported),
     setClipboard: (content) => {
       clipboard = { text: null, html: null, image: false, ...content };
     },
@@ -1939,6 +2227,10 @@ export type MockHooks = {
   cannotKeep(on: boolean): void;
   /** F7, UC-004 BR-007: what the system's program would have opened, in order. */
   openedWithSystem(): string[];
+  /** F11, UC-009 step 2: what the fake save dialog does from now on. */
+  exportDialog(dialog: MockExportDialog): void;
+  /** F11: the files the exports wrote, by path, with the text exported. */
+  exportedFiles(): Record<string, string>;
   /** F6: the system clipboard holds `content` now (unset parts are empty). */
   setClipboard(content: Partial<MockClipboard>): void;
   /** F6: what the system clipboard holds. */

@@ -238,7 +238,7 @@ Signieren und Notarisieren gehören zu Phase 4 und werden dort abgefragt.
 
 | Plugin | Wofür | Permissions |
 |---|---|---|
-| `tauri-plugin-dialog` | Export-Speicherdialog (heute rfd, ADR-016) | `dialog:allow-save` |
+| – | Export-Speicherdialog: bleibt rfd im Backend (ADR-016, entschieden in F11, A-106); kein `tauri-plugin-dialog` | – |
 
 Mehr braucht es nicht:
 
@@ -252,7 +252,7 @@ Mehr braucht es nicht:
 Capabilities:
 
 - Eine Capability `main` für das Hauptfenster: `core:default` ohne Webview-Erzeugung, die eigenen Commands
-  (`allow-*` per Build-Script) und `dialog:allow-save`.
+  (`allow-*` per Build-Script).
 - Drag & Drop über Tauris `onDragDropEvent` (liefert Pfade, wie heute `dropped_files`).
 - CSP: `default-src 'self'; img-src 'self' ul-asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc:
   http://ipc.localhost`. Kein Fremd-Host. Web-Bilder kommen über das Backend und `ul-asset://` (ADR-013,

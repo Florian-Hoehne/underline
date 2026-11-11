@@ -27,6 +27,15 @@ arboard = { version = "3.7", default-features = false, features = ["image-data"]
 # UC-004 BR-007, plan section 8: web addresses and files open with the
 # system's program, as in the egui app; no opener plugin.
 open.workspace = true
+# UC-009 step 2, ADR-016: the system's save dialog for an export, as in the
+# egui app; no dialog plugin. Pinned exactly: `dialog.rs` reads rfd's log
+# records ("Using zenity fallback", errors) to tell a dialog that could not
+# show from a cancelled one; check them again before moving to another
+# version.
+rfd = "=0.17.2"
+# Only to tell a save dialog that could not show from a cancelled one
+# (`dialog.rs`, inventory D-09); rfd reports through `log`.
+log = "0.4"
 # Typed bindings for the window (plan section 4). Release candidates: pinned
 # exactly, as tauri-specta asks.
 specta.workspace = true

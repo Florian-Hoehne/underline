@@ -229,7 +229,7 @@ impl Session {
     /// Takes in the outcomes of background saves (UC-005 A14, A15).
     fn take_save_results(&mut self, results: Vec<SaveResult>) {
         // D-04 (fixed, paritaet.md A-83): the report an offer belongs to.
-        let offered = self.undo_delete.as_ref().map(|offer| offer.status.clone());
+        let kept = self.status_kept();
         let Some(open) = &mut self.open else {
             return;
         };
@@ -259,7 +259,7 @@ impl Session {
                     } else {
                         // D-04 (fixed, paritaet.md A-83): "Saved {t}" does
                         // not take the place of a report with an offer.
-                        if offered.as_deref() != Some(self.status.as_str()) {
+                        if !kept {
                             self.status = format!("Saved {}", tab.title);
                         }
                         // F12: the git changes are asked again here

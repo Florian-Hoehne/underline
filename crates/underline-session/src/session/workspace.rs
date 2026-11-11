@@ -349,12 +349,27 @@ impl Session {
 
     /// M-05.2: the note overview.
     pub(super) fn overview_items(&self) -> Vec<OverviewItem> {
-        self.open
+        let Some(open) = &self.open else {
+            return Vec::new();
+        };
+        // M-05.4: the format names the kinds of export of the note's menu.
+        let formats: std::collections::HashMap<&NoteId, underline_core::NoteFormat> = open
+            .workspace
+            .listing()
+            .notes
             .iter()
-            .flat_map(|open| &open.overview)
+            .map(|note| (&note.id, note.format))
+            .collect();
+        open.overview
+            .iter()
             .map(|entry| OverviewItem {
                 note: entry.id.as_str().to_owned(),
                 label: entry.label.clone(),
+                format: formats
+                    .get(&entry.id)
+                    .copied()
+                    .unwrap_or(underline_core::NoteFormat::Markdown)
+                    .into(),
             })
             .collect()
     }

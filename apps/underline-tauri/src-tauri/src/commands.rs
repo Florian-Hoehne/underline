@@ -27,6 +27,10 @@ use underline_session::{
     RenameStart, RestoreAnswer, Scope, Session, SettingName, SettingsAnswer, SettingsWindowView,
     StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
 };
+use underline_session::{
+    DialogOutcome, ExportAnswer, ExportDialogPlan, ExportJob, ExportKindName, ExportPlaceAnswer,
+    ExportShown, ExportStart, TypedExportPath,
+};
 use underline_session::{FoundNoteView, FoundPlace, SearchOpened};
 
 use crate::clipboard::SystemClipboard;
@@ -1022,6 +1026,142 @@ pub async fn search_open(
     .await?
 }
 
+/// UC-009 step 2, ADR-016: the system's save dialog for an export, managed
+/// by the app so tests can answer it themselves.
+#[derive(Clone)]
+pub struct SaveDialog(Arc<dyn Fn(&ExportDialogPlan) -> DialogOutcome + Send + Sync>);
+
+impl SaveDialog {
+    /// A dialog that answers with `ask`.
+    pub fn new(ask: impl Fn(&ExportDialogPlan) -> DialogOutcome + Send + Sync + 'static) -> Self {
+        Self(Arc::new(ask))
+    }
+}
+
+/// UC-009 step 1, BR-008, M-15.1: Ctrl+Shift+E or "Export…" of the tab
+/// menu: "Export {t} as:" with the kinds of export of the note. `null`
+/// without a workspace or for a note in conflict (the status says so).
+#[tauri::command]
+#[specta::specta]
+pub async fn export_start(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+) -> Result<Option<ExportStart>, UiError> {
+    let id = NoteId::from_relative(&note);
+    on_session(&session, &waker, move |session| session.export_start(&id)).await
+}
+
+/// UC-009 steps 2–3, A1, M-15.2, ADR-016: the system's save dialog "Export
+/// as {label}" for `note` as `kind`, starting in the folder of the last
+/// export (else the home folder) with the note's name. It runs on the
+/// blocking pool without the session, so the window and the tick go on
+/// while it is open. A chosen file is kept by the backend; the window then
+/// runs the export with `export_run` once its edits are sent. Without a
+/// dialog, the answer asks for the path in a field.
+#[tauri::command]
+#[specta::specta]
+pub async fn export_choose(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    dialog: State<'_, SaveDialog>,
+    note: String,
+    kind: ExportKindName,
+) -> Result<ExportPlaceAnswer, UiError> {
+    let id = NoteId::from_relative(&note);
+    let plan = {
+        let id = id.clone();
+        on_session(&session, &waker, move |session| {
+            session.export_dialog(&id, kind)
+        })
+        .await?
+    };
+    let Some(plan) = plan else {
+        return Ok(ExportPlaceAnswer::Done);
+    };
+    let ask = Arc::clone(&dialog.inner().0);
+    // A dialog that ended without an answer counts as cancelled, so the
+    // next one may open (one at a time).
+    let outcome = blocking(move || ask(&plan))
+        .await
+        .unwrap_or(DialogOutcome::Cancelled);
+    on_session(&session, &waker, move |session| {
+        session.export_dialog_answer(&id, kind, outcome)
+    })
+    .await
+}
+
+/// UC-009 steps 4–5, A2 to A6, M-15.3 to M-15.5: exports `note` as `kind`
+/// to the file chosen in the dialog (`typed` is `null`) or typed in the
+/// field. The window's edits reached the backend first (`flushed`,
+/// ADR-025), so the tab's text with changes not yet saved is exported. The
+/// status says "Exporting {t}…" at once; the export is made and written
+/// on the blocking pool without the session (a PDF may take a while), then
+/// the status reports it.
+#[tauri::command]
+#[specta::specta]
+pub async fn export_run(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    kind: ExportKindName,
+    typed: Option<TypedExportPath>,
+) -> Result<ExportAnswer, UiError> {
+    let id = NoteId::from_relative(&note);
+    let typed_run = typed.is_some();
+    let job = on_session(&session, &waker, move |session| {
+        session.export_prepare(&id, kind, typed)
+    })
+    .await?;
+    let job = match job {
+        Ok(job) => job,
+        Err(answer) => return Ok(answer),
+    };
+    let (id, title) = (job.id(), job.title().to_owned());
+    // Review F11: a job whose thread ended still ends "Exporting {t}…".
+    let outcome = blocking(move || job.run())
+        .await
+        .unwrap_or_else(|error| ExportJob::aborted(id, title, &error.message));
+    let failure = on_session(&session, &waker, move |session| {
+        session.finish_export(outcome)
+    })
+    .await?;
+    // Review F11: a typed path comes back with why it failed.
+    Ok(match failure {
+        Some(problem) if typed_run => ExportAnswer::Problem { problem },
+        _ => ExportAnswer::Done,
+    })
+}
+
+/// M-04.8, UC-009 step 5: "Open" of the status bar opens the export
+/// `index` it reports (from 0) with the system's program; nothing once
+/// another report took its place.
+#[tauri::command]
+#[specta::specta]
+pub async fn export_open(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    index: u32,
+) -> Result<(), UiError> {
+    let target = read_session(&session, move |session| session.export_target(index)).await?;
+    if let Some(target) = target {
+        open_with_system(&session, &waker, target).await?;
+    }
+    Ok(())
+}
+
+/// M-04.8, M-15.6, UC-009 A2 step 3: "Show": the note and the lines of the
+/// blocks the export `index` the status reports only approximated, for the
+/// window "Approximated blocks"; `null` once another report took its place.
+#[tauri::command]
+#[specta::specta]
+pub async fn export_approximated(
+    session: State<'_, SharedSession>,
+    index: u32,
+) -> Result<Option<ExportShown>, UiError> {
+    read_session(&session, move |session| session.export_approximated(index)).await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1040,10 +1180,11 @@ mod tests {
     use underline_core::{StateStore, SETTINGS_FILE_NAME};
     use underline_session::{Session, SettingsState};
 
-    use super::{Closer, SharedClipboard, SharedSession};
+    use super::{Closer, SaveDialog, SharedClipboard, SharedSession};
     use crate::bindings;
     use crate::clipboard::{ClipContent, ClipImage, SystemClipboard};
     use crate::ticker::Waker;
+    use underline_session::{DialogOutcome, ExportKindName};
 
     /// Every command, by its Rust name; keep in step with `bindings::builder`
     /// and `build.rs`.
@@ -1096,6 +1237,11 @@ mod tests {
         "search_set",
         "search_page",
         "search_open",
+        "export_start",
+        "export_choose",
+        "export_run",
+        "export_open",
+        "export_approximated",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user
@@ -1108,6 +1254,11 @@ mod tests {
 
     impl Mock {
         fn new(given: Option<PathBuf>, dir: &Path) -> Self {
+            Self::with_dialog(given, dir, SaveDialog::new(|_| DialogOutcome::Cancelled))
+        }
+
+        /// A mock whose save dialog answers with `dialog` (UC-009 step 2).
+        fn with_dialog(given: Option<PathBuf>, dir: &Path, dialog: SaveDialog) -> Self {
             let session = Session::new(
                 given,
                 StateStore::in_memory(),
@@ -1119,6 +1270,7 @@ mod tests {
                 .manage(Arc::new(Mutex::new(session)))
                 .manage(waker)
                 .manage(Closer::new(|| {}))
+                .manage(dialog)
                 .manage(SharedClipboard::new(Mutex::new(
                     SystemClipboard::in_memory(),
                 )))
@@ -1342,8 +1494,8 @@ mod tests {
         assert_eq!(
             response["snapshot"]["overview"],
             json!([
-                { "note": "Home", "label": "Home" },
-                { "note": "Ideas", "label": "Ideas" }
+                { "note": "Home", "label": "Home", "format": "Markdown" },
+                { "note": "Ideas", "label": "Ideas", "format": "Markdown" }
             ])
         );
         assert_eq!(response["snapshot"]["tabs"]["active"], json!("Home"));
@@ -1858,5 +2010,171 @@ mod tests {
         closer.begin_handshake();
         closer.flushed(true);
         assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    /// UC-009 steps 1–5, M-15.1, M-15.2, M-15.5: the kinds, the dialog
+    /// (answered by the test) with the planned name, and the export made
+    /// without the session and reported.
+    #[test]
+    fn uc009_m15_export_start_choose_and_run() {
+        let dir = temp_dir("export");
+        let root = dir.join("notes");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Plan.md"), "# Plan\n\nText.\n").unwrap();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let target = out.join("Plan.html");
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let dialog = {
+            let asked = Arc::clone(&asked);
+            let target = target.clone();
+            SaveDialog::new(move |plan| {
+                asked
+                    .lock()
+                    .push((plan.title.clone(), plan.file_name.clone()));
+                DialogOutcome::Chosen(target.clone())
+            })
+        };
+        let mock = Mock::with_dialog(Some(root), &dir, dialog);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let start = mock
+            .invoke("export_start", json!({ "note": "Plan" }))
+            .unwrap();
+        assert_eq!(start["title"], json!("Plan"));
+        assert_eq!(
+            start["choices"][0],
+            json!({ "kind": "otherFormat", "label": "AsciiDoc" })
+        );
+
+        let chosen = mock
+            .invoke("export_choose", json!({ "note": "Plan", "kind": "html" }))
+            .unwrap();
+        assert_eq!(chosen["kind"], json!("chosen"));
+        assert_eq!(
+            *asked.lock(),
+            [("Export as HTML".to_owned(), "Plan.html".to_owned())]
+        );
+
+        let ran = mock
+            .invoke(
+                "export_run",
+                json!({ "note": "Plan", "kind": "html", "typed": null }),
+            )
+            .unwrap();
+        assert_eq!(ran, json!({ "kind": "done" }));
+        assert!(std::fs::read_to_string(&target).unwrap().contains("Text."));
+        assert_eq!(
+            mock.status(),
+            format!("Exported Plan to {}", target.display())
+        );
+        assert_eq!(
+            mock.invoke("export_approximated", json!({ "index": 0 }))
+                .unwrap(),
+            json!({ "title": "Plan", "lines": [] })
+        );
+    }
+
+    /// ADR-016, M-15.2: without a dialog the path is typed; an existing
+    /// file asks first (D-03: for that path only).
+    #[test]
+    fn uc009_m15_2_without_a_dialog_the_path_is_typed() {
+        let dir = temp_dir("export-typed");
+        let root = dir.join("notes");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Plan.md"), "# Plan\n").unwrap();
+        let mock = Mock::with_dialog(
+            Some(root),
+            &dir,
+            SaveDialog::new(|_| DialogOutcome::Unavailable),
+        );
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let answer = mock
+            .invoke("export_choose", json!({ "note": "Plan", "kind": "pdf" }))
+            .unwrap();
+        assert_eq!(answer["kind"], json!("typed"));
+        assert_eq!(answer["heading"], json!("Export Plan as PDF to:"));
+        assert!(answer["path"].as_str().unwrap().ends_with("Plan.pdf"));
+
+        let target = dir.join("Plan.md.html");
+        std::fs::write(&target, "old").unwrap();
+        let path = target.display().to_string();
+        let answer = mock
+            .invoke(
+                "export_run",
+                json!({ "note": "Plan", "kind": "html", "typed": { "path": path, "replace": null } }),
+            )
+            .unwrap();
+        assert_eq!(
+            answer,
+            json!({ "kind": "exists", "problem": "The file exists. Export again to replace it.", "path": path })
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old");
+    }
+
+    /// UC-009 A1: a cancelled dialog writes nothing and says nothing.
+    #[test]
+    fn uc009_a1_a_cancelled_dialog_does_nothing() {
+        let dir = temp_dir("export-cancel");
+        let root = dir.join("notes");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Plan.md"), "# Plan\n").unwrap();
+        let mock = Mock::new(Some(root), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        let before = mock.status();
+
+        let answer = mock
+            .invoke("export_choose", json!({ "note": "Plan", "kind": "pdf" }))
+            .unwrap();
+        let ran = mock
+            .invoke(
+                "export_run",
+                json!({ "note": "Plan", "kind": "pdf", "typed": null }),
+            )
+            .unwrap();
+
+        assert_eq!(answer, json!({ "kind": "done" }));
+        assert_eq!(ran, json!({ "kind": "done" }));
+        assert_eq!(mock.status(), before);
+        // Nothing to open.
+        assert_eq!(
+            mock.invoke("export_open", json!({ "index": 0 })),
+            Ok(Value::Null)
+        );
+    }
+
+    /// Review F11: one save dialog at a time; a second request while one is
+    /// open does not show another.
+    #[test]
+    fn uc009_a121_a_second_dialog_does_not_open() {
+        let dir = temp_dir("export-single");
+        let root = dir.join("notes");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("Plan.md"), "# Plan\n").unwrap();
+        let shown = Arc::new(Mutex::new(0));
+        let dialog = {
+            let shown = Arc::clone(&shown);
+            SaveDialog::new(move |_| {
+                *shown.lock() += 1;
+                DialogOutcome::Cancelled
+            })
+        };
+        let mock = Mock::with_dialog(Some(root), &dir, dialog);
+        mock.invoke("ws_start", json!({})).unwrap();
+        // A dialog is open (as the first `export_choose` leaves it).
+        let open = mock.app.state::<SharedSession>().lock().export_dialog(
+            &underline_core::NoteId::from_relative("Plan"),
+            ExportKindName::Pdf,
+        );
+        assert!(open.is_some());
+
+        let answer = mock
+            .invoke("export_choose", json!({ "note": "Plan", "kind": "html" }))
+            .unwrap();
+
+        assert_eq!(answer, json!({ "kind": "done" }));
+        assert_eq!(*shown.lock(), 0);
+        assert_eq!(mock.status(), "Choosing where to save Plan…");
     }
 }

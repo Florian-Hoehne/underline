@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-approximated"
+description = "Enables the export_approximated command without any pre-configured scope."
+commands.allow = ["export_approximated"]
+
+[[permission]]
+identifier = "deny-export-approximated"
+description = "Denies the export_approximated command without any pre-configured scope."
+commands.deny = ["export_approximated"]

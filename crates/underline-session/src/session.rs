@@ -6,6 +6,7 @@ mod diagrams;
 pub(crate) use diagrams::SvgDiagrams;
 mod editing;
 mod embed;
+mod export;
 mod facade;
 mod indexes;
 mod links;
@@ -18,6 +19,7 @@ mod window;
 mod workspace;
 
 pub use self::embed::{EmbedDone, EmbedPlan};
+pub use self::export::{ExportDialogPlan, ExportJob, ExportOutcome};
 pub use self::links::Followed;
 pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
@@ -125,6 +127,9 @@ pub struct Session {
     restoring: Option<notes::Restoring>,
     /// UC-008: the search of the overlay, kept when another workspace opens.
     search: search::Search,
+    /// UC-009: the last folder, the chosen file, the open dialog, the
+    /// running exports and the reports the status shows.
+    exports: export::Exports,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -146,8 +151,9 @@ impl std::fmt::Debug for Session {
 #[derive(Debug)]
 struct Told {
     status: String,
-    /// What the status bar offered with it.
-    offer: Option<StatusOffer>,
+    /// What the status bar offered with it: the undo, the exports' offers,
+    /// the error mark and the busy state.
+    offer: (Option<StatusOffer>, Vec<crate::ExportOfferView>, bool, bool),
     /// The settings in effect; the view is built only when they changed.
     settings: Effective,
     width_generation: u32,
@@ -192,7 +198,7 @@ impl Session {
     ) -> Self {
         let told = Told {
             status: String::new(),
-            offer: None,
+            offer: (None, Vec::new(), false, false),
             settings: settings.effective().clone(),
             width_generation: settings.width_generation(),
             settings_window: (settings.revision(), None),
@@ -229,6 +235,7 @@ impl Session {
             undo_delete: None,
             restoring: None,
             search: search::Search::default(),
+            exports: export::Exports::default(),
             views_dirty: false,
             told,
         };
@@ -265,6 +272,7 @@ impl Session {
             themes: theme_names(),
             status: self.status.clone(),
             tools: crate::ToolView::all(),
+            export_kinds: crate::ExportKindsView::default(),
             input_modes: underline_core::InputMode::ALL
                 .iter()
                 .map(|mode| mode.label().to_owned())
@@ -447,20 +455,25 @@ impl Session {
         events.extend(self.sync_events());
         // UC-007 A4: the undo is offered while the report of the deletion
         // shows; another report ends it.
-        if self
-            .undo_delete
-            .as_ref()
-            .is_some_and(|offer| offer.status != self.status)
-        {
+        if self.undo_delete.as_ref().is_some_and(|offer| {
+            offer.status != self.status && !self.replaced_by_dialog(&offer.status)
+        }) {
             self.undo_delete = None;
         }
         let offer = self.undo_delete.as_ref().map(|_| StatusOffer::UndoDelete);
-        if self.status != self.told.status || offer != self.told.offer {
+        // M-04.8: "Open" and "Show" of the exports reported, likewise.
+        let (exports, error) = self.export_offers();
+        let busy = self.exporting();
+        let told = (offer, exports.clone(), error, busy);
+        if self.status != self.told.status || told != self.told.offer {
             self.told.status.clone_from(&self.status);
-            self.told.offer = offer;
+            self.told.offer = told;
             events.push(Event::Status(StatusView {
                 text: self.status.clone(),
                 offer,
+                exports,
+                error,
+                busy,
             }));
         }
         events
@@ -485,6 +498,16 @@ impl Session {
         }
         self.told.settings_window_view = Some(view.clone());
         Some(Event::SettingsWindow(Box::new(view)))
+    }
+
+    /// D-04 (fixed, paritaet.md A-83, A-113): the status that the
+    /// background save's "Saved {t}" does not replace: the report of a
+    /// deletion with its "Undo", and an export's own status.
+    pub(super) fn status_kept(&self) -> bool {
+        self.undo_delete
+            .as_ref()
+            .is_some_and(|offer| offer.status == self.status)
+            || self.export_status_kept()
     }
 
     /// The settings' messages become the status, the last one wins.
@@ -798,6 +821,9 @@ mod tests {
             [Event::Status(StatusView {
                 text: session.status().to_owned(),
                 offer: None,
+                exports: Vec::new(),
+                error: false,
+                busy: false,
             })]
         );
     }

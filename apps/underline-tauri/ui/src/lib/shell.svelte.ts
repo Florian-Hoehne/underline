@@ -19,6 +19,10 @@ import {
   type CreateAnswer,
   type DeletedNoteView,
   type DeleteQuestion,
+  type ExportChoice,
+  type ExportKindName,
+  type ExportOfferView,
+  type ExportShown,
   type NewNoteRequest,
   type RestoreAnswer,
   type StatusOffer,
@@ -131,6 +135,35 @@ export type RestoreDialog = { title: string; folder: string; problem: string | n
 /** M-14.4, UC-007 A7: "Remove deleted notes": one by its key, or all (`null`). */
 export type PurgeDialog = { key: string | null; count: number };
 
+/**
+ * M-15.1, M-15.2: the window "Export note" (UC-009 steps 1–3): the kinds to
+ * choose from with the keyboard (BR-008), the system's file dialog being
+ * open (nothing shows meanwhile, as in egui), or the path field when no
+ * dialog could be shown (ADR-016).
+ */
+export type ExportDialog =
+  | {
+      stage: 'choose';
+      note: string;
+      title: string;
+      choices: ExportChoice[];
+      /** The kind chosen with Up and Down, from 0. */
+      chosen: number;
+    }
+  | { stage: 'system'; note: string; kind: ExportKindName }
+  | {
+      stage: 'path';
+      note: string;
+      kind: ExportKindName;
+      /** "Export {t} as {label} to:". */
+      heading: string;
+      path: string;
+      /** "The file exists. Export again to replace it." */
+      problem: string | null;
+      /** The path the user may replace with the next "Replace" (D-03: that path only). */
+      replace: string | null;
+    };
+
 /** The note dialogs (M-14); several may be open at once, as in egui. */
 export type NoteDialogs = {
   newNote: NewNoteDialog | null;
@@ -192,6 +225,12 @@ export class Shell {
   status = $state('');
   /** UC-007 A4: what the status bar offers with the status message ("Undo"). */
   statusOffer = $state<StatusOffer | null>(null);
+  /** M-04.8: "Open" and "Show" for each export the status reports. */
+  statusExports = $state.raw<ExportOfferView[]>([]);
+  /** UC-009 A4: the status reports a failed export. */
+  statusError = $state(false);
+  /** Review F11: an export is running. */
+  statusBusy = $state(false);
   /** M-05.6, UC-007 A5: the deleted notes, most recently deleted first. */
   deleted = $state.raw<DeletedNoteView[]>([]);
   /**
@@ -241,6 +280,12 @@ export class Shell {
    * note then active; the tool panel shows them while that note is.
    */
   indexes = $state.raw<IndexesView | null>(null);
+  /** M-15.1, M-15.2: the window "Export note", or the system's dialog, while open. */
+  exporting = $state.raw<ExportDialog | null>(null);
+  /** M-15.6, UC-009 A2: what the window "Approximated blocks" lists, until it is closed. */
+  approximated = $state.raw<ExportShown | null>(null);
+  /** Grows when the open "Export note" is asked for again; it takes the keyboard. */
+  exportAskedAgain = $state(0);
   /** M-07.3, UC-004 A4: the web address "Open web address" asks about. */
   webQuestion = $state<string | null>(null);
   /**
@@ -336,6 +381,9 @@ export class Shell {
       events.status.listen((event) => {
         this.status = event.payload.text;
         this.statusOffer = event.payload.offer;
+        this.statusExports = event.payload.exports;
+        this.statusError = event.payload.error;
+        this.statusBusy = event.payload.busy;
       }),
       events.deleted.listen((event) => {
         this.deleted = event.payload;
@@ -351,6 +399,9 @@ export class Shell {
         if (event.payload?.root !== this.workspace?.root) {
           // The note dialogs were of the workspace left.
           this.notes = NO_NOTE_DIALOGS;
+          if (this.exporting?.stage !== 'system') {
+            this.exporting = null;
+          }
           // M-21.3: the find field closes; the search starts anew there.
           this.search.workspaceChanged();
         }
@@ -860,6 +911,189 @@ export class Shell {
   async openExistingNote(note: string): Promise<void> {
     this.closeNoteDialog('newNote');
     await this.openNote(note);
+  }
+
+  /**
+   * M-15.1, UC-009 step 1: exports `note`; with `kind` (the submenu of the
+   * note overview, M-05.4) the system's dialog comes at once, else "Export
+   * {t} as:" asks first (Ctrl+Shift+E, "Export…" of the tab menu). Refused
+   * in the status bar for a note in conflict. While an export is being
+   * asked for, another is not started (egui).
+   */
+  async startExport(note: string, kind?: ExportKindName): Promise<void> {
+    if (this.exporting !== null) {
+      // UX review F11: the open "Export note" takes the keyboard again;
+      // while the system's dialog is open the status says so already.
+      if (this.exporting.stage !== 'system') {
+        this.exportAskedAgain += 1;
+      }
+      return;
+    }
+    if (kind !== undefined) {
+      await this.#askExportPlace(note, kind);
+      return;
+    }
+    const result = await this.#serial(() => commands.exportStart(note));
+    if (result.status === 'error') {
+      this.#fail('export_start', result.error);
+      return;
+    }
+    if (result.data === null || this.exporting !== null) {
+      return;
+    }
+    this.exporting = { stage: 'choose', ...result.data, chosen: 0 };
+  }
+
+  /** M-15.1, BR-008: Up and Down move the choice of "Export {t} as:". */
+  moveExportChoice(by: number): void {
+    const dialog = this.exporting;
+    if (dialog?.stage === 'choose') {
+      const chosen = Math.min(dialog.choices.length - 1, Math.max(0, dialog.chosen + by));
+      this.exporting = { ...dialog, chosen };
+    }
+  }
+
+  /** M-15.1: Enter or a click chooses the kind `index`; the system's dialog follows. */
+  async chooseExportKind(index: number): Promise<void> {
+    const dialog = this.exporting;
+    const choice = dialog?.stage === 'choose' ? dialog.choices[index] : undefined;
+    if (dialog?.stage !== 'choose' || choice === undefined) {
+      return;
+    }
+    this.exporting = null;
+    await this.#askExportPlace(dialog.note, choice.kind);
+  }
+
+  /** M-15.2: the path typed in the field (ADR-016); the problem of the last try goes. */
+  editExportPath(path: string): void {
+    const dialog = this.exporting;
+    if (dialog?.stage === 'path') {
+      this.exporting = { ...dialog, path, problem: null };
+    }
+  }
+
+  /** UC-009 A1: Cancel or Escape: nothing is exported. */
+  closeExport(): void {
+    if (this.exporting?.stage !== 'system') {
+      this.exporting = null;
+    }
+  }
+
+  /**
+   * UC-009 steps 2–3, M-15.2: the system's file dialog (in the backend,
+   * ADR-016); nothing else shows while it is open. Its file is exported;
+   * without a dialog the path field asks.
+   */
+  async #askExportPlace(note: string, kind: ExportKindName): Promise<void> {
+    this.exporting = { stage: 'system', note, kind };
+    let answer;
+    try {
+      // Not queued: the dialog waits for the user, the window goes on.
+      answer = await commands.exportChoose(note, kind);
+    } catch (error) {
+      answer = {
+        status: 'error' as const,
+        error: { kind: 'internal' as const, message: String(error) },
+      };
+    }
+    this.exporting = null;
+    if (answer.status === 'error') {
+      this.#fail('export_choose', answer.error);
+      return;
+    }
+    const place = answer.data;
+    if (place.kind === 'chosen') {
+      await this.#runExport(note, kind, null);
+    } else if (place.kind === 'typed') {
+      this.exporting = {
+        stage: 'path',
+        note,
+        kind,
+        heading: place.heading,
+        path: place.path,
+        problem: null,
+        replace: null,
+      };
+    }
+  }
+
+  /** M-15.2: "Export" or "Replace" (or Enter) of the path field. */
+  async exportToTypedPath(): Promise<void> {
+    const dialog = this.exporting;
+    if (dialog?.stage !== 'path') {
+      return;
+    }
+    // The field closes at once, as in egui; it comes back if the file exists.
+    this.exporting = null;
+    await this.#runExport(dialog.note, dialog.kind, dialog);
+  }
+
+  /**
+   * UC-009 steps 4–5, A5, M-15.3 to M-15.5: the export, once the window's
+   * edits reached the backend (ADR-025: it holds the tab's text with
+   * changes not yet saved). Not queued: a PDF may take a while, and the
+   * status says "Exporting {t}…" meanwhile.
+   */
+  async #runExport(
+    note: string,
+    kind: ExportKindName,
+    typed: Extract<ExportDialog, { stage: 'path' }> | null,
+  ): Promise<void> {
+    let result;
+    try {
+      result = await flushed(() =>
+        commands.exportRun(
+          note,
+          kind,
+          typed === null ? null : { path: typed.path, replace: typed.replace },
+        ),
+      );
+    } catch (error) {
+      this.#fail('export_run', { kind: 'internal', message: String(error) });
+      return;
+    }
+    if (result.status === 'error') {
+      this.#fail('export_run', result.error);
+      return;
+    }
+    const answer = result.data;
+    if (answer.kind === 'askAgain') {
+      // A5: another place is asked for.
+      if (this.exporting === null) {
+        await this.#askExportPlace(note, kind);
+      }
+    } else if (answer.kind === 'exists' && typed !== null && this.exporting === null) {
+      this.exporting = { ...typed, problem: answer.problem, replace: answer.path };
+    } else if (answer.kind === 'problem' && typed !== null && this.exporting === null) {
+      // The field comes back with what was typed and why (A5, an empty
+      // path, a folder, a failed export).
+      this.exporting = { ...typed, problem: answer.problem };
+    }
+  }
+
+  /** M-04.8, UC-009 step 5: "Open" opens the export `index` with the system's program. */
+  async openExport(index: number): Promise<void> {
+    const result = await commands.exportOpen(index);
+    if (result.status === 'error') {
+      this.#fail('export_open', result.error);
+    }
+  }
+
+  /** M-04.8, M-15.6, UC-009 A2: "Show" lists the approximated blocks of the export `index`. */
+  async showApproximated(index: number): Promise<void> {
+    const result = await commands.exportApproximated(index);
+    if (result.status === 'error') {
+      this.#fail('export_approximated', result.error);
+      return;
+    }
+    if (result.data !== null && result.data.lines.length > 0) {
+      this.approximated = result.data;
+    }
+  }
+
+  /** M-15.6: "Close" of "Approximated blocks". */
+  closeApproximated(): void {
+    this.approximated = null;
   }
 
   /**

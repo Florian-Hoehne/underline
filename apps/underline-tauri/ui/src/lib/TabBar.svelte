@@ -12,9 +12,9 @@
   among the tabs, Enter and Space activate one, and Delete closes it (Q-08:
   "×" is no longer in the Tab sequence).
 
-  M-06.4 (feature F8): the context menu of a tab, "Rename…  F2" and
-  "Delete…" ("Export…" comes with feature F11, paritaet.md A-79); it also
-  opens with Shift+F10 or the context menu key (A-80).
+  M-06.4 (features F8, F11): the context menu of a tab, "Rename…  F2",
+  "Delete…" and "Export…  Ctrl+Shift+E" ("Cmd+Shift+E" on macOS, inventory
+  D-11 fixed); it also opens with Shift+F10 or the context menu key (A-80).
 
   A later feature adds the tab "Todos (N)" (M-06.5, F15). Until then a tab "Todos" that was active is remembered,
   but no note tab shows as active.
@@ -93,6 +93,12 @@
     return [
       { label: 'Rename…', shortcut: 'F2', action: () => void shell.startRename(note) },
       { label: 'Delete…', action: () => void shell.startDelete(note) },
+      // UC-009 step 1: asks for the kind first.
+      {
+        label: 'Export…',
+        shortcut: `${shell.command}+Shift+E`,
+        action: () => void shell.startExport(note),
+      },
     ];
   }
 
