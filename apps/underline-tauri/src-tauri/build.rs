@@ -71,6 +71,8 @@ fn main() {
         "conflict_keep",
         "conflict_abort",
         "todo_conflict_resolve",
+        "agents_set_access",
+        "agents_section",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

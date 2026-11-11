@@ -26,11 +26,23 @@
 
   The rows, their texts and choices come from the backend
   (`SettingsWindowView`); nothing is decided here.
+
+  M-17.2 to M-17.5 (UC-016, feature F14): below the settings, in both
+  parts, the section "Agents", open, as egui's collapsing header: what it
+  does and the agent access in effect (or "Open a workspace to connect
+  agents to it."), each agent tool with how the workspace stands in it and
+  "Install" or "Remove", a question before installing (A1, A2), the report
+  of the last action, and "Copy configuration". The tools are checked when
+  the window opens, when another workspace opens, and after every action
+  (BR-006); meanwhile the section is busy.
 -->
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
   import DialogWindow from './DialogWindow.svelte';
   import type {
+    AgentAction,
+    AgentButtonView,
+    AgentsSectionView,
     Scope,
     SettingChoiceView,
     SettingControlView,
@@ -258,6 +270,62 @@
     shell.settingsBeforeClose = flushNumbers;
   });
 
+  // M-17.2, UC-016 BR-006: the agent tools are checked when the window
+  // opens and when another workspace opens.
+  let agentsCheckedFor: string | null | undefined;
+  $effect(() => {
+    const root = shell.workspace?.root ?? null;
+    if (root !== agentsCheckedFor) {
+      agentsCheckedFor = root;
+      void shell.agentsAct(null);
+    }
+  });
+
+  const section = $derived<AgentsSectionView | null>(shell.agentsSection);
+  let agentsBody = $state<HTMLElement | null>(null);
+
+  /**
+   * A button of the section: the backend does it and checks the tools
+   * again. A question that comes takes the keyboard; when it is answered,
+   * the keyboard goes to the tool's row, else it stays where it was.
+   */
+  /** The tools are being checked: the buttons wait (`aria-disabled`). */
+  const busy = $derived(shell.agentsSectionBusy);
+
+  /** UX review F14, Q-109: Escape in a question is its "Cancel". */
+  function onQuestionKey(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      void agentAct({ kind: 'cancel' });
+    }
+  }
+
+  async function agentAct(action: AgentAction) {
+    if (busy) {
+      return;
+    }
+    const asked = section?.question !== null && section?.question !== undefined;
+    await shell.agentsAct(action);
+    await tick();
+    if (destroyed) {
+      return;
+    }
+    const question = agentsBody?.querySelector<HTMLButtonElement>('.question button');
+    if (question) {
+      question.focus();
+    } else if (asked && 'tool' in action) {
+      agentsBody?.querySelector<HTMLButtonElement>(`[data-tool="${action.tool}"]`)?.focus();
+    } else if (asked) {
+      agentsBody?.querySelector<HTMLButtonElement>('.copy')?.focus();
+    }
+  }
+
+  /** "Install Claude Code", "Remove Cursor": the button with its tool. */
+  function toolButtonName(button: AgentButtonView, tool: string): string {
+    return `${button.label} ${tool}`;
+  }
+
   onDestroy(() => {
     flushNumbers();
     destroyed = true;
@@ -390,6 +458,95 @@
           {/each}
         </div>
       </div>
+      <details class="agents" open>
+        <summary>Agents</summary>
+        <div
+          class="agents-body"
+          aria-busy={busy}
+          aria-label="Agents"
+          role="group"
+          bind:this={agentsBody}
+        >
+          {#each shell.agents.head as line (line)}
+            <p class="weak">{line}</p>
+          {/each}
+          {#if shell.agents.workspace && busy}
+            <!-- UX review F14 (new text, Q-105): the tools are being checked. -->
+            <p class="weak">Checking…</p>
+          {/if}
+          {#if shell.agents.workspace && section !== null}
+            <div class="tools">
+              {#each section.tools as row (row.tool)}
+                <span class="tool-name">{row.name}</span>
+                <span class="tool-state" class:weak={row.weak} title={row.hover ?? undefined}
+                  >{#if row.warn}<span aria-hidden="true">⚠&nbsp;</span><span class="hidden"
+                      >Warning:
+                    </span>{/if}{row.state}{#if row.hover}<span class="hidden">: {row.hover}</span
+                    >{/if}</span
+                >
+                <span class="tool-action">
+                  {#if row.button}
+                    {@const button = row.button}
+                    <button
+                      type="button"
+                      class="ui-button small"
+                      data-tool={row.tool}
+                      disabled={!button.enabled}
+                      aria-disabled={busy}
+                      aria-label={toolButtonName(button, row.name)}
+                      onclick={() => void agentAct(button.action)}>{button.label}</button
+                    >
+                  {/if}
+                </span>
+              {/each}
+            </div>
+            {#if section.question}
+              {@const question = section.question}
+              <!-- UX review F14: named by its text; Escape is "Cancel" (Q-109). -->
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <div
+                class="question"
+                role="group"
+                aria-label={question.text === null ? 'Question' : undefined}
+                aria-labelledby={question.text === null ? undefined : 'agents-question'}
+                onkeydown={onQuestionKey}
+              >
+                {#if question.text}
+                  <p id="agents-question">{question.text}</p>
+                {/if}
+                <div class="actions">
+                  {#each question.buttons as button (button.label)}
+                    <button
+                      type="button"
+                      class="ui-button small"
+                      aria-disabled={busy}
+                      onclick={() => void agentAct(button.action)}>{button.label}</button
+                    >
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          {/if}
+          <!-- Always there, so screen readers hear each new report. -->
+          <p class="report" role="status">
+            {shell.agents.workspace ? (section?.report ?? '') : ''}
+          </p>
+          {#if shell.agents.workspace && section?.copy}
+            {@const copy = section.copy}
+            <div>
+              <button
+                type="button"
+                class="ui-button small copy"
+                title={section.copyHover}
+                aria-describedby="agents-copy-hint"
+                aria-disabled={busy}
+                onclick={() => void agentAct(copy.action)}>{copy.label}</button
+              >
+              <span class="hidden" id="agents-copy-hint">{section.copyHover}</span>
+            </div>
+          {/if}
+        </div>
+      </details>
     {/if}
   </div>
 </DialogWindow>
@@ -508,6 +665,74 @@
     padding: 0 var(--space-2);
   }
 
+  /* M-17.2: the section "Agents", as egui's collapsing header, 8 px below. */
+  .agents {
+    /* App-tester F14: the section takes the window's width and does not
+       widen it when a question or report appears. */
+    width: 0;
+    min-width: 100%;
+    margin-top: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--ui-rule);
+  }
+
+  .agents summary {
+    min-height: 24px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .agents summary:focus-visible {
+    outline: 2px solid var(--ui-focus);
+    outline-offset: 2px;
+  }
+
+  .agents-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .agents-body p {
+    margin: 0;
+  }
+
+  /* egui's grid of three columns, 12 px apart, rows 6 px apart. */
+  .tools {
+    display: grid;
+    grid-template-columns: max-content minmax(0, max-content) max-content;
+    gap: 6px var(--space-3);
+    align-items: center;
+  }
+
+  .tool-state,
+  .agents-body p {
+    overflow-wrap: anywhere;
+  }
+
+  [aria-disabled='true'] {
+    color: var(--ui-hint);
+    cursor: progress;
+  }
+
+  .question,
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .small:disabled {
+    color: var(--ui-hint);
+    cursor: default;
+  }
+
   /* A narrow window: one column, each name above its control and note. */
   @media (max-width: 520px) {
     .grid,
@@ -522,6 +747,16 @@
 
     select {
       width: 100%;
+    }
+
+    /* UX review F14: each tool's name above its state and button. */
+    .tools {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 2px;
+    }
+
+    .tool-name:not(:first-child) {
+      margin-top: var(--space-2);
     }
   }
 </style>

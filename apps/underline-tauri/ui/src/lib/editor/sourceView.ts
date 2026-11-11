@@ -65,6 +65,7 @@ import {
   type FindAnswer,
   type FindStep,
   type FoundView,
+  type AgentMarkView,
   type HighlightView,
   type KeysStatusView,
   type SectionsView,
@@ -78,6 +79,7 @@ import type { CursorMark } from '../facade/active';
 import { onPointerReleased, type Clipboarded } from './clipboard';
 import { folding, sectionsField, setSections } from './folding';
 import { foundField, foundRanges, setFound } from './found';
+import { agentMarksField, agentMarksTheme, setAgentMarks } from './agentMarks';
 import { colorField, setColors } from './highlight';
 import { routeKey, type InputModeName } from './keys';
 import type { CoreListener } from './sync';
@@ -656,6 +658,14 @@ export class SourceView {
     }
   }
 
+  /** M-17.6: the agent cursors in this note, as the backend sent them last. */
+  setAgentMarks(marks: readonly AgentMarkView[]): void {
+    if (this.#destroyed) {
+      return;
+    }
+    this.view.dispatch({ effects: setAgentMarks.of(marks) });
+  }
+
   destroy(): void {
     // The Vim keys' changes not sent yet still go (A-01).
     if (this.#local.length > 0) {
@@ -742,6 +752,9 @@ export class SourceView {
       ),
       colorField,
       foundField,
+      // M-17.6: the agent cursor.
+      agentMarksField,
+      agentMarksTheme,
       sourceTheme,
       EditorView.domEventHandlers({
         keydown: (event) => this.#onKey(event),

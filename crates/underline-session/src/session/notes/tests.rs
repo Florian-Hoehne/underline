@@ -440,6 +440,7 @@ fn uc007_m14_3_deleting_closes_the_tab_and_offers_the_undo() {
             exports: Vec::new(),
             error: false,
             busy: false,
+            agents: Vec::new(),
         }]
     );
     let deleted = events

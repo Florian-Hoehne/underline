@@ -18,6 +18,8 @@ underline-facade.workspace = true
 underline-editor-core.workspace = true
 underline-editor-view.workspace = true
 underline-wiki.workspace = true
+# UC-016, ADR-017: MCP install for the section "Agents" of the settings.
+underline-mcp.workspace = true
 ropey.workspace = true
 serde.workspace = true
 thiserror.workspace = true

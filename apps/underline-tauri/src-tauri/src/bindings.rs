@@ -20,10 +20,10 @@ use underline_session::{
 
 use crate::commands;
 use crate::events::{
-    ChangedEvent, ChangesEvent, CloseQuestionEvent, ConflictEvent, DeletedEvent, DiffEvent,
-    EnrichEvent, FlushEvent, GitBarEvent, HighlightEvent, IndexesEvent, OverviewEvent,
-    PropertiesEvent, SearchEvent, SettingsEvent, SettingsWindowEvent, StatusEvent, TabsEvent,
-    TodoConflictsEvent, WorkspaceEvent,
+    AgentMarksEvent, AgentsEvent, ChangedEvent, ChangesEvent, CloseQuestionEvent, ConflictEvent,
+    DeletedEvent, DiffEvent, EnrichEvent, FlushEvent, GitBarEvent, HighlightEvent, IndexesEvent,
+    OverviewEvent, PropertiesEvent, SearchEvent, SettingsEvent, SettingsWindowEvent, StatusEvent,
+    TabsEvent, TodoConflictsEvent, WorkspaceEvent,
 };
 
 /// Where the generated bindings live.
@@ -112,7 +112,9 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::conflict_take_side,
             commands::conflict_keep,
             commands::conflict_abort,
-            commands::todo_conflict_resolve
+            commands::todo_conflict_resolve,
+            commands::agents_set_access,
+            commands::agents_section
         ])
         .events(collect_events![
             StatusEvent,
@@ -134,7 +136,9 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             DiffEvent,
             GitBarEvent,
             ConflictEvent,
-            TodoConflictsEvent
+            TodoConflictsEvent,
+            AgentsEvent,
+            AgentMarksEvent
         ])
         // ADR-025: what crosses only between the window and the editor's
         // WASM (`ui/src/lib/editor/core.ts`).

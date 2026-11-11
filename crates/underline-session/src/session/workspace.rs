@@ -519,14 +519,17 @@ impl Session {
     fn switch_to(&mut self, workspace: Workspace) {
         let root = workspace.root().to_owned();
         // Closing the workspace open before:
-        // - F14 (inventory D-05, fixed there): remove its window presence
-        //   here, as the egui app does only when it ends.
+        // - F14 (inventory D-05, fixed, A-162): its window presence goes
+        //   here, which the egui app removes only when it ends.
         // - F13: its syncer ends with it (`track_remote`).
         // Opening this one:
         // - F13: a `Syncer` when it has a git remote, then a full sync
         //   (UC-014), started below; its state is the status bar's (D-06).
         // - F12: a `ChangeTracker` when it is a git repository (UC-011),
         //   started below.
+        if let Some(left) = self.workspace_root().map(Path::to_owned) {
+            self.agents_leave(&left);
+        }
         let wake = self.wake.clone();
         let watcher = WorkspaceWatcher::start(
             &root,

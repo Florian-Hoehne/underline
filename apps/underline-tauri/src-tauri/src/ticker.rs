@@ -3,9 +3,11 @@
 
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use parking_lot::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
+use underline_session::Session;
 
 use crate::commands::SharedSession;
 use crate::events::emit_all;
@@ -41,11 +43,31 @@ pub fn spawn<R: Runtime>(app: AppHandle<R>, wakes: Receiver<()>) -> std::io::Res
         .name("underline-tick".into())
         .spawn(move || {
             run(&wakes, TICK, || {
-                let events = app.state::<SharedSession>().lock().tick(Instant::now());
+                let session = app.state::<SharedSession>();
+                run_agents(&session, Instant::now());
+                let events = session.lock().tick(Instant::now());
                 emit_all(&app, events);
             });
         })
         .map(drop)
+}
+
+/// How many rounds of the agents' files one tick runs at most: the
+/// presence and requests, the notes of the requests, the answers.
+const AGENT_ROUNDS: usize = 4;
+
+/// ADR-018, UC-017 BR-004: the agents' files of the open workspace, read and
+/// written without holding the session (`Session::agents_job`): the window
+/// presence, the connected agents, the requests, the changes of notes not
+/// open and the answers.
+pub fn run_agents(session: &Mutex<Session>, now: Instant) {
+    for _ in 0..AGENT_ROUNDS {
+        let Some(job) = session.lock().agents_job(now) else {
+            break;
+        };
+        let done = job.run(SystemTime::now());
+        session.lock().agents_done(done, now);
+    }
 }
 
 /// Calls `tick` every `every`, or at once on a wake, until every sender of

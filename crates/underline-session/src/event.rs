@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 
+use crate::agents_view::{AgentMarksView, AgentOpenView, AgentsView};
 use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
 use crate::export_view::ExportOfferView;
 use crate::git_view::{ChangesView, DiffView};
@@ -30,6 +31,10 @@ pub struct StatusView {
     pub error: bool,
     /// Review F11: an export is running.
     pub busy: bool,
+    /// M-04.9 (UC-019 BR-010): "Open" or "Open {title}" for the notes the
+    /// text reports an agent created or changed, the newest first, at most
+    /// three.
+    pub agents: Vec<AgentOpenView>,
 }
 
 /// A change the window has to show.
@@ -80,4 +85,9 @@ pub enum Event {
     Conflict(Option<ConflictBarView>),
     /// M-19.10, UC-020 A10: the todos in conflict.
     TodoConflicts(Vec<TodoConflictView>),
+    /// M-04.4, M-17.1, M-17.2: the agents entry of the status bar and the
+    /// head of the section "Agents" of the settings.
+    Agents(AgentsView),
+    /// M-17.6: the agent cursors in the open notes.
+    AgentMarks(Vec<AgentMarksView>),
 }

@@ -239,21 +239,9 @@ fn uc006_uc019_backend_changes_by_bytes_with_their_undo_steps() {
         .backend_edit(&a(), &[(0..0, "> ".to_owned())], true)
         .unwrap();
     assert_eq!(texts(&session), "> 😀 [a](new.md)\n");
-    // Ranges out of order, past the end or inside a char do not fit, and
-    // change nothing.
+    // Ranges out of order do not fit, and change nothing.
     let backwards = [(9..12, String::new()), (2..4, String::new())];
     assert!(session.backend_edit(&a(), &backwards, false).is_err());
-    assert!(session
-        .backend_edit(&a(), &[(0..99, String::new())], false)
-        .is_err());
-    let inside = session
-        .backend_edit(&a(), &[(3..6, String::new())], false)
-        .unwrap_err();
-    assert!(
-        inside.message.contains("inside a character"),
-        "{}",
-        inside.message
-    );
     assert_eq!(texts(&session), "> 😀 [a](new.md)\n");
 
     let events = session.take_events();
@@ -277,6 +265,25 @@ fn uc006_uc019_backend_changes_by_bytes_with_their_undo_steps() {
         })
         .collect();
     assert_eq!(sealed, [false, true], "the rename's, then the agent's step");
+}
+
+/// Q-41 (decided in F14), UC-019: as egui's `apply_edits`, a byte past
+/// the end counts as the end and a byte inside a character as that
+/// character's start.
+#[test]
+fn q41_backend_edits_round_bytes_as_egui() {
+    let dir = temp_dir("round");
+    let (mut session, _) = session_with(&dir, "😀ab\n");
+    // Byte 2 lies inside "😀" (bytes 0 to 3): from its start.
+    session
+        .backend_edit(&a(), &[(2..4, "x".to_owned())], true)
+        .unwrap();
+    assert_eq!(texts(&session), "xab\n");
+    // Past the end: at the end.
+    session
+        .backend_edit(&a(), &[(99..120, "!".to_owned())], true)
+        .unwrap();
+    assert_eq!(texts(&session), "xab\n!");
 }
 
 /// ADR-025 section 3.10: the window's text wins after the copies went

@@ -440,10 +440,28 @@ export const commands = {
 	 *  todo `number` in conflict; git marks it resolved without the session.
 	 */
 	todoConflictResolve: (number: number, mine: boolean) => typedError<null, UiError>(__TAURI_INVOKE("todo_conflict_resolve", { number, mine })),
+	/**
+	 *  M-04.4, M-17.1 (UC-017 step 2, BR-002): the level chosen in the agents
+	 *  menu of the status bar; it changes the user setting, which is written at
+	 *  once, so on the blocking pool.
+	 */
+	agentsSetAccess: (level: AgentLevelName) => typedError<null, UiError>(__TAURI_INVOKE("agents_set_access", { level })),
+	/**
+	 *  M-17.2 to M-17.5 (UC-016, ADR-017): the section "Agents" of the
+	 *  settings. Without `action` it checks how the workspace stands in each
+	 *  agent tool (the settings open, a workspace opened, BR-006); with one it
+	 *  installs, removes, copies the configuration (to the system clipboard,
+	 *  ADR-014) or answers a question, then checks again. The tools'
+	 *  configuration files of this computer's home folder are read and written
+	 *  without the session.
+	 */
+	agentsSection: (action: AgentAction | null) => typedError<AgentsSectionView, UiError>(__TAURI_INVOKE("agents_section", { action })),
 };
 
 /** Events */
 export const events = {
+	agentMarks: makeEvent<AgentMarksEvent, AgentMarksEvent>("agent-marks"),
+	agents: makeEvent<AgentsEvent, AgentsEvent>("agents"),
 	changes: makeEvent<ChangesEvent, ChangesEvent>("changes"),
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
 	conflict: makeEvent<ConflictEvent, ConflictEvent>("conflict"),
@@ -467,6 +485,193 @@ export const events = {
 };
 
 /* Types */
+/**  What a button of the section "Agents" does (UC-016 steps 3–5, A1–A4). */
+export type AgentAction = 
+/**
+ *  "Install"; with `replace` ("Replace", A2) an entry for another place
+ *  is replaced.
+ */
+{ kind: "install"; tool: AgentToolName; replace: boolean } | 
+/**  A1: "Install only", although agent access stays off. */
+{ kind: "installOnly"; tool: AgentToolName } | 
+/**
+ *  A1: "Allow reading and install", "Allow reading and writing and
+ *  install".
+ */
+{ kind: "allowAndInstall"; tool: AgentToolName; level: AgentLevelName } | 
+/**  A3: "Remove". */
+{ kind: "remove"; tool: AgentToolName } | 
+/**  A4: "Copy configuration". */
+{ kind: "copy" } | 
+/**  "Cancel" of a question. */
+{ kind: "cancel" };
+
+/**  A button of the section "Agents". */
+export type AgentButtonView = {
+	label: string,
+	/**  Not found tools show "Install" disabled. */
+	enabled: boolean,
+	action: AgentAction,
+};
+
+/**  One level of agent access (UC-017 BR-002). */
+export type AgentLevelName = "off" | "readOnly" | "readWrite";
+
+/**  One level in the agents menu. */
+export type AgentLevelView = {
+	level: AgentLevelName,
+	/**  "Off", "Read only", "Read and write". */
+	label: string,
+	/**  The level of the user settings (BR-002). */
+	chosen: boolean,
+};
+
+/**
+ *  M-17.6 (FR-057, UC-018 BR-006, UC-019 BR-006): the agent cursor of one
+ *  agent in a note: the lines it read or wrote last.
+ */
+export type AgentMarkView = {
+	/**  The first line, counted from 0. */
+	from: number,
+	/**
+	 *  The line after the last, counted from 0; equal to `from` marks the
+	 *  line `from` alone.
+	 */
+	to: number,
+	/**  The agent's name. */
+	name: string,
+	/**  The agent wrote these lines, rather than read them. */
+	wrote: boolean,
+};
+
+/**
+ *  M-17.6 (FR-057, UC-018 BR-006, UC-019 BR-006): the agent cursors in the
+ *  open notes; a note not named shows none.
+ */
+export type AgentMarksEvent = AgentMarksView[];
+
+/**  The agent cursors in one open note. */
+export type AgentMarksView = {
+	note: string,
+	/**  Sorted by their first line. */
+	marks: AgentMarkView[],
+};
+
+/**
+ *  M-04.9 (UC-019 BR-010): a button "Open" or "Open {title}" of the status
+ *  bar, for a note an agent created or changed while it was not open.
+ */
+export type AgentOpenView = {
+	note: string,
+	/**  "Open" for one note, "Open {title}" for several. */
+	label: string,
+	/**  The agent created the note, rather than changed it. */
+	created: boolean,
+};
+
+/**  M-17.3: what the section asks before installing (UC-016 A1, A2). */
+export type AgentQuestionView = {
+	/**
+	 *  A1: "Agents reach the notes only while agent access is on. …"; A2
+	 *  asks in the report instead.
+	 */
+	text: string | null,
+	buttons: AgentButtonView[],
+};
+
+/**  An agent tool MCP install knows (UC-016, FR-060). */
+export type AgentToolName = "claudeCode" | "claudeDesktop" | "cursor" | "vsCode" | "codex" | "geminiCli";
+
+/**
+ *  M-17.2 (UC-016 BR-006): one tool of the section "Agents" and how the
+ *  workspace stands in it.
+ */
+export type AgentToolRowView = {
+	tool: AgentToolName,
+	/**  "Claude Code", "VS Code (Copilot)" … */
+	name: string,
+	/**
+	 *  "not found", "not installed", "installed as {name}", "{name}:
+	 *  installed for another place", "cannot be read".
+	 */
+	state: string,
+	/**  "not found" is weak. */
+	weak: boolean,
+	/**  In the warning colour: installed for another place, cannot be read. */
+	warn: boolean,
+	/**  Why the configuration cannot be read, at the pointer. */
+	hover: string | null,
+	/**  "Install" or "Remove"; none when the configuration cannot be read. */
+	button: AgentButtonView | null,
+};
+
+/**
+ *  M-04.4, M-17.1, M-17.2 (UC-017): the agents entry of the status bar and
+ *  the head of the section "Agents" of the settings.
+ */
+export type AgentsEvent = AgentsView;
+
+/**
+ *  M-04.4, M-17.1 (UC-017 step 1, A1, A2, A4): the agents entry of the
+ *  status bar and its menu, while a workspace is open.
+ */
+export type AgentsMenuView = {
+	/**  "Agents: read only in this workspace · Agent connected: Claude". */
+	text: string,
+	/**
+	 *  UC-017 A2: "Claude asked for access" while access is off; egui
+	 *  appends it to `text` with " · ", the window shows it first, marked,
+	 *  so a cut text keeps it (A-168).
+	 */
+	asked: string | null,
+	/**  "What agents may do with the notes through Underline's MCP server". */
+	hover: string,
+	/**  The levels up to what the workspace allows, the user's chosen. */
+	levels: AgentLevelView[],
+	/**  "Settings of this workspace…". */
+	workspaceSettings: string,
+};
+
+/**
+ *  M-17.2 to M-17.5: the section "Agents" of the settings window below its
+ *  head (`AgentsView::head`): the tools, a question, the report of the last
+ *  action and "Copy configuration".
+ */
+export type AgentsSectionView = {
+	/**  Empty without a workspace. */
+	tools: AgentToolRowView[],
+	question: AgentQuestionView | null,
+	/**
+	 *  M-17.4, M-17.5: "Installed …", "Removed …", "{tool} was not
+	 *  changed: …", "Copied the configuration of …".
+	 */
+	report: string | null,
+	/**
+	 *  "Copy configuration" with its hover "For any other agent tool";
+	 *  `null` without a workspace.
+	 */
+	copy: AgentButtonView | null,
+	/**  "For any other agent tool". */
+	copyHover: string,
+};
+
+/**
+ *  What the window shows of the agents, sent as the event `agents` when it
+ *  changes.
+ */
+export type AgentsView = {
+	/**  The agents entry of the status bar; `null` without a workspace. */
+	menu: AgentsMenuView | null,
+	/**
+	 *  M-17.2: the lines above the tools in the section "Agents" of the
+	 *  settings: "Open a workspace to connect agents to it." alone, or
+	 *  what the section does and the agent access in effect.
+	 */
+	head: string[],
+	/**  A workspace is open: the section shows the tools. */
+	workspace: boolean,
+};
+
 /**  What a block is (M-09.1). */
 export type BlockKindView = 
 /**  A heading of level 1 to 6. */
@@ -2658,6 +2863,11 @@ export type StartInfo = {
 	/**  M-11.4: the input modes of the "Keys" choice, by name. */
 	inputModes: string[],
 	/**
+	 *  M-04.4, M-17.2: the agents entry of the status bar and the head of
+	 *  the section "Agents"; the event `agents` keeps it current.
+	 */
+	agents: AgentsView,
+	/**
 	 *  M-05.4: the kinds of export by note format, for the submenu
 	 *  "Export" of the note overview.
 	 */
@@ -2707,6 +2917,12 @@ export type StatusView = {
 	error: boolean,
 	/**  Review F11: an export is running. */
 	busy: boolean,
+	/**
+	 *  M-04.9 (UC-019 BR-010): "Open" or "Open {title}" for the notes the
+	 *  text reports an agent created or changed, the newest first, at most
+	 *  three.
+	 */
+	agents: AgentOpenView[],
 };
 
 /**  The answer to choosing a branch in the menu (UC-013 steps 3–6, A1 to A6). */

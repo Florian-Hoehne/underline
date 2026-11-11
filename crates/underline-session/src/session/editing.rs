@@ -160,9 +160,9 @@ impl Session {
         })
     }
 
-    /// M-21.4, M-22.1: Underline ends: what can be stored is stored, then
-    /// the app state is written. The window presence is removed with
-    /// feature F14.
+    /// M-21.4, M-22.1, M-17.8: Underline ends: what can be stored is
+    /// stored, then the app state is written, and the window presence is
+    /// removed, so the MCP servers write the files themselves (ADR-018).
     ///
     /// # Errors
     ///
@@ -172,6 +172,7 @@ impl Session {
         if let Err(err) = self.write_state_now() {
             problems.push(err.to_string());
         }
+        self.agents_end();
         if problems.is_empty() {
             Ok(())
         } else {
@@ -236,12 +237,21 @@ impl Session {
     fn take_save_results(&mut self, results: Vec<SaveResult>) {
         // D-04 (fixed, paritaet.md A-83): the report an offer belongs to.
         let kept = self.status_kept();
+        // UC-019: the agents whose change a save stored are answered, also
+        // when the tab or the workspace went meanwhile.
+        let agent_saves: Vec<bool> = results
+            .iter()
+            .map(|result| {
+                let stored = result.result.as_ref().copied().map_err(String::as_str);
+                self.agent_saved(&result.path, stored)
+            })
+            .collect();
         let Some(open) = &mut self.open else {
             return;
         };
         let root = open.workspace.root().to_owned();
         let mut saved = false;
-        for result in results {
+        for (result, agent) in results.into_iter().zip(agent_saves) {
             let Some((_, tab)) = open.tabs.iter_mut().find(|(_, t)| t.path == result.path) else {
                 continue;
             };
@@ -255,7 +265,11 @@ impl Session {
                         tab.on_disk = text;
                     }
                     tab.read_properties(&root);
-                    if std::mem::take(&mut tab.quiet_save) {
+                    if agent {
+                        // As egui's `save_now`: stored without a report.
+                        tab.deleted = false;
+                        saved = true;
+                    } else if std::mem::take(&mut tab.quiet_save) {
                         // UC-006 A7: the rename's report stays. The note is
                         // at its place again, also when it was deleted
                         // outside (egui keeps the mark here; review F8).
@@ -303,9 +317,12 @@ impl Session {
 
     /// Whether a background save of a tab runs.
     fn saving(&self) -> bool {
-        self.open
-            .as_ref()
-            .is_some_and(|open| open.tabs.iter().any(|(_, tab)| tab.saving))
+        // An agent's change being stored counts too, also when its tab went.
+        self.agents_storing()
+            || self
+                .open
+                .as_ref()
+                .is_some_and(|open| open.tabs.iter().any(|(_, tab)| tab.saving))
     }
 
     /// M-16.2: the properties section for the active tab, if a note tab is

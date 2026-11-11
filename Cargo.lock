@@ -8437,6 +8437,7 @@ dependencies = [
  "underline-editor-core",
  "underline-editor-view",
  "underline-facade",
+ "underline-mcp",
  "underline-wiki",
 ]
 

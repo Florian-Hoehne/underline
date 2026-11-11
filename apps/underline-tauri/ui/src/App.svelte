@@ -282,6 +282,8 @@
       <SearchOverlay {shell} />
     {/if}
   </main>
+  <!-- UX review F14: the agents, told politely to screen readers. -->
+  <p class="announce" aria-live="polite">{shell.agentAnnouncement}</p>
   <StatusBar
     root={shell.workspaceRoot}
     status={shell.status}
@@ -297,10 +299,24 @@
     onUndo={() => void shell.undoDelete()}
     onOpenExport={(index) => void shell.openExport(index)}
     onShowApproximated={(index) => void shell.showApproximated(index)}
+    agents={shell.agents.menu}
+    agentOpens={shell.statusAgents}
+    onAgentLevel={(level) => void shell.setAgentAccess(level)}
+    onAgentSettings={() => void shell.openSettings('workspace')}
+    onOpenAgentNote={(note) => void shell.openAgentNote(note)}
   />
 </div>
 
 <style>
+  .announce {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .window {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;

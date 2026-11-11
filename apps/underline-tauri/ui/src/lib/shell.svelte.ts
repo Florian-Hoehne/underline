@@ -18,6 +18,13 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   commands,
   events,
+  type AgentAction,
+  type AgentLevelName,
+  type AgentMarkView,
+  type AgentMarksView,
+  type AgentOpenView,
+  type AgentsSectionView,
+  type AgentsView,
   type BranchEntryView,
   type BranchMenuView,
   type BranchNameView,
@@ -287,6 +294,15 @@ export function toolPanelWidthWithin(width: number): number {
 
 const NO_TABS: TabsView = { tabs: [], active: null, todoList: { open: false, active: false } };
 
+/**
+ * M-17.2: the agents before the backend said anything: no workspace, the
+ * head comes with `app_start`.
+ */
+const NO_AGENTS: AgentsView = { menu: null, head: [], workspace: false };
+
+/** M-17.6: no agent cursor in a note. */
+const NO_MARKS: AgentMarkView[] = [];
+
 export class Shell {
   /** What the window started with; `null` when `app_start` failed. */
   start = $state<StartInfo | null>(null);
@@ -300,6 +316,8 @@ export class Shell {
   statusExports = $state.raw<ExportOfferView[]>([]);
   /** UC-009 A4: the status reports a failed export. */
   statusError = $state(false);
+  /** M-04.9: "Open" for the notes an agent changed that the status reports. */
+  statusAgents = $state.raw<AgentOpenView[]>([]);
   /** Review F11: an export is running. */
   statusBusy = $state(false);
   /** M-05.6, UC-007 A5: the deleted notes, most recently deleted first. */
@@ -384,6 +402,26 @@ export class Shell {
   conflictPlace = $state(0);
   /** M-19.10, UC-020 A10: the todos in conflict. */
   todoConflicts = $state.raw<TodoConflictView[]>([]);
+  /**
+   * M-04.4, M-17.1, M-17.2 (UC-017): the agents entry of the status bar and
+   * the head of the section "Agents" of the settings.
+   */
+  agents = $state.raw<AgentsView>(NO_AGENTS);
+  /** M-17.6: the agent cursors in the open notes. */
+  agentMarks = $state.raw<AgentMarksView[]>([]);
+  /**
+   * UX review F14: what screen readers are told politely of the agents:
+   * "{agent} is editing {title}", "{agent} is reading {title}" when a
+   * cursor appears, "{names} asked for access" (UC-017 A2).
+   */
+  agentAnnouncement = $state('');
+  /**
+   * M-17.2 to M-17.5 (UC-016): the tools, question and report of the
+   * section "Agents", as checked last; `null` until the settings asked.
+   */
+  agentsSection = $state.raw<AgentsSectionView | null>(null);
+  /** The section "Agents" waits for the tools' configurations. */
+  agentsSectionBusy = $state(false);
   /** M-04.2, M-19.10, UC-015 A5: "Abort the sync" asks, while open. */
   abortAsked = $state(false);
   /** "Abort the sync" waits for git. */
@@ -436,6 +474,8 @@ export class Shell {
   settingsBeforeClose: (() => void) | null = null;
 
   #unlisten: UnlistenFn[] = [];
+  /** The number of the last call of `agentsAct`. */
+  #agentsAsked = 0;
   /**
    * The workspace commands run one after the other, in the order the user
    * gave them, so a tab is never activated before it was opened.
@@ -492,6 +532,19 @@ export class Shell {
         this.statusExports = event.payload.exports;
         this.statusError = event.payload.error;
         this.statusBusy = event.payload.busy;
+        this.statusAgents = event.payload.agents;
+      }),
+      // M-04.4, M-17.1, M-17.2, M-17.6 (UC-017 to UC-019): the agents.
+      events.agents.listen((event) => {
+        const asked = event.payload.menu?.asked ?? null;
+        if (asked !== null && asked !== (this.agents.menu?.asked ?? null)) {
+          this.agentAnnouncement = asked;
+        }
+        this.agents = event.payload;
+      }),
+      events.agentMarks.listen((event) => {
+        this.#announceMarks(this.agentMarks, event.payload);
+        this.agentMarks = event.payload;
       }),
       events.deleted.listen((event) => {
         this.deleted = event.payload;
@@ -588,6 +641,7 @@ export class Shell {
       if (result.status === 'ok') {
         this.start = result.data;
         this.status = result.data.status;
+        this.agents = result.data.agents;
         this.#takeSettings(result.data.settings);
         // M-01.1: a workspace to start with is opened next (startWorkspace).
         this.starting = (result.data.givenDir ?? result.data.lastWorkspace) !== null;
@@ -749,6 +803,75 @@ export class Shell {
     const result = await this.#serial(() => commands.tabOpen(note));
     if (result.status === 'error') {
       this.#fail('tab_open', result.error);
+    }
+  }
+
+  /**
+   * M-04.9 (UC-019 BR-010): "Open" of the status bar opens a note an agent
+   * created or changed.
+   */
+  openAgentNote(note: string): Promise<void> {
+    return this.openNote(note);
+  }
+
+  /** M-17.6: the agent cursors in `note`. */
+  agentMarksOf(note: string): AgentMarkView[] {
+    return this.agentMarks.find((marks) => marks.note === note)?.marks ?? NO_MARKS;
+  }
+
+  /**
+   * M-04.4, M-17.1 (UC-017 step 2, BR-002): a level chosen in the agents
+   * menu changes the user setting.
+   */
+  async setAgentAccess(level: AgentLevelName): Promise<void> {
+    const result = await commands.agentsSetAccess(level);
+    if (result.status === 'error') {
+      this.#fail('agents_set_access', result.error);
+    }
+  }
+
+  /**
+   * M-17.2 to M-17.5 (UC-016): checks the agent tools (`action` null, when
+   * the settings open or another workspace opened), or does what a button
+   * of the section "Agents" says and checks them again (BR-006).
+   */
+  async agentsAct(action: AgentAction | null = null): Promise<void> {
+    // Only the answer to the latest call shows; answers can cross.
+    const asked = ++this.#agentsAsked;
+    this.agentsSectionBusy = true;
+    try {
+      const result = await commands.agentsSection(action);
+      if (asked !== this.#agentsAsked) {
+        return;
+      }
+      if (result.status === 'ok') {
+        this.agentsSection = result.data;
+      } else {
+        this.#fail('agents_section', result.error);
+      }
+    } catch (error) {
+      this.#fail('agents_section', { kind: 'internal', message: String(error) });
+    } finally {
+      if (asked === this.#agentsAsked) {
+        this.agentsSectionBusy = false;
+      }
+    }
+  }
+
+  /** UX review F14: a cursor that appeared is told to screen readers. */
+  #announceMarks(before: AgentMarksView[], now: AgentMarksView[]): void {
+    const key = (note: string, mark: AgentMarkView) =>
+      `${note}\u0000${mark.name}\u0000${mark.wrote}`;
+    // Made for this one comparison, read by nothing reactive.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const seen = new Set(before.flatMap((m) => m.marks.map((mark) => key(m.note, mark))));
+    for (const { note, marks } of now) {
+      for (const mark of marks) {
+        if (!seen.has(key(note, mark))) {
+          const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+          this.agentAnnouncement = `${mark.name} is ${mark.wrote ? 'editing' : 'reading'} ${title}`;
+        }
+      }
     }
   }
 

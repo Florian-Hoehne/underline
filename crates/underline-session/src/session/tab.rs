@@ -40,6 +40,9 @@ pub(super) struct Tab {
     /// The mirror's revision the window was last told of or answered with;
     /// a later one rings it (`ed-changed`).
     pub(super) told_rev: u32,
+    /// How many times the window synced this tab (`ed_sync`, `ed_resync`);
+    /// an agent's change waits for the next one (ADR-025 section 3.6).
+    pub(super) syncs: u64,
     /// When the text is stored next (UC-005 BR-001).
     pub(super) autosave: Autosave,
     /// A background save of this tab is running.
@@ -109,6 +112,7 @@ impl Tab {
             mirror: Server::new(&body),
             window_synced: false,
             told_rev: 1,
+            syncs: 0,
             autosave: Autosave::default(),
             saving: false,
             saving_text: None,

@@ -510,6 +510,7 @@
                   onError={(message) => shell.editorFailed(message)}
                   onCommand={(name) => command(activeTab.note, name)}
                   onFollow={(at) => void shell.followLink(activeTab.note, at)}
+                  agentMarks={shell.agentMarksOf(activeTab.note)}
                 />
               {:else}
                 <SourceEditor
@@ -524,6 +525,7 @@
                   onError={(message) => shell.editorFailed(message)}
                   onCommand={(name) => command(activeTab.note, name)}
                   onFollow={(at) => void shell.followLink(activeTab.note, at)}
+                  agentMarks={shell.agentMarksOf(activeTab.note)}
                 />
               {/if}
             {/key}

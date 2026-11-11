@@ -120,8 +120,10 @@ impl Session {
     ///
     /// The note has no open tab.
     pub fn editor_sync(&mut self, note: &NoteId, batch: &SyncBatch) -> Result<Synced, UiError> {
+        self.agents_synced();
         let tab = self.sync_tab(note)?;
         tab.window_synced = true;
+        tab.syncs += 1;
         let received = tab.mirror.receive(&Batch::from(batch));
         // The window has the backend's text up to here.
         tab.told_rev = received.answer.rev;
@@ -157,8 +159,10 @@ impl Session {
     ///
     /// The note has no open tab.
     pub fn editor_resync(&mut self, note: &NoteId, text: &str) -> Result<Synced, UiError> {
+        self.agents_synced();
         let tab = self.sync_tab(note)?;
         tab.window_synced = true;
+        tab.syncs += 1;
         eprintln!(
             "ADR-025: the window's text of {} went apart from the backend's; the window's is taken",
             note.as_str()
@@ -194,10 +198,13 @@ impl Session {
     /// changes an open note. The tab holds a change not stored yet; the
     /// window is told to fetch it. The new revision.
     ///
+    /// A byte past the end counts as the end, a byte inside a character as
+    /// that character's start, as in egui (Q-41).
+    ///
     /// # Errors
     ///
-    /// The note has no open tab, or a range does not fit the text: past its
-    /// end, backwards, out of order, or not on a char boundary.
+    /// The note has no open tab, or the ranges are backwards or out of
+    /// order.
     pub fn backend_edit(
         &mut self,
         note: &NoteId,
@@ -225,20 +232,17 @@ impl Session {
                 format!("The change does not fit the note: {why}"),
             )
         };
-        let char_at = |byte: usize| -> Result<usize, UiError> {
-            let at = rope
-                .try_byte_to_char(byte)
-                .map_err(|_| invalid(format!("byte {byte} lies past its end")))?;
-            if rope.char_to_byte(at) == byte {
-                Ok(at)
-            } else {
-                Err(invalid(format!("byte {byte} lies inside a character")))
-            }
-        };
-        let replacements = edits
+        // Q-41 (decided in F14): as egui's `apply_edits`
+        // (`source_view.rs:425-427`), a byte past the end counts as the end
+        // and a byte inside a character as that character's start.
+        // Ranges backwards or out of order, on which egui would panic or
+        // change the wrong text, are refused below.
+        let len = rope.len_bytes();
+        let char_at = |byte: usize| rope.byte_to_char(byte.min(len));
+        let replacements: Vec<_> = edits
             .iter()
-            .map(|(range, text)| Ok((char_at(range.start)?..char_at(range.end)?, text.clone())))
-            .collect::<Result<Vec<_>, UiError>>()?;
+            .map(|(range, text)| (char_at(range.start)..char_at(range.end), text.clone()))
+            .collect();
         let set = ChangeSet::of_replacements(rope.len_chars(), &replacements)
             .map_err(|error| invalid(error.to_string()))?;
         let (rev, touched) = tab

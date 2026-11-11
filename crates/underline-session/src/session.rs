@@ -2,6 +2,7 @@
 //! state, the settings, the open workspace with its overview and tabs, and
 //! the status message, driven by [`Session::tick`] (ADR-022).
 
+mod agents;
 mod branches;
 mod conflicts;
 mod diagrams;
@@ -22,6 +23,9 @@ mod tab;
 mod window;
 mod workspace;
 
+pub use self::agents::{
+    AgentsDone, AgentsJob, SectionDone, SectionJob, FLUSH_AT_MOST, REQUESTS_EVERY,
+};
 pub use self::branches::{branch_name_view, BranchesJob, BranchesListed, SwitchJob, SwitchOutcome};
 pub use self::conflicts::{AbortJob, AbortOutcome};
 pub use self::embed::{EmbedDone, EmbedPlan};
@@ -157,6 +161,9 @@ pub struct Session {
     /// A-113): "Switched to …", "The conflicts are resolved; syncing" and
     /// the other reports of F13, while the status shows it.
     git_report: Option<String>,
+    /// UC-016 to UC-019: the agents connected, their requests and cursors,
+    /// and the section "Agents" of the settings (feature F14).
+    agents: agents::Agents,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -179,8 +186,14 @@ impl std::fmt::Debug for Session {
 struct Told {
     status: String,
     /// What the status bar offered with it: the undo, the exports' offers,
-    /// the error mark and the busy state.
-    offer: (Option<StatusOffer>, Vec<crate::ExportOfferView>, bool, bool),
+    /// the error mark, the busy state and the notes agents changed.
+    offer: (
+        Option<StatusOffer>,
+        Vec<crate::ExportOfferView>,
+        bool,
+        bool,
+        Vec<crate::AgentOpenView>,
+    ),
     /// The settings in effect; the view is built only when they changed.
     settings: Effective,
     width_generation: u32,
@@ -226,7 +239,7 @@ impl Session {
     ) -> Self {
         let told = Told {
             status: String::new(),
-            offer: (None, Vec::new(), false, false),
+            offer: (None, Vec::new(), false, false, Vec::new()),
             settings: settings.effective().clone(),
             width_generation: settings.width_generation(),
             settings_window: (settings.revision(), None),
@@ -270,9 +283,11 @@ impl Session {
             branches_listed: None,
             saves_paused: std::collections::BTreeSet::new(),
             git_report: None,
+            agents: agents::Agents::new(),
             views_dirty: false,
             told,
         };
+        session.agents_told();
         if let Some(notice) = notice {
             session.status = format!("Note: {notice}");
         }
@@ -311,6 +326,7 @@ impl Session {
                 .iter()
                 .map(|mode| mode.label().to_owned())
                 .collect(),
+            agents: self.agents_view(),
         }
     }
 
@@ -406,6 +422,9 @@ impl Session {
         self.take_settings_messages();
         self.run_syncs(now);
         self.run_conflicts();
+        // ADR-018, ADR-025: agents' changes of open notes, before the
+        // autosave, which stores them.
+        self.agents_tick(now);
         self.autosave(now);
         if let Err(err) = self.state.write_if_due(now) {
             self.status = err.to_string();
@@ -419,6 +438,7 @@ impl Session {
         events.extend(self.git_events(now));
         events.extend(self.conflict_events());
         events.extend(self.git_bar_event(now));
+        events.extend(self.agent_marks_event(now));
         events
     }
 
@@ -498,6 +518,7 @@ impl Session {
             events.push(Event::Deleted(self.deleted_view()));
         }
         events.extend(self.sync_events());
+        events.extend(self.agents_event());
         // UC-007 A4: the undo is offered while the report of the deletion
         // shows; another report ends it.
         if self.undo_delete.as_ref().is_some_and(|offer| {
@@ -509,7 +530,9 @@ impl Session {
         // M-04.8: "Open" and "Show" of the exports reported, likewise.
         let (exports, error) = self.export_offers();
         let busy = self.exporting();
-        let told = (offer, exports.clone(), error, busy);
+        // M-04.9: "Open" for the notes an agent changed, likewise.
+        let agents = self.agent_opens();
+        let told = (offer, exports.clone(), error, busy, agents.clone());
         if self.status != self.told.status || told != self.told.offer {
             self.told.status.clone_from(&self.status);
             self.told.offer = told;
@@ -519,6 +542,7 @@ impl Session {
                 exports,
                 error,
                 busy,
+                agents,
             }));
         }
         events
@@ -545,15 +569,17 @@ impl Session {
         Some(Event::SettingsWindow(Box::new(view)))
     }
 
-    /// D-04 (fixed, paritaet.md A-83, A-113): the status that the
+    /// D-04 (fixed, paritaet.md A-83, A-113, A-163): the status that the
     /// background save's "Saved {t}" does not replace: the report of a
-    /// deletion with its "Undo", and an export's own status.
+    /// deletion with its "Undo", an export's own status, a git report and
+    /// the report of an agent's changes with its "Open" buttons.
     pub(super) fn status_kept(&self) -> bool {
         self.undo_delete
             .as_ref()
             .is_some_and(|offer| offer.status == self.status)
             || self.export_status_kept()
             || self.git_report.as_deref() == Some(self.status.as_str())
+            || self.agent_report_kept()
     }
 
     /// The settings' messages become the status, the last one wins.
@@ -870,6 +896,7 @@ mod tests {
                 exports: Vec::new(),
                 error: false,
                 busy: false,
+                agents: Vec::new(),
             })]
         );
     }

@@ -80,14 +80,14 @@ Reihenfolge von links nach rechts:
 
   Die Begründung bzw. die Dateien stehen im Hover. Danach folgen „N to push“, „N to pull“ und der Button „Sync now“,
   deaktiviert während eines Syncs oder bei offenen Konflikten.
-- [ ] **M-04.4** Agents-Menü (M-17.1).
+- [~] **M-04.4** Agents-Menü (M-17.1).
 - [ ] **M-04.5** Rot „1 todo overdue“/„N todos overdue“ (Hover „Open the todo list“) öffnet den Todos-Tab mit Filter
   Open.
 - [ ] **M-04.6** Undo für einen abgehakten Todo („Todo {name} is as before“) und für einen gelöschten Todo
   („Todo {name} is back“). Beide stehen *vor* dem Text.
 - [x] **M-04.7** Text: Workspace-Pfad und Status, getrennt durch „  |  “.
 - [~] **M-04.8** Nach einem Export: „Open“ (Systemprogramm) und „Show“ (Fenster „Approximated blocks“).
-- [ ] **M-04.9** Nach Agent-Änderungen: bis zu 3 Buttons „Open“/„Open {title}“, die neueste zuerst.
+- [~] **M-04.9** Nach Agent-Änderungen: bis zu 3 Buttons „Open“/„Open {title}“, die neueste zuerst.
 - [ ] **M-04.10** Undo nach dem Löschen einer Notiz. Das Angebot verschwindet, sobald sich der Status ändert.
 
 ## M-05 Notizübersicht links (UC-002, FR-017)
@@ -402,29 +402,29 @@ Reihenfolge von links nach rechts:
 
 ## M-17 Agenten / MCP (UC-016 bis UC-019)
 
-- [ ] **M-17.1** Agents-Menü in der Statusleiste:
+- [~] **M-17.1** Agents-Menü in der Statusleiste:
   - Text „Agents: {status}“, „ in this workspace“ und „ · Agent(s) connected: A, B“ bzw. „ · A asked for access“.
   - Radio-Auswahl der Stufen bis zur Obergrenze des Workspace. Die Wahl ändert die **Benutzer**-Einstellung.
   - „Settings of this workspace…“.
-- [ ] **M-17.2** Abschnitt Agents in den Einstellungen:
+- [~] **M-17.2** Abschnitt Agents in den Einstellungen:
   - Ohne Workspace: „Open a workspace to connect agents to it.“
   - Raster je Tool mit dem Zustand: not found, not installed, installed as X, installed for another place, cannot be
     read. Dazu Install bzw. Remove.
   - Zustände werden beim Öffnen und nach jeder Aktion neu geprüft.
-- [ ] **M-17.3** Install bei Zugriff Off fragt nach: „Allow reading and install“, „Allow reading and writing and
+- [~] **M-17.3** Install bei Zugriff Off fragt nach: „Allow reading and install“, „Allow reading and writing and
   install“, „Install only“, „Cancel“. Bei ForAnotherPlace: „Replace“ oder „Cancel“.
-- [ ] **M-17.4** Meldungen:
+- [~] **M-17.4** Meldungen:
   - „Installed … restart {tool} if it does not show it yet.“ (gegebenenfalls mit dem Hinweis, dass der Zugriff aus
     ist)
   - „Removed …“
   - „{tool} was not changed: …“
-- [ ] **M-17.5** „Copy configuration“ kopiert das Snippet: „Copied the configuration of {ws}. Its command: …“. Der
+- [~] **M-17.5** „Copy configuration“ kopiert das Snippet: „Copied the configuration of {ws}. Its command: …“. Der
   Befehl ist `current_exe` plus Workspace.
-- [ ] **M-17.6** Agent-Cursor (FR-057/058):
+- [~] **M-17.6** Agent-Cursor (FR-057/058):
   - Markierte Zeilen bzw. Blöcke werden blau getönt, mit einem 3-px-Balken links und dem Agent-Namen in 80 % Grösse.
   - Sichtbar 10 s nach dem letzten Lesen/Schreiben, gefiltert nach Zugriff.
   - Die Farben sind fest, nicht je Theme.
-- [ ] **M-17.7** Agent-Schreiben durch das Fenster (ADR-018):
+- [~] **M-17.7** Agent-Schreiben durch das Fenster (ADR-018):
   - Präsenzdatei `window` wird jede Sekunde erneuert. Requests werden alle 100 ms gelesen, solange ein Agent
     verbunden ist.
   - Ohne Schreibrecht verweigert: „Underline allows agents only to read the notes of this workspace“.
@@ -433,7 +433,7 @@ Reihenfolge von links nach rechts:
   - Offene Notiz → Antwort `Busy`, solange gespeichert wird. Sonst `plan_for_tab` → versiegelte Änderung → sofort
     speichern → Antwort.
   - Ein Todo, den ein Agent ändert, gibt den Status „{agent} {change}“.
-- [ ] **M-17.8** Beim Beenden wird die Fenster-Präsenz entfernt. *Beim Workspace-Wechsel heute nicht (Defekt D-05).*
+- [~] **M-17.8** Beim Beenden wird die Fenster-Präsenz entfernt. *Beim Workspace-Wechsel heute nicht (Defekt D-05).*
 
 ## M-18 Todos (UC-020, UC-021)
 

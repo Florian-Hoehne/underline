@@ -5,10 +5,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    ChangedView, ChangesView, CloseQuestion, ConflictBarView, DeletedNoteView, DiffView,
-    EnrichView, Event, FlushView, GitBarView, HighlightView, IndexesView, OverviewItem, SearchView,
-    SettingsView, SettingsWindowView, StatusView, TabPropertiesView, TabsView, TodoConflictView,
-    WorkspaceView,
+    AgentMarksView, AgentsView, ChangedView, ChangesView, CloseQuestion, ConflictBarView,
+    DeletedNoteView, DiffView, EnrichView, Event, FlushView, GitBarView, HighlightView,
+    IndexesView, OverviewItem, SearchView, SettingsView, SettingsWindowView, StatusView,
+    TabPropertiesView, TabsView, TodoConflictView, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -121,6 +121,18 @@ pub struct ConflictEvent(pub Option<ConflictBarView>);
 #[tauri_specta(event_name = "todo-conflicts")]
 pub struct TodoConflictsEvent(pub Vec<TodoConflictView>);
 
+/// M-04.4, M-17.1, M-17.2 (UC-017): the agents entry of the status bar and
+/// the head of the section "Agents" of the settings.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "agents")]
+pub struct AgentsEvent(pub AgentsView);
+
+/// M-17.6 (FR-057, UC-018 BR-006, UC-019 BR-006): the agent cursors in the
+/// open notes; a note not named shows none.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "agent-marks")]
+pub struct AgentMarksEvent(pub Vec<AgentMarksView>);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -145,6 +157,8 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::GitBar(bar) => GitBarEvent(bar).emit(app),
             Event::Conflict(bar) => ConflictEvent(bar).emit(app),
             Event::TodoConflicts(todos) => TodoConflictsEvent(todos).emit(app),
+            Event::Agents(agents) => AgentsEvent(agents).emit(app),
+            Event::AgentMarks(marks) => AgentMarksEvent(marks).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

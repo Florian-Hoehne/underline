@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-agents-set-access"
+description = "Enables the agents_set_access command without any pre-configured scope."
+commands.allow = ["agents_set_access"]
+
+[[permission]]
+identifier = "deny-agents-set-access"
+description = "Denies the agents_set_access command without any pre-configured scope."
+commands.deny = ["agents_set_access"]

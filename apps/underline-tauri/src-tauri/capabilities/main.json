@@ -73,6 +73,8 @@
     "allow-conflict-take-side",
     "allow-conflict-keep",
     "allow-conflict-abort",
-    "allow-todo-conflict-resolve"
+    "allow-todo-conflict-resolve",
+    "allow-agents-set-access",
+    "allow-agents-section"
   ]
 }

@@ -7,6 +7,9 @@
   Nano hits come from the core. While the text loads the area stays empty;
   a failure is said in the status bar.
 
+  M-17.6: the agent cursors in the note (`agentMarks`) show behind its
+  lines (editor/agentMarks.ts).
+
   It follows the input mode and the line numbers of the settings (M-11,
   M-08.7) and tells `info` the place of the cursor and the keys' status for
   the status line (M-11.4).
@@ -18,7 +21,7 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { EditorCommandName } from './bindings';
+  import type { AgentMarkView, EditorCommandName } from './bindings';
   import { setActiveSourceView } from './editor/active';
   import { runJump, takeJump } from './editor/jump';
   import type { EditorInfo } from './editor/info.svelte';
@@ -50,6 +53,8 @@
     onCommand?: (command: EditorCommandName) => void;
     /** M-07.3: a Ctrl+click (Cmd+click) at `at` (web units) follows the link there. */
     onFollow?: (at: number) => void;
+    /** M-17.6: the agent cursors in this note. */
+    agentMarks?: AgentMarkView[];
     backend?: EditorBackend;
   };
 
@@ -65,6 +70,7 @@
     onError,
     onCommand,
     onFollow,
+    agentMarks = [],
     backend = wasmBackend(mac),
   }: Props = $props();
 
@@ -83,6 +89,10 @@
 
   $effect(() => {
     view?.setLineNumbers(lineNumbers, lineNumberSide);
+  });
+
+  $effect(() => {
+    view?.setAgentMarks(agentMarks);
   });
 
   onMount(() => {

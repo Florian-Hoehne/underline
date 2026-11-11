@@ -214,6 +214,12 @@ impl SettingsState {
         }
     }
 
+    /// The user settings file, if there is a home directory.
+    #[must_use]
+    pub fn user_file(&self) -> Option<&Path> {
+        self.user_path.as_deref()
+    }
+
     fn path(&self, scope: Scope) -> Option<PathBuf> {
         match scope {
             Scope::Me => self.user_path.clone(),

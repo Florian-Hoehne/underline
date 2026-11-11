@@ -153,6 +153,17 @@ body {
   .hit.current {
     outline: 2px solid CanvasText;
   }
+
+  /* M-17.6, UX review F14: the agent cursor's bar and name pill. */
+  .cm-ul-agent,
+  .slot.agent {
+    border-left-color: Highlight !important;
+  }
+
+  .cm-ul-agent-first::after,
+  .slot.agent[data-agent]::before {
+    border-color: CanvasText !important;
+  }
 }
 
 /*

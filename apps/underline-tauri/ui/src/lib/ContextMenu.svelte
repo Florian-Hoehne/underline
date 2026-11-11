@@ -10,6 +10,12 @@
   click elsewhere closes it. Choosing an entry closes the menu first, then
   acts, so a dialog the entry opens takes the keyboard.
 
+  An entry may be one of a group of choices (M-17.1: the levels of agent
+  access, as egui's `radio`): it is a `menuitemradio` showing whether it is
+  the one chosen. A line may stand before an entry (egui's `separator`).
+  Opened from the status bar, the menu opens above the point it is given
+  (`above`).
+
   An entry may open a submenu (M-05.4: "Export", feature F11), as egui's
   `menu_button`: pointing at it or clicking it opens the submenu beside it;
   Right, Enter and Space open it with the keyboard on its first entry,
@@ -23,7 +29,15 @@
    * does; or its text and the entries of its submenu.
    */
   export type MenuEntry =
-    | { label: string; shortcut?: string; action: () => void }
+    | {
+        label: string;
+        shortcut?: string;
+        action: () => void;
+        /** One of a group of choices; whether it is the one chosen. */
+        checked?: boolean;
+        /** A line stands before it. */
+        separatorBefore?: boolean;
+      }
     | { label: string; entries: MenuEntry[] };
 
   /**
@@ -66,9 +80,21 @@
      * edge (the menu's left edge), review F11.
      */
     flipAt?: number;
+    /** It opens above `y` rather than below it (from the status bar). */
+    above?: boolean;
   };
 
-  let { label, entries, x, y, onClose, autofocus = true, nested = false, flipAt }: Props = $props();
+  let {
+    label,
+    entries,
+    x,
+    y,
+    onClose,
+    autofocus = true,
+    nested = false,
+    flipAt,
+    above = false,
+  }: Props = $props();
 
   /** The open submenu: its entry's index, where it opens, and whether it takes the keyboard. */
   let sub = $state<{ index: number; x: number; y: number; flip: number; focus: boolean } | null>(
@@ -81,7 +107,11 @@
 
   // Its own entries, not those of an open submenu inside it.
   const items = () =>
-    Array.from(menu?.querySelectorAll<HTMLElement>(':scope > [role="menuitem"]') ?? []);
+    Array.from(
+      menu?.querySelectorAll<HTMLElement>(
+        ':scope > [role="menuitem"], :scope > [role="menuitemradio"]',
+      ) ?? [],
+    );
 
   onMount(() => {
     left = x;
@@ -91,9 +121,10 @@
       const box = menu?.getBoundingClientRect();
       if (box) {
         const fits = x + box.width <= window.innerWidth - 4;
-        const from = !fits && flipAt !== undefined ? flipAt - box.width : x;
-        left = Math.max(4, Math.min(from, window.innerWidth - box.width - 4));
-        top = Math.max(4, Math.min(y, window.innerHeight - box.height - 4));
+        const start = !fits && flipAt !== undefined ? flipAt - box.width : x;
+        left = Math.max(4, Math.min(start, window.innerWidth - box.width - 4));
+        const from = above ? y - box.height : y;
+        top = Math.max(4, Math.min(from, window.innerHeight - box.height - 4));
       }
       if (autofocus) {
         items()[0]?.focus();
@@ -265,19 +296,36 @@
         <span class="shortcut" aria-hidden="true">▸</span>
       </button>
     {:else}
-      <button
-        type="button"
-        role="menuitem"
-        tabindex="-1"
-        aria-keyshortcuts={entry.shortcut}
-        onclick={() => choose(entry, index)}
-        onpointerenter={() => onPoint(entry, index)}
-      >
-        {entry.label}
-        {#if entry.shortcut}
-          <span class="shortcut" aria-hidden="true">{entry.shortcut}</span>
-        {/if}
-      </button>
+      {#if entry.separatorBefore}
+        <div class="separator" role="separator"></div>
+      {/if}
+      {#if entry.checked !== undefined}
+        <button
+          type="button"
+          role="menuitemradio"
+          tabindex="-1"
+          aria-checked={entry.checked}
+          onclick={() => choose(entry, index)}
+          onpointerenter={() => onPoint(entry, index)}
+        >
+          <span class="radio" class:on={entry.checked} aria-hidden="true"></span>
+          {entry.label}
+        </button>
+      {:else}
+        <button
+          type="button"
+          role="menuitem"
+          tabindex="-1"
+          aria-keyshortcuts={entry.shortcut}
+          onclick={() => choose(entry, index)}
+          onpointerenter={() => onPoint(entry, index)}
+        >
+          {entry.label}
+          {#if entry.shortcut}
+            <span class="shortcut" aria-hidden="true">{entry.shortcut}</span>
+          {/if}
+        </button>
+      {/if}
     {/if}
   {/each}
   {#if sub !== null}
@@ -315,7 +363,8 @@
     outline: none;
   }
 
-  [role='menuitem'] {
+  [role='menuitem'],
+  [role='menuitemradio'] {
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -332,14 +381,37 @@
   }
 
   [role='menuitem']:hover,
-  [role='menuitem']:focus {
+  [role='menuitem']:focus,
+  [role='menuitemradio']:hover,
+  [role='menuitemradio']:focus {
     color: var(--ui-chosen-text);
     background: var(--ui-chosen);
   }
 
-  [role='menuitem']:focus-visible {
+  [role='menuitem']:focus-visible,
+  [role='menuitemradio']:focus-visible {
     outline: 2px solid var(--ui-focus);
     outline-offset: -2px;
+  }
+
+  /* egui's radio button: a ring, filled when chosen (not by colour alone). */
+  .radio {
+    flex: none;
+    box-sizing: border-box;
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentcolor;
+    border-radius: 50%;
+  }
+
+  .radio.on {
+    background: radial-gradient(circle, currentcolor 0 3px, transparent 3.5px);
+  }
+
+  .separator {
+    height: 1px;
+    margin: var(--space-1) 0;
+    background: var(--ui-rule);
   }
 
   .shortcut {

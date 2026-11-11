@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::{ExportKindsView, SettingsView, ToolView};
+use crate::{AgentsView, ExportKindsView, SettingsView, ToolView};
 
 /// The operating system the app runs on.
 ///
@@ -61,6 +61,9 @@ pub struct StartInfo {
     pub tools: Vec<ToolView>,
     /// M-11.4: the input modes of the "Keys" choice, by name.
     pub input_modes: Vec<String>,
+    /// M-04.4, M-17.2: the agents entry of the status bar and the head of
+    /// the section "Agents"; the event `agents` keeps it current.
+    pub agents: AgentsView,
     /// M-05.4: the kinds of export by note format, for the submenu
     /// "Export" of the note overview.
     pub export_kinds: ExportKindsView,

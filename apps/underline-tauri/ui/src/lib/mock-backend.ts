@@ -95,11 +95,24 @@
 // `gitBranchInTheWay(files)` makes the next switch meet changes in the way,
 // `gitProblem(reason)` makes git unable to answer (UC-011 A9), and
 // `syncs()` counts the fake syncs started.
+//
+// Feature F14 (`mock-agents.ts`): agents connect and leave (`agentConnect`,
+// `agentDisconnect`), read lines (`agentRead`, the agent cursor for 10 s),
+// change or create notes (`agentChange`, `agentCreate`: an open note takes
+// the change as the backend's edit, a note not open is reported in the
+// status with "Open"), and change todos (`agentTodo`). The agents entry of
+// the status bar changes the user's access; the section "Agents" installs
+// into fake tools (`agentTool` sets how one stands), never into files.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
+import { MockAgents, levelOf, type MockToolState } from './mock-agents';
 import { emit } from '@tauri-apps/api/event';
 import type {
   commands,
+  AgentAction,
+  AgentLevelName,
+  AgentOpenView,
+  AgentToolName,
   BranchEntryView,
   BranchTarget,
   ChoiceName,
@@ -338,6 +351,12 @@ export type MockHandlers = {
     number: number;
     mine: boolean;
   }) => Promise<Ok<typeof commands.todoConflictResolve>>;
+  agents_set_access: (args: {
+    level: AgentLevelName;
+  }) => Promise<Ok<typeof commands.agentsSetAccess>>;
+  agents_section: (args: {
+    action: AgentAction | null;
+  }) => Promise<Ok<typeof commands.agentsSection>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
@@ -752,19 +771,28 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
   const model = new MockSettings(userFileOf(start.settings ?? {}), PALETTES);
   let status = start.status ?? '';
   // F11: the exports' offers, error mark and busy state of the status.
-  const extra: MockStatusExtra = { exports: [], error: false, busy: false };
-  const setStatus = async (text: string, offer: StatusOffer | null = null, report = false) => {
+  const extra: MockStatusExtra = { exports: [], error: false, busy: false, agents: [] };
+  // F14: the agents of the open workspace and the section "Agents".
+  const agents = new MockAgents();
+  const setStatus = async (
+    text: string,
+    offer: StatusOffer | null = null,
+    report = false,
+    opens: AgentOpenView[] = [],
+  ) => {
     status = text;
     if (!report) {
       extra.exports = [];
       extra.error = false;
     }
+    extra.agents = opens;
     await emit('status', { text, offer, ...extra });
   };
   /** The window is told the settings in effect and what the settings window shows. */
   const sendSettings = async () => {
     await emit('settings', model.effective());
     await emit('settings-window', model.windowView('Markdown'));
+    await emit('agents', agentsView(agents, model));
   };
   return {
     app_start: () => {
@@ -781,6 +809,7 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         ...info,
         settings: model.effective(),
         status,
+        agents: agentsView(agents, model),
       };
     },
     settings_quick: async ({ key, value }) => {
@@ -798,18 +827,37 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         await setStatus(said);
       }
       await emit('settings', model.effective());
+      // F14: the agents entry follows the access (UC-017 A1); not awaited,
+      // so the answer comes as soon as before.
+      void emit('agents', agentsView(agents, model));
       return { view: model.windowView('Markdown'), problem: said };
     },
     wiki_check: async ({ url }) => {
       await setStatus(wikiStatus(url));
       return null;
     },
-    ...workspaceHandlers(start, setStatus, model, sendSettings, () => status, extra),
+    ...workspaceHandlers(start, setStatus, model, sendSettings, () => status, extra, agents),
   };
 }
 
 /** F11: what the status says besides its text about exports. */
-type MockStatusExtra = { exports: ExportOfferView[]; error: boolean; busy: boolean };
+type MockStatusExtra = {
+  exports: ExportOfferView[];
+  error: boolean;
+  busy: boolean;
+  agents: AgentOpenView[];
+};
+
+/** F14: what the agents entry and the section's head show (`Session::agents_view`). */
+function agentsView(agents: MockAgents, model: MockSettings) {
+  const effective = model.effective();
+  return agents.view(model.root, {
+    user: model.user.agent_access ?? 'Off',
+    effective: effective.agentAccess,
+    cap: model.root === null ? null : (model.workspaces[model.root]?.agent_access ?? null),
+    lowered: effective.agentAccessLowered,
+  });
+}
 
 /** One note tab of the fake session. */
 type FakeTab = { note: string; view: EditingViewName };
@@ -817,11 +865,17 @@ type FakeTab = { note: string; view: EditingViewName };
 /** The workspace commands over the fake file system. */
 function workspaceHandlers(
   start: MockStart,
-  setStatus: (text: string, offer?: StatusOffer | null, report?: boolean) => Promise<void>,
+  setStatus: (
+    text: string,
+    offer?: StatusOffer | null,
+    report?: boolean,
+    opens?: AgentOpenView[],
+  ) => Promise<void>,
   model: MockSettings,
   sendSettings: () => Promise<void>,
   status: () => string = () => '',
-  extra: MockStatusExtra = { exports: [], error: false, busy: false },
+  extra: MockStatusExtra = { exports: [], error: false, busy: false, agents: [] },
+  agents: MockAgents = new MockAgents(),
 ): Pick<
   MockHandlers,
   | 'ws_start'
@@ -887,6 +941,8 @@ function workspaceHandlers(
   | 'conflict_keep'
   | 'conflict_abort'
   | 'todo_conflict_resolve'
+  | 'agents_set_access'
+  | 'agents_section'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -2160,6 +2216,9 @@ function workspaceHandlers(
   let settingsSaid: string | null | undefined;
   const switchTo = (dir: string) => {
     root = dir;
+    // F14, D-05 (fixed): the agents of the workspace left are forgotten.
+    agents.leave();
+    void sendAgentMarks();
     gitChosen = null;
     gitDiscarding = null;
     // F13, UC-014 BR-001: a workspace with a remote syncs when it opens.
@@ -2246,6 +2305,59 @@ function workspaceHandlers(
     return { stage: 'options', directory: dir };
   };
 
+  // F14: the agents (UC-017 to UC-019).
+  const LEVEL_LABELS: Record<AgentLevelName, string> = {
+    off: 'Off',
+    readOnly: 'Read only',
+    readWrite: 'Read and write',
+  };
+  const setAgentLevel = async (level: AgentLevelName) => {
+    const label = LEVEL_LABELS[level];
+    if ((model.user.agent_access ?? 'Off') === label) {
+      return;
+    }
+    const said = model.change('me', 'agent_access', label);
+    await sendSettings();
+    await sendAgentMarks();
+    if (said !== null) {
+      await setStatus(said);
+    }
+  };
+  const sendAgents = async () => {
+    await emit('agents', agentsView(agents, model));
+  };
+  let marksTimer: ReturnType<typeof setTimeout> | null = null;
+  /** M-17.6: the cursors in the open notes, again when the next one ends. */
+  const sendAgentMarks = async () => {
+    if (disposed) {
+      return;
+    }
+    const now = Date.now();
+    const shown = agents.marks(
+      tabs.map((tab) => tab.note),
+      model.effective().agentAccess,
+      now,
+    );
+    if (marksTimer !== null) {
+      clearTimeout(marksTimer);
+      marksTimer = null;
+    }
+    const next = Math.min(...[...agents.cursors.values()].map((c) => c.until));
+    if (Number.isFinite(next)) {
+      marksTimer = setTimeout(() => void sendAgentMarks(), Math.max(0, next - now) + 20);
+    }
+    await emit('agent-marks', shown);
+  };
+  /** UC-019: the agent `name` may write, else why not. */
+  const agentRefusal = (note: string): string | null =>
+    levelOf(model.effective().agentAccess) >= 2
+      ? null
+      : `the note \`${note}\` cannot be written: Underline allows agents only to read the notes of this workspace`;
+  /** UC-019 BR-010: a note not open changed; the status reports it with "Open". */
+  const reportAgentChange = async (name: string, verb: 'created' | 'changed', note: string) => {
+    const text = agents.reportChange(name, verb, note, status());
+    await setStatus(text, null, false, agents.opens(text));
+  };
   const handlers: ReturnType<typeof workspaceHandlers> = {
     ws_start: async () => {
       if (!started) {
@@ -3197,6 +3309,26 @@ function workspaceHandlers(
       }
       return null;
     },
+    // F14, M-17.1: the agents menu changes the user's access (UC-017 BR-002).
+    agents_set_access: async ({ level }) => {
+      await setAgentLevel(level);
+      return null;
+    },
+    // F14, M-17.2 to M-17.5: the section "Agents" over the fake tools.
+    agents_section: async ({ action }) => {
+      if (action !== null && root !== null) {
+        const reads = () => levelOf(model.effective().agentAccess) >= 1;
+        const done = agents.act(action, root, model.user.agent_access ?? 'Off', reads);
+        if (done.level !== null && action.kind === 'allowAndInstall') {
+          await setAgentLevel(done.level);
+          agents.installAfterAllowing(action.tool, root, reads);
+        }
+        if (done.copied !== null) {
+          clipboard = { text: done.copied, html: null, image: false };
+        }
+      }
+      return agents.section(root);
+    },
   };
   handlers.__hooks = {
     backendEdit: async (note, at, remove, insert, sealed = true) => {
@@ -3229,6 +3361,78 @@ function workspaceHandlers(
       return rev;
     },
     mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    agentConnect: async (name, refused = false) => {
+      agents.connected = [...agents.connected.filter((a) => a.name !== name), { name, refused }];
+      await sendAgents();
+    },
+    agentDisconnect: async (name) => {
+      agents.connected = agents.connected.filter((a) => a.name !== name);
+      await sendAgents();
+      await sendAgentMarks();
+    },
+    agentRead: async (name, note, from, to, wrote = false) => {
+      agents.cursors.set(name, { note, lines: [from, to], wrote, until: Date.now() + 10_000 });
+      await sendAgentMarks();
+    },
+    agentChange: async (name, note, oldText, newText) => {
+      const refused = agentRefusal(note);
+      if (refused !== null) {
+        return refused;
+      }
+      const mirror = mirrors.get(note);
+      const text = mirror ? mirror.text() : textOf(note);
+      const at = text.indexOf(oldText);
+      if (oldText === '' || at < 0) {
+        return `the passage to replace does not occur in the note \`${note}\`; read the note again and quote it exactly`;
+      }
+      const line = text.slice(0, at).split('\n').length;
+      const lines = Math.max(1, newText.split('\n').length - (newText.endsWith('\n') ? 1 : 0));
+      if (mirror) {
+        // ADR-025: as the backend's change of an open note, an undo step of its own.
+        const rev = mirror.backendEdit(
+          Array.from(text.slice(0, at)).length,
+          Array.from(oldText).length,
+          newText,
+          true,
+        );
+        followMirror(note, mirror);
+        await changed(note);
+        await emit('ed-changed', { note, rev });
+        await sendIndexes();
+        agents.cursors.set(name, {
+          note,
+          lines: [line, line + lines - 1],
+          wrote: true,
+          until: Date.now() + 10_000,
+        });
+        await sendAgentMarks();
+      } else {
+        texts.set(note, text.slice(0, at) + newText + text.slice(at + oldText.length));
+        await reportAgentChange(name, 'changed', note);
+      }
+      const place = lines > 1 ? `lines ${line} to ${line + lines - 1}` : `line ${line}`;
+      return `changed ${note}; the change is in ${place}`;
+    },
+    agentCreate: async (name, note, text) => {
+      const refused = agentRefusal(note);
+      if (refused !== null || root === null) {
+        return refused ?? 'Underline is busy; try again';
+      }
+      if (files[root]?.includes(note)) {
+        return `the note cannot be created: the note ${note} exists`;
+      }
+      files[root] = [...(files[root] ?? []), note];
+      texts.set(note, text);
+      await sendAll();
+      await reportAgentChange(name, 'created', note);
+      return `created ${note}`;
+    },
+    agentTodo: async (name, change) => {
+      await setStatus(`${name} ${change}`);
+    },
+    agentTool: (tool, state) => {
+      agents.tools[tool] = state;
+    },
     settingsOutside: async (place, key, value) => {
       const said = model.outside(place, key, value);
       await sendSettings();
@@ -3308,6 +3512,10 @@ function workspaceHandlers(
         clearTimeout(syncTimer);
         syncTimer = null;
       }
+      if (marksTimer !== null) {
+        clearTimeout(marksTimer);
+        marksTimer = null;
+      }
       disposed = true;
     },
   };
@@ -3328,6 +3536,24 @@ export type MockHooks = {
   outsideChange(note: string, text: string): Promise<number | null>;
   /** The backend's text of `note`, if a window's core holds it. */
   mirrorText(note: string): string | null;
+  /** F14, UC-017 BR-004: the agent `name` connects (`refused`: it asked while access is off, A2). */
+  agentConnect(name: string, refused?: boolean): Promise<void>;
+  /** F14, UC-017 A3: the agent `name` disconnects. */
+  agentDisconnect(name: string): Promise<void>;
+  /** F14, M-17.6: the agent `name` read (or `wrote`) lines `from` to `to` (from 1) of `note`. */
+  agentRead(name: string, note: string, from: number, to: number, wrote?: boolean): Promise<void>;
+  /**
+   * F14, UC-019: the agent `name` replaces `oldText` by `newText` in `note`:
+   * in the open tab as the backend's edit, else in the note's file with a
+   * report in the status. The agent's answer.
+   */
+  agentChange(name: string, note: string, oldText: string, newText: string): Promise<string>;
+  /** F14, UC-019 A1: the agent `name` creates `note` with `text`; the agent's answer. */
+  agentCreate(name: string, note: string, text: string): Promise<string>;
+  /** F14, UC-020 A8: the agent `name` changed a todo (`change`, such as "created todo #3"). */
+  agentTodo(name: string, change: string): Promise<void>;
+  /** F14, M-17.2: how the fake agent tool `tool` stands from now on. */
+  agentTool(tool: AgentToolName, state: MockToolState): void;
   /** F10, UC-010 A5: another program sets `key` in a settings file (`null` removes it). */
   settingsOutside(place: MockSettingsPlace, key: SettingName, value: string | null): Promise<void>;
   /** F10, UC-010 A6: the settings file cannot be read now; changes are not stored. */

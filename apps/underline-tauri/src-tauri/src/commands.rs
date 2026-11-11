@@ -20,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_specta::Event as _;
 use underline_core::NoteId;
+use underline_mcp::install::Places;
 use underline_session::{
     branch_name_view, CommitAnswer, CommitJob, DiscardQuestion, CLOSING_SYNC_AT_MOST,
 };
@@ -30,6 +31,7 @@ use underline_session::{
     RenameStart, RestoreAnswer, Scope, Session, SettingName, SettingsAnswer, SettingsWindowView,
     StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
 };
+use underline_session::{AgentAction, AgentLevelName, AgentsSectionView};
 use underline_session::{
     BranchMenuView, BranchNameView, BranchTarget, ChoiceName, SideName, SwitchAnswer, SyncModeName,
 };
@@ -1565,6 +1567,52 @@ pub async fn todo_conflict_resolve(
 ) -> Result<(), UiError> {
     on_session(&session, &waker, move |session| {
         session.todo_conflict_resolve(number, mine);
+    })
+    .await
+}
+
+/// M-04.4, M-17.1 (UC-017 step 2, BR-002): the level chosen in the agents
+/// menu of the status bar; it changes the user setting, which is written at
+/// once, so on the blocking pool.
+#[tauri::command]
+#[specta::specta]
+pub async fn agents_set_access(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    level: AgentLevelName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.set_agent_access(level);
+    })
+    .await
+}
+
+/// M-17.2 to M-17.5 (UC-016, ADR-017): the section "Agents" of the
+/// settings. Without `action` it checks how the workspace stands in each
+/// agent tool (the settings open, a workspace opened, BR-006); with one it
+/// installs, removes, copies the configuration (to the system clipboard,
+/// ADR-014) or answers a question, then checks again. The tools'
+/// configuration files of this computer's home folder are read and written
+/// without the session.
+#[tauri::command]
+#[specta::specta]
+pub async fn agents_section(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    clipboard: State<'_, SharedClipboard>,
+    action: Option<AgentAction>,
+) -> Result<AgentsSectionView, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.agents_section_start(action)
+    })
+    .await?;
+    if let Some(snippet) = job.copied().map(str::to_owned) {
+        let clipboard = Arc::clone(&clipboard);
+        blocking(move || clipboard.lock().write_text(&snippet)).await?;
+    }
+    let done = blocking(move || job.run(&Places::of_this_computer())).await?;
+    on_session(&session, &waker, move |session| {
+        session.agents_section_done(done)
     })
     .await
 }

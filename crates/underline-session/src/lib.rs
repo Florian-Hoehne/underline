@@ -48,11 +48,16 @@
 //! with the commit box, the diff, discarding, committing and the user's
 //! name for commits; git runs without the session. Feature F13 adds the
 //! branches, the syncs and the conflicts (UC-013 to UC-015, M-04.1 to
-//! M-04.3, M-19.6 to M-19.10).
+//! M-04.3, M-19.6 to M-19.10). Feature F14 adds the agents (UC-016 to
+//! UC-019, M-04.4, M-04.9, M-17): the agents entry of the status bar, MCP
+//! install in the settings, the agent cursor, and the agents' changes
+//! through the window (ADR-018), which ask the window for its edits first
+//! (ADR-025).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
 
+mod agents_view;
 pub mod assets;
 mod clip;
 mod editor_view;
@@ -71,6 +76,11 @@ mod start;
 mod sync_view;
 mod workspace_view;
 
+pub use agents_view::{
+    AgentAction, AgentButtonView, AgentLevelName, AgentLevelView, AgentMarkView, AgentMarksView,
+    AgentOpenView, AgentQuestionView, AgentToolName, AgentToolRowView, AgentsMenuView,
+    AgentsSectionView, AgentsView,
+};
 pub use clip::clipboard_view;
 pub use editor_view::{
     ClipAction, ClipContentView, Clipped, CloseQuestion, CopyOnSelectView, DragName,
@@ -112,6 +122,7 @@ pub use session::{
     branch_name_view, AbortJob, AbortOutcome, BranchesJob, BranchesListed, SwitchJob,
     SwitchOutcome, CLOSING_SYNC_AT_MOST,
 };
+pub use session::{AgentsDone, AgentsJob, SectionDone, SectionJob, FLUSH_AT_MOST, REQUESTS_EVERY};
 pub use session::{
     CommitJob, CommitOutcome, CreatePlan, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused,
     EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed, IdentityJob,

@@ -25,9 +25,28 @@
     a warning marked "⚠" (not by colour alone), "N to push", "N to pull"
     and "Sync now", disabled while a sync runs or conflicts wait (UC-014
     BR-004, A10).
+
+  Feature F14 (UC-017, UC-019):
+  - M-04.4, M-17.1: after the git parts, the agents entry "Agents: {status}"
+    (" in this workspace", " · Agent(s) connected: A, B", " · A asked for
+    access"), hover "What agents may do with the notes through Underline's
+    MCP server"; it opens a menu with the levels the workspace allows as
+    choices, the user's chosen (BR-002), and "Settings of this workspace…".
+    Only while a workspace is open.
+  - M-04.9: after an agent created or changed notes that are not open, up
+    to three buttons "Open" or "Open {title}", the newest first, right of
+    the text, as long as that report shows (UC-019 BR-010).
 -->
 <script lang="ts">
-  import type { ExportOfferView, GitBarView, StatusOffer } from './bindings';
+  import type {
+    AgentLevelName,
+    AgentOpenView,
+    AgentsMenuView,
+    ExportOfferView,
+    GitBarView,
+    StatusOffer,
+  } from './bindings';
+  import ContextMenu, { type MenuEntry } from './ContextMenu.svelte';
 
   type Props = {
     /** The root of the open workspace, if one is open. */
@@ -58,6 +77,16 @@
     onOpenExport?: (index: number) => void;
     /** "Show" of the approximated blocks of the export `index`. */
     onShowApproximated?: (index: number) => void;
+    /** M-04.4: the agents entry and its menu; `null` without a workspace. */
+    agents?: AgentsMenuView | null;
+    /** M-04.9: "Open" for the notes an agent changed. */
+    agentOpens?: AgentOpenView[];
+    /** M-17.1: a level chosen in the agents menu. */
+    onAgentLevel?: (level: AgentLevelName) => void;
+    /** M-17.1: "Settings of this workspace…". */
+    onAgentSettings?: () => void;
+    /** M-04.9: "Open" of a note an agent changed. */
+    onOpenAgentNote?: (note: string) => void;
   };
 
   let {
@@ -75,7 +104,72 @@
     onUndo,
     onOpenExport,
     onShowApproximated,
+    agents = null,
+    agentOpens = [],
+    onAgentLevel,
+    onAgentSettings,
+    onOpenAgentNote,
   }: Props = $props();
+
+  /** M-17.1: where the agents menu opens, while it is open. */
+  let agentsMenu = $state<{ x: number; y: number } | null>(null);
+  let agentsButton = $state<HTMLButtonElement | null>(null);
+
+  /** M-17.1: the levels as choices, then "Settings of this workspace…". */
+  const agentEntries = $derived<MenuEntry[]>(
+    agents === null
+      ? []
+      : [
+          ...agents.levels.map((level) => ({
+            label: level.label,
+            checked: level.chosen,
+            action: () => {
+              if (!level.chosen) {
+                onAgentLevel?.(level.level);
+              }
+            },
+          })),
+          {
+            label: agents.workspaceSettings,
+            separatorBefore: true,
+            action: () => onAgentSettings?.(),
+          },
+        ],
+  );
+
+  /**
+   * When the menu closed last: a click on the entry closes an open menu
+   * (its pointer-down outside the menu closed it already) rather than
+   * opening it again.
+   */
+  let agentsClosedAt = -Infinity;
+
+  function openAgentsMenu() {
+    if (agentsMenu !== null || performance.now() - agentsClosedAt < 300) {
+      agentsMenu = null;
+      return;
+    }
+    const box = agentsButton?.getBoundingClientRect();
+    if (box) {
+      agentsMenu = { x: box.left, y: box.top - 2 };
+    }
+  }
+
+  /** The menu closed; `back` gives the keyboard back to the entry. */
+  function closeAgentsMenu(back: boolean) {
+    if (agentsMenu === null) {
+      // Already closed (an Escape, then the focus leaving): no debounce.
+      return;
+    }
+    agentsMenu = null;
+    agentsClosedAt = back ? -Infinity : performance.now();
+    if (back) {
+      agentsButton?.focus();
+    }
+  }
+
+  /** M-04.9: "Open" names the note when there are several (for screen readers always). */
+  const agentsOffered = $derived(agentOpens.length > 0 ? '. Open available' : '');
 
   /** For screen readers before a failure (new text, A-118). */
   const ERROR_PREFIX = 'Error: ';
@@ -97,6 +191,7 @@
   );
 
   const text = $derived([root ?? '', status].filter((part) => part !== '').join('  |  '));
+  const told = $derived(offered || agentsOffered);
 </script>
 
 <footer class="status-bar" aria-busy={busy || (git?.sync?.running ?? false)}>
@@ -141,12 +236,35 @@
       onclick={() => onSyncNow?.()}>Sync now</button
     >
   {/if}
+  {#if agents !== null}
+    <button
+      type="button"
+      class="ui-button undo git-part agents"
+      title={agents.hover}
+      aria-haspopup="menu"
+      aria-expanded={agentsMenu !== null}
+      bind:this={agentsButton}
+      onclick={openAgentsMenu}
+      >{#if agents.asked}<span aria-hidden="true">⚠&nbsp;</span
+        >{`${agents.asked} · `}{/if}{agents.text}</button
+    >
+    {#if agentsMenu !== null}
+      <ContextMenu
+        label="Agents"
+        entries={agentEntries}
+        x={agentsMenu.x}
+        y={agentsMenu.y}
+        above
+        onClose={closeAgentsMenu}
+      />
+    {/if}
+  {/if}
   {#if error}
     <span class="sign" aria-hidden="true">⚠</span>
   {/if}
   <p class="text" role={error ? 'alert' : 'status'} title={text}>
-    {#if error}<span class="hidden">{ERROR_PREFIX}</span>{/if}{text}{#if offered}<span
-        class="hidden">{offered}</span
+    {#if error}<span class="hidden">{ERROR_PREFIX}</span>{/if}{text}{#if told}<span class="hidden"
+        >{told}</span
       >{/if}
   </p>
   {#if offer === 'undoDelete'}
@@ -177,6 +295,21 @@
       >
     {/if}
   {/each}
+  {#if agentOpens.length > 0}
+    <!-- App-tester F14: one line, which shrinks and scrolls rather than wraps. -->
+    <span class="opens">
+      {#each agentOpens as open (open.note)}
+        {@const label = `Open ${open.note}, ${open.created ? 'created' : 'changed'} by an agent`}
+        <button
+          type="button"
+          class="ui-button undo open-note"
+          aria-label={label}
+          title={label}
+          onclick={() => onOpenAgentNote?.(open.note)}>{open.label}</button
+        >
+      {/each}
+    </span>
+  {/if}
 </footer>
 
 <style>
@@ -226,6 +359,33 @@
     color: var(--ui-hint);
   }
 
+  /* M-04.4, app-tester F14: the agents entry is one line that gives way
+     to the report text in a small window, cut at its end (what an agent
+     asked stands first, so it stays); screen readers get it whole. */
+  .agents {
+    flex: 0 1 auto;
+    min-width: 8ch;
+    max-width: min(60ch, 40vw);
+  }
+
+  /* M-04.9: the "Open" buttons on one line beside the text; it shrinks
+     and scrolls sideways when the window is narrow. */
+  .opens {
+    display: flex;
+    flex: 0 1 auto;
+    gap: var(--space-2);
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  /* M-04.9: "Open {title}" at most 18 characters wide, cut at the end. */
+  .open-note {
+    max-width: 18ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* UC-015 BR-005: egui's conflict orange, as the letter C (Q-91). */
   .conflicts {
     font-weight: 700;
@@ -247,14 +407,19 @@
     background: var(--ui-button);
   }
 
-  /* A very long message wraps, up to four lines, then scrolls. */
+  /* A long message wraps to two lines, cut at the end (app-tester F14: the
+     editor keeps its height); the whole text is at the pointer (`title`)
+     and for screen readers. */
   /* UX review F13: in a narrow window the text goes to a line of its own
      rather than getting thin. */
   .text {
+    display: -webkit-box;
     flex: 1 1 16em;
     min-width: 0;
-    max-height: calc(4 * 1.4em);
-    overflow: auto;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     margin: 0;
     /* "  |  " keeps its two spaces; a long message wraps instead of being cut. */
     white-space: pre-wrap;

@@ -45,6 +45,9 @@
     cursor there, shows it and takes the keyboard (a heading a link leads
     to, M-07.3).
   - M-12.2: the minimap gets one bar per row and figures as areas.
+  - M-17.6: the agent cursors: a block holding lines an agent read or wrote
+    is tinted blue with a 3 px bar left of it, and the first such block of
+    each agent names it, in 80 % of the size (fixed colours, as egui).
 -->
 <script module lang="ts">
   /**
@@ -60,6 +63,7 @@
   import { onMount, tick } from 'svelte';
   import { DIALOG_OPENED } from '../DialogWindow.svelte';
   import type {
+    AgentMarkView,
     BlockView,
     BlocksView,
     ClipAction,
@@ -132,6 +136,8 @@
     backend?: FacadeBackend;
     /** ADR-024 measuring point: called when a patch is in place. */
     probe?: ((start: number, patched: number) => void) | null;
+    /** M-17.6: the agent cursors in this note. */
+    agentMarks?: AgentMarkView[];
   };
 
   let {
@@ -146,7 +152,34 @@
     onFollow,
     backend = wasmFacadeBackend(platform === 'macos'),
     probe = null,
+    agentMarks = [],
   }: Props = $props();
+
+  /**
+   * M-17.6 (UC-019 BR-006): the agent marking each block that holds lines
+   * it read or wrote (the first mark wins, as in egui), and whether the
+   * block names it: only the first block of each agent does.
+   */
+  const agentBlocks = $derived.by(() => {
+    // Made anew from the props each time, never changed in place.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const marked = new Map<number, { name: string; named: boolean }>();
+    if (agentMarks.length === 0) {
+      return marked;
+    }
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const named = new Set<string>();
+    blocks.forEach((block, index) => {
+      const first = block.line;
+      const last = block.line + Math.max(block.lines, 1);
+      const mark = agentMarks.find((m) => m.from < last && first < Math.max(m.to, m.from + 1));
+      if (mark) {
+        marked.set(index, { name: mark.name, named: !named.has(mark.name) });
+        named.add(mark.name);
+      }
+    });
+    return marked;
+  });
 
   /** egui's `PADDING` around the blocks. */
   const PADDING = 12;
@@ -1526,10 +1559,17 @@
       <div class="space" style:height="{spaceAbove}px" contenteditable="false"></div>
       {#key drawn}
         {#each shown as index (index)}
+          {@const agent = agentBlocks.get(index)}
           {#if index === gapBefore}
             {@render emptyLines()}
           {/if}
-          <div class="slot" data-slot={index} {@attach measure}>
+          <div
+            class="slot"
+            class:agent={agent !== undefined}
+            data-slot={index}
+            data-agent={agent?.named ? agent.name : undefined}
+            {@attach measure}
+          >
             <Block
               block={blocks[index]}
               {index}
@@ -1590,6 +1630,38 @@
 {/snippet}
 
 <style>
+  /* M-17.6: egui's agent colours, fixed (A-166): a light tint, a real 3 px
+     border 6 px left of the block (also in forced colours, app.css), and
+     the name on a pill in the theme's colours above the first block of
+     each agent, where it covers neither text nor the format label (UX
+     review and app-tester F14). */
+  .slot.agent {
+    position: relative;
+    margin-left: -6px;
+    padding-left: 3px;
+    background-color: rgb(40 120 220 / 0.15);
+    border-left: 3px solid rgb(40 120 220);
+  }
+
+  .slot.agent[data-agent] {
+    padding-top: 1.5em;
+  }
+
+  .slot.agent[data-agent]::before {
+    position: absolute;
+    top: 2px;
+    left: 3px;
+    padding: 0 4px;
+    font-size: 80%;
+    line-height: 1.3;
+    color: var(--palette-foreground);
+    content: attr(data-agent);
+    background: var(--palette-background);
+    border: 1px solid rgb(40 120 220);
+    border-radius: 3px;
+    pointer-events: none;
+  }
+
   .facade {
     --facade-weak: color-mix(in srgb, var(--palette-foreground) 55%, transparent);
 
