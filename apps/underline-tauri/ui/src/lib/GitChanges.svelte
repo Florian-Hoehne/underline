@@ -1,7 +1,7 @@
 <!--
   M-16.4, M-19.1 to M-19.3 (UC-011, UC-012): the git changes in the tool
   panel, as egui's `changes_ui` shows them, only in a git workspace and only
-  while git answers (A9: the status bar says why, feature F13).
+  while git answers (A9: the status bar says why, M-04.1).
 
   M-19.1, the commit box above the list (UC-012 steps 2–4):
   - during a merge, instead, "A synchronization left notes in conflict;
@@ -23,8 +23,11 @@
   box of the commit, the letter in its colour (BR-003), "{title} · {folder}"
   or "{new} ← {old}", which opens the note or shows its diff (scrolled into
   view), and "Discard…" for a note. "Other files" divides the notes from
-  the rest; "Nothing changed since the last commit." when empty (A1). The
-  actions of conflicts come with F13.
+  the rest; "Nothing changed since the last commit." when empty (A1).
+  Feature F13 adds the actions of conflicts (UC-015): a file that is not a
+  note offers "Keep here" and "Keep remote" (A2), one deleted on a side
+  says "deleted here" or "deleted on the remote" and offers "Keep" and
+  "Delete" (A3); a note in conflict is resolved in its conflict bar.
 
   M-19.3, "Diff", open at first: the file, then each changed part after a
   rule; a line is "{old} {new} {±}" and its text, the words changed marked
@@ -170,7 +173,10 @@
   /** "Other files" goes before the first file that is not a note. */
   function startsOthers(index: number): boolean {
     const files = changes?.files ?? [];
-    return !files[index].note && (index === 0 || files[index - 1].note);
+    // Conflicts come first, files among them (UC-015 BR-005); "Other files"
+    // stands once, before the first other file after them (app-tester F13).
+    const other = (i: number) => !files[i].note && files[i].kind !== 'conflict';
+    return other(index) && !files.slice(0, index).some((_, i) => other(i));
   }
 
   function choose(change: ChangeView, index: number) {
@@ -342,7 +348,50 @@
                 >{change.name}<span class="visually-hidden">, {KIND_WORDS[change.kind]}</span
                 ></button
               >
-              {#if change.note && change.kind !== 'conflict'}
+              {#if change.kind === 'conflict' && change.deletedOn !== null}
+                <span class="conflict-actions">
+                  <span class="weak side"
+                    >{change.deletedOn === 'here' ? 'deleted here' : 'deleted on the remote'}</span
+                  >
+                  <button
+                    type="button"
+                    class="ui-button small"
+                    tabindex={stop}
+                    aria-label="Keep {change.name}"
+                    onfocus={() => (rowStop = index)}
+                    onclick={() => void shell.keepConflict(change.path, true)}>Keep</button
+                  >
+                  <button
+                    type="button"
+                    class="ui-button small"
+                    tabindex={stop}
+                    aria-label="Delete {change.name}"
+                    onfocus={() => (rowStop = index)}
+                    onclick={() => void shell.keepConflict(change.path, false)}>Delete</button
+                  >
+                </span>
+              {:else if change.kind === 'conflict' && !change.note}
+                <span class="conflict-actions">
+                  <button
+                    type="button"
+                    class="ui-button small"
+                    tabindex={stop}
+                    aria-label="Keep {change.name} as here"
+                    onfocus={() => (rowStop = index)}
+                    onclick={() => void shell.takeConflictSide(change.path, 'here')}
+                    >Keep here</button
+                  >
+                  <button
+                    type="button"
+                    class="ui-button small"
+                    tabindex={stop}
+                    aria-label="Keep {change.name} as on the remote"
+                    onfocus={() => (rowStop = index)}
+                    onclick={() => void shell.takeConflictSide(change.path, 'remote')}
+                    >Keep remote</button
+                  >
+                </span>
+              {:else if change.note && change.kind !== 'conflict'}
                 <button
                   type="button"
                   class="ui-button small"
@@ -507,6 +556,7 @@
 
   .change {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-1);
     align-items: center;
     min-width: 0;
@@ -522,6 +572,22 @@
 
   .others {
     padding-top: var(--space-1);
+  }
+
+  .side {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  /* App-tester F13: the actions of a conflict go on a line of their own
+     under the name, so they stay in a narrow panel. */
+  .conflict-actions {
+    display: flex;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    align-items: center;
+    padding-left: calc(1ch + 2 * var(--space-1));
   }
 
   .git-letter {

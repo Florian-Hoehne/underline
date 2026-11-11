@@ -27,9 +27,9 @@
 //! The jobs run git with literal pathspecs and tell a file that was not
 //! committed from a failure of git (`runner.rs`, review F12).
 //!
-//! The branch button of the status bar (M-04.1), the branch menu, the sync
-//! after a commit and the actions of conflicts come with feature F13 (hooks
-//! below); `in_conflict` stays its stub until then.
+//! Feature F13 builds on this: the branch button of the status bar
+//! (M-04.1, `remote.rs`), the branch menu (`branches.rs`), the sync after a
+//! commit (UC-014 BR-001) and the actions of conflicts (`conflicts.rs`).
 
 mod runner;
 
@@ -44,7 +44,7 @@ use ropey::Rope;
 use underline_core::{
     changed_lines, diff, now, proposed_message, write_atomic, BranchState, ChangeKind,
     ChangeTracker, Changes, DiscardError, FileChange, GitError, Hunk, LineKind, NoteId,
-    OnlyDiffers,
+    OnlyDiffers, Side,
 };
 use underline_editor_core::utf16::WebOffsets;
 
@@ -54,6 +54,7 @@ use crate::git_view::{
     BranchView, ChangeKindName, ChangeView, ChangesView, CommitAnswer, DiffBody, DiffLineKind,
     DiffLineView, DiffPartView, DiffView, DiscardQuestion, HunkView,
 };
+use crate::remote_view::SideName;
 use crate::Event;
 
 /// UC-011 A3: how often git is asked again for the changes, so commits made
@@ -78,7 +79,7 @@ const DIFF_GIVEN_UP: Duration = Duration::from_secs(30);
 const DIFF_STOPPED: &str = "it stopped unexpectedly";
 
 /// "1 note", "2 notes" (egui's `count`).
-fn count(n: usize, thing: &str) -> String {
+pub(super) fn count(n: usize, thing: &str) -> String {
     if n == 1 {
         format!("1 {thing}")
     } else {
@@ -204,7 +205,7 @@ impl GitChanges {
 }
 
 /// M-04.1: where the workspace stands, as egui's status bar names it.
-fn branch_view(branch: &BranchState) -> BranchView {
+pub(super) fn branch_view(branch: &BranchState) -> BranchView {
     match branch {
         BranchState::Branch(name) => BranchView {
             label: name.clone(),
@@ -233,6 +234,14 @@ fn change_name(change: &FileChange) -> String {
             None => id.title(),
         },
         (None, _) => change.path.clone(),
+    }
+}
+
+/// UC-015 BR-002: the side as the window names it.
+pub(super) fn side_name(side: Side) -> SideName {
+    match side {
+        Side::Here => SideName::Here,
+        Side::Remote => SideName::Remote,
     }
 }
 
@@ -280,6 +289,12 @@ fn changes_view(answer: &Result<Changes, String>, left_out: &HashSet<String>) ->
                 name: change_name(change),
                 note: change.note().is_some(),
                 chosen: !left_out.contains(&change.path),
+                deleted_on: match change.kind {
+                    ChangeKind::Conflict {
+                        deleted: Some(side),
+                    } => Some(side_name(side)),
+                    _ => None,
+                },
             })
             .collect(),
         merging: changes.merging,
@@ -721,6 +736,50 @@ impl Session {
         }
     }
 
+    /// git's last answer about the changes: the changes, or why git could
+    /// not be asked (UC-011 A9); `None` before it answered or without git.
+    pub(super) fn git_answer(&self) -> Option<&Result<Changes, String>> {
+        self.changes
+            .changes
+            .as_ref()
+            .filter(|_| self.changes.tracker.is_some())
+    }
+
+    /// The changes as git answered last, if it could.
+    pub(super) fn git_changes(&self) -> Option<&Changes> {
+        self.git_answer().and_then(|answer| answer.as_ref().ok())
+    }
+
+    /// The number of git's answers so far; grows with each.
+    pub(super) fn git_generation(&self) -> u64 {
+        self.changes.generation
+    }
+
+    /// How the session's git jobs run git (ADR-006).
+    pub(super) fn git_setup(&self) -> GitSetup {
+        self.changes.setup.clone()
+    }
+
+    /// UC-012 BR-004, UC-014 BR-002: the changes left out of commits, which
+    /// a sync leaves out too.
+    pub(super) fn left_out(&self) -> HashSet<String> {
+        self.changes.left_out.clone()
+    }
+
+    /// A git job asked for the changes itself (UC-015): its answer is the
+    /// newest, as egui takes `git.changes` after resolving.
+    pub(super) fn take_git_changes(&mut self, changes: Changes) {
+        if self.changes.tracker.is_none() {
+            return;
+        }
+        self.changes
+            .left_out
+            .retain(|p| changes.files.iter().any(|f| &f.path == p));
+        self.changes.changes = Some(Ok(changes));
+        self.changes.generation += 1;
+        self.changes.dirty = true;
+    }
+
     /// Whether the open workspace is a git repository whose changes are
     /// tracked (M-16.4).
     #[must_use]
@@ -1083,15 +1142,18 @@ impl Session {
                 self.changes.left_out.clear();
                 self.changes.dirty = true;
                 self.refresh_changes();
-                // F13: UC-014 BR-001, a commit is synced right after
-                // (`request_sync(SyncMode::Full, false)`).
+                // UC-014 BR-001: a commit is synced right after.
+                self.request_sync(underline_core::SyncMode::Full, false);
                 CommitAnswer::Committed
             }
             // A3: git does not know the user.
             Err(GitError::NoIdentity) => CommitAnswer::Identity,
             // A4.
             Err(err) => {
-                self.status = format!("The commit failed: {err}");
+                self.status = format!(
+                    "The commit failed: {}",
+                    super::remote::redact(&err.to_string())
+                );
                 CommitAnswer::Done
             }
         }
@@ -1156,7 +1218,8 @@ impl Session {
         self.changes.discarding = None;
         self.status = format!(
             "The changes of {} could not be discarded: {}",
-            refused.title, refused.why
+            refused.title,
+            super::remote::redact(&refused.why)
         );
     }
 
@@ -1297,7 +1360,10 @@ impl Session {
                 self.status = format!("Discarded the changes of {title}");
             }
             Err(err) => {
-                self.status = format!("The changes of {title} could not be discarded: {err}");
+                self.status = format!(
+                    "The changes of {title} could not be discarded: {}",
+                    super::remote::redact(&err)
+                );
             }
         }
     }

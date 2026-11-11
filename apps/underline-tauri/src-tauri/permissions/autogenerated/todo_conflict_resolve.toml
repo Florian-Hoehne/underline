@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-todo-conflict-resolve"
+description = "Enables the todo_conflict_resolve command without any pre-configured scope."
+commands.allow = ["todo_conflict_resolve"]
+
+[[permission]]
+identifier = "deny-todo-conflict-resolve"
+description = "Denies the todo_conflict_resolve command without any pre-configured scope."
+commands.deny = ["todo_conflict_resolve"]

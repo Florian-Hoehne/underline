@@ -149,7 +149,8 @@ impl Session {
 
     /// M-21.4, UC-005 BR-001: Underline is to close; every change is stored
     /// first. When that fails, the window stays open and the user is asked
-    /// (A14 step 3). The sync before closing comes with feature F13.
+    /// (A14 step 3). With a remote, a last sync follows
+    /// ([`Session::closing_sync`], UC-014 A9).
     pub fn request_close(&mut self) -> Option<CloseQuestion> {
         let failures = self.flush_all().err()?;
         Some(CloseQuestion {
@@ -210,8 +211,13 @@ impl Session {
         let Some(open) = &mut self.open else {
             return;
         };
+        // A-142: not while git switches, aborts or completes on the notes.
+        let paused = !self.saves_paused.is_empty();
         for (_, tab) in open.tabs.iter_mut() {
-            if !tab.saving && tab.autosave.is_due(now) {
+            if !paused && !tab.saving && tab.autosave.is_due(now) {
+                // M1 (round 2): a note gone with its folder (another
+                // branch) is stored again at its place.
+                tab.make_folder();
                 let text = tab.mirror.text();
                 tab.saving_text = Some(text.clone());
                 self.saver.save(SaveJob {

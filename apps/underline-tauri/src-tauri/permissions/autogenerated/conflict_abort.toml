@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-conflict-abort"
+description = "Enables the conflict_abort command without any pre-configured scope."
+commands.allow = ["conflict_abort"]
+
+[[permission]]
+identifier = "deny-conflict-abort"
+description = "Denies the conflict_abort command without any pre-configured scope."
+commands.deny = ["conflict_abort"]

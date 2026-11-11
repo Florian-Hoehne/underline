@@ -32,7 +32,9 @@ pub enum ChangeKindName {
     Deleted,
     /// The letter `R`, blue.
     Renamed,
-    /// UC-015: the letter `C`, orange (its actions come with feature F13).
+    /// UC-015: the letter `C`, orange; a file that is not a note offers
+    /// "Keep here" and "Keep remote" (A2), one deleted on a side "Keep" and
+    /// "Delete" (A3).
     Conflict,
 }
 
@@ -56,6 +58,10 @@ pub struct ChangeView {
     pub note: bool,
     /// UC-012 BR-004: chosen for the commit.
     pub chosen: bool,
+    /// UC-015 A3: a conflict of a note or file deleted on this side and
+    /// changed on the other; the row says "deleted here" or "deleted on the
+    /// remote" and offers "Keep" and "Delete" (M-19.2, feature F13).
+    pub deleted_on: Option<crate::remote_view::SideName>,
 }
 
 /// UC-011, UC-012, M-19.1, M-19.2: the changes of a git workspace as the
@@ -65,7 +71,7 @@ pub struct ChangeView {
 #[serde(rename_all = "camelCase")]
 pub struct ChangesView {
     /// UC-011 A9: why git could not be asked; then nothing else is shown
-    /// (the status bar says it with feature F13).
+    /// here (the status bar says it, M-04.1).
     pub problem: Option<String>,
     /// Where the workspace stands; `None` with a problem.
     pub branch: Option<BranchView>,

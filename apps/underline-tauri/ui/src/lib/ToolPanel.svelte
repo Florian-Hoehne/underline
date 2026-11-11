@@ -29,7 +29,8 @@
   them (egui shows the changes without an open note too).
 
   A later feature adds the todos (M-16.3, F15) between the properties and
-  the git changes, as in egui.
+  the git changes, as in egui. Until then, the todos in conflict after a
+  sync stand there alone (M-19.10, feature F13, A-146).
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -37,6 +38,7 @@
   import { activeSourceView } from './editor/active';
   import { activeFacade } from './facade/active';
   import GitChanges from './GitChanges.svelte';
+  import TodoConflicts from './TodoConflicts.svelte';
   import { toolPanelWidthWithin, type Shell } from './shell.svelte';
 
   type Props = { shell: Shell };
@@ -149,6 +151,9 @@
           <p class="weak">Not saved yet</p>
         {/if}
       </details>
+    {/if}
+    {#if shell.todoConflicts.length > 0}
+      <TodoConflicts {shell} conflicts={shell.todoConflicts} />
     {/if}
     <GitChanges {shell} onShow={show} />
     {#if lists && noteShown}

@@ -12,7 +12,8 @@
 
   A window that stays open while the user works (the settings, M-20.1)
   gives `width`, may be `resizable`, and shows a close button "×" beside its
-  title, as egui's windows do.
+  title, as egui's windows do. One anchored at the bottom left (the branch
+  menu, M-19.6) stands above the status bar there, as egui anchors it.
 -->
 <script lang="ts" module>
   /** The event on `window` when a dialog shows. */
@@ -40,6 +41,8 @@
     resizable?: boolean;
     /** A close button "×" beside the title. */
     closeButton?: boolean;
+    /** Where it stands: centred at the top, or at the bottom left. */
+    anchor?: 'top' | 'bottom-left';
     children: Snippet;
   };
 
@@ -52,6 +55,7 @@
     width,
     resizable = false,
     closeButton = false,
+    anchor = 'top',
     children,
   }: Props = $props();
 
@@ -165,6 +169,7 @@
   class="dialog"
   class:sized={width !== undefined}
   class:resizable
+  class:bottom-left={anchor === 'bottom-left'}
   style:--dialog-width={width === undefined ? undefined : `${width}px`}
   role="dialog"
   aria-labelledby={headingId}
@@ -217,6 +222,14 @@
     width: max-content;
     min-width: min(var(--dialog-width), calc(100% - var(--dialog-left, 0px) - var(--space-4)));
     max-width: calc(100% - var(--dialog-left, var(--space-4)) - var(--space-4));
+    transform: none;
+  }
+
+  /* M-19.6: egui's branch menu, anchored at the bottom left. */
+  .dialog.bottom-left {
+    top: auto;
+    bottom: var(--space-2);
+    left: var(--space-2);
     transform: none;
   }
 

@@ -1,12 +1,14 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
-// `deleted`, `tabs`, `properties`, `indexes`, `changes`, `diff` and `close-question` events (ADR-022); the editor's
+// `deleted`, `tabs`, `properties`, `indexes`, `changes`, `diff`, `git-bar`,
+// `conflict`, `todo-conflicts` and `close-question` events (ADR-022); the editor's
 // `ed-highlight` goes to the source view shown now, `ed-changed`,
 // `ed-flush` and `ed-enrich` to the editor cores (ADR-025, `editor/sync.ts`),
 // plus the UI state that is not stored (M-22.4): the Open and Create
 // dialogs, the note dialogs (M-14), the question before closing, "Open web
 // address" (M-07.3), the commit box with "Your name for commits" and
-// "Discard changes" (M-19), the
+// "Discard changes" (M-19), the branch menu, "Abort the sync" and the
+// place chosen in the conflict bar (M-19.6 to M-19.10), the
 // loading state and the panels' widths while they are dragged. The text of the notes is not here: each
 // open note's editor core holds it (ADR-025). No domain logic lives here:
 // every change goes to the backend, which answers with an event or with the
@@ -16,8 +18,18 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   commands,
   events,
+  type BranchEntryView,
+  type BranchMenuView,
+  type BranchNameView,
+  type BranchTarget,
   type ChangesView,
+  type ChoiceName,
   type CloseQuestion,
+  type ConflictBarView,
+  type GitBarView,
+  type SideName,
+  type SyncModeName,
+  type TodoConflictView,
   type CommitAnswer,
   type CreateAnswer,
   type DiffView,
@@ -197,6 +209,32 @@ const EMPTY_COMMIT: CommitBox = {
  */
 export type IdentityDialog = { name: string; email: string; problem: string | null };
 
+/**
+ * M-19.6, UC-013: the branch menu. `view` is `null` while git lists the
+ * branches. `naming` holds the name of a new branch while it is asked for
+ * (A1), with `name` (what git makes of it) once checked. `problem` is A2 or
+ * git's reason, `inTheWay` A3.
+ */
+export type BranchMenu = {
+  view: BranchMenuView | null;
+  filter: string;
+  cursor: number;
+  naming: string | null;
+  name: BranchNameView | null;
+  problem: string | null;
+  inTheWay: string | null;
+  busy: boolean;
+};
+
+/** No git part in the status bar (no workspace, no git). */
+const NO_GIT_BAR: GitBarView = { branch: null, problem: null, conflicts: null, sync: null };
+
+/** M-19.6, BR-001: the entries holding the filter's text, ignoring case. */
+export function filteredBranches(menu: BranchMenu): BranchEntryView[] {
+  const filter = menu.filter.toLowerCase();
+  return (menu.view?.branches ?? []).filter((entry) => entry.name.toLowerCase().includes(filter));
+}
+
 /** The note dialogs (M-14); several may be open at once, as in egui. */
 export type NoteDialogs = {
   newNote: NewNoteDialog | null;
@@ -336,6 +374,20 @@ export class Shell {
   discarding = $state.raw<DiscardQuestion | null>(null);
   /** "Discard changes" waits for the backend. */
   discardBusy = $state(false);
+  /** M-04.1 to M-04.3: the branch, the conflicts and the syncs of the status bar. */
+  gitBar = $state.raw<GitBarView>(NO_GIT_BAR);
+  /** M-19.6, UC-013: the branch menu, while open. */
+  branchMenu = $state.raw<BranchMenu | null>(null);
+  /** M-19.9, UC-015 step 3: the conflict bar of the active note, if it holds places. */
+  conflictBar = $state.raw<ConflictBarView | null>(null);
+  /** M-19.9: the place the conflict bar shows (egui's `conflict_cursor`). */
+  conflictPlace = $state(0);
+  /** M-19.10, UC-020 A10: the todos in conflict. */
+  todoConflicts = $state.raw<TodoConflictView[]>([]);
+  /** M-04.2, M-19.10, UC-015 A5: "Abort the sync" asks, while open. */
+  abortAsked = $state(false);
+  /** "Abort the sync" waits for git. */
+  abortBusy = $state(false);
   /** M-15.1, M-15.2: the window "Export note", or the system's dialog, while open. */
   exporting = $state.raw<ExportDialog | null>(null);
   /** M-15.6, UC-009 A2: what the window "Approximated blocks" lists, until it is closed. */
@@ -455,9 +507,12 @@ export class Shell {
         if (event.payload?.root !== this.workspace?.root) {
           // The note dialogs were of the workspace left.
           this.notes = NO_NOTE_DIALOGS;
-          // So were "Discard changes" and "Your name for commits".
+          // So were "Discard changes" and "Your name for commits", the
+          // branch menu and "Abort the sync".
           this.discarding = null;
           this.identity = null;
+          this.branchMenu = null;
+          this.abortAsked = false;
           if (this.exporting?.stage !== 'system') {
             this.exporting = null;
           }
@@ -497,6 +552,16 @@ export class Shell {
       }),
       events.diff.listen((event) => {
         this.diff = event.payload;
+      }),
+      // M-04.1 to M-04.3, M-19.9, M-19.10: branches, syncs and conflicts.
+      events.gitBar.listen((event) => {
+        this.gitBar = event.payload;
+      }),
+      events.conflict.listen((event) => {
+        this.#takeConflictBar(event.payload);
+      }),
+      events.todoConflicts.listen((event) => {
+        this.todoConflicts = event.payload;
       }),
       // The editor's events are listened to here, once for the window, and
       // handed to the source view shown now: listening per view left events
@@ -1556,6 +1621,276 @@ export class Shell {
       if (this.discarding === question) {
         this.discarding = null;
       }
+    }
+  }
+
+  /**
+   * M-19.6, UC-013 steps 1–2, BR-006: the branch status button or
+   * Ctrl+Shift+B opens the branch menu, with the keyboard in its filter;
+   * git lists the branches. Nothing opens without git (as in egui).
+   */
+  async openBranchMenu(): Promise<void> {
+    // A-143: only while git answers.
+    if (this.changes === null || this.changes.problem !== null) {
+      return;
+    }
+    const menu: BranchMenu = {
+      view: null,
+      filter: '',
+      cursor: 0,
+      naming: null,
+      name: null,
+      problem: null,
+      inTheWay: null,
+      busy: true,
+    };
+    this.branchMenu = menu;
+    const result = await this.#serial(() => commands.gitBranches());
+    if (this.branchMenu !== menu) {
+      return;
+    }
+    if (result.status === 'error') {
+      this.branchMenu = null;
+      this.#fail('git_branches', result.error);
+      return;
+    }
+    this.branchMenu = result.data === null ? null : { ...menu, view: result.data, busy: false };
+  }
+
+  /** M-19.6, UC-013 A8: Escape or a click on the current branch closes the menu. */
+  closeBranchMenu(): void {
+    this.branchMenu = null;
+  }
+
+  /** M-19.6, BR-001: the filter typed; the choice goes back to the first entry. */
+  editBranchFilter(filter: string): void {
+    if (this.branchMenu !== null) {
+      this.branchMenu = { ...this.branchMenu, filter, cursor: 0 };
+    }
+  }
+
+  /** M-19.6, BR-006: Up and Down move the choice within the list shown. */
+  moveBranchCursor(by: number): void {
+    const menu = this.branchMenu;
+    if (menu === null) {
+      return;
+    }
+    const count = filteredBranches(menu).length;
+    if (count === 0) {
+      return;
+    }
+    const cursor = Math.max(0, Math.min(count - 1, menu.cursor + by));
+    this.branchMenu = { ...menu, cursor };
+  }
+
+  /**
+   * M-19.7, UC-013 steps 3–6, A4: a branch chosen; the current one closes
+   * the menu, another is switched to once the window's edits reached the
+   * backend.
+   */
+  async chooseBranch(entry: BranchEntryView): Promise<void> {
+    const menu = this.branchMenu;
+    if (menu === null || menu.busy || menu.view?.merging) {
+      return;
+    }
+    if (entry.current) {
+      this.branchMenu = null;
+      return;
+    }
+    await this.#switch(
+      entry.remote ? { kind: 'remote', name: entry.name } : { kind: 'local', name: entry.name },
+    );
+  }
+
+  /** M-19.6, UC-013 A1 step 1: "New branch…", filled with the filter. */
+  startNewBranch(): void {
+    const menu = this.branchMenu;
+    if (menu === null || menu.view?.merging) {
+      return;
+    }
+    this.branchMenu = { ...menu, naming: menu.filter, name: null, problem: null };
+    void this.editNewBranch(menu.filter);
+  }
+
+  /** M-19.6, BR-005: the name typed, and what git makes of it ("Branch: {clean}"). */
+  async editNewBranch(name: string): Promise<void> {
+    const menu = this.branchMenu;
+    if (menu === null || menu.naming === null) {
+      return;
+    }
+    this.branchMenu = { ...menu, naming: name, problem: null };
+    const result = await commands.gitBranchName(name);
+    const now = this.branchMenu;
+    if (now === null || now.naming !== name) {
+      return;
+    }
+    if (result.status === 'ok') {
+      this.branchMenu = { ...now, name: result.data };
+    }
+  }
+
+  /** M-19.6, UC-013 A1 step 2: "Create" or Enter. */
+  async createBranch(): Promise<void> {
+    const menu = this.branchMenu;
+    if (menu === null || menu.naming === null || menu.busy || !menu.name?.ok) {
+      return;
+    }
+    await this.#switch({ kind: 'new', name: menu.naming });
+  }
+
+  /** M-19.6, A8: "Cancel" of the new branch's name closes the menu, as in egui. */
+  cancelNewBranch(): void {
+    this.branchMenu = null;
+  }
+
+  /** M-19.6, BR-002: "Show changes" (and "Commit first", A3) opens the changes. */
+  branchShowChanges(): void {
+    this.branchMenu = null;
+    this.showChanges();
+  }
+
+  async #switch(target: BranchTarget): Promise<void> {
+    const menu = this.branchMenu;
+    if (menu === null) {
+      return;
+    }
+    this.branchMenu = { ...menu, busy: true };
+    const result = await this.#serial(() => flushed(() => commands.gitSwitch(target)));
+    const now = this.branchMenu;
+    if (now === null) {
+      return;
+    }
+    if (result.status === 'error') {
+      this.branchMenu = null;
+      this.#fail('git_switch', result.error);
+      return;
+    }
+    const answer = result.data;
+    switch (answer.kind) {
+      case 'done':
+        this.branchMenu = null;
+        return;
+      case 'inTheWay':
+        this.branchMenu = { ...now, busy: false, naming: null, inTheWay: answer.text };
+        return;
+      case 'exists':
+        // A2: the list again, filtered by the name, which can be chosen.
+        this.branchMenu = {
+          ...now,
+          busy: false,
+          naming: null,
+          filter: answer.name,
+          cursor: 0,
+          problem: answer.problem,
+        };
+        return;
+      case 'invalid':
+        this.branchMenu = { ...now, busy: false, problem: answer.problem };
+        return;
+    }
+  }
+
+  /**
+   * M-04.3, M-19.6, M-19.8, UC-014 step 1, A1: "Sync now", "Pull" or
+   * "Push", once the window's edits reached the backend; the branch menu
+   * closes.
+   */
+  async sync(mode: SyncModeName): Promise<void> {
+    this.branchMenu = null;
+    const result = await this.#serial(() => flushed(() => commands.syncRequest(mode)));
+    if (result.status === 'error') {
+      this.#fail('sync_request', result.error);
+    }
+  }
+
+  /** The conflict bar came; the place shown stays within its places. */
+  #takeConflictBar(bar: ConflictBarView | null): void {
+    this.conflictBar = bar;
+    if (bar !== null && this.conflictPlace >= bar.places.length) {
+      this.conflictPlace = bar.places.length - 1;
+    }
+  }
+
+  /** M-19.9, BR-006: Next (F7) and Previous (Shift+F7); the place shown. */
+  moveConflictPlace(by: number): number | null {
+    const bar = this.conflictBar;
+    if (bar === null) {
+      return null;
+    }
+    this.conflictPlace = Math.max(0, Math.min(bar.places.length - 1, this.conflictPlace + by));
+    return this.conflictPlace;
+  }
+
+  /**
+   * M-19.9, UC-015 steps 4–5, A1: "Here", "Remote", "Both" for the place
+   * shown (Alt+H, Alt+R, Alt+B), or "All: Here"/"All: Remote" (`all`), once
+   * the window's edits reached the backend.
+   */
+  async chooseConflict(choice: ChoiceName, all = false): Promise<void> {
+    const bar = this.conflictBar;
+    if (bar === null) {
+      return;
+    }
+    const place = all ? null : this.conflictPlace;
+    // S3 (review F13): the bar's revision; a choice of an older text does nothing.
+    const result = await this.#serial(() =>
+      flushed(() => commands.conflictChoose(bar.note, bar.rev, place, choice)),
+    );
+    if (result.status === 'error') {
+      this.#fail('conflict_choose', result.error);
+    }
+  }
+
+  /** M-19.2, UC-015 A2: "Keep here" or "Keep remote" of a file that is not a note. */
+  async takeConflictSide(path: string, side: SideName): Promise<void> {
+    const result = await this.#serial(() => commands.conflictTakeSide(path, side));
+    if (result.status === 'error') {
+      this.#fail('conflict_take_side', result.error);
+    }
+  }
+
+  /** M-19.2, UC-015 A3: "Keep" or "Delete" of a note or file deleted on one side. */
+  async keepConflict(path: string, keep: boolean): Promise<void> {
+    const result = await this.#serial(() => flushed(() => commands.conflictKeep(path, keep)));
+    if (result.status === 'error') {
+      this.#fail('conflict_keep', result.error);
+    }
+  }
+
+  /** M-19.10, UC-020 A10: "Keep mine" or "Take remote" of a todo in conflict. */
+  async resolveTodoConflict(todo: number, mine: boolean): Promise<void> {
+    const result = await this.#serial(() => commands.todoConflictResolve(todo, mine));
+    if (result.status === 'error') {
+      this.#fail('todo_conflict_resolve', result.error);
+    }
+  }
+
+  /** M-04.2, M-19.9, UC-015 A5 step 1: "Abort the sync" asks first. */
+  askAbort(): void {
+    this.abortAsked = true;
+  }
+
+  /** M-19.10, UC-015 A5: Cancel or Escape: nothing changes. */
+  closeAbort(): void {
+    this.abortAsked = false;
+  }
+
+  /** M-19.10, UC-015 A5 step 2: "Abort the sync" confirmed, once the edits reached the backend. */
+  async abortSync(): Promise<void> {
+    if (this.abortBusy) {
+      return;
+    }
+    this.abortBusy = true;
+    try {
+      const result = await this.#serial(() => flushed(() => commands.conflictAbort()));
+      if (result.status === 'error') {
+        this.#fail('conflict_abort', result.error);
+      }
+    } catch (error) {
+      this.#fail('conflict_abort', { kind: 'internal', message: String(error) });
+    } finally {
+      this.abortBusy = false;
+      this.abortAsked = false;
     }
   }
 

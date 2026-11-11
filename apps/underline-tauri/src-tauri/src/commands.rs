@@ -15,11 +15,14 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use tauri::{AppHandle, Manager, Runtime, State};
 use tauri_specta::Event as _;
 use underline_core::NoteId;
+use underline_session::{
+    branch_name_view, CommitAnswer, CommitJob, DiscardQuestion, CLOSING_SYNC_AT_MOST,
+};
 use underline_session::{
     clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, CreateNoteAnswer, DeleteAnswer,
     DeleteQuestion, DragName, EditingViewName, EmbedAnswer, FormatName, Insertion, LinkAnswer,
@@ -27,7 +30,9 @@ use underline_session::{
     RenameStart, RestoreAnswer, Scope, Session, SettingName, SettingsAnswer, SettingsWindowView,
     StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
 };
-use underline_session::{CommitAnswer, CommitJob, DiscardQuestion};
+use underline_session::{
+    BranchMenuView, BranchNameView, BranchTarget, ChoiceName, SideName, SwitchAnswer, SyncModeName,
+};
 use underline_session::{
     DialogOutcome, ExportAnswer, ExportDialogPlan, ExportJob, ExportKindName, ExportPlaceAnswer,
     ExportShown, ExportStart, TypedExportPath,
@@ -743,19 +748,78 @@ impl Closer {
 /// M-21.4, UC-005 BR-001, ADR-025 section 3.9: after the window sent its
 /// edits (or did not answer in time), every change is stored; when that
 /// fails, the window asks "Changes not stored" (A14 step 3), else the app
-/// ends.
+/// ends, after a last sync with a remote (UC-014 A9).
 pub fn close_after_flush<R: Runtime>(app: &AppHandle<R>) {
-    let question = app.state::<SharedSession>().lock().request_close();
+    if prepare_close(app) == CloseStep::Close {
+        app.state::<Closer>().close_now();
+    }
+}
+
+/// What closing does after every change was to be stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseStep {
+    /// Everything was stored: Underline may end now.
+    Close,
+    /// A change could not be stored; the window asks "Changes not stored".
+    Asked,
+    /// UC-014 A9: a last sync runs; Underline ends when it ended, or after
+    /// [`CLOSING_SYNC_AT_MOST`], by itself.
+    Syncing,
+}
+
+/// M-21.4, UC-005 BR-001, UC-014 A9: stores every change; when that fails,
+/// sends the question "Changes not stored". With a remote, a last sync
+/// starts ("Syncing before closing…"), and a thread ends Underline once
+/// it ended or after ten seconds, without blocking the window.
+pub fn prepare_close<R: Runtime>(app: &AppHandle<R>) -> CloseStep {
+    let shared = app.state::<SharedSession>();
+    let (question, syncing) = {
+        let mut session = shared.lock();
+        match session.request_close() {
+            Some(question) => (Some(question), false),
+            None => (None, session.closing_sync(Instant::now())),
+        }
+    };
     app.state::<Waker>().wake();
-    match question {
-        None => app.state::<Closer>().close_now(),
-        Some(question) => {
-            if let Err(error) = CloseQuestionEvent(question).emit(app) {
-                eprintln!("The question before closing could not be sent: {error}");
+    if let Some(question) = question {
+        if let Err(error) = CloseQuestionEvent(question).emit(app) {
+            eprintln!("The question before closing could not be sent: {error}");
+        }
+        return CloseStep::Asked;
+    }
+    if !syncing {
+        return CloseStep::Close;
+    }
+    let app = app.clone();
+    let waited = std::thread::Builder::new()
+        .name("underline-closing".into())
+        .spawn(move || {
+            // The tick takes in the sync's outcome; the deadline holds even
+            // if it never comes.
+            let deadline = Instant::now() + CLOSING_SYNC_AT_MOST + CLOSING_POLL;
+            loop {
+                std::thread::sleep(CLOSING_POLL);
+                let over = app
+                    .state::<SharedSession>()
+                    .lock()
+                    .closing_sync_over(Instant::now());
+                if over || Instant::now() >= deadline {
+                    break;
+                }
             }
+            app.state::<Closer>().close_now();
+        });
+    match waited {
+        Ok(_) => CloseStep::Syncing,
+        Err(error) => {
+            eprintln!("UC-014 A9: the last sync cannot be waited for: {error}");
+            CloseStep::Close
         }
     }
 }
+
+/// How often closing looks whether the last sync ended (UC-014 A9).
+const CLOSING_POLL: Duration = Duration::from_millis(100);
 
 /// ADR-025 section 3.9: the window's answer to `ed-flush` with `closing`:
 /// with `sent`, it sent the edits of every note, and Underline closes now
@@ -1323,6 +1387,188 @@ pub async fn git_discard(
     .await
 }
 
+/// M-19.6, UC-013 steps 1–2: the branch menu: the local branches, then
+/// the remote's without a local one (BR-001), listed by git without the
+/// session; nothing is sent over the network. `null` in a workspace whose
+/// changes are not tracked, as egui opens no menu there.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_branches(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<Option<BranchMenuView>, UiError> {
+    let job = read_session(&session, Session::branches_prepare).await?;
+    let Some(job) = job else {
+        return Ok(None);
+    };
+    let listed = blocking(move || job.run()).await?;
+    on_session(&session, &waker, move |session| {
+        session.branches_listed(listed)
+    })
+    .await
+}
+
+/// M-19.6, UC-013 A1, BR-005: "Branch: {clean}" for the name typed, or why
+/// git would not take it, while the user types.
+#[tauri::command]
+#[specta::specta]
+pub fn git_branch_name(typed: String) -> Result<BranchNameView, UiError> {
+    Ok(branch_name_view(&typed))
+}
+
+/// M-19.7, UC-013 steps 3–6, A1 to A6: switches to the branch chosen (a
+/// local one, one of the remote, or a new one), after the window sent its
+/// edits (`flushed`, ADR-025). The open notes are stored first; git runs
+/// without the session. The answer keeps the menu open when changes are
+/// in the way (A3) or the name is taken (A2); the status says the rest.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_switch(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    target: BranchTarget,
+) -> Result<SwitchAnswer, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.switch_prepare(&target)
+    })
+    .await?;
+    let job = match job {
+        Ok(job) => job,
+        Err(answer) => return Ok(answer),
+    };
+    // A job that fails still lets the saves go on.
+    let outcome = blocking(move || job.run()).await;
+    match outcome {
+        Ok(outcome) => {
+            on_session(&session, &waker, move |session| {
+                session.finish_switch(outcome)
+            })
+            .await
+        }
+        Err(error) => {
+            on_session(&session, &waker, Session::resume_background_saves).await?;
+            Err(error)
+        }
+    }
+}
+
+/// M-04.3, M-19.6, M-19.8, UC-014 step 1, A1, A10: "Sync now" (`full`),
+/// "Pull" or "Push", after the window sent its edits: the open notes are
+/// stored and the sync runs on the syncer's thread; a refusal is said in
+/// the status, as the user asked.
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_request(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    mode: SyncModeName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.request_sync(mode.into(), true);
+    })
+    .await
+}
+
+/// M-19.9, UC-015 steps 4–5, A1, BR-006: "Here", "Remote" or "Both" for the
+/// place `place` of the open note `note` (all places with `null`: "All:
+/// Here", "All: Remote") of the bar of revision `rev`, after the window
+/// sent its edits; nothing happens when the text changed since. The note
+/// is stored and marked resolved once no place is left (step 6).
+#[tauri::command]
+#[specta::specta]
+pub async fn conflict_choose(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    rev: u32,
+    place: Option<u32>,
+    choice: ChoiceName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        let place = place.and_then(|p| usize::try_from(p).ok());
+        session.conflict_choose(&NoteId::from_relative(&note), rev, place, choice);
+    })
+    .await
+}
+
+/// M-19.2, UC-015 A2: "Keep here" or "Keep remote" of the file in conflict
+/// at `path` that is not a note; git takes the side without the session,
+/// and the status says where the other version was kept.
+#[tauri::command]
+#[specta::specta]
+pub async fn conflict_take_side(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    path: String,
+    side: SideName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.conflict_take_side(&path, side);
+    })
+    .await
+}
+
+/// M-19.2, UC-015 A3: "Keep" (`keep`) or "Delete" of the note or file at
+/// `path`, deleted on one side and changed on the other, after the window
+/// sent its edits. "Delete" moves a note to the deleted notes.
+#[tauri::command]
+#[specta::specta]
+pub async fn conflict_keep(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    path: String,
+    keep: bool,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.conflict_keep(&path, keep);
+    })
+    .await
+}
+
+/// M-04.2, M-19.9, M-19.10, UC-015 A5: "Abort the sync", once confirmed and
+/// after the window sent its edits: git puts the workspace back as it was
+/// before the sync joined, without the session; the tabs show the notes
+/// again and the status says so.
+#[tauri::command]
+#[specta::specta]
+pub async fn conflict_abort(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<(), UiError> {
+    let job = on_session(&session, &waker, Session::abort_prepare).await?;
+    let Some(job) = job else {
+        return Ok(());
+    };
+    match blocking(move || job.run()).await {
+        Ok(outcome) => {
+            on_session(&session, &waker, move |session| {
+                session.finish_abort(outcome);
+            })
+            .await
+        }
+        Err(error) => {
+            on_session(&session, &waker, Session::resume_background_saves).await?;
+            Err(error)
+        }
+    }
+}
+
+/// M-19.10, UC-020 A10 step 3: "Keep mine" (`mine`) or "Take remote" of the
+/// todo `number` in conflict; git marks it resolved without the session.
+#[tauri::command]
+#[specta::specta]
+pub async fn todo_conflict_resolve(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    number: u32,
+    mine: bool,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.todo_conflict_resolve(number, mine);
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1409,6 +1655,15 @@ mod tests {
         "git_set_identity",
         "git_discard_start",
         "git_discard",
+        "git_branches",
+        "git_branch_name",
+        "git_switch",
+        "sync_request",
+        "conflict_choose",
+        "conflict_take_side",
+        "conflict_keep",
+        "conflict_abort",
+        "todo_conflict_resolve",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user
@@ -2376,6 +2631,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(answer, json!({ "kind": "done" }));
+        assert_eq!(
+            std::fs::read_to_string(root.join("Home.md")).unwrap(),
+            "# Home\n"
+        );
+    }
+
+    #[test]
+    fn uc013_uc014_uc015_m19_6_to_m19_10_commands_without_git_change_nothing() {
+        let dir = temp_dir("remote-none");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        assert_eq!(mock.invoke("git_branches", json!({})).unwrap(), Value::Null);
+        assert_eq!(
+            mock.invoke("git_branch_name", json!({ "typed": " trip  ideas " }))
+                .unwrap(),
+            json!({ "text": "Branch: trip-ideas", "ok": true })
+        );
+        let answer = mock
+            .invoke(
+                "git_switch",
+                json!({ "target": { "kind": "new", "name": "trip" } }),
+            )
+            .unwrap();
+        assert_eq!(answer, json!({ "kind": "done" }));
+        mock.invoke("sync_request", json!({ "mode": "full" }))
+            .unwrap();
+        assert_eq!(mock.status(), "This workspace has no remote to sync with");
+        mock.invoke(
+            "conflict_choose",
+            json!({ "note": "Home", "rev": 1, "place": 0, "choice": "here" }),
+        )
+        .unwrap();
+        mock.invoke(
+            "conflict_take_side",
+            json!({ "path": "Home.md", "side": "remote" }),
+        )
+        .unwrap();
+        mock.invoke("conflict_keep", json!({ "path": "Home.md", "keep": false }))
+            .unwrap();
+        mock.invoke("conflict_abort", json!({})).unwrap();
+        mock.invoke(
+            "todo_conflict_resolve",
+            json!({ "number": 1, "mine": true }),
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("Home.md")).unwrap(),
             "# Home\n"

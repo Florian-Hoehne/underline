@@ -7,6 +7,7 @@ use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
 use crate::export_view::ExportOfferView;
 use crate::git_view::{ChangesView, DiffView};
 use crate::notes_view::{DeletedNoteView, StatusOffer};
+use crate::remote_view::{ConflictBarView, GitBarView, TodoConflictView};
 use crate::search_view::SearchView;
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
@@ -71,4 +72,12 @@ pub enum Event {
     /// M-19.3, UC-011 step 6: the diff of the chosen file or the active
     /// note; `None` without either ("Open a note to see its changes.").
     Diff(Option<DiffView>),
+    /// M-04.1 to M-04.3: the branch, the conflicts and the syncs in the
+    /// status bar changed.
+    GitBar(GitBarView),
+    /// M-19.9, UC-015 step 3: the conflict bar of the active note; `None`
+    /// when the note holds no conflicting place.
+    Conflict(Option<ConflictBarView>),
+    /// M-19.10, UC-020 A10: the todos in conflict.
+    TodoConflicts(Vec<TodoConflictView>),
 }

@@ -64,6 +64,15 @@
     "allow-git-commit",
     "allow-git-set-identity",
     "allow-git-discard-start",
-    "allow-git-discard"
+    "allow-git-discard",
+    "allow-git-branches",
+    "allow-git-branch-name",
+    "allow-git-switch",
+    "allow-sync-request",
+    "allow-conflict-choose",
+    "allow-conflict-take-side",
+    "allow-conflict-keep",
+    "allow-conflict-abort",
+    "allow-todo-conflict-resolve"
   ]
 }

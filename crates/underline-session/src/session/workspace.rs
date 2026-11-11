@@ -10,8 +10,8 @@
 //!
 //! Feature F3 adds storing the tabs' changes before a switch or a close
 //! and the open tabs' text in the changes from outside. Left for later
-//! features, with a hook where they go: the syncer (F13) and the window
-//! presence (F14); feature F12 starts the change tracker (UC-011). Feature F8 reads the deleted
+//! features, with a hook where they go: the window presence (F14); feature
+//! F12 starts the change tracker (UC-011), feature F13 the syncer (UC-014). Feature F8 reads the deleted
 //! notes when the workspace opens (M-05.6); feature F9 starts the searcher
 //! of the workspace (UC-008).
 //!
@@ -521,10 +521,10 @@ impl Session {
         // Closing the workspace open before:
         // - F14 (inventory D-05, fixed there): remove its window presence
         //   here, as the egui app does only when it ends.
-        // - F13: stop its syncer; drop the old `Syncer` here.
+        // - F13: its syncer ends with it (`track_remote`).
         // Opening this one:
-        // - F13: start a `Syncer` when it has a git remote, then a full sync
-        //   (UC-014); with it the git state of the status bar (D-06).
+        // - F13: a `Syncer` when it has a git remote, then a full sync
+        //   (UC-014), started below; its state is the status bar's (D-06).
         // - F12: a `ChangeTracker` when it is a git repository (UC-011),
         //   started below.
         let wake = self.wake.clone();
@@ -541,6 +541,11 @@ impl Session {
         self.search_switched();
         // UC-011: the changes, when the workspace is a git repository.
         self.track_changes(&root);
+        // UC-014, UC-015: the syncs and the conflicts of a git workspace.
+        self.track_remote(&root);
+        self.track_conflicts(&root);
+        self.branches_listed = None;
+        self.saves_paused.clear();
         self.settings.open_workspace(&root, &self.git);
         self.state.workspace_opened(&root, now());
         // UC-021 BR-005: the tab "Todos", its sort and filter come back.
@@ -898,7 +903,15 @@ impl Session {
     /// A note's file changed outside: its tab shows it again (UC-004 A7),
     /// or both versions are kept when the tab holds a change not stored
     /// yet (A9). Returns whether the note overview needs a rescan.
-    fn outside_change(&mut self, path: &Path) -> bool {
+    pub(super) fn outside_change(&mut self, path: &Path) -> bool {
+        self.take_file_version(path, true)
+    }
+
+    /// [`Session::outside_change`]; without `report`, a tab that shows the
+    /// file again says nothing in the status, as after switching branches
+    /// (UC-013 step 5), where egui reloads the tabs without a word. Keeping
+    /// both versions (A9) is always said.
+    pub(super) fn take_file_version(&mut self, path: &Path, report: bool) -> bool {
         let Some(open) = &mut self.open else {
             return false;
         };
@@ -940,7 +953,9 @@ impl Session {
         }
         tab.reload(content);
         self.changed.push(note.clone());
-        self.status = format!("{} was changed outside", tab.title);
+        if report {
+            self.status = format!("{} was changed outside", tab.title);
+        }
         was_deleted
     }
 }

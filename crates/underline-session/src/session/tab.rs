@@ -170,6 +170,7 @@ impl Tab {
         }
         let started = Instant::now();
         let text = self.mirror.text();
+        self.make_folder();
         match saver.save_now(&self.path, &text) {
             Ok(()) => {
                 self.on_disk = text;
@@ -183,6 +184,20 @@ impl Tab {
                 self.autosave.failed(started);
                 self.error = Some(err.clone());
                 Err(format!("{}: {err}", self.title))
+            }
+        }
+    }
+
+    /// A note deleted outside (UC-004 A8), or not on the branch switched to
+    /// (M1, review F13), is stored again at its place: its folder is made
+    /// again first when it went too. Nothing for a note that is there.
+    pub(super) fn make_folder(&self) {
+        if !self.deleted {
+            return;
+        }
+        if let Some(parent) = self.path.parent() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                eprintln!("The folder of {} could not be made: {error}", self.title);
             }
         }
     }

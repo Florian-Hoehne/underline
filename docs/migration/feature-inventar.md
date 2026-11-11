@@ -62,11 +62,11 @@ Allgemeine Konventionen der heutigen UI:
 
 Reihenfolge von links nach rechts:
 
-- [ ] **M-04.1** Branch-Button (nur wenn die Änderungen lesbar sind): „Branch {b}“ oder „Branch {b} · N change(s)“.
+- [~] **M-04.1** Branch-Button (nur wenn die Änderungen lesbar sind): „Branch {b}“ oder „Branch {b} · N change(s)“.
   `{b}` ist der Name, „{name} (no commit yet)“ oder „not on a branch: {commit}“. Hover „Branches  Ctrl+Shift+B“,
   Klick öffnet das Branch-Menü. Bei einem Fehler steht schwach „Changes cannot be shown: {e}“.
-- [ ] **M-04.2** Konflikte: orange „1 conflict“/„N conflicts“ und ein kleiner Button „Abort the sync“.
-- [ ] **M-04.3** Sync-Zustand (nur mit Syncer):
+- [~] **M-04.2** Konflikte: orange „1 conflict“/„N conflicts“ und ein kleiner Button „Abort the sync“.
+- [~] **M-04.3** Sync-Zustand (nur mit Syncer):
   - „Syncing…“
   - „Not synced yet“
   - „Synced just now / N min ago / N h ago“
@@ -510,18 +510,18 @@ Reihenfolge von links nach rechts:
   - Texte je Fall (neu, zurück wie committet, N Zeilen gehen verloren).
   - Wirkung je Art: neu → löschen; umbenannt → zurück; sonst `restore_committed`. Bei Konflikt verweigert.
   - Der Tab wird neu geladen. „Discarded the changes of X“.
-- [ ] **M-19.6** Branch-Menü (UC-013, Ctrl+Shift+B):
+- [~] **M-19.6** Branch-Menü (UC-013, Ctrl+Shift+B):
   - Fenster unten links mit Filter: erst lokale, dann Remote-Branches, Kennzeichen „(current)“ und „(on the remote)“.
     Up/Down/Enter, Escape. Während eines Merge deaktiviert.
   - „New branch…“ vorbefüllt mit dem Filter, live „Branch: {clean}“ oder der Fehler. Existiert der Branch: „The
     branch X exists; choose it in the list to switch to it.“
   - Weitere Buttons: „Show changes“, „Pull“, „Push“.
-- [ ] **M-19.7** Branch wechseln:
+- [~] **M-19.7** Branch wechseln:
   - Vorher speichern, sonst „Did not switch, because …“.
   - Tabs, deren Datei weg ist, schliessen; geänderte neu laden.
   - „Switched to X; carried along N change(s); closed A, B, not on this branch“.
   - WouldOverwrite → „… Commit them first, or stay.“ mit „Commit first“.
-- [ ] **M-19.8** Sync (UC-014):
+- [~] **M-19.8** Sync (UC-014):
   - Nur mit `.git` und Remote.
   - Auslöser: Workspace öffnen, nach Commit, nach gelösten Konflikten, Sync now, Pull, Push, Intervall
     (`git_sync_interval` Minuten, mindestens 1, ab dem Ende des letzten Syncs) und Schliessen.
@@ -529,12 +529,12 @@ Reihenfolge von links nach rechts:
   - Ablehnungen (kein Remote, Merge, detached) werden nur gemeldet, wenn der Benutzer gefragt hat.
   - Ergebnismeldungen: Conflict, InTheWay, PushRejected, SignIn, NotPossible (Texte in `app:3725-3840`). Synced →
     Tabs neu laden und neu einlesen.
-- [ ] **M-19.9** Konfliktleiste (UC-015):
+- [~] **M-19.9** Konfliktleiste (UC-015):
   - „Conflict: place i of n open (line L)“.
   - Previous/Shift+F7, Next/F7, „All: Here“, „All: Remote“, „Abort the sync“.
   - Spalten Here/Remote (Monospace, max. 160 px).
   - Here Alt+H, Remote Alt+R, Both Alt+B, „Or edit the place in the note.“
-- [ ] **M-19.10** Konfliktauflösung:
+- [~] **M-19.10** Konfliktauflösung:
   - Eine Notiz ohne Marker wird gespeichert und als gelöst markiert.
   - Ist alles gelöst → `complete_joining`, „The conflicts are resolved; syncing“.
   - Todo-Konflikte: Raster mit fetten Unterschieden, „Keep mine“/„Take remote“, „Todo #a is now #b“.

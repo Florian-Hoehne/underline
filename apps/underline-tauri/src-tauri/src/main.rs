@@ -21,14 +21,14 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use tauri::{Manager, RunEvent, WindowEvent};
-use tauri_specta::Event as _;
 use underline_core::Workspace;
 use underline_session::Session;
 
 use crate::clipboard::SystemClipboard;
-use crate::commands::{close_after_flush, Closer, SaveDialog, SharedClipboard, SharedSession};
+use crate::commands::{
+    close_after_flush, prepare_close, CloseStep, Closer, SaveDialog, SharedClipboard, SharedSession,
+};
 use crate::events::emit_all;
-use crate::events::CloseQuestionEvent;
 use crate::ticker::Waker;
 
 /// The window starts hidden and the frontend shows it after its first
@@ -171,17 +171,10 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
 /// M-21.4, UC-005 BR-001: closing the window or ending the app stores every
 /// change first; when that fails, it asks "Changes not stored" (A14 step 3)
 /// and returns `true`: the window stays open. "Close anyway" ends the app
-/// (`app_close_anyway`).
+/// (`app_close_anyway`). With a remote, a last sync runs first and the app
+/// ends by itself afterwards (UC-014 A9); `true` meanwhile.
 fn ask_before_closing(app: &tauri::AppHandle) -> bool {
-    let question = app.state::<SharedSession>().lock().request_close();
-    app.state::<Waker>().wake();
-    let Some(question) = question else {
-        return false;
-    };
-    if let Err(error) = CloseQuestionEvent(question).emit(app) {
-        eprintln!("The question before closing could not be sent: {error}");
-    }
-    true
+    prepare_close(app) != CloseStep::Close
 }
 
 /// ADR-025 section 3.9: closing the window first asks it to send the edits

@@ -62,6 +62,15 @@ fn main() {
         "git_set_identity",
         "git_discard_start",
         "git_discard",
+        "git_branches",
+        "git_branch_name",
+        "git_switch",
+        "sync_request",
+        "conflict_choose",
+        "conflict_take_side",
+        "conflict_keep",
+        "conflict_abort",
+        "todo_conflict_resolve",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

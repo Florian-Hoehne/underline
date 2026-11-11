@@ -2,6 +2,8 @@
 //! state, the settings, the open workspace with its overview and tabs, and
 //! the status message, driven by [`Session::tick`] (ADR-022).
 
+mod branches;
+mod conflicts;
 mod diagrams;
 pub(crate) use diagrams::SvgDiagrams;
 mod editing;
@@ -12,6 +14,7 @@ mod git;
 mod indexes;
 mod links;
 mod notes;
+mod remote;
 mod search;
 mod sync;
 mod tab;
@@ -19,6 +22,8 @@ mod tab;
 mod window;
 mod workspace;
 
+pub use self::branches::{branch_name_view, BranchesJob, BranchesListed, SwitchJob, SwitchOutcome};
+pub use self::conflicts::{AbortJob, AbortOutcome};
 pub use self::embed::{EmbedDone, EmbedPlan};
 pub use self::export::{ExportDialogPlan, ExportJob, ExportOutcome};
 pub use self::git::{
@@ -26,6 +31,7 @@ pub use self::git::{
     NEEDS_MESSAGE, NOTHING_CHOSEN,
 };
 pub use self::links::Followed;
+pub use self::remote::CLOSING_SYNC_AT_MOST;
 pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
 
@@ -138,6 +144,19 @@ pub struct Session {
     /// UC-011, UC-012: the git changes of the open workspace, the commit's
     /// choice, the diff and the question before discarding.
     changes: git::GitChanges,
+    /// UC-014: the syncs of the open workspace (feature F13).
+    remote: remote::Remote,
+    /// UC-015: the conflicts a stopped sync left, and resolving them.
+    conflicts: conflicts::Conflicts,
+    /// UC-013 A2: the branches the branch menu listed last.
+    branches_listed: Option<underline_core::Branches>,
+    /// Why no note is stored in the background now: git syncs, switches,
+    /// aborts or resolves on the notes (A-142); empty when saves run.
+    saves_paused: std::collections::BTreeSet<branches::Pause>,
+    /// A git report the background's "Saved {t}" does not replace (like
+    /// A-113): "Switched to …", "The conflicts are resolved; syncing" and
+    /// the other reports of F13, while the status shows it.
+    git_report: Option<String>,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -246,6 +265,11 @@ impl Session {
             search: search::Search::default(),
             exports: export::Exports::default(),
             changes: git::GitChanges::default(),
+            remote: remote::Remote::default(),
+            conflicts: conflicts::Conflicts::default(),
+            branches_listed: None,
+            saves_paused: std::collections::BTreeSet::new(),
+            git_report: None,
             views_dirty: false,
             told,
         };
@@ -372,12 +396,16 @@ impl Session {
     /// code and figures of the tool panel (M-16.5); the answer of the
     /// workspace search is taken in and the search started again when its
     /// notes changed (UC-008 A3, M-13.1); git's answer about the changes is
-    /// taken in and the diff made again (UC-011, M-19). Returns what changed
-    /// for the window.
+    /// taken in and the diff made again (UC-011, M-19); the outcomes of
+    /// syncs and of steps resolving conflicts are taken in, and the syncs
+    /// of the interval started (UC-014, UC-015). Returns what changed for
+    /// the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
         self.settings.poll(now);
         self.take_settings_messages();
+        self.run_syncs(now);
+        self.run_conflicts();
         self.autosave(now);
         if let Err(err) = self.state.write_if_due(now) {
             self.status = err.to_string();
@@ -389,6 +417,8 @@ impl Session {
         events.extend(self.indexes_events(now));
         events.extend(self.search_events());
         events.extend(self.git_events(now));
+        events.extend(self.conflict_events());
+        events.extend(self.git_bar_event(now));
         events
     }
 
@@ -523,6 +553,7 @@ impl Session {
             .as_ref()
             .is_some_and(|offer| offer.status == self.status)
             || self.export_status_kept()
+            || self.git_report.as_deref() == Some(self.status.as_str())
     }
 
     /// The settings' messages become the status, the last one wins.

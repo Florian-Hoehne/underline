@@ -14,9 +14,20 @@
   "Open {title}" after agent changes, A-120). A failed export is marked
   as an error by a sign and the word "Error:" for screen readers, not by
   colour alone; while an export runs the bar is busy (review F11).
+
+  Feature F13, left of the text as in egui (M-04.1 to M-04.3):
+  - the branch button "Branch {b}" or "Branch {b} · N change(s)" (hover
+    "Branches  Ctrl+Shift+B"), which opens the branch menu; when git cannot
+    answer, "Changes cannot be shown: {e}", weak (UC-011 A9);
+  - "1 conflict"/"N conflicts" in the conflict colour, with "Abort the sync"
+    (UC-015 step 1, A5);
+  - with a remote, the state of the syncs with its reason at the pointer,
+    a warning marked "⚠" (not by colour alone), "N to push", "N to pull"
+    and "Sync now", disabled while a sync runs or conflicts wait (UC-014
+    BR-004, A10).
 -->
 <script lang="ts">
-  import type { ExportOfferView, StatusOffer } from './bindings';
+  import type { ExportOfferView, GitBarView, StatusOffer } from './bindings';
 
   type Props = {
     /** The root of the open workspace, if one is open. */
@@ -31,6 +42,16 @@
     error?: boolean;
     /** An export is running. */
     busy?: boolean;
+    /** M-04.1 to M-04.3: the branch, the conflicts and the syncs. */
+    git?: GitBarView | null;
+    /** "Cmd" on macOS, "Ctrl" elsewhere. */
+    command?: string;
+    /** M-04.1: the branch button opens the branch menu. */
+    onBranches?: () => void;
+    /** M-04.2: "Abort the sync". */
+    onAbort?: () => void;
+    /** M-04.3: "Sync now". */
+    onSyncNow?: () => void;
     /** "Undo" of a deletion. */
     onUndo?: () => void;
     /** "Open" of the export `index`. */
@@ -46,6 +67,11 @@
     exports = [],
     error = false,
     busy = false,
+    git = null,
+    command = 'Ctrl',
+    onBranches,
+    onAbort,
+    onSyncNow,
     onUndo,
     onOpenExport,
     onShowApproximated,
@@ -73,7 +99,48 @@
   const text = $derived([root ?? '', status].filter((part) => part !== '').join('  |  '));
 </script>
 
-<footer class="status-bar" aria-busy={busy}>
+<footer class="status-bar" aria-busy={busy || (git?.sync?.running ?? false)}>
+  {#if git?.branch}
+    <button
+      type="button"
+      class="ui-button undo git-part"
+      title="Branches  {command}+Shift+B"
+      aria-keyshortcuts="{command === 'Cmd' ? 'Meta' : 'Control'}+Shift+B"
+      onclick={() => onBranches?.()}>{git.branch}</button
+    >
+  {:else if git?.problem}
+    <span class="weak git-part" title={git.problem}>{git.problem}</span>
+  {/if}
+  {#if git?.conflicts}
+    <span class="conflicts git-part">{git.conflicts}</span>
+    <button type="button" class="ui-button undo" onclick={() => onAbort?.()}>Abort the sync</button>
+  {/if}
+  {#if git?.sync}
+    {@const sync = git.sync}
+    <span class="git-part" role="status" title={sync.hover ?? undefined}
+      >{#if sync.warning}<span aria-hidden="true">⚠&nbsp;</span><span class="hidden"
+          >Warning:
+        </span>{/if}{sync.text}{#if sync.hover}<span class="hidden">: {sync.hover}</span>{/if}</span
+    >
+    {#if sync.toPush}
+      <span class="weak git-part">{sync.toPush}</span>
+    {/if}
+    {#if sync.toPull}
+      <span class="weak git-part">{sync.toPull}</span>
+    {/if}
+    <!-- UX review F13 (new texts, Q-97): why "Sync now" cannot be chosen. -->
+    <button
+      type="button"
+      class="ui-button undo"
+      disabled={!sync.canSync}
+      title={sync.running
+        ? 'A sync is running'
+        : sync.canSync
+          ? undefined
+          : 'Resolve the conflicts first'}
+      onclick={() => onSyncNow?.()}>Sync now</button
+    >
+  {/if}
   {#if error}
     <span class="sign" aria-hidden="true">⚠</span>
   {/if}
@@ -115,6 +182,7 @@
 <style>
   .status-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     min-height: 28px;
@@ -145,8 +213,45 @@
     padding: 0 var(--space-2);
   }
 
+  /* M-04.1 to M-04.3: the git parts keep their width; the text wraps. */
+  .git-part {
+    flex: none;
+    max-width: 40ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .weak {
+    color: var(--ui-hint);
+  }
+
+  /* UC-015 BR-005: egui's conflict orange, as the letter C (Q-91). */
+  .conflicts {
+    font-weight: 700;
+    color: rgb(255 110 40);
+  }
+
+  /* UX review F13: a darker orange on light themes reaches 4.5:1. */
+  :global(:root[data-scheme='light']) .conflicts {
+    color: rgb(178 60 0);
+  }
+
+  .ui-button:disabled {
+    color: var(--ui-hint);
+    cursor: default;
+  }
+
+  .ui-button:disabled:hover {
+    color: var(--ui-hint);
+    background: var(--ui-button);
+  }
+
   /* A very long message wraps, up to four lines, then scrolls. */
+  /* UX review F13: in a narrow window the text goes to a line of its own
+     rather than getting thin. */
   .text {
+    flex: 1 1 16em;
     min-width: 0;
     max-height: calc(4 * 1.4em);
     overflow: auto;

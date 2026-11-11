@@ -82,6 +82,13 @@ impl GitSetup {
         }
     }
 
+    /// Whether git's settings for the workspace at `dir` hold `key` (S7,
+    /// review F13: the user's own ssh command).
+    pub(in crate::session) fn has_config(&self, dir: &Path, key: &str) -> bool {
+        self.raw(dir, &["config", "--get", key])
+            .is_ok_and(|ran| ran.success)
+    }
+
     /// The last commit, or `None` when there is none yet (UC-011 A7).
     fn head(&self, dir: &Path) -> Result<Option<String>, String> {
         // Not `HEAD^{commit}`: that says nothing when the commit's object is

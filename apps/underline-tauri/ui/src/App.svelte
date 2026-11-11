@@ -31,6 +31,11 @@
   the keyboard is, before the editors see the key; "Discard changes" and
   "Your name for commits" float above the central area (M-19.4, M-19.5).
 
+  M-19.6 (UC-013 BR-006): Ctrl+Shift+B (Cmd+Shift+B) opens the branch menu,
+  wherever the keyboard is, before the editors see the key, in a git
+  workspace (as egui); the menu stands at the bottom left. "Abort the sync"
+  (M-19.10) floats above the central area like the other dialogs.
+
   M-20.1 (UC-010 BR-006): Ctrl+, (Cmd+, on macOS) opens the settings window
   or closes it, wherever the keyboard is, before the editors see the key.
   The window floats above the central area, not modal, like egui's.
@@ -42,6 +47,8 @@
   import CreateDialog from './lib/CreateDialog.svelte';
   import DeleteDialog from './lib/DeleteDialog.svelte';
   import DiscardDialog from './lib/DiscardDialog.svelte';
+  import AbortSyncDialog from './lib/AbortSyncDialog.svelte';
+  import BranchMenu from './lib/BranchMenu.svelte';
   import IdentityDialog from './lib/IdentityDialog.svelte';
   import NewNoteDialog from './lib/NewNoteDialog.svelte';
   import PurgeDialog from './lib/PurgeDialog.svelte';
@@ -159,8 +166,25 @@
     shell.showChanges();
   }
 
+  /** M-19.6, UC-013 BR-006: Ctrl+Shift+B (Cmd+Shift+B) opens the branch menu. */
+  function branchKey(event: KeyboardEvent) {
+    const mac = shell.platform === 'macos';
+    const command = mac ? event.metaKey : event.ctrlKey;
+    const other = mac ? event.ctrlKey : event.metaKey;
+    if (!command || other || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'b') {
+      return;
+    }
+    if (shell.changes === null || shell.changes.problem !== null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void shell.openBranchMenu();
+  }
+
   // Before the editors see it, as egui takes F2 first.
   onMount(() => {
+    window.addEventListener('keydown', branchKey, true);
     window.addEventListener('keydown', renameKey, true);
     window.addEventListener('keydown', changesKey, true);
     window.addEventListener('keydown', searchKey, true);
@@ -168,6 +192,7 @@
     window.addEventListener('keydown', exportKey, true);
     return () => {
       window.removeEventListener('keydown', exportKey, true);
+      window.removeEventListener('keydown', branchKey, true);
       window.removeEventListener('keydown', renameKey, true);
       window.removeEventListener('keydown', changesKey, true);
       window.removeEventListener('keydown', searchKey, true);
@@ -231,6 +256,12 @@
     {#if shell.identity !== null}
       <IdentityDialog {shell} dialog={shell.identity} />
     {/if}
+    {#if shell.branchMenu !== null}
+      <BranchMenu {shell} menu={shell.branchMenu} />
+    {/if}
+    {#if shell.abortAsked}
+      <AbortSyncDialog {shell} />
+    {/if}
     {#if shell.closeQuestion}
       <CloseQuestionDialog {shell} question={shell.closeQuestion} />
     {/if}
@@ -258,6 +289,11 @@
     exports={shell.statusExports}
     error={shell.statusError}
     busy={shell.statusBusy}
+    git={shell.gitBar}
+    command={shell.command}
+    onBranches={() => void shell.openBranchMenu()}
+    onAbort={() => shell.askAbort()}
+    onSyncNow={() => void shell.sync('full')}
     onUndo={() => void shell.undoDelete()}
     onOpenExport={(index) => void shell.openExport(index)}
     onShowApproximated={(index) => void shell.showApproximated(index)}

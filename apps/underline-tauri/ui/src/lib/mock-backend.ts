@@ -80,13 +80,36 @@
 // the name fail). `gitCommitFails(reason)` makes git
 // refuse commits (A4), `gitMerging(true)` stands for an unfinished merge
 // (BR-009), and `gitLog()` lists the commit messages, newest first.
+//
+// Feature F13: `/home/user/Team` is a git repository with a remote
+// (UC-013 to UC-015), everything committed; `/home/user/Work` has no
+// remote. Team's branches are `main` and `drafts` (which holds the note
+// `Sketch`), and the remote has `origin/review`. It syncs when it opens and
+// with "Sync now", "Pull" and "Push": a fake sync commits the changes as
+// `Auto: …` after a short wait, and ends as `syncOutcome(kind)` says (by
+// default `synced`; `offline`, `failed`, `signIn`, `pushRejected`,
+// `inTheWay` or `conflict`). A conflict marks a place in `Meetings`, the
+// file `assets/team.png` (Keep here/Keep remote), the note `Plan` deleted
+// on the remote (Keep/Delete) and todo #3 (Keep mine/Take remote); resolving
+// all completes and syncs again, "Abort the sync" puts Meetings back.
+// `gitBranchInTheWay(files)` makes the next switch meet changes in the way,
+// `gitProblem(reason)` makes git unable to answer (UC-011 A9), and
+// `syncs()` counts the fake syncs started.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
   commands,
+  BranchEntryView,
+  BranchTarget,
+  ChoiceName,
+  SideName,
+  SyncModeName,
   ChangesView,
   ChangeView,
+  ConflictBarView,
+  GitBarView,
+  TodoConflictView,
   CommitAnswer,
   CreateNoteAnswer,
   DeletedNoteView,
@@ -139,6 +162,16 @@ import {
   mockProposedMessage,
   type MockProposalChange,
 } from './mock-git';
+import {
+  MOCK_TODO_CONFLICT,
+  mockBranchName,
+  mockConflictPlaces,
+  mockCopyName,
+  mockResolvePlace,
+  mockSyncBar,
+  type MockLastSync,
+  type MockSyncOutcome,
+} from './mock-remote';
 import palettes from './palettes.generated.json';
 
 /** The success value of a command in the generated bindings. */
@@ -282,6 +315,29 @@ export type MockHandlers = {
   }) => Promise<Ok<typeof commands.gitSetIdentity>>;
   git_discard_start: (args: { path: string }) => Promise<Ok<typeof commands.gitDiscardStart>>;
   git_discard: (args: { path: string }) => Promise<Ok<typeof commands.gitDiscard>>;
+  git_branches: () => Promise<Ok<typeof commands.gitBranches>>;
+  git_branch_name: (args: { typed: string }) => Ok<typeof commands.gitBranchName>;
+  git_switch: (args: { target: BranchTarget }) => Promise<Ok<typeof commands.gitSwitch>>;
+  sync_request: (args: { mode: SyncModeName }) => Promise<Ok<typeof commands.syncRequest>>;
+  conflict_choose: (args: {
+    note: string;
+    rev: number;
+    place: number | null;
+    choice: ChoiceName;
+  }) => Promise<Ok<typeof commands.conflictChoose>>;
+  conflict_take_side: (args: {
+    path: string;
+    side: SideName;
+  }) => Promise<Ok<typeof commands.conflictTakeSide>>;
+  conflict_keep: (args: {
+    path: string;
+    keep: boolean;
+  }) => Promise<Ok<typeof commands.conflictKeep>>;
+  conflict_abort: () => Promise<Ok<typeof commands.conflictAbort>>;
+  todo_conflict_resolve: (args: {
+    number: number;
+    mine: boolean;
+  }) => Promise<Ok<typeof commands.todoConflictResolve>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
@@ -341,6 +397,9 @@ The end.
 /** The user's home directory in the fake file system. */
 export const FAKE_HOME = '/home/user';
 
+/** F13: the fake git workspace with a remote (UC-013 to UC-015). */
+export const TEAM = '/home/user/Team';
+
 /**
  * The fake file system: workspaces by their root with their notes' ids, and
  * `/home/user/Letters`, a directory with files that is no workspace yet.
@@ -358,6 +417,7 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
   ],
   '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE, LINK_TOUR_NOTE],
   '/home/user/Letters': ['Draft'],
+  '/home/user/Team': ['Home', 'Plan', 'Meetings'],
 };
 
 /**
@@ -818,6 +878,15 @@ function workspaceHandlers(
   | 'git_set_identity'
   | 'git_discard_start'
   | 'git_discard'
+  | 'git_branches'
+  | 'git_branch_name'
+  | 'git_switch'
+  | 'sync_request'
+  | 'conflict_choose'
+  | 'conflict_take_side'
+  | 'conflict_keep'
+  | 'conflict_abort'
+  | 'todo_conflict_resolve'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -1106,6 +1175,15 @@ function workspaceHandlers(
   let gitTimer: ReturnType<typeof setTimeout> | null = null;
   /** The fake repository of the open workspace, if it is one. */
   const gitOf = (): MockGit | null => {
+    if (root === TEAM) {
+      // F13: everything committed.
+      gits[root] ??= {
+        committed: new Map((FAKE_FILES[TEAM] ?? []).map((note) => [note, fakeNoteText(note)])),
+        others: [],
+        messages: ['Plan the quarter'],
+      };
+      return gits[root];
+    }
     if (root !== '/home/user/Work') {
       return null;
     }
@@ -1198,14 +1276,32 @@ function workspaceHandlers(
         gitLeftOut.delete(left);
       }
     }
-    const rows: ChangeView[] = changes.map((c) => ({
+    const conflicted = new Set(remoteOf()?.conflicts.map((c) => c.path) ?? []);
+    // UC-015 BR-005: the conflicts first.
+    const conflictRows: ChangeView[] = (remoteOf()?.conflicts ?? []).map((c) => ({
       path: c.path,
-      kind: c.kind,
-      letter: LETTERS[c.kind],
-      name: changeName(c),
+      kind: 'conflict',
+      letter: 'C',
+      name:
+        c.note === null ? c.path : changeName({ ...c, kind: 'changed', from: null, text: null }),
       note: c.note !== null,
-      chosen: !gitLeftOut.has(c.path),
+      chosen: true,
+      deletedOn: c.deletedOn,
     }));
+    const rows: ChangeView[] = [
+      ...conflictRows,
+      ...changes
+        .filter((c) => !conflicted.has(c.path))
+        .map((c) => ({
+          path: c.path,
+          kind: c.kind,
+          letter: LETTERS[c.kind],
+          name: changeName(c),
+          note: c.note !== null,
+          chosen: !gitLeftOut.has(c.path),
+          deletedOn: null,
+        })),
+    ];
     const proposal: MockProposalChange[] = changes
       .filter((c) => !gitLeftOut.has(c.path))
       .map((c) => ({
@@ -1213,11 +1309,22 @@ function workspaceHandlers(
         title: c.note === null ? null : title(c.note),
         from: c.from === null ? null : title(c.from),
       }));
+    const problem = remoteOf()?.problem ?? null;
+    if (problem !== null) {
+      return {
+        problem,
+        branch: null,
+        files: [],
+        merging: false,
+        amendable: null,
+        proposed: '',
+      };
+    }
     return {
       problem: null,
-      branch: { label: 'main', detached: false },
+      branch: { label: remoteOf()?.current ?? 'main', detached: false },
       files: rows,
-      merging: gitMerging,
+      merging: gitMerging || conflictRows.length > 0,
       amendable: git.messages[0] ?? null,
       proposed: mockProposedMessage(proposal),
     };
@@ -1271,6 +1378,9 @@ function workspaceHandlers(
     try {
       await emit('changes', changesView());
       await emit('diff', diffView());
+      await emit('git-bar', gitBarView());
+      await emit('conflict', conflictBarView());
+      await emit('todo-conflicts', remoteOf()?.todos ?? []);
     } catch {
       // The mock was taken down meanwhile (a test ended).
     }
@@ -1282,6 +1392,7 @@ function workspaceHandlers(
     }
     gitTimer = setTimeout(() => {
       gitTimer = null;
+      void checkResolved();
       void sendGit();
       void emit('overview', overview()).catch(() => undefined);
     }, 50);
@@ -1345,6 +1456,8 @@ function workspaceHandlers(
     await setStatus(
       amending ? `Amended the last commit, now ${id}${holding}` : `Committed ${id}${holding}`,
     );
+    // F13, UC-014 BR-001: a commit is synced right after.
+    void runSync('full', false);
     return { kind: 'committed' };
   };
   /** UC-011 A6 steps 2–3: the fake discard. */
@@ -1403,6 +1516,314 @@ function workspaceHandlers(
     await sendAll();
     await setStatus(`Discarded the changes of ${title(note)}`);
   };
+
+  // F13: branches, syncs and conflicts of the git workspaces (UC-013 to
+  // UC-015); only Team has a remote.
+  type MockConflict = { path: string; note: string | null; deletedOn: SideName | null };
+  type MockRemote = {
+    hasRemote: boolean;
+    local: string[];
+    current: string;
+    remoteOnly: string[];
+    running: boolean;
+    last: MockLastSync | null;
+    succeeded: number | null;
+    ahead: number;
+    behind: number;
+    conflicts: MockConflict[];
+    todos: TodoConflictView[];
+    /** Meetings before the sync joined, for "Abort the sync". */
+    hereText: string | null;
+    problem: string | null;
+  };
+  const remotes: Record<string, MockRemote> = {};
+  /** F13: the git report "Saved {t}" does not replace. */
+  let gitReport: string | null = null;
+  const setReport = async (text: string) => {
+    gitReport = text;
+    await setStatus(text);
+  };
+  /** UC-015 BR-007: a note in conflict waits; the status says so. */
+  const conflictRefused = (note: string, verb: string): boolean => {
+    if (!remoteOf()?.conflicts.some((c) => c.note === note)) {
+      return false;
+    }
+    void setStatus(`${title(note)} is in conflict; resolve it before ${verb} it`);
+    return true;
+  };
+  let syncNext: MockSyncOutcome = 'synced';
+  let branchInTheWay: string[] | null = null;
+  let syncCount = 0;
+  let syncTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The branches and syncs of the open git workspace. */
+  const remoteOf = (): MockRemote | null => {
+    if (root === null || !gitOf()) {
+      return null;
+    }
+    remotes[root] ??= {
+      hasRemote: root === TEAM,
+      local: root === TEAM ? ['drafts', 'main'] : ['main'],
+      current: 'main',
+      remoteOnly: root === TEAM ? ['origin/review'] : [],
+      running: false,
+      last: null,
+      succeeded: null,
+      ahead: 0,
+      behind: 0,
+      conflicts: [],
+      todos: [],
+      hereText: null,
+      problem: null,
+    };
+    return remotes[root];
+  };
+  const byName = (a: string, b: string) => a.toLowerCase().localeCompare(b.toLowerCase());
+  /** M-04.1 to M-04.3: the git part of the status bar. */
+  const gitBarView = (): GitBarView => {
+    const state = remoteOf();
+    if (!state) {
+      return { branch: null, problem: null, conflicts: null, sync: null };
+    }
+    const count = state.conflicts.length;
+    const changes = changesView()?.files.length ?? 0;
+    return {
+      branch:
+        state.problem !== null
+          ? null
+          : changes === 0
+            ? `Branch ${state.current}`
+            : `Branch ${state.current} · ${changes === 1 ? '1 change' : `${changes} changes`}`,
+      problem: state.problem === null ? null : `Changes cannot be shown: ${state.problem}`,
+      conflicts: count === 0 ? null : count === 1 ? '1 conflict' : `${count} conflicts`,
+      sync: state.hasRemote ? mockSyncBar({ ...state, conflicts: count, now: Date.now() }) : null,
+    };
+  };
+  /** M-19.9: the conflict bar of the active note while it holds places. */
+  const conflictBarView = (): ConflictBarView | null => {
+    const state = remoteOf();
+    const note = active;
+    if (!state || note === null) {
+      return null;
+    }
+    if (!state.conflicts.some((c) => c.note === note && c.deletedOn === null)) {
+      return null;
+    }
+    const mirror = mirrors.get(note);
+    const places = mockConflictPlaces(mirror?.text() ?? textOf(note));
+    if (places.length === 0) {
+      return null;
+    }
+    return {
+      note,
+      rev: mirror?.rev ?? 1,
+      places: places.map((p) => ({
+        line: p.line,
+        offset: p.start,
+        here: p.here.trimEnd(),
+        remote: p.remote.trimEnd(),
+      })),
+    };
+  };
+  /** The note's text is `text` now, also in its open tab. */
+  const replaceText = async (note: string, text: string) => {
+    texts.set(note, text);
+    const mirror = mirrors.get(note);
+    if (mirror) {
+      const rev = mirror.reload(text);
+      followMirror(note, mirror);
+      await emit('ed-changed', { note, rev });
+    }
+  };
+  /** The tab of `note` closes. */
+  const closeTabOf = (note: string) => {
+    const at = tabs.findIndex((tab) => tab.note === note);
+    if (at >= 0) {
+      clearTimeout(saveTimers.get(note));
+      tabs.splice(at, 1);
+      if (active === note) {
+        active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
+      }
+    }
+    for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
+      map.delete(note);
+    }
+    unstored.delete(note);
+    remember();
+  };
+  /** UC-014 A3: the fake sync met conflicts. */
+  const makeConflict = async (state: MockRemote): Promise<string[]> => {
+    const here = textOf('Meetings');
+    state.hereText = here;
+    const lines = here.split('\n');
+    const at = Math.min(2, Math.max(0, lines.length - 2));
+    const marked = [
+      ...lines.slice(0, at),
+      '<<<<<<< HEAD',
+      lines[at],
+      '=======',
+      'The remote changed this line.',
+      '>>>>>>> 1a2b3c4',
+      ...lines.slice(at + 1),
+    ].join('\n');
+    await replaceText('Meetings', marked);
+    state.conflicts = [
+      { path: '.todos/3.yaml', note: null, deletedOn: null },
+      { path: 'Meetings.md', note: 'Meetings', deletedOn: null },
+      { path: 'Plan.md', note: 'Plan', deletedOn: 'remote' },
+      { path: 'assets/team.png', note: null, deletedOn: null },
+    ];
+    state.todos = [MOCK_TODO_CONFLICT];
+    return state.conflicts.map((c) => c.path);
+  };
+  /**
+   * UC-014 step 2: the changes not left out are committed as `Auto: …`;
+   * with `message`, under that message (the joining's commit, UC-015 BR-004).
+   */
+  const autoCommit = (state: MockRemote, message: string | null = null) => {
+    const git = gitOf();
+    const chosen = gitChanges().filter((c) => !gitLeftOut.has(c.path));
+    if (!git || chosen.length === 0) {
+      return;
+    }
+    for (const change of chosen) {
+      if (change.note === null) {
+        git.others = git.others.filter((o) => o.path !== change.path);
+      } else if (change.kind === 'deleted') {
+        git.committed.delete(change.note);
+      } else {
+        git.committed.set(change.note, change.text ?? '');
+        if (change.from !== null) {
+          git.committed.delete(change.from);
+        }
+      }
+    }
+    git.messages.unshift(
+      message ??
+        `Auto: ${mockProposedMessage(
+          chosen.map((c) => ({
+            kind: c.kind,
+            title: c.note === null ? null : title(c.note),
+            from: c.from === null ? null : title(c.from),
+          })),
+        )}`,
+    );
+    state.ahead += 1;
+  };
+  /** How a fake sync ends (UC-014 steps 3–7, A1 to A7, A11). */
+  const endSync = async (
+    at: string,
+    state: MockRemote,
+    mode: SyncModeName,
+    outcome: MockSyncOutcome,
+  ) => {
+    state.running = false;
+    if (disposed || root !== at) {
+      return;
+    }
+    autoCommit(state);
+    let said: string | null = null;
+    let files: string[] = [];
+    switch (outcome) {
+      case 'synced':
+        state.succeeded = Date.now();
+        if (mode !== 'pull') {
+          state.ahead = 0;
+        }
+        if (mode !== 'push') {
+          state.behind = 0;
+        }
+        break;
+      case 'signIn':
+        said = `Signing in to the remote failed (fatal: could not read Username for 'https://example.com': terminal prompts disabled). Set up a sign-in for git, such as a saved token or an SSH key.`;
+        break;
+      case 'pushRejected':
+        state.behind = 1;
+        said = 'The remote has commits this branch lacks; sync to join them first';
+        break;
+      case 'inTheWay':
+        files = ['README.md'];
+        said = `The sync stopped: changes you left out of commits are in the way of the remote's: ${files.join(', ')}. Commit or discard them.`;
+        break;
+      case 'conflict':
+        files = await makeConflict(state);
+        said = `The sync stopped: ${files.join(', ')} changed here and on the remote in the same lines`;
+        break;
+      case 'offline':
+      case 'failed':
+        break;
+    }
+    state.last = { outcome, files };
+    await sendAll();
+    if (said !== null) {
+      await setReport(said);
+    }
+  };
+  /** UC-014 step 1, A1, A8, A10: a fake sync after the open notes are stored. */
+  const runSync = async (mode: SyncModeName, asked: boolean) => {
+    const state = remoteOf();
+    if (!state?.hasRemote) {
+      if (asked) {
+        await setStatus('This workspace has no remote to sync with');
+      }
+      return;
+    }
+    if (state.conflicts.length > 0 || gitMerging) {
+      if (asked) {
+        await setStatus('No sync, because notes are in conflict; resolve them first');
+      }
+      return;
+    }
+    if (state.running) {
+      return;
+    }
+    const failures = tabs.map((tab) => store(tab.note)).filter((f): f is string => f !== null);
+    if (failures.length > 0) {
+      // D-08 (fixed): no sync starts.
+      await sendAll();
+      await setStatus(`Not everything could be saved before the sync: ${failures.join('; ')}`);
+      return;
+    }
+    syncCount += 1;
+    state.running = true;
+    await sendGit();
+    const at = root ?? '';
+    const outcome = syncNext;
+    syncTimer = setTimeout(() => {
+      syncTimer = null;
+      void endSync(at, state, mode, outcome);
+    }, 300);
+  };
+  /** UC-015 step 7: nothing in conflict any more: the joining completes and the sync goes on. */
+  const afterResolving = async (state: MockRemote) => {
+    if (state.conflicts.length > 0 || state.hereText === null) {
+      return;
+    }
+    state.hereText = null;
+    autoCommit(state, `Merge remote changes into ${state.current}`);
+    await sendAll();
+    await setReport('The conflicts are resolved; syncing');
+    await runSync('full', false);
+  };
+  /** UC-015 step 6: a note in conflict without places is resolved. */
+  const checkResolved = async () => {
+    const state = remoteOf();
+    if (!state || state.conflicts.length === 0) {
+      return;
+    }
+    const before = state.conflicts.length;
+    state.conflicts = state.conflicts.filter(
+      (c) =>
+        c.note === null ||
+        c.deletedOn !== null ||
+        mockConflictPlaces(mirrors.get(c.note)?.text() ?? textOf(c.note)).length > 0,
+    );
+    if (state.conflicts.length !== before) {
+      for (const tab of tabs) {
+        store(tab.note);
+      }
+      await afterResolving(state);
+    }
+  };
   const label = (note: string) =>
     title(note) +
     (saveErrors.has(note) ? ' ⚠' : unstored.has(note) && !quiet.has(note) ? ' •' : '');
@@ -1459,7 +1880,11 @@ function workspaceHandlers(
         // UC-006 A7: a save of a rename's links keeps its report; D-04
         // (fixed): "Saved" does not end an offer.
         const quietly =
-          quiet.delete(note) || (undo !== null && status() === undo.status) || exportKept();
+          quiet.delete(note) ||
+          (undo !== null && status() === undo.status) ||
+          exportKept() ||
+          // F13: a git report stays (like A-113).
+          (gitReport !== null && status() === gitReport);
         if (!failure && quietly) {
           void sendAll();
           return;
@@ -1737,6 +2162,10 @@ function workspaceHandlers(
     root = dir;
     gitChosen = null;
     gitDiscarding = null;
+    // F13, UC-014 BR-001: a workspace with a remote syncs when it opens.
+    if (dir === TEAM) {
+      setTimeout(() => void runSync('full', false), 0);
+    }
     settingsSaid = model.openWorkspace(dir);
     recent = [dir, ...recent.filter((r) => r !== dir)];
     const back = remembered[dir];
@@ -2139,12 +2568,15 @@ function workspaceHandlers(
       await setStatus(`Created the note ${title(id)}`);
       return { kind: 'created', note: id, rev: mirror.rev, offset: text.length };
     },
-    note_rename_start: ({ note }) => ({
-      note,
-      title: title(note),
-      folder: folder(note) ?? '',
-      home: note === 'Home',
-    }),
+    note_rename_start: ({ note }) =>
+      conflictRefused(note, 'renaming')
+        ? null
+        : {
+            note,
+            title: title(note),
+            folder: folder(note) ?? '',
+            home: note === 'Home',
+          },
     note_plan_rename: ({ note, title: newTitle, folder: newFolder }) => {
       const planned = planNote(newTitle, newFolder, note);
       return 'id' in planned && planned.id !== note ? `${planned.id}.md` : null;
@@ -2214,6 +2646,9 @@ function workspaceHandlers(
       return { kind: 'renamed', from: note, to };
     },
     note_delete_start: ({ note }) => {
+      if (conflictRefused(note, 'deleting')) {
+        return null;
+      }
       let links = 0;
       let notes = 0;
       for (const other of root ? (files[root] ?? []) : []) {
@@ -2311,14 +2746,14 @@ function workspaceHandlers(
       return null;
     },
     export_start: async ({ note }) => {
-      if (!root) {
+      if (!root || conflictRefused(note, 'exporting')) {
         return null;
       }
       return { note, title: title(note), choices: FAKE_EXPORT_KINDS.markdown };
     },
     export_choose: async ({ note, kind }): Promise<ExportPlaceAnswer> => {
-      // One dialog at a time (review F11).
-      if (!root || choosing !== null) {
+      // One dialog at a time (review F11); not a note in conflict (UC-015 BR-007).
+      if (!root || choosing !== null || conflictRefused(note, 'exporting')) {
         return { kind: 'done' };
       }
       const asking = `Choosing where to save ${title(note)}…`;
@@ -2355,6 +2790,9 @@ function workspaceHandlers(
       return { kind: 'chosen', path };
     },
     export_run: async ({ note, kind, typed }): Promise<ExportAnswer> => {
+      if (conflictRefused(note, 'exporting')) {
+        return { kind: 'done' };
+      }
       let path: string;
       if (typed !== null) {
         path = typed.path.trim();
@@ -2551,6 +2989,205 @@ function workspaceHandlers(
       await gitDiscard(path);
       return null;
     },
+    git_branches: async () => {
+      const state = remoteOf();
+      if (!state || state.problem !== null) {
+        return null;
+      }
+      const entries: BranchEntryView[] = [
+        ...state.local.map((name) => ({
+          name,
+          label: name === state.current ? `${name}  (current)` : name,
+          current: name === state.current,
+          remote: false,
+        })),
+        ...state.remoteOnly.map((name) => ({
+          name,
+          label: `${name}  (on the remote)`,
+          current: false,
+          remote: true,
+        })),
+      ];
+      return {
+        branches: entries,
+        problem: null,
+        merging: state.conflicts.length > 0 || gitMerging,
+      };
+    },
+    git_branch_name: ({ typed }) => mockBranchName(typed),
+    git_switch: async ({ target }) => {
+      const state = remoteOf();
+      if (!state || state.conflicts.length > 0 || gitMerging) {
+        return { kind: 'done' };
+      }
+      let name = target.name;
+      if (target.kind === 'local' && name === state.current) {
+        return { kind: 'done' };
+      }
+      if (target.kind === 'new') {
+        const checked = mockBranchName(name);
+        if (!checked.ok) {
+          return { kind: 'invalid', problem: checked.text };
+        }
+        name = checked.text.slice('Branch: '.length);
+        if (state.local.includes(name)) {
+          return {
+            kind: 'exists',
+            problem: `The branch ${name} exists; choose it in the list to switch to it.`,
+            name,
+          };
+        }
+      }
+      if (target.kind === 'remote') {
+        name = name.slice(name.indexOf('/') + 1);
+      }
+      const failures = tabs.map((tab) => store(tab.note)).filter((f): f is string => f !== null);
+      if (failures.length > 0) {
+        await sendAll();
+        await setStatus(`Did not switch, because ${failures.join('; ')}`);
+        return { kind: 'done' };
+      }
+      if (branchInTheWay !== null) {
+        const files = branchInTheWay;
+        branchInTheWay = null;
+        return {
+          kind: 'inTheWay',
+          text: `Changes not committed would be overwritten: ${files.join(', ')}. Commit them first, or stay.`,
+        };
+      }
+      const carried = changesView()?.files.length ?? 0;
+      if (target.kind !== 'local') {
+        state.local = [...state.local, name].sort(byName);
+        state.remoteOnly = state.remoteOnly.filter((r) => r !== target.name);
+      }
+      state.current = name;
+      const closed: string[] = [];
+      if (root === TEAM) {
+        // The branch `drafts` holds the note Sketch.
+        const notes = files[root] ?? [];
+        const committed = gitOf()?.committed;
+        if (name === 'drafts' && !notes.includes('Sketch')) {
+          files[root] = [...notes, 'Sketch'];
+          committed?.set('Sketch', textOf('Sketch'));
+        } else if (name !== 'drafts' && notes.includes('Sketch')) {
+          files[root] = notes.filter((n) => n !== 'Sketch');
+          committed?.delete('Sketch');
+          if (tabs.some((tab) => tab.note === 'Sketch')) {
+            closeTabOf('Sketch');
+            closed.push(title('Sketch'));
+          }
+        }
+      }
+      let said = `Switched to ${name}`;
+      if (carried > 0) {
+        said += `; carried along ${carried === 1 ? '1 change' : `${carried} changes`}`;
+      }
+      if (closed.length > 0) {
+        said += `; closed ${closed.join(', ')}, not on this branch`;
+      }
+      await sendAll();
+      await setReport(said);
+      return { kind: 'done' };
+    },
+    sync_request: async ({ mode }) => {
+      await runSync(mode, true);
+      return null;
+    },
+    conflict_choose: async ({ note, rev, place, choice }) => {
+      const state = remoteOf();
+      const mirror = mirrors.get(note);
+      // S3 (review F13): a choice of an older text does nothing.
+      if (
+        !state ||
+        !mirror ||
+        mirror.rev !== rev ||
+        !state.conflicts.some((c) => c.note === note)
+      ) {
+        return null;
+      }
+      const places = mockConflictPlaces(mirror.text());
+      const chosen = place === null ? places : places.slice(place, place + 1);
+      if (chosen.length === 0) {
+        return null;
+      }
+      // From the end, so the places before keep their offsets.
+      for (const p of [...chosen].reverse()) {
+        mirror.backendEdit(p.start, p.end - p.start, mockResolvePlace(p, choice), false);
+      }
+      followMirror(note, mirror);
+      await changed(note);
+      await emit('ed-changed', { note, rev: mirror.rev });
+      await checkResolved();
+      await sendGit();
+      return null;
+    },
+    conflict_take_side: async ({ path, side }) => {
+      const state = remoteOf();
+      if (!state?.conflicts.some((c) => c.path === path && c.note === null)) {
+        return null;
+      }
+      state.conflicts = state.conflicts.filter((c) => c.path !== path);
+      if (path === '.todos/3.yaml') {
+        state.todos = [];
+      }
+      await sendAll();
+      await setReport(
+        `Kept one version of ${path}; the other is ${mockCopyName(path, side === 'here' ? 'remote' : 'here')}`,
+      );
+      await afterResolving(state);
+      return null;
+    },
+    conflict_keep: async ({ path, keep }) => {
+      const state = remoteOf();
+      const conflict = state?.conflicts.find((c) => c.path === path && c.deletedOn !== null);
+      if (!state || !conflict) {
+        return null;
+      }
+      if (!keep && conflict.note !== null && root !== null) {
+        const note = conflict.note;
+        clock += 1;
+        deletedNotes[root] = [
+          { key: `${Date.now()}:${clock}:${note}`, note, text: textOf(note), at: Date.now() },
+          ...(deletedNotes[root] ?? []),
+        ];
+        files[root] = (files[root] ?? []).filter((n) => n !== note);
+        closeTabOf(note);
+      }
+      state.conflicts = state.conflicts.filter((c) => c.path !== path);
+      await sendAll();
+      await afterResolving(state);
+      return null;
+    },
+    conflict_abort: async () => {
+      const state = remoteOf();
+      if (!state || state.conflicts.length === 0) {
+        return null;
+      }
+      state.conflicts = [];
+      state.todos = [];
+      if (state.hereText !== null) {
+        await replaceText('Meetings', state.hereText);
+        state.hereText = null;
+      }
+      // App-tester F13: no stale "Sync stopped: conflict".
+      if (state.last?.outcome === 'conflict') {
+        state.last = null;
+      }
+      await sendAll();
+      await setReport('The sync was aborted; the workspace is as before it');
+      return null;
+    },
+    todo_conflict_resolve: async ({ number }) => {
+      const state = remoteOf();
+      if (!state?.todos.some((t) => t.number === number)) {
+        return null;
+      }
+      state.todos = state.todos.filter((t) => t.number !== number);
+      state.conflicts = state.conflicts.filter((c) => c.path !== `.todos/${number}.yaml`);
+      await sendAll();
+      await afterResolving(state);
+      return null;
+    },
     link_open_web: async ({ open: answer }) => {
       const address = webAsked;
       webAsked = null;
@@ -2629,6 +3266,20 @@ function workspaceHandlers(
       await sendGit();
     },
     gitLog: () => [...(gitOf()?.messages ?? [])],
+    syncOutcome: (outcome) => {
+      syncNext = outcome;
+    },
+    syncs: () => syncCount,
+    gitBranchInTheWay: (files) => {
+      branchInTheWay = files;
+    },
+    gitProblem: async (reason) => {
+      const state = remoteOf();
+      if (state) {
+        state.problem = reason;
+        await sendGit();
+      }
+    },
     exportDialog: (dialog) => {
       exportDialog = dialog;
     },
@@ -2652,6 +3303,10 @@ function workspaceHandlers(
       if (gitTimer !== null) {
         clearTimeout(gitTimer);
         gitTimer = null;
+      }
+      if (syncTimer !== null) {
+        clearTimeout(syncTimer);
+        syncTimer = null;
       }
       disposed = true;
     },
@@ -2695,6 +3350,14 @@ export type MockHooks = {
   gitMerging(on: boolean): Promise<void>;
   /** F12: the messages of the fake commits of the open workspace, newest first. */
   gitLog(): string[];
+  /** F13, UC-014: how the fake syncs end from now on (`synced` at first). */
+  syncOutcome(outcome: MockSyncOutcome): void;
+  /** F13: how many fake syncs started. */
+  syncs(): number;
+  /** F13, UC-013 A3: the next switch meets these changes in the way (`null`: none). */
+  gitBranchInTheWay(files: string[] | null): void;
+  /** F13, UC-011 A9: git cannot answer, with `reason` (`null`: it can again). */
+  gitProblem(reason: string | null): Promise<void>;
   /** F11, UC-009 step 2: what the fake save dialog does from now on. */
   exportDialog(dialog: MockExportDialog): void;
   /** F11: the files the exports wrote, by path, with the text exported. */

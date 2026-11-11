@@ -46,7 +46,9 @@
 //! and the status bar offers "Open" and "Show" after it (M-04.8). Feature
 //! F12 adds the git changes (UC-011, UC-012, M-19.1 to M-19.5): the list
 //! with the commit box, the diff, discarding, committing and the user's
-//! name for commits; git runs without the session.
+//! name for commits; git runs without the session. Feature F13 adds the
+//! branches, the syncs and the conflicts (UC-013 to UC-015, M-04.1 to
+//! M-04.3, M-19.6 to M-19.10).
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -61,6 +63,7 @@ mod facade_view;
 mod git_view;
 mod notes_view;
 mod palette;
+mod remote_view;
 mod search_view;
 mod session;
 mod settings;
@@ -96,9 +99,18 @@ pub use notes_view::{
     RenameAnswer, RenameStart, RestoreAnswer, StatusOffer,
 };
 pub use palette::PaletteView;
+pub use remote_view::{
+    BranchEntryView, BranchMenuView, BranchNameView, BranchTarget, ChoiceName, ConflictBarView,
+    ConflictPlaceView, GitBarView, SideName, SwitchAnswer, SyncBarView, SyncModeName,
+    TodoConflictRowView, TodoConflictView,
+};
 pub use search_view::{
     FoundLineView, FoundNoteView, FoundPartView, FoundPlace, SearchOpened, SearchResultView,
     SearchView,
+};
+pub use session::{
+    branch_name_view, AbortJob, AbortOutcome, BranchesJob, BranchesListed, SwitchJob,
+    SwitchOutcome, CLOSING_SYNC_AT_MOST,
 };
 pub use session::{
     CommitJob, CommitOutcome, CreatePlan, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused,

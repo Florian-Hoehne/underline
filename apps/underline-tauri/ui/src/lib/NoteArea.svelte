@@ -41,6 +41,11 @@
   - M-13.2: the words of the search overlay are marked in every open note,
     those of the find field instead in the note it finds in
     (`editor/sync.ts`, `setSearches`).
+
+  Feature F13 adds, as in egui:
+  - M-19.9: the conflict bar below the find field while the note holds
+    places a sync left in conflict (ConflictBar.svelte), and "Abort the
+    sync" asks from there (AbortSyncDialog.svelte, in App.svelte).
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
@@ -53,6 +58,8 @@
     ToolName,
   } from './bindings';
   import FindBar from './FindBar.svelte';
+  import ConflictBar from './ConflictBar.svelte';
+  import { activeFacade } from './facade/active';
   import FacadeView from './facade/FacadeView.svelte';
   import EditorStatus from './EditorStatus.svelte';
   import { EDITOR_FAILED, coreOf, setSearches } from './editor/sync';
@@ -398,6 +405,19 @@
     };
   });
 
+  /** M-19.9: a place of the conflict bar shows in the note, as the outline's do (M-16.5). */
+  function showPlace(note: string, offset: number) {
+    const facade = activeFacade();
+    if (facade?.note === note) {
+      facade.reveal(offset);
+      return;
+    }
+    const source = activeSourceView();
+    if (source?.note === note) {
+      source.jump(offset);
+    }
+  }
+
   /** M-10.9: the Vim or Nano keys store the note or close its tab. */
   function command(note: string, command: EditorCommandName) {
     if (command === 'store') {
@@ -431,6 +451,9 @@
             onStep={(by) => findStep(by > 0 ? 'next' : 'previous')}
             onClose={closeFind}
           />
+        {/if}
+        {#if shell.conflictBar !== null && shell.conflictBar.note === activeTab.note}
+          <ConflictBar {shell} bar={shell.conflictBar} onShow={showPlace} />
         {/if}
         {#if activeTab.saveError !== null}
           <p class="save-error" role="alert">

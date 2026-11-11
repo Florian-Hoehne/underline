@@ -887,7 +887,13 @@ fn review_f12_a_failure_of_git_is_not_taken_for_a_note_never_committed() {
         session.status()
     );
     // The diff read before is kept for the same commit; without it, git
-    // is asked and fails.
+    // is asked and fails. A diff job still running would bring its cache
+    // back (seen under load in F13), so it ends first.
+    let start = Instant::now();
+    while session.changes.diffs.running.is_some() && start.elapsed() < WAIT {
+        session.tick(Instant::now());
+        std::thread::sleep(Duration::from_millis(10));
+    }
     session.changes.diffs.cache = None;
     session.window_type(&id("Plan"), 0, "x");
     let diff = wait_diff(&mut session, |d| matches!(d.body, DiffBody::Problem { .. }));

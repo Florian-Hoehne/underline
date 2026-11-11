@@ -5,9 +5,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    ChangedView, ChangesView, CloseQuestion, DeletedNoteView, DiffView, EnrichView, Event,
-    FlushView, HighlightView, IndexesView, OverviewItem, SearchView, SettingsView,
-    SettingsWindowView, StatusView, TabPropertiesView, TabsView, WorkspaceView,
+    ChangedView, ChangesView, CloseQuestion, ConflictBarView, DeletedNoteView, DiffView,
+    EnrichView, Event, FlushView, GitBarView, HighlightView, IndexesView, OverviewItem, SearchView,
+    SettingsView, SettingsWindowView, StatusView, TabPropertiesView, TabsView, TodoConflictView,
+    WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -103,6 +104,23 @@ pub struct ChangesEvent(pub Option<ChangesView>);
 #[tauri_specta(event_name = "diff")]
 pub struct DiffEvent(pub Option<DiffView>);
 
+/// M-04.1 to M-04.3 (UC-011 step 1, UC-014 BR-004, UC-015 step 1): the
+/// branch, the conflicts and the syncs in the status bar.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "git-bar")]
+pub struct GitBarEvent(pub GitBarView);
+
+/// M-19.9, UC-015 step 3: the conflict bar of the active note; `null` when
+/// it holds no conflicting place.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "conflict")]
+pub struct ConflictEvent(pub Option<ConflictBarView>);
+
+/// M-19.10, UC-020 A10: the todos in conflict after a sync.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "todo-conflicts")]
+pub struct TodoConflictsEvent(pub Vec<TodoConflictView>);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -124,6 +142,9 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Search(search) => SearchEvent(search).emit(app),
             Event::Changes(changes) => ChangesEvent(changes).emit(app),
             Event::Diff(diff) => DiffEvent(diff).emit(app),
+            Event::GitBar(bar) => GitBarEvent(bar).emit(app),
+            Event::Conflict(bar) => ConflictEvent(bar).emit(app),
+            Event::TodoConflicts(todos) => TodoConflictsEvent(todos).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

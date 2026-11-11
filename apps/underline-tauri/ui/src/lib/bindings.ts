@@ -381,18 +381,79 @@ export const commands = {
 	 *  discarded.
 	 */
 	gitDiscard: (path: string) => typedError<null, UiError>(__TAURI_INVOKE("git_discard", { path })),
+	/**
+	 *  M-19.6, UC-013 steps 1–2: the branch menu: the local branches, then
+	 *  the remote's without a local one (BR-001), listed by git without the
+	 *  session; nothing is sent over the network. `null` in a workspace whose
+	 *  changes are not tracked, as egui opens no menu there.
+	 */
+	gitBranches: () => typedError<BranchMenuView | null, UiError>(__TAURI_INVOKE("git_branches")),
+	/**
+	 *  M-19.6, UC-013 A1, BR-005: "Branch: {clean}" for the name typed, or why
+	 *  git would not take it, while the user types.
+	 */
+	gitBranchName: (typed: string) => typedError<BranchNameView, UiError>(__TAURI_INVOKE("git_branch_name", { typed })),
+	/**
+	 *  M-19.7, UC-013 steps 3–6, A1 to A6: switches to the branch chosen (a
+	 *  local one, one of the remote, or a new one), after the window sent its
+	 *  edits (`flushed`, ADR-025). The open notes are stored first; git runs
+	 *  without the session. The answer keeps the menu open when changes are
+	 *  in the way (A3) or the name is taken (A2); the status says the rest.
+	 */
+	gitSwitch: (target: BranchTarget) => typedError<SwitchAnswer, UiError>(__TAURI_INVOKE("git_switch", { target })),
+	/**
+	 *  M-04.3, M-19.6, M-19.8, UC-014 step 1, A1, A10: "Sync now" (`full`),
+	 *  "Pull" or "Push", after the window sent its edits: the open notes are
+	 *  stored and the sync runs on the syncer's thread; a refusal is said in
+	 *  the status, as the user asked.
+	 */
+	syncRequest: (mode: SyncModeName) => typedError<null, UiError>(__TAURI_INVOKE("sync_request", { mode })),
+	/**
+	 *  M-19.9, UC-015 steps 4–5, A1, BR-006: "Here", "Remote" or "Both" for the
+	 *  place `place` of the open note `note` (all places with `null`: "All:
+	 *  Here", "All: Remote") of the bar of revision `rev`, after the window
+	 *  sent its edits; nothing happens when the text changed since. The note
+	 *  is stored and marked resolved once no place is left (step 6).
+	 */
+	conflictChoose: (note: string, rev: number, place: number | null, choice: ChoiceName) => typedError<null, UiError>(__TAURI_INVOKE("conflict_choose", { note, rev, place, choice })),
+	/**
+	 *  M-19.2, UC-015 A2: "Keep here" or "Keep remote" of the file in conflict
+	 *  at `path` that is not a note; git takes the side without the session,
+	 *  and the status says where the other version was kept.
+	 */
+	conflictTakeSide: (path: string, side: SideName) => typedError<null, UiError>(__TAURI_INVOKE("conflict_take_side", { path, side })),
+	/**
+	 *  M-19.2, UC-015 A3: "Keep" (`keep`) or "Delete" of the note or file at
+	 *  `path`, deleted on one side and changed on the other, after the window
+	 *  sent its edits. "Delete" moves a note to the deleted notes.
+	 */
+	conflictKeep: (path: string, keep: boolean) => typedError<null, UiError>(__TAURI_INVOKE("conflict_keep", { path, keep })),
+	/**
+	 *  M-04.2, M-19.9, M-19.10, UC-015 A5: "Abort the sync", once confirmed and
+	 *  after the window sent its edits: git puts the workspace back as it was
+	 *  before the sync joined, without the session; the tabs show the notes
+	 *  again and the status says so.
+	 */
+	conflictAbort: () => typedError<null, UiError>(__TAURI_INVOKE("conflict_abort")),
+	/**
+	 *  M-19.10, UC-020 A10 step 3: "Keep mine" (`mine`) or "Take remote" of the
+	 *  todo `number` in conflict; git marks it resolved without the session.
+	 */
+	todoConflictResolve: (number: number, mine: boolean) => typedError<null, UiError>(__TAURI_INVOKE("todo_conflict_resolve", { number, mine })),
 };
 
 /** Events */
 export const events = {
 	changes: makeEvent<ChangesEvent, ChangesEvent>("changes"),
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
+	conflict: makeEvent<ConflictEvent, ConflictEvent>("conflict"),
 	deleted: makeEvent<DeletedEvent, DeletedEvent>("deleted"),
 	diff: makeEvent<DiffEvent, DiffEvent>("diff"),
 	edChanged: makeEvent<ChangedEvent, ChangedEvent>("ed-changed"),
 	edEnrich: makeEvent<EnrichEvent, EnrichEvent>("ed-enrich"),
 	edFlush: makeEvent<FlushEvent, FlushEvent>("ed-flush"),
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
+	gitBar: makeEvent<GitBarEvent, GitBarEvent>("git-bar"),
 	indexes: makeEvent<IndexesEvent, IndexesEvent>("indexes"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
@@ -401,6 +462,7 @@ export const events = {
 	settingsWindow: makeEvent<SettingsWindowEvent, SettingsWindowEvent>("settings-window"),
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
 	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
+	todoConflicts: makeEvent<TodoConflictsEvent, TodoConflictsEvent>("todo-conflicts"),
 	workspace: makeEvent<WorkspaceEvent, WorkspaceEvent>("workspace"),
 };
 
@@ -509,6 +571,51 @@ export type BlocksView = {
 	lineShift: number,
 };
 
+/**  M-19.6, UC-013 step 2, BR-001: one entry of the branch menu's list. */
+export type BranchEntryView = {
+	/**  The branch, `origin/review` for one of the remote. */
+	name: string,
+	/**  "{name}  (current)", "{name}  (on the remote)" or the name. */
+	label: string,
+	/**  The branch the workspace is on. */
+	current: boolean,
+	/**  A branch of the remote without a local one (A4). */
+	remote: boolean,
+};
+
+/**  M-19.6, UC-013 step 2: what the branch menu lists. */
+export type BranchMenuView = {
+	/**  The local branches, then those of the remote (BR-001). */
+	branches: BranchEntryView[],
+	/**  Why git could not list them. */
+	problem: string | null,
+	/**  A7: a sync left notes in conflict; no switch and no new branch. */
+	merging: boolean,
+};
+
+/**  M-19.6, UC-013 A1, BR-005: the name of a new branch as typed. */
+export type BranchNameView = {
+	/**  "Branch: {clean}" (weak), or "{problem}." (a warning). */
+	text: string,
+	/**  The name is allowed; "Create" can be chosen. */
+	ok: boolean,
+};
+
+/**  M-19.6, M-19.7: the branch chosen in the menu, or the new one. */
+export type BranchTarget = 
+/**  A local branch (step 3). */
+{ kind: "local"; 
+/**  Its name. */
+name: string } | 
+/**  A4: a branch of the remote, `origin/review`. */
+{ kind: "remote"; 
+/**  Its name with the remote's. */
+name: string } | 
+/**  A1: a new branch, as typed. */
+{ kind: "new"; 
+/**  The name typed (spaces become `-`, BR-005). */
+name: string };
+
 /**
  *  UC-011 step 1, A7, A8: where the workspace stands, as the branch button
  *  of the status bar names it (M-04.1, feature F13).
@@ -542,7 +649,11 @@ export type ChangeKindName =
 "deleted" | 
 /**  The letter `R`, blue. */
 "renamed" | 
-/**  UC-015: the letter `C`, orange (its actions come with feature F13). */
+/**
+ *  UC-015: the letter `C`, orange; a file that is not a note offers
+ *  "Keep here" and "Keep remote" (A2), one deleted on a side "Keep" and
+ *  "Delete" (A3).
+ */
 "conflict";
 
 /**  M-19.2: one row of "Changes (N)". */
@@ -568,6 +679,12 @@ export type ChangeView = {
 	note: boolean,
 	/**  UC-012 BR-004: chosen for the commit. */
 	chosen: boolean,
+	/**
+	 *  UC-015 A3: a conflict of a note or file deleted on this side and
+	 *  changed on the other; the row says "deleted here" or "deleted on the
+	 *  remote" and offers "Keep" and "Delete" (M-19.2, feature F13).
+	 */
+	deletedOn: SideName | null,
 };
 
 /**
@@ -600,7 +717,7 @@ export type ChangesEvent = ChangesView | null;
 export type ChangesView = {
 	/**
 	 *  UC-011 A9: why git could not be asked; then nothing else is shown
-	 *  (the status bar says it with feature F13).
+	 *  here (the status bar says it, M-04.1).
 	 */
 	problem: string | null,
 	/**  Where the workspace stands; `None` with a problem. */
@@ -623,6 +740,15 @@ export type ChangesView = {
 	/**  UC-012 BR-002: the message proposed for the changes chosen. */
 	proposed: string,
 };
+
+/**  UC-015 step 4, BR-006: a choice for a conflicting place. */
+export type ChoiceName = 
+/**  "Here", Alt+H. */
+"here" | 
+/**  "Remote", Alt+R. */
+"remote" | 
+/**  "Both", Alt+B: here first, then remote. */
+"both";
 
 /**  The clipboard keys of the source view (M-08.6, ADR-014). */
 export type ClipAction = 
@@ -735,6 +861,37 @@ problem: string } |
 { kind: "nameNotKept"; 
 /**  "Your name could not be kept: {err}". */
 problem: string };
+
+/**
+ *  M-19.9, UC-015 steps 3–5: the conflict bar over the active note, while
+ *  it holds conflicting places.
+ */
+export type ConflictBarView = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the backend's text the places are of. */
+	rev: number,
+	/**  The open places, in order; never empty. */
+	places: ConflictPlaceView[],
+};
+
+/**
+ *  M-19.9, UC-015 step 3: the conflict bar of the active note; `null` when
+ *  it holds no conflicting place.
+ */
+export type ConflictEvent = ConflictBarView | null;
+
+/**  M-19.9, UC-015 step 3: one conflicting place of the active note. */
+export type ConflictPlaceView = {
+	/**  The line it starts on, from 1. */
+	line: number,
+	/**  Where it starts, in web units of [`ConflictBarView::rev`]. */
+	offset: number,
+	/**  "Here", without its last line break. */
+	here: string,
+	/**  "Remote", likewise. */
+	remote: string,
+};
 
 /**  FR-031, BR-011: what copy on select asks of the backend after an input. */
 export type CopyOnSelectView = {
@@ -1538,6 +1695,30 @@ export type GapView = {
 	 *  last.
 	 */
 	lines: number,
+};
+
+/**
+ *  M-04.1 to M-04.3 (UC-011 step 1, UC-014 BR-004, UC-015 step 1): the
+ *  branch, the conflicts and the syncs in the status bar.
+ */
+export type GitBarEvent = GitBarView;
+
+/**  M-04.1 to M-04.3: the git part of the status bar, left of the text. */
+export type GitBarView = {
+	/**
+	 *  M-04.1, UC-011 step 1: "Branch {b}" or "Branch {b} · N change(s)",
+	 *  the button that opens the branch menu; only while git answers.
+	 */
+	branch: string | null,
+	/**  M-04.1, UC-011 A9: "Changes cannot be shown: {e}", weak. */
+	problem: string | null,
+	/**
+	 *  M-04.2, UC-015 step 1: "1 conflict" or "N conflicts", with "Abort
+	 *  the sync" beside it.
+	 */
+	conflicts: string | null,
+	/**  M-04.3: the state of the syncs, only for a workspace with a remote. */
+	sync: SyncBarView | null,
 };
 
 /**  M-08.2, ADR-024: the colours of the lines the source view shows. */
@@ -2429,6 +2610,13 @@ export type SettingsWindowView = {
 	thisWorkspace: SettingRowView[],
 };
 
+/**  UC-015 BR-002: a side of a conflict. */
+export type SideName = 
+/**  This computer's version. */
+"here" | 
+/**  The version that came with the sync. */
+"remote";
+
 /**  How one kind of highlighted text looks (ADR-010). */
 export type SpanStyle = {
 	/**  The colour, `#rrggbb`. */
@@ -2521,6 +2709,34 @@ export type StatusView = {
 	busy: boolean,
 };
 
+/**  The answer to choosing a branch in the menu (UC-013 steps 3–6, A1 to A6). */
+export type SwitchAnswer = 
+/**  The menu closes; the status says what happened. */
+{ kind: "done" } | 
+/**
+ *  A3: "Changes not committed would be overwritten: {files}. Commit
+ *  them first, or stay." with "Commit first"; the menu stays.
+ */
+{ kind: "inTheWay"; 
+/**  The text. */
+text: string } | 
+/**
+ *  A2: "The branch {name} exists; choose it in the list to switch to
+ *  it."; the menu shows the list again, filtered by the name.
+ */
+{ kind: "exists"; 
+/**  The text. */
+problem: string; 
+/**  The name, for the filter. */
+name: string } | 
+/**
+ *  BR-005: the name typed is not allowed ("{problem}."); the menu
+ *  keeps it.
+ */
+{ kind: "invalid"; 
+/**  The text. */
+problem: string };
+
 /**  The backend's answer to `ed_sync` and `ed_resync`. */
 export type SyncAnswer = {
 	/**  The revision of the backend's text now. */
@@ -2531,6 +2747,29 @@ export type SyncAnswer = {
 	remote: RemoteOp[],
 	/**  The window must send its whole text (`ed_resync`). */
 	resync: boolean,
+};
+
+/**  M-04.3, UC-014 BR-004: the state of the syncs and "Sync now". */
+export type SyncBarView = {
+	/**
+	 *  "Syncing…", "Not synced yet", "Synced just now", "Offline, will
+	 *  retry (synced 2 min ago)", "Sync failed", "Sync failed: signing in",
+	 *  "Sync stopped: conflict", "Sync stopped", "Push refused" or "No
+	 *  sync".
+	 */
+	text: string,
+	/**  In egui's warning colour. */
+	warning: boolean,
+	/**  The reason or the files, shown at the pointer. */
+	hover: string | null,
+	/**  "N to push", when commits wait to be pushed. */
+	toPush: string | null,
+	/**  "N to pull", when commits wait to be pulled. */
+	toPull: string | null,
+	/**  A sync runs. */
+	running: boolean,
+	/**  "Sync now" can be chosen: no sync runs and no conflict waits (A10). */
+	canSync: boolean,
 };
 
 /**
@@ -2561,6 +2800,15 @@ export type SyncEdit = {
 	/**  What it puts in their place. */
 	insert: string,
 };
+
+/**  UC-014 step 1, A1: what a sync does. */
+export type SyncModeName = 
+/**  "Sync now": commit, pull, push. */
+"full" | 
+/**  "Pull" of the branch menu: commit and pull. */
+"pull" | 
+/**  "Push" of the branch menu: commit and push. */
+"push";
 
 /**  M-16.2: the properties section of the tool panel for the active tab. */
 export type TabPropertiesView = {
@@ -2649,6 +2897,31 @@ export type TextChange = {
 	/**  The text put in its place. */
 	insert: string,
 };
+
+/**  M-19.10, UC-020 A10: a row of a todo in conflict. */
+export type TodoConflictRowView = {
+	/**  "Title", "Due", "Scheduled", "Urgency", "Status" or "Notes". */
+	name: string,
+	/**  This computer's value, "–" for none, "(deleted)". */
+	here: string,
+	/**  The remote's. */
+	remote: string,
+	/**  The two differ: both in bold. */
+	differ: boolean,
+};
+
+/**  M-19.10, UC-020 A10: a todo changed here and on the remote. */
+export type TodoConflictView = {
+	/**  Its number, sent back with "Keep mine" or "Take remote". */
+	number: number,
+	/**  "Todo #{n} was changed here and on the remote". */
+	heading: string,
+	/**  Both versions, field by field. */
+	rows: TodoConflictRowView[],
+};
+
+/**  M-19.10, UC-020 A10: the todos in conflict after a sync. */
+export type TodoConflictsEvent = TodoConflictView[];
 
 /**  The tab "Todos" (M-06.5, UC-021 BR-005), as it is remembered. */
 export type TodoTabView = {

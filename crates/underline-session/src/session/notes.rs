@@ -108,12 +108,6 @@ impl OpenNotes for OpenTexts {
 }
 
 impl Session {
-    /// UC-015 BR-007: whether the note `id` is in conflict. The conflicts
-    /// come with feature F13 (`in_conflict`); until then no note is.
-    pub(super) fn in_conflict(&self, _id: &NoteId) -> bool {
-        false
-    }
-
     /// UC-003 step 2, M-14.1: the dialog "New note" starts with the folder
     /// of the active note and the default format; `None` without a
     /// workspace.
@@ -244,6 +238,14 @@ impl Session {
     /// updated N link(s) in M note(s)", and which notes could not be
     /// updated (A6).
     pub fn rename_note(&mut self, from: &NoteId, title: &str, folder: &str) -> RenameAnswer {
+        // K2 (review F13): a sync may have put it in conflict meanwhile.
+        if self.in_conflict(from) {
+            self.status = format!(
+                "{} is in conflict; resolve it before renaming it",
+                from.title()
+            );
+            return RenameAnswer::Done;
+        }
         let rename = Rename {
             folder: folder.to_owned(),
             title: title.to_owned(),
@@ -472,6 +474,14 @@ impl Session {
     /// the undo when it is kept. When it cannot be kept, the answer asks to
     /// delete it for good; other failures are in the status (A2, A3).
     pub fn delete_note(&mut self, note: &NoteId, for_good: bool) -> DeleteAnswer {
+        // K2 (review F13): a sync may have put it in conflict meanwhile.
+        if self.in_conflict(note) {
+            self.status = format!(
+                "{} is in conflict; resolve it before deleting it",
+                note.title()
+            );
+            return DeleteAnswer::Done;
+        }
         // Step 4: unsaved changes are saved first, so they are kept too.
         if let Err(err) = self.store_first(note) {
             self.status = format!("The note could not be deleted, because {err}");
