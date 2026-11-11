@@ -88,7 +88,7 @@ Reihenfolge von links nach rechts:
 - [x] **M-04.7** Text: Workspace-Pfad und Status, getrennt durch „  |  “.
 - [~] **M-04.8** Nach einem Export: „Open“ (Systemprogramm) und „Show“ (Fenster „Approximated blocks“).
 - [~] **M-04.9** Nach Agent-Änderungen: bis zu 3 Buttons „Open“/„Open {title}“, die neueste zuerst.
-- [ ] **M-04.10** Undo nach dem Löschen einer Notiz. Das Angebot verschwindet, sobald sich der Status ändert.
+- [x] **M-04.10** Undo nach dem Löschen einer Notiz. Das Angebot verschwindet, sobald sich der Status ändert.
 
 ## M-05 Notizübersicht links (UC-002, FR-017)
 
@@ -113,7 +113,7 @@ Reihenfolge von links nach rechts:
 - [x] **M-06.2** Ein Klick aktiviert den Tab, merkt „zuletzt geöffnet“ vor, speichert die Tabs und sortiert die
   Übersicht neu.
 - [x] **M-06.3** Mittelklick oder „×“ schliesst den Tab. Vorher wird gespeichert; scheitert das, fragt M-21.2.
-- [ ] **M-06.4** Kontextmenü: „Rename…  F2“, „Delete…“, „Export…  Ctrl+Shift+E“.
+- [~] **M-06.4** Kontextmenü: „Rename…  F2“, „Delete…“, „Export…  Ctrl+Shift+E“.
 - [~] **M-06.5** Todos-Tab „Todos (N)“, wenn die Liste offen ist. Schliessen mit „×“ oder Mittelklick. Das Öffnen
   einer Notiz deaktiviert ihn, lässt ihn aber offen.
 - [~] **M-06.6** Höchstens 100 Tabs (`MAX_TABS`). Ein weiterer schliesst den am längsten unbenutzten Tab, Status
@@ -123,7 +123,7 @@ Reihenfolge von links nach rechts:
 
 ## M-07 Notiz lesen (UC-004)
 
-- [ ] **M-07.1** Ohne Tab steht „Select or create a note.“.
+- [x] **M-07.1** Ohne Tab steht „Select or create a note.“.
 - [x] **M-07.2** Die Werkzeugleiste über dem Editor hat den Umschalter „Facade“/„Source“ (FR-010). Der Umschalter
   speichert die Tabs und fokussiert den Editor. Cursor und Auswahl bleiben beim Wechsel erhalten (UC-005 A1).
 - [~] **M-07.3** Links folgen (FR-040, `app:2463-2523`) mit Ctrl/Cmd+Klick, in beiden Ansichten. Ziel:
@@ -147,8 +147,8 @@ Reihenfolge von links nach rechts:
 
 ## M-08 Quellansicht (FR-008, ADR-012)
 
-- [ ] **M-08.1** Monospace 14 pt mit Soft-Wrap. Nur sichtbare Zeilen werden gelayoutet (10'000 Zeilen, NFR-002).
-- [ ] **M-08.2** Syntax-Hervorhebung von Markdown/AsciiDoc mit syntect (ADR-010). Code in Fences wird in seiner
+- [x] **M-08.1** Monospace 14 pt mit Soft-Wrap. Nur sichtbare Zeilen werden gelayoutet (10'000 Zeilen, NFR-002).
+- [~] **M-08.2** Syntax-Hervorhebung von Markdown/AsciiDoc mit syntect (ADR-010). Code in Fences wird in seiner
   Sprache eingefärbt. Noch nicht gefärbte Zeilen erscheinen schlicht und werden nachgefärbt (Budget 4 ms je Frame).
   Die Palette kommt aus dem Theme.
 - [x] **M-08.3** Maus: Klick setzt den Cursor, Ziehen oder Shift+Klick erweitert die Auswahl. *Kein Doppel- oder
@@ -159,7 +159,7 @@ Reihenfolge von links nach rechts:
     Ctrl+Home/End. Shift erweitert die Auswahl.
   - *Keine Wort-Bewegung und kein wortweises Löschen.*
 - [ ] **M-08.5** IME: es wird nur der fertige Text eingefügt, die Komposition wird nicht angezeigt.
-- [ ] **M-08.6** Kopieren und Ausschneiden legen das Markup ab. Einfügen fügt immer reinen Text ein. Ein Bild in der
+- [~] **M-08.6** Kopieren und Ausschneiden legen das Markup ab. Einfügen fügt immer reinen Text ein. Ein Bild in der
   Zwischenablage wird als PNG neben der Notiz gespeichert und als Bild eingefügt (M-10.6).
 - [x] **M-08.7** Zeilennummern (FR-028/029): ein/aus, links oder rechts. Die Breite folgt der Stellenzahl, die Farbe
   ist 45 % der Textfarbe. Nur in der Quellansicht.
@@ -169,7 +169,7 @@ Reihenfolge von links nach rechts:
   - Steht der Cursor beim Falten in der Sektion, springt er zur Überschrift. Landet der Cursor in einem gefalteten
     Bereich, klappt dieser auf.
   - Der Faltzustand gilt für beide Ansichten.
-- [ ] **M-08.9** Cursor blinkt im Takt von egui. Nach jeder Bewegung ist er sofort sichtbar. Er wird nur mit Fokus
+- [x] **M-08.9** Cursor blinkt im Takt von egui. Nach jeder Bewegung ist er sofort sichtbar. Er wird nur mit Fokus
   gezeichnet.
 - [x] **M-08.10** Tab, Pfeile und (in Vim/Nano) Escape verlassen den Editor nicht über die Fokus-Navigation.
 
@@ -189,11 +189,11 @@ Reihenfolge von links nach rechts:
   - Spaltenbreiten nach Inhalt, proportional geschrumpft, wenn zu breit.
   - Ausrichtung je Spalte, Kopfzeile fett und schattiert.
   - Beschriftung „Table n.“
-- [ ] **M-09.6** Bilder:
+- [~] **M-09.6** Bilder:
   - Geladen im Hintergrund, mit Beschriftung „Figure n.“
   - Meldungen für „lädt“, „nicht gefunden“ und „ausserhalb des Workspace“.
   - Web-Bilder nur nach Zustimmung (ADR-013, M-09.15).
-- [ ] **M-09.7** Diagramme (`plantuml`, `puml`, `mermaid`):
+- [~] **M-09.7** Diagramme (`plantuml`, `puml`, `mermaid`):
   - Offline gerendert (ADR-009), mit Cache.
   - Während eine geänderte Quelle rendert, bleibt das letzte Bild stehen.
   - Bei einem Fehler wird die Quelle mit der Meldung gezeigt.
@@ -229,7 +229,7 @@ Reihenfolge von links nach rechts:
   - Kopieren legt Markup als Text plus HTML ab.
 - [x] **M-09.15** Web-Bilder sind der einzige Netzzugriff des Editors (ADR-013), mit Zustimmung. Die Webview darf
   keine Fremd-URLs selbst laden.
-- [ ] **M-09.16** `reveal(offset)` scrollt einen Block nach oben, ohne den Cursor zu bewegen (Sprünge aus dem
+- [x] **M-09.16** `reveal(offset)` scrollt einen Block nach oben, ohne den Cursor zu bewegen (Sprünge aus dem
   Werkzeugpanel).
 
 ## M-10 Bearbeiten, beide Ansichten (UC-005)
@@ -241,7 +241,7 @@ Reihenfolge von links nach rechts:
   - Agent-Änderungen sind ein eigener, versiegelter Schritt. Neu laden löscht die History.
   - Nach Undo steht der Cursor am Ende des wiederhergestellten Texts.
   - Die History gilt über den Ansichtswechsel hinweg.
-- [ ] **M-10.2** Formatierungs-Toolbar (FR-023), ein Button je Tool mit Hover-Hinweis:
+- [~] **M-10.2** Formatierungs-Toolbar (FR-023), ein Button je Tool mit Hover-Hinweis:
   - Bold Ctrl+B, Italic Ctrl+I, Code Ctrl+E, Link Ctrl+K.
   - Heading Ctrl+Shift+H, List Ctrl+Shift+L, Quote Ctrl+Shift+Q, Image Ctrl+Shift+I, Table Ctrl+Shift+T.
   - Inline-Formate schalten um (ein zweites Mal entfernt das Format). Zeilenformate setzen Präfixe, je Format die
@@ -391,7 +391,7 @@ Reihenfolge von links nach rechts:
 
 ## M-16 Werkzeugpanel rechts (FR-019, FR-041–043)
 
-- [ ] **M-16.1** Breite veränderbar (100–1000) und wird gespeichert, aber nur mit aktivem Tab.
+- [x] **M-16.1** Breite veränderbar (100–1000) und wird gespeichert, aber nur mit aktivem Tab.
 - [x] **M-16.2** Properties: Place, Format, Size, Last change, sonst „Not saved yet“.
 - [~] **M-16.3** Abschnitt Todos (M-18.1).
 - [~] **M-16.4** Commit / Changes / Diff (M-19), nur in Git-Workspaces.
@@ -577,7 +577,7 @@ Reihenfolge von links nach rechts:
   3. Optionaler Remote mit dem Hinweis „The remote is not contacted now; …“.
 
   Erfolg „Workspace created in {root}“, mit Home-Notiz aus der Registry.
-- [ ] **M-21.3** Workspace-Wechsel startet Syncer, Watcher, Searcher und Tracker, stellt die Tabs wieder her und
+- [~] **M-21.3** Workspace-Wechsel startet Syncer, Watcher, Searcher und Tracker, stellt die Tabs wieder her und
   räumt alte gelöschte Notizen auf.
 - [~] **M-21.4** Schliessen:
   - Alles speichern. Bei Fehler bleibt das Fenster offen, mit „Changes not stored“: „Close {the tab X|Underline}
@@ -592,7 +592,7 @@ Reihenfolge von links nach rechts:
 - [x] **M-22.2** `<ws>/.underline/state.yaml`: Tabs (Notiz, Position, Ansicht, aktiv), „zuletzt geöffnet“ je Notiz,
   Zustand des Todos-Tabs.
 - [~] **M-22.3** Einstellungen in `~/underline.yaml` und `<ws>/underline.yaml`, sofort geschrieben.
-- [ ] **M-22.4** Nicht gespeichert: Fenstergeometrie, Klappzustände, Web-Zustimmung, letzter Export-Ordner,
+- [x] **M-22.4** Nicht gespeichert: Fenstergeometrie, Klappzustände, Web-Zustimmung, letzter Export-Ordner,
   Wiki-URL, Such- und Find-Text, Commit-Nachricht, Cursor- und Scrollpositionen.
 
 ---

@@ -1,7 +1,39 @@
 # Paritätsbericht: egui-App → Tauri 2
 
-Wird je Feature fortgeschrieben. Grundlage ist [feature-inventar.md](feature-inventar.md). Die endgültige Fassung
-entsteht in Phase 4.
+Grundlage ist [feature-inventar.md](feature-inventar.md). Je Feature fortgeschrieben, in Phase 4 zusammengefasst.
+
+## Zusammenfassung (Phase 4, 2026-11-11)
+
+- **Umfang:** F1–F16 umgesetzt, je Feature mit rust-reviewer, ux-reviewer (ausser F16, ohne neue Oberfläche) und
+  app-tester geprüft und committet. Der Editor-Kern läuft als WASM im Fenster (ADR-025, ersetzt ADR-024).
+- **Inventar:** 145 Punkte, davon 57 `[x]` (migriert, von app-tester geprüft) und 87 `[~]` (migriert mit
+  dokumentierter Abweichung; meist, weil die Tauri-App egui-Defekte behebt (A-02) oder Bedienung und
+  Barrierefreiheit ergänzt). Offen ist nur M-08.5 (echte IME; synthetisch über CDP geprüft, Q-09/Q-36).
+- **Im echten Fenster noch zu prüfen** (im Mock nicht darstellbar, in Rust-Tests abgedeckt): syntect-Farben je Theme
+  und AsciiDoc (M-08.2), Diagramm-Fehler, Cache und Offline-Rendern (M-09.7), Bildunterschriften „Figure n.“ und
+  Bilder ausserhalb des Workspace bzw. aus dem Web (M-09.6), Neustart von Watcher, Suche, Syncer und Change-Tracker
+  beim Workspace-Wechsel samt dem Aufräumen alter gelöschter Notizen (M-21.3).
+- **Messwerte:** Tippen p99 2–7 ms, 93–100 % der Tasten im nächsten Frame in beiden Ansichten (Ziel ≤ 16 ms und
+  ≥ 90 %); Start mit dem letzten Workspace 0,6–0,9 s bis die Notiz geöffnet ist (NFR-001 ≤ 1 s, warmer Cache);
+  Suche 19 von 20 Anfragen unter 1 s auf 10'000 Notizen (NFR-003; erste Suche nach dem Öffnen 2,2 s wie egui, Q-70);
+  Agent-Änderung sichtbar in 0,2 s (NFR-008). AppImage 122 MiB, deb 44 MiB (Q-123: strip/LTO).
+- **Nicht geprüft:** Windows (WebView2) und macOS (WKWebView), echte IME und Tottasten, echtes Drag-and-drop aus dem
+  Dateimanager und Zwischenablage fremder Programme (Q-49), das echte Fenster per Tastatur-Automation (kein
+  `xdotool` unter Wayland). Die Flüsse sind gegen das Mock-Backend (Playwright) und in Rust-Tests mit echten
+  Dateien und Git-Repositories geprüft; das echte Fenster nur stichprobenweise (Schliessen, Agent, Start, Bundles).
+- **Legacy:** `apps/underline-desktop` und `crates/underline-editor` sind unverändert. Geteilte Crates
+  (`underline-core`, `-facade`, `-markup`, `-mcp`, `-wiki`) wurden nur verhaltensgleich geändert (Verschieben mit
+  Re-Export, rein additive Funktionen, ein nachgewiesen gleichwertiger ASCII-Pfad der Wortsuche).
+- **Vor dem Entfernen des alten UI-Codes** braucht es die Bestätigung der Parität durch den Benutzer und die
+  Entscheide in `offene-fragen.md`. Vordringlich (Sicherheit und Datenverlust):
+  - Q-110 Dateirechte und Symlinks beim MCP-Install (teilt egui), Q-61/Q-62 Links auf Programme und beliebige
+    URL-Schemas, Q-63 `file://`-Pfade.
+  - Q-27/Q-28 Agent-Änderung gegen gleichzeitiges Tippen, Fenstertext gewinnt bei einem Desync; Q-117/Q-120
+    Todos: „nochmals ändern“ überschreibt, „Close anyway“ verwirft.
+  - Q-66 Fokus auf endgültigen Aktionen (Löschen, Verwerfen), Q-89 Export ersetzt keine Notiz mehr, Q-96 Sync trotz
+    nicht speicherbarer Notiz, Q-104 „All: Here/Remote“ ohne Rückfrage, Q-121 Tab-Limit.
+  - Q-42 (A-58/A-59) und weitere Fälle, in denen Tauri bewusst von egui abweicht; Q-122/Q-123 Paket-Metadaten und
+    Release-Profil; neue Texte ohne egui-Vorlage (Q-43, Q-90, Q-95, Q-97, Q-105, Q-112).
 
 ## Stand je Feature
 
