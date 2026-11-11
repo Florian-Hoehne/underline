@@ -116,7 +116,7 @@ Reihenfolge von links nach rechts:
 - [ ] **M-06.4** Kontextmenü: „Rename…  F2“, „Delete…“, „Export…  Ctrl+Shift+E“.
 - [~] **M-06.5** Todos-Tab „Todos (N)“, wenn die Liste offen ist. Schliessen mit „×“ oder Mittelklick. Das Öffnen
   einer Notiz deaktiviert ihn, lässt ihn aber offen.
-- [ ] **M-06.6** Höchstens 100 Tabs (`MAX_TABS`). Ein weiterer schliesst den am längsten unbenutzten Tab, Status
+- [~] **M-06.6** Höchstens 100 Tabs (`MAX_TABS`). Ein weiterer schliesst den am längsten unbenutzten Tab, Status
   „Closed the tab {t}, used longest ago“. *Speicherfehler werden dabei heute ignoriert (Defekt D-07).*
 - [x] **M-06.7** Tabs, aktiver Tab und Ansicht je Tab werden beim Öffnen des Workspace wiederhergestellt. Ohne
   gemerkten Tab wird `first_note` geöffnet.
@@ -579,7 +579,7 @@ Reihenfolge von links nach rechts:
   Erfolg „Workspace created in {root}“, mit Home-Notiz aus der Registry.
 - [ ] **M-21.3** Workspace-Wechsel startet Syncer, Watcher, Searcher und Tracker, stellt die Tabs wieder her und
   räumt alte gelöschte Notizen auf.
-- [ ] **M-21.4** Schliessen:
+- [~] **M-21.4** Schliessen:
   - Alles speichern. Bei Fehler bleibt das Fenster offen, mit „Changes not stored“: „Close {the tab X|Underline}
     anyway and lose these changes?“, „Keep open“/„Close anyway“.
   - Mit Syncer: „Syncing before closing…“, dann schliessen (höchstens 10 s).

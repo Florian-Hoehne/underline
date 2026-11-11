@@ -87,6 +87,16 @@ impl<T> TabList<T> {
         self.tabs.iter_mut().map(|e| (&e.note, &mut e.item))
     }
 
+    /// The indices of the tabs, the one used longest ago first (UC-004 A6).
+    /// [`TabList::open`] closes the first of them at [`MAX_TABS`]; a caller
+    /// that must not lose a tab's changes can close another one first.
+    #[must_use]
+    pub fn longest_unused_first(&self) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.tabs.len()).collect();
+        order.sort_by_key(|&i| self.tabs[i].last_used);
+        order
+    }
+
     /// Makes the tab at `index` the active one (UC-004 A5).
     pub fn activate(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -110,7 +120,9 @@ impl<T> TabList<T> {
         }
         let mut closed = None;
         if self.tabs.len() >= MAX_TABS {
-            if let Some(oldest) = (0..self.tabs.len()).min_by_key(|&i| self.tabs[i].last_used) {
+            // The first of the order: `min_by_key` and the stable sort both
+            // take the leftmost tab among equal uses.
+            if let Some(&oldest) = self.longest_unused_first().first() {
                 closed = Some(self.close(oldest));
             }
         }
@@ -238,5 +250,23 @@ mod tests {
         assert_eq!(opened.closed.map(|(n, _)| n.to_string()), Some("N1".into()));
         assert_eq!(tabs.len(), MAX_TABS);
         assert!(tabs.find(&id("New")).is_some());
+    }
+
+    /// UC-004 A6, M-06.6: the order in which the limit closes tabs, the
+    /// one used longest ago first; `open` closes the first of them.
+    #[test]
+    fn uc004_a6_m06_6_tabs_in_the_order_of_their_last_use() {
+        let mut tabs = TabList::default();
+        for name in ["A", "B", "C"] {
+            tabs.open(id(name), || ());
+        }
+        tabs.activate(tabs.find(&id("A")).unwrap());
+        let order: Vec<String> = tabs
+            .longest_unused_first()
+            .into_iter()
+            .map(|i| tabs.note(i).to_string())
+            .collect();
+        assert_eq!(order, ["B", "C", "A"]);
+        assert!(TabList::<()>::default().longest_unused_first().is_empty());
     }
 }

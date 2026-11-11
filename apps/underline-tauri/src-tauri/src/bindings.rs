@@ -7,15 +7,17 @@
 //! Debug builds write both files on every start; the tests below fail when a
 //! checked-in file is outdated.
 
+#[cfg(any(debug_assertions, test))]
 use std::path::Path;
 
+#[cfg(any(debug_assertions, test))]
 use specta_typescript::Typescript;
 use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use underline_session::{
     ClipAction, Clipped, CopyOnSelectView, EditorInput, EditorPatch, EditorState, FacadeAt,
-    FacadeInput, FacadePatch, FacadeState, FindAnswer, FindStep, PaletteView, RemoteApplied,
-    RowsView, TabViews, VimChange, VimState,
+    FacadeInput, FacadePatch, FacadeState, FindAnswer, FindStep, RemoteApplied, RowsView, TabViews,
+    VimChange, VimState,
 };
 
 use crate::commands;
@@ -27,9 +29,11 @@ use crate::events::{
 };
 
 /// Where the generated bindings live.
+#[cfg(any(debug_assertions, test))]
 pub const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/src/lib/bindings.ts");
 
 /// Where the generated palettes live.
+#[cfg(any(debug_assertions, test))]
 pub const PALETTES_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../ui/src/lib/palettes.generated.json"
@@ -174,7 +178,9 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .disable_serde_phases()
 }
 
-/// Writes the TypeScript bindings of `builder` to `path`.
+/// Writes the TypeScript bindings of `builder` to `path` (debug builds
+/// and tests only; a release build has them checked in).
+#[cfg(any(debug_assertions, test))]
 pub fn export<R: Runtime>(
     builder: &Builder<R>,
     path: impl AsRef<Path>,
@@ -183,14 +189,16 @@ pub fn export<R: Runtime>(
 }
 
 /// The palettes of all themes as JSON, in the order of the Theme menu.
+#[cfg(any(debug_assertions, test))]
 pub fn palettes_json() -> String {
-    let mut json = serde_json::to_string_pretty(&PaletteView::all())
+    let mut json = serde_json::to_string_pretty(&underline_session::PaletteView::all())
         .expect("palettes are plain strings and flags");
     json.push('\n');
     json
 }
 
 /// Writes [`palettes_json`] to `path`.
+#[cfg(any(debug_assertions, test))]
 pub fn export_palettes(path: impl AsRef<Path>) -> std::io::Result<()> {
     std::fs::write(path, palettes_json())
 }

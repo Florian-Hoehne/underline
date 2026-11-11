@@ -114,6 +114,13 @@
 // make the todo files unwritable (`todoWriteFails`; cleared, what was not
 // stored is stored half a second later) or a file unreadable
 // (`todoUnreadable`), and list the todos (`todos`).
+//
+// Feature F16: `/home/user/Many` holds one note more than tabs may be open
+// (M-06.6); at the limit the tab opened longest ago that can be stored
+// closes, else the note does not open (D-07, fixed). `closeWindow` closes
+// the window as the system would (M-21.4: the close handshake, "Changes not
+// stored", the last sync of `/home/user/Team`), `windowClosed` says whether
+// Underline ended, and `failSaves` makes the saves of notes fail.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { MockAgents, levelOf, type MockToolState } from './mock-agents';
@@ -279,7 +286,7 @@ export type MockHandlers = {
   ed_mirror: (args: { note: string }) => Promise<Ok<typeof commands.edMirror>>;
   ed_sync: (args: { note: string; batch: SyncBatch }) => Promise<Ok<typeof commands.edSync>>;
   ed_resync: (args: { note: string; text: string }) => Promise<Ok<typeof commands.edResync>>;
-  app_request_close: (args: { sent: boolean }) => Ok<typeof commands.appRequestClose>;
+  app_request_close: (args: { sent: boolean }) => Promise<Ok<typeof commands.appRequestClose>>;
   ed_follow_link: (args: {
     note: string;
     at: number;
@@ -458,6 +465,12 @@ export const FAKE_HOME = '/home/user';
 /** F13: the fake git workspace with a remote (UC-013 to UC-015). */
 export const TEAM = '/home/user/Team';
 
+/** M-06.6: at most this many tabs are open (`MAX_TABS` of underline-core). */
+export const MAX_TABS = 100;
+
+/** F16, M-06.6: a workspace with `MAX_TABS + 1` notes, to try the tab limit. */
+export const MANY = '/home/user/Many';
+
 /**
  * The fake file system: workspaces by their root with their notes' ids, and
  * `/home/user/Letters`, a directory with files that is no workspace yet.
@@ -476,6 +489,11 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
   '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE, LINK_TOUR_NOTE],
   '/home/user/Letters': ['Draft'],
   '/home/user/Team': ['Home', 'Plan', 'Meetings'],
+  // F16, M-06.6: one note more than tabs may be open.
+  [MANY]: [
+    'Home',
+    ...Array.from({ length: MAX_TABS }, (_, i) => `N${String(i + 1).padStart(3, '0')}`),
+  ],
 };
 
 /**
@@ -1942,6 +1960,52 @@ function workspaceHandlers(
       void endSync(at, state, mode, outcome);
     }, 300);
   };
+  /** F16, M-21.4: Underline ended (the window would be gone). */
+  let windowClosed = false;
+  /** UC-014 A9: the last sync before closing was asked for. */
+  let closingSync = false;
+  /**
+   * M-21.4, UC-005 BR-001: Underline is to close: every change is stored,
+   * else "Changes not stored" asks (A14 step 3); with a remote, a last
+   * sync runs first, ten seconds at most (UC-014 A9). A second close
+   * meanwhile goes through, as in the backend.
+   */
+  const requestClose = async () => {
+    const failures = tabs.map((tab) => store(tab.note)).filter((f): f is string => f !== null);
+    if (root !== null) {
+      failures.push(...todos.settle(root));
+    }
+    await sendAll();
+    if (failures.length > 0) {
+      await emit('close-question', {
+        tab: null,
+        what: 'Underline',
+        error: failures.join('; '),
+        switching: false,
+      });
+      return;
+    }
+    const state = remoteOf();
+    if (!closingSync && state?.hasRemote) {
+      closingSync = true;
+      await runSync('full', false);
+      if (state.running) {
+        await setStatus('Syncing before closing…');
+        const deadline = Date.now() + 10_000;
+        const wait = () =>
+          later(100, () => {
+            if (!state.running || Date.now() >= deadline) {
+              windowClosed = true;
+            } else {
+              wait();
+            }
+          });
+        wait();
+        return;
+      }
+    }
+    windowClosed = true;
+  };
   /** UC-015 step 7: nothing in conflict any more: the joining completes and the sync goes on. */
   const afterResolving = async (state: MockRemote) => {
     if (state.conflicts.length > 0 || state.hereText === null) {
@@ -2000,12 +2064,14 @@ function workspaceHandlers(
             lastChange: '2026-11-09 10:00',
           },
         };
+  /** Notes whose saves fail (`MockStart.failingSaves`, the hook `failSaves`). */
+  const failing = new Set(start.failingSaves ?? []);
   /** Stores `note` now; the failure names the note, as the backend's does. */
   const store = (note: string): string | null => {
     if (!unstored.has(note) && !saveErrors.has(note)) {
       return null;
     }
-    if (start.failingSaves?.includes(note)) {
+    if (failing.has(note)) {
       saveErrors.set(note, MOCK_SAVE_ERROR);
       return `${title(note)}: ${MOCK_SAVE_ERROR}`;
     }
@@ -2301,7 +2367,59 @@ function workspaceHandlers(
       todos.list(root).active = false;
     }
   };
-  const openTab = (note: string) => {
+  /**
+   * Takes the tab of `note` out, with its marks. A stored text stays the
+   * note's, as on disk; one not stored ("Close anyway") is lost, and the
+   * note reads as the fake file again (roughly: the mock keeps no older
+   * stored text).
+   */
+  const dropTab = (note: string, stored: boolean) => {
+    const at = tabs.findIndex((tab) => tab.note === note);
+    if (at < 0) {
+      return;
+    }
+    clearTimeout(saveTimers.get(note));
+    saveTimers.delete(note);
+    if (!stored) {
+      texts.delete(note);
+    }
+    mirrors.delete(note);
+    unstored.delete(note);
+    saveErrors.delete(note);
+    tabs.splice(at, 1);
+    if (active === note) {
+      active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
+    }
+  };
+  /**
+   * UC-004 A6, M-06.6: at the limit, the tab used longest ago that can be
+   * stored closes (D-07, fixed); `false` when none can, and the note does
+   * not open. Roughly the backend's order: by when a note was opened last.
+   */
+  const makeRoomFor = (note: string): boolean => {
+    if (tabs.length < MAX_TABS || tabs.some((tab) => tab.note === note)) {
+      return true;
+    }
+    const opened = (root && lastOpened[root]) || {};
+    // Review F16: never the active tab.
+    const order = [...tabs]
+      .filter((tab) => tab.note !== active)
+      .sort((a, b) => (opened[a.note] ?? 0) - (opened[b.note] ?? 0));
+    const closing = order.find((tab) => store(tab.note) === null);
+    if (!closing) {
+      void setStatus(
+        `${title(note)} was not opened: ${MAX_TABS} tabs are open, and none can close without losing changes`,
+      );
+      return false;
+    }
+    dropTab(closing.note, true);
+    void setStatus(`Closed the tab ${title(closing.note)}, used longest ago`);
+    return true;
+  };
+  const openTab = (note: string): boolean => {
+    if (!makeRoomFor(note)) {
+      return false;
+    }
     if (!tabs.some((tab) => tab.note === note)) {
       const at = active === null ? tabs.length : tabs.findIndex((t) => t.note === active) + 1;
       tabs.splice(at, 0, { note, view: start.view ?? 'facade' });
@@ -2309,6 +2427,7 @@ function workspaceHandlers(
     active = note;
     viewed(note);
     remember();
+    return true;
   };
   /** F10: the settings of the workspace opened last, still to be sent. */
   let settingsSaid: string | null | undefined;
@@ -2573,15 +2692,7 @@ function workspaceHandlers(
         await sendAll();
         return { tab: note, what: `the tab ${title(note)}`, error: failure, switching: false };
       }
-      clearTimeout(saveTimers.get(note));
-      texts.delete(note);
-      mirrors.delete(note);
-      unstored.delete(note);
-      saveErrors.delete(note);
-      tabs.splice(at, 1);
-      if (active === note) {
-        active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
-      }
+      dropTab(note, failure === null);
       remember();
       await sendAll();
       return null;
@@ -2694,7 +2805,10 @@ function workspaceHandlers(
       });
       return null;
     },
-    app_close_anyway: () => null,
+    app_close_anyway: () => {
+      windowClosed = true;
+      return null;
+    },
     ed_mirror: async ({ note }) => {
       if (!tabs.some((tab) => tab.note === note)) {
         throw notOpen(note);
@@ -2754,7 +2868,13 @@ function workspaceHandlers(
       await changed(note);
       return answer;
     },
-    app_request_close: () => null,
+    app_request_close: async ({ sent }) => {
+      // ADR-025 section 3.9: without `sent`, the window asks itself.
+      if (sent) {
+        await requestClose();
+      }
+      return null;
+    },
     ed_follow_link: async ({ note, at, rev }) => {
       const mirror = mirrors.get(note);
       if (!mirror || !tabs.some((tab) => tab.note === note)) {
@@ -3528,6 +3648,16 @@ function workspaceHandlers(
     },
   };
   handlers.__hooks = {
+    closeWindow: async () => {
+      await emit('ed-flush', { note: null, closing: true });
+    },
+    windowClosed: () => windowClosed,
+    failSaves: (notes) => {
+      failing.clear();
+      for (const note of notes) {
+        failing.add(note);
+      }
+    },
     backendEdit: async (note, at, remove, insert, sealed = true) => {
       const mirror = mirrors.get(note);
       const rev = mirror?.backendEdit(at, remove, insert, sealed);
@@ -3558,6 +3688,7 @@ function workspaceHandlers(
       return rev;
     },
     mirrorText: (note) => mirrors.get(note)?.text() ?? null,
+    noteText: (note) => textOf(note),
     agentConnect: async (name, refused = false) => {
       agents.connected = [...agents.connected.filter((a) => a.name !== name), { name, refused }];
       await sendAgents();
@@ -3765,6 +3896,8 @@ export type MockHooks = {
   outsideChange(note: string, text: string): Promise<number | null>;
   /** The backend's text of `note`, if a window's core holds it. */
   mirrorText(note: string): string | null;
+  /** F16: the text of `note` as the backend has it: the open tab's, else the file's. */
+  noteText(note: string): string;
   /** F14, UC-017 BR-004: the agent `name` connects (`refused`: it asked while access is off, A2). */
   agentConnect(name: string, refused?: boolean): Promise<void>;
   /** F14, UC-017 A3: the agent `name` disconnects. */
@@ -3845,6 +3978,15 @@ export type MockHooks = {
   dragLeave(): void;
   /** M-10.5: `paths` are dropped at `x`, `y` (CSS pixels of the window). */
   drop(paths: string[], x: number, y: number): void;
+  /**
+   * F16, M-21.4: the user closes the window: the window is asked to send
+   * its edits (`ed-flush` with `closing`) and answers `app_request_close`.
+   */
+  closeWindow(): Promise<void>;
+  /** F16, M-21.4: whether Underline ended (closed, or "Close anyway"). */
+  windowClosed(): boolean;
+  /** F16, M-06.6, M-21.4: the saves of these notes fail from now on (empty: none). */
+  failSaves(notes: string[]): void;
   /** The test ended: no timer of the mock outlives it. */
   dispose(): void;
 };

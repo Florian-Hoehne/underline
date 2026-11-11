@@ -26,9 +26,9 @@ use std::path::{Path, PathBuf};
 use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace, now,
     outside_copy_path, user_settings_dir, CreateError, CreateProblem, DeletedNote,
-    DirectoryProblem, EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, OpenProblem,
-    OverviewEntry, Searcher, Surroundings, TabList, TabState, TodoListState, Workspace,
-    WorkspaceEvent, WorkspaceWatcher, HOME_TITLE,
+    DirectoryProblem, EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, NoteSaver,
+    OpenProblem, OverviewEntry, Searcher, Surroundings, TabList, TabState, TodoListState,
+    Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, MAX_TABS,
 };
 
 use super::tab::Tab;
@@ -805,6 +805,14 @@ impl Session {
     /// Opens `id` in a tab; with `viewed`, records it as the most recently
     /// opened note. Returns whether a tab shows the note now.
     fn open_tab(&mut self, id: &NoteId, viewed: bool, editing_view: EditingView) -> bool {
+        let at_the_limit = self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.tabs.len() >= MAX_TABS && open.tabs.find(id).is_none());
+        if at_the_limit {
+            // UC-005 BR-001: no background save lands after the one below.
+            self.settle_saves();
+        }
         let Some(open) = &mut self.open else {
             return false;
         };
@@ -832,17 +840,31 @@ impl Session {
                 .iter()
                 .find(|entry| entry.id == note.id)
                 .map_or(open.workspace.default_format(), |entry| entry.format);
+            // UC-004 A6, M-06.6: at the limit, the tab used longest ago is
+            // closed after its changes were stored. D-07 (fixed, paritaet.md
+            // A-190): a tab whose changes cannot be stored stays open, and
+            // the next one in the order of use closes instead; when no tab
+            // can close without losing changes, the note does not open.
+            let mut closed = None;
+            if open.tabs.len() >= MAX_TABS {
+                let Some(note) = close_longest_unused(&mut open.tabs, &self.saver) else {
+                    self.status = format!(
+                        "{} was not opened: {MAX_TABS} tabs are open, and none can close \
+                         without losing changes",
+                        id.title()
+                    );
+                    self.views_dirty = true;
+                    return false;
+                };
+                closed = Some(note);
+            }
             let title = note.title();
-            let opened = open.tabs.open(id.clone(), || {
+            open.tabs.open(id.clone(), || {
                 let mut tab = Tab::new(path, title, format, editing_view, note.body);
                 tab.read_properties(&root);
                 tab
             });
-            // UC-004 A6, M-06.6: the tab used longest ago was closed; its
-            // changes are stored first. Feature F16 fixes that a failure is
-            // ignored here, as in the egui app (inventory D-07).
-            if let Some((closed, mut tab)) = opened.closed {
-                let _ = tab.flush(&self.saver);
+            if let Some(closed) = closed {
                 self.status = format!("Closed the tab {}, used longest ago", closed.title());
             }
         }
@@ -1047,6 +1069,22 @@ impl Session {
         }
         was_deleted
     }
+}
+
+/// UC-004 A6, M-06.6: closes the tab used longest ago whose changes can be
+/// stored, storing them first, and returns its note; `None` when no tab can
+/// close without losing changes (D-07, fixed). A tab that cannot be stored
+/// stays open, marked by the failure. The active tab never closes: it is
+/// the one the user works in, and the window may hold edits of it not yet
+/// sent (`tab_open` does not flush, A-190).
+fn close_longest_unused(tabs: &mut TabList<Tab>, saver: &NoteSaver) -> Option<NoteId> {
+    let active = tabs.active_index();
+    let index = tabs
+        .longest_unused_first()
+        .into_iter()
+        .filter(|&index| Some(index) != active)
+        .find(|&index| tabs.get_mut(index).flush(saver).is_ok())?;
+    Some(tabs.close(index).0)
 }
 
 #[cfg(test)]

@@ -27,12 +27,37 @@
   "bundle": {
     "active": true,
     "targets": ["appimage", "deb", "nsis", "dmg"],
+    "publisher": "Florian Höhne",
+    "copyright": "Copyright (c) 2026 Florian Höhne",
+    "license": "MIT",
+    "licenseFile": "../../../LICENSE",
+    "homepage": "https://github.com/Florian-Hoehne/underline",
+    "category": "Productivity",
+    "shortDescription": "Notes in Markdown or AsciiDoc, shared with AI agents",
+    "longDescription": "A note-taking app for notes that are plain Markdown or AsciiDoc files in a workspace directory, kept in the layout of a GitHub or GitLab wiki. Edit a note in its markup or in the facade, a rendered editing view; work with git; and let an AI agent read and write the same notes through an MCP server.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "section": "editors",
+        "recommends": ["git"]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
   }
 }

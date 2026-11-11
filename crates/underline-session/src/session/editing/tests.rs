@@ -559,3 +559,139 @@ fn m10_9_storing_at_once_leaves_no_later_saved_status() {
         "no \"Saved Home\" after it"
     );
 }
+
+/// M-06.6: `MAX_TABS` notes `N000`… plus one more, the tabs opened in
+/// order, so `N000` is the one used longest ago.
+fn session_at_the_tab_limit(dir: &Path) -> (Session, PathBuf, Vec<String>) {
+    let notes: Vec<String> = (0..=underline_core::MAX_TABS)
+        .map(|i| format!("N{i:03}"))
+        .collect();
+    let names: Vec<&str> = notes.iter().map(String::as_str).collect();
+    let (mut session, root) = session_with(dir, &names);
+    for note in &notes[..underline_core::MAX_TABS] {
+        assert!(session.open_note(&id(note)));
+    }
+    assert_eq!(session.snapshot().tabs.tabs.len(), underline_core::MAX_TABS);
+    (session, root, notes)
+}
+
+fn open_tabs(session: &Session) -> Vec<String> {
+    session
+        .snapshot()
+        .tabs
+        .tabs
+        .into_iter()
+        .map(|tab| tab.note)
+        .collect()
+}
+
+#[test]
+fn uc004_a6_m06_6_the_tab_used_longest_ago_is_stored_and_closed() {
+    let dir = temp_dir("tab-limit");
+    let (mut session, root, notes) = session_at_the_tab_limit(&dir);
+    type_at_start(&mut session, "N000", "x");
+
+    assert!(session.open_note(&id("N100")));
+
+    assert_eq!(session.status(), "Closed the tab N000, used longest ago");
+    let tabs = open_tabs(&session);
+    assert_eq!(tabs.len(), underline_core::MAX_TABS);
+    assert!(!tabs.contains(&notes[0]));
+    assert!(tabs.contains(&"N100".to_owned()));
+    assert_eq!(
+        fs::read_to_string(root.join("N000.md")).unwrap(),
+        "x# N000\n"
+    );
+}
+
+/// D-07 (fixed, paritaet.md A-190): the egui app closed the tab even when
+/// its changes could not be stored, and they were lost.
+#[test]
+fn d07_uc004_a6_m06_6_a_tab_that_cannot_be_stored_stays_and_the_next_closes() {
+    let dir = temp_dir("tab-limit-d07");
+    let (mut session, root, _) = session_at_the_tab_limit(&dir);
+    block(&root.join("N000.md"));
+    type_at_start(&mut session, "N000", "x");
+
+    assert!(session.open_note(&id("N100")));
+
+    assert_eq!(session.status(), "Closed the tab N001, used longest ago");
+    let tabs = open_tabs(&session);
+    assert_eq!(tabs.len(), underline_core::MAX_TABS);
+    assert!(tabs.contains(&"N000".to_owned()), "the change is kept");
+    assert!(!tabs.contains(&"N001".to_owned()));
+    assert_eq!(label(&session, "N000"), "N000 ⚠");
+    assert_eq!(editor_text(&mut session, "N000"), "x# N000\n");
+}
+
+/// D-07 (fixed, Q-121): when no tab can close without losing changes, the
+/// note does not open and the status says why.
+#[test]
+fn d07_uc004_a6_m06_6_no_tab_closes_when_none_can_be_stored() {
+    let dir = temp_dir("tab-limit-none");
+    let (mut session, root, notes) = session_at_the_tab_limit(&dir);
+    for note in &notes[..underline_core::MAX_TABS] {
+        block(&root.join(format!("{note}.md")));
+        type_at_start(&mut session, note, "x");
+    }
+
+    assert!(!session.open_note(&id("N100")));
+
+    assert_eq!(
+        session.status(),
+        "N100 was not opened: 100 tabs are open, and none can close without losing changes"
+    );
+    let tabs = open_tabs(&session);
+    assert_eq!(tabs, notes[..underline_core::MAX_TABS]);
+}
+
+/// Review F16: the active tab never closes at the limit, even when it is
+/// the only one that could be stored; the note is not opened then.
+#[test]
+fn d07_uc004_a6_m06_6_the_active_tab_never_closes_at_the_limit() {
+    let dir = temp_dir("tab-limit-active");
+    let (mut session, root, notes) = session_at_the_tab_limit(&dir);
+    let active = session.snapshot().tabs.active.expect("an active tab");
+    for note in notes[..underline_core::MAX_TABS]
+        .iter()
+        .filter(|note| **note != active)
+    {
+        block(&root.join(format!("{note}.md")));
+        type_at_start(&mut session, note, "x");
+    }
+
+    assert!(!session.open_note(&id("N100")));
+
+    assert_eq!(
+        session.status(),
+        "N100 was not opened: 100 tabs are open, and none can close without losing changes"
+    );
+    assert!(open_tabs(&session).contains(&active));
+    assert_eq!(session.snapshot().tabs.active, Some(active));
+}
+
+/// Review F16: a change typed in a tab that is not active, not stored yet,
+/// is stored before the limit closes the tab.
+#[test]
+fn uc004_a6_m06_6_an_unstored_change_is_stored_before_the_tab_closes() {
+    let dir = temp_dir("tab-limit-unstored");
+    let notes: Vec<String> = (0..=underline_core::MAX_TABS)
+        .map(|i| format!("N{i:03}"))
+        .collect();
+    let names: Vec<&str> = notes.iter().map(String::as_str).collect();
+    let (mut session, root) = session_with(&dir, &names);
+    assert!(session.open_note(&id("N000")));
+    type_at_start(&mut session, "N000", "typed ");
+    for note in &notes[1..underline_core::MAX_TABS] {
+        assert!(session.open_note(&id(note)));
+    }
+    assert_eq!(label(&session, "N000"), "N000 •", "not stored yet");
+
+    assert!(session.open_note(&id("N100")));
+
+    assert_eq!(session.status(), "Closed the tab N000, used longest ago");
+    assert_eq!(
+        fs::read_to_string(root.join("N000.md")).unwrap(),
+        "typed # N000\n"
+    );
+}
