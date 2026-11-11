@@ -314,7 +314,7 @@ describe('M-16.5 outline, code and figures (FR-041 to FR-043)', () => {
 
     await waitFor(() => expect(within(tools()).getByText('Code (0)')).toBeInTheDocument());
     expect(within(tools()).getByText('Outline (1)')).toBeInTheDocument();
-    expect(within(tools()).getAllByText('None')).toHaveLength(2);
+    expect(within(tools()).getAllByText('None', { selector: 'p' })).toHaveLength(2);
   });
 
   it('lists of another note are not shown', async () => {

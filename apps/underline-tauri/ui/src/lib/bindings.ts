@@ -335,12 +335,60 @@ export const commands = {
 	 *  window "Approximated blocks"; `null` once another report took its place.
 	 */
 	exportApproximated: (index: number) => typedError<ExportShown | null, UiError>(__TAURI_INVOKE("export_approximated", { index })),
+	/**
+	 *  M-19.2, UC-011 step 5, A4, A5: a click on the change of `path` in the
+	 *  list: a note opens in a tab, whose diff the tool panel then shows; a
+	 *  deleted note or another file is shown without a tab. The diff follows
+	 *  as the event `diff`.
+	 */
+	gitChoose: (path: string) => typedError<null, UiError>(__TAURI_INVOKE("git_choose", { path })),
+	/**
+	 *  M-19.1, UC-012 step 3, BR-004: the change of `path` is chosen for the
+	 *  commit or left out; with `path` `null`, all changes ("All") or none
+	 *  ("None"). The event `changes` brings the choice and the proposed
+	 *  message.
+	 */
+	gitCommitChoice: (path: string | null, chosen: boolean) => typedError<null, UiError>(__TAURI_INVOKE("git_commit_choice", { path, chosen })),
+	/**
+	 *  M-19.4, UC-012 steps 4–7, A1 to A6: commits the chosen changes with
+	 *  `message` (`amend`: amends the last commit, A6), after the window sent
+	 *  its edits (`flushed`, ADR-025). The open notes are stored first; git
+	 *  runs on the blocking pool without the session (ADR-006, D-16). The
+	 *  answer is a refusal for the commit box (A1, A2), `identity` when git
+	 *  does not know the user (A3), or `committed`; the status reports the
+	 *  rest.
+	 */
+	gitCommit: (message: string, amend: boolean) => typedError<CommitAnswer, UiError>(__TAURI_INVOKE("git_commit", { message, amend })),
+	/**
+	 *  M-19.4, UC-012 A3: "Commit" of "Your name for commits": keeps `name`
+	 *  and `email` in the user's own git settings (BR-005), then commits as
+	 *  `git_commit` does, after the window sent its edits. git runs without
+	 *  the session. A name that could not be kept is said in the status.
+	 */
+	gitSetIdentity: (name: string, email: string, message: string, amend: boolean) => typedError<CommitAnswer, UiError>(__TAURI_INVOKE("git_set_identity", { name, email, message, amend })),
+	/**
+	 *  M-19.5, UC-011 A6 step 1: "Discard…" of the note changed at `path`:
+	 *  the question with what is lost, after the window sent its edits; git
+	 *  runs without the session. `null` when the change cannot be discarded;
+	 *  when git could not tell what was committed, the status says why.
+	 */
+	gitDiscardStart: (path: string) => typedError<DiscardQuestion | null, UiError>(__TAURI_INVOKE("git_discard_start", { path })),
+	/**
+	 *  M-19.5, UC-011 A6 steps 2–3: "Discard" of the question about `path`,
+	 *  after the window sent its edits: a new note goes to the deleted notes,
+	 *  the others get their committed content back (fetched by git without
+	 *  the session), an open tab shows it again. The status says what was
+	 *  discarded.
+	 */
+	gitDiscard: (path: string) => typedError<null, UiError>(__TAURI_INVOKE("git_discard", { path })),
 };
 
 /** Events */
 export const events = {
+	changes: makeEvent<ChangesEvent, ChangesEvent>("changes"),
 	closeQuestion: makeEvent<CloseQuestionEvent, CloseQuestionEvent>("close-question"),
 	deleted: makeEvent<DeletedEvent, DeletedEvent>("deleted"),
+	diff: makeEvent<DiffEvent, DiffEvent>("diff"),
 	edChanged: makeEvent<ChangedEvent, ChangedEvent>("ed-changed"),
 	edEnrich: makeEvent<EnrichEvent, EnrichEvent>("ed-enrich"),
 	edFlush: makeEvent<FlushEvent, FlushEvent>("ed-flush"),
@@ -461,6 +509,20 @@ export type BlocksView = {
 	lineShift: number,
 };
 
+/**
+ *  UC-011 step 1, A7, A8: where the workspace stands, as the branch button
+ *  of the status bar names it (M-04.1, feature F13).
+ */
+export type BranchView = {
+	/**
+	 *  "{name}", "{name} (no commit yet)" or "not on a branch: {commit}",
+	 *  as egui's status bar writes it.
+	 */
+	label: string,
+	/**  A8: not on a branch. */
+	detached: boolean,
+};
+
 /**  How the text of a table column is aligned (M-09.5). */
 export type CellAlignName = 
 /**  Left. */
@@ -469,6 +531,44 @@ export type CellAlignName =
 "center" | 
 /**  Right. */
 "right";
+
+/**  How a file changed since the last commit (UC-011 BR-003). */
+export type ChangeKindName = 
+/**  Not in the last commit: the letter `N`, green. */
+"new" | 
+/**  The letter `M`, amber. */
+"changed" | 
+/**  The letter `D`, red. */
+"deleted" | 
+/**  The letter `R`, blue. */
+"renamed" | 
+/**  UC-015: the letter `C`, orange (its actions come with feature F13). */
+"conflict";
+
+/**  M-19.2: one row of "Changes (N)". */
+export type ChangeView = {
+	/**
+	 *  The file, relative to the workspace with `/`; the window sends it
+	 *  back to choose the change, leave it out or discard it.
+	 */
+	path: string,
+	/**  How it changed. */
+	kind: ChangeKindName,
+	/**  The letter of the mark: `N`, `M`, `D`, `R` or `C`. */
+	letter: string,
+	/**
+	 *  "{title} · {folder}", "{title}" for a note in the top folder, "{new}
+	 *  ← {old}" for a renamed note, the path for another file.
+	 */
+	name: string,
+	/**
+	 *  It is a note: notes come before "Other files", and only a note can
+	 *  be discarded (UC-011 BR-005).
+	 */
+	note: boolean,
+	/**  UC-012 BR-004: chosen for the commit. */
+	chosen: boolean,
+};
 
 /**
  *  ADR-025: the backend changed the text of a note; the window fetches the
@@ -485,6 +585,43 @@ export type ChangedView = {
 	note: string,
 	/**  The backend's revision now. */
 	rev: number,
+};
+
+/**
+ *  M-19.1, M-19.2, UC-011, UC-012: the git changes of the workspace;
+ *  `null` without git or before git answered.
+ */
+export type ChangesEvent = ChangesView | null;
+
+/**
+ *  UC-011, UC-012, M-19.1, M-19.2: the changes of a git workspace as the
+ *  tool panel shows them.
+ */
+export type ChangesView = {
+	/**
+	 *  UC-011 A9: why git could not be asked; then nothing else is shown
+	 *  (the status bar says it with feature F13).
+	 */
+	problem: string | null,
+	/**  Where the workspace stands; `None` with a problem. */
+	branch: BranchView | null,
+	/**
+	 *  The changed files: conflicts, then notes, then other files, each by
+	 *  place (UC-011 BR-002, UC-015 BR-005).
+	 */
+	files: ChangeView[],
+	/**
+	 *  UC-012 BR-009: a merge waits for its conflicts to be resolved; the
+	 *  commit box gives way to a warning.
+	 */
+	merging: boolean,
+	/**
+	 *  UC-012 A6, BR-006: the message of the last commit while it may be
+	 *  amended.
+	 */
+	amendable: string | null,
+	/**  UC-012 BR-002: the message proposed for the changes chosen. */
+	proposed: string,
 };
 
 /**  The clipboard keys of the source view (M-08.6, ADR-014). */
@@ -572,6 +709,32 @@ export type CodeColors = {
 	/**  The looks the spans refer to. */
 	styles: SpanStyle[],
 };
+
+/**  The answer to "Commit" (UC-012 steps 4–7, A1 to A6). */
+export type CommitAnswer = 
+/**
+ *  Nothing more for the commit box; the status says what happened (A4,
+ *  A5, a refused name).
+ */
+{ kind: "done" } | 
+/**  Step 7: committed; the box empties. */
+{ kind: "committed" } | 
+/**  A1, A2: refused; the box says why and keeps the message. */
+{ kind: "problem"; 
+/**  "A commit needs a message." or "Nothing is chosen." */
+problem: string } | 
+/**
+ *  A3: git does not know the user; the window asks "Your name for
+ *  commits".
+ */
+{ kind: "identity" } | 
+/**
+ *  A3: the name and email could not be kept; "Your name for commits"
+ *  stays open with what was typed and says why.
+ */
+{ kind: "nameNotKept"; 
+/**  "Your name could not be kept: {err}". */
+problem: string };
 
 /**  FR-031, BR-011: what copy on select asks of the backend after an input. */
 export type CopyOnSelectView = {
@@ -689,6 +852,99 @@ export type DeletedNoteView = {
 	hover: string,
 	/**  When it was deleted, local time to the minute. */
 	deleted: string,
+};
+
+/**  M-19.3: what the section "Diff" shows besides the file. */
+export type DiffBody = 
+/**  UC-011 A5: "This file is not text; it is {new|deleted|changed}." */
+{ kind: "notText"; 
+/**  The text, as egui writes it. */
+text: string } | 
+/**  A2: "The note did not change since the last commit." */
+{ kind: "unchanged" } | 
+/**
+ *  git could not be asked for the committed content: "The diff cannot
+ *  be shown: {why}" (review F12, new text).
+ */
+{ kind: "problem"; 
+/**  The text. */
+text: string } | 
+/**  The changed parts (BR-004). */
+{ kind: "hunks"; 
+/**  The parts, in order. */
+hunks: HunkView[] };
+
+/**
+ *  M-19.3, UC-011 step 6: the diff of the chosen file or the active note;
+ *  `null` without either.
+ */
+export type DiffEvent = DiffView | null;
+
+/**  UC-011 BR-004: what a line of the diff is. */
+export type DiffLineKind = 
+/**  An unchanged line around a changed part. */
+"same" | 
+/**  A line of the last commit that is gone. */
+"removed" | 
+/**  A line that is new. */
+"added";
+
+/**  M-19.3: one line of the diff. */
+export type DiffLineView = {
+	/**  What it is. */
+	kind: DiffLineKind,
+	/**  "{old:>4} {new:>4} {sign} ", as egui writes it before the line. */
+	numbers: string,
+	/**  The line without its line ending, in parts. */
+	parts: DiffPartView[],
+	/**  "  (only spaces differ)" or "  (only the line ending differs)". */
+	only: string | null,
+	/**
+	 *  UC-011 steps 7–8: where a click puts the cursor of the tab, in web
+	 *  units of the revision `DiffView::rev`; `None` for a diff of a file
+	 *  without a tab.
+	 */
+	offset: number | null,
+};
+
+/**
+ *  A part of a diff line; `strong` for the words removed or added within
+ *  the line (BR-004).
+ */
+export type DiffPartView = {
+	/**  The text. */
+	text: string,
+	/**  A word removed or added. */
+	strong: boolean,
+};
+
+/**  M-19.3, UC-011 step 6: the diff of the chosen file or the active note. */
+export type DiffView = {
+	/**  The file, relative to the workspace, shown above the diff. */
+	path: string,
+	/**
+	 *  The note of the tab whose text it shows; `None` for a file chosen
+	 *  in the list without a tab (A4, A5).
+	 */
+	note: string | null,
+	/**  The revision of the tab's text the diff was made of. */
+	rev: number | null,
+	/**  What it shows. */
+	body: DiffBody,
+};
+
+/**  UC-011 A6 step 1, M-19.5: the question "Discard changes". */
+export type DiscardQuestion = {
+	/**  The file, which the window sends back with "Discard". */
+	path: string,
+	/**  "Discard the changes of {title} since the last commit?" */
+	question: string,
+	/**
+	 *  "The note is new; it goes to the deleted notes.", "The note comes
+	 *  back as it was committed." or "N changed line(s) will be lost and
+	 *  cannot be restored."
+	 */
+	consequence: string,
 };
 
 /**  M-10.5, UC-005 A9: files dragged over the window. */
@@ -1311,6 +1567,12 @@ export type HighlightView = {
 	styles: SpanStyle[],
 };
 
+/**  One changed part with the lines around it. */
+export type HunkView = {
+	/**  Its lines. */
+	lines: DiffLineView[],
+};
+
 /**
  *  M-16.5, FR-041 to FR-043: one entry of the outline, the code index or
  *  the figure index of the tool panel.
@@ -1654,6 +1916,12 @@ export type OverviewItem = {
 	 *  (M-05.4, `StartInfo::export_kinds`).
 	 */
 	format: FormatName,
+	/**
+	 *  M-05.3, UC-011 step 2: the letter of its git change after the title
+	 *  (`N`, `M`, `R`, `C`), and `M` for an open note with changes not
+	 *  stored yet; only in a git workspace.
+	 */
+	mark: string | null,
 };
 
 /**

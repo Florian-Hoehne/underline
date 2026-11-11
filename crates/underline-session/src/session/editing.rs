@@ -234,6 +234,7 @@ impl Session {
             return;
         };
         let root = open.workspace.root().to_owned();
+        let mut saved = false;
         for result in results {
             let Some((_, tab)) = open.tabs.iter_mut().find(|(_, t)| t.path == result.path) else {
                 continue;
@@ -262,8 +263,7 @@ impl Session {
                         if !kept {
                             self.status = format!("Saved {}", tab.title);
                         }
-                        // F12: the git changes are asked again here
-                        // (`refresh_changes`).
+                        saved = true;
                     }
                 }
                 Err(err) => {
@@ -273,6 +273,10 @@ impl Session {
                     tab.error = Some(err);
                 }
             }
+        }
+        // UC-011 A3: a saved note is asked about again.
+        if saved {
+            self.refresh_changes();
         }
     }
 

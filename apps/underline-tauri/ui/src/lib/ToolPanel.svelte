@@ -23,14 +23,20 @@
   and leaves the cursor (M-09.16), the source view puts the cursor there
   and takes the keyboard.
 
-  Later features add the todos (M-16.3, F15) and the git changes (M-16.4,
-  F12) between the properties and the outline, as in egui.
+  M-16.4 (feature F12): in a git workspace the commit box, "Changes (N)"
+  and "Diff" (GitChanges.svelte) follow the properties, before the
+  outline, as in egui. Without an active note tab the panel shows only
+  them (egui shows the changes without an open note too).
+
+  A later feature adds the todos (M-16.3, F15) between the properties and
+  the git changes, as in egui.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { IndexEntryView } from './bindings';
   import { activeSourceView } from './editor/active';
   import { activeFacade } from './facade/active';
+  import GitChanges from './GitChanges.svelte';
   import { toolPanelWidthWithin, type Shell } from './shell.svelte';
 
   type Props = { shell: Shell };
@@ -44,6 +50,8 @@
   const width = $derived(
     shell.toolPanelWidth ?? toolPanelWidthWithin(shell.settings?.toolPanelWidth ?? 240),
   );
+  /** A note tab is active; without one only the git changes show. */
+  const noteShown = $derived(shell.tabs.active !== null && !shell.tabs.todoList.active);
   const properties = $derived(shell.properties?.properties ?? null);
   /** M-16.5: the lists of the active note, once the backend made them. */
   const lists = $derived(
@@ -123,24 +131,27 @@
     onpointercancel={endDrag}
   ></div>
   <div class="sections">
-    <details open>
-      <summary>Properties</summary>
-      {#if properties}
-        <dl class="properties">
-          <dt>Place</dt>
-          <dd>{properties.place}</dd>
-          <dt>Format</dt>
-          <dd>{properties.format}</dd>
-          <dt>Size</dt>
-          <dd>{properties.size}</dd>
-          <dt>Last change</dt>
-          <dd>{properties.lastChange}</dd>
-        </dl>
-      {:else}
-        <p class="weak">Not saved yet</p>
-      {/if}
-    </details>
-    {#if lists}
+    {#if noteShown}
+      <details open>
+        <summary>Properties</summary>
+        {#if properties}
+          <dl class="properties">
+            <dt>Place</dt>
+            <dd>{properties.place}</dd>
+            <dt>Format</dt>
+            <dd>{properties.format}</dd>
+            <dt>Size</dt>
+            <dd>{properties.size}</dd>
+            <dt>Last change</dt>
+            <dd>{properties.lastChange}</dd>
+          </dl>
+        {:else}
+          <p class="weak">Not saved yet</p>
+        {/if}
+      </details>
+    {/if}
+    <GitChanges {shell} onShow={show} />
+    {#if lists && noteShown}
       {#each sections as section (section.title)}
         <details open>
           <summary>{section.title} ({section.entries.length})</summary>

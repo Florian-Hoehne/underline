@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-git-commit-choice"
+description = "Enables the git_commit_choice command without any pre-configured scope."
+commands.allow = ["git_commit_choice"]
+
+[[permission]]
+identifier = "deny-git-commit-choice"
+description = "Denies the git_commit_choice command without any pre-configured scope."
+commands.deny = ["git_commit_choice"]

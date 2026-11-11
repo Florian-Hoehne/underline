@@ -8,6 +8,7 @@ mod editing;
 mod embed;
 mod export;
 mod facade;
+mod git;
 mod indexes;
 mod links;
 mod notes;
@@ -20,6 +21,10 @@ mod workspace;
 
 pub use self::embed::{EmbedDone, EmbedPlan};
 pub use self::export::{ExportDialogPlan, ExportJob, ExportOutcome};
+pub use self::git::{
+    CommitJob, CommitOutcome, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused, IdentityJob,
+    NEEDS_MESSAGE, NOTHING_CHOSEN,
+};
 pub use self::links::Followed;
 pub use self::sync::{KeepCopy, Synced};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
@@ -130,6 +135,9 @@ pub struct Session {
     /// UC-009: the last folder, the chosen file, the open dialog, the
     /// running exports and the reports the status shows.
     exports: export::Exports,
+    /// UC-011, UC-012: the git changes of the open workspace, the commit's
+    /// choice, the diff and the question before discarding.
+    changes: git::GitChanges,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -162,8 +170,9 @@ struct Told {
     settings_window: (u32, Option<(PathBuf, u64)>),
     settings_window_view: Option<SettingsWindowView>,
     workspace: Option<WorkspaceView>,
-    /// The overview by the generation of the workspace it was taken from.
-    overview: Option<(PathBuf, u64)>,
+    /// The overview by the generation of the workspace it was taken from,
+    /// and the number of its git marks (M-05.3).
+    overview: Option<(PathBuf, u64, u64)>,
     /// The deleted notes, likewise (M-05.6).
     deleted: Option<(PathBuf, u64)>,
     tabs: TabsView,
@@ -236,6 +245,7 @@ impl Session {
             restoring: None,
             search: search::Search::default(),
             exports: export::Exports::default(),
+            changes: git::GitChanges::default(),
             views_dirty: false,
             told,
         };
@@ -361,7 +371,8 @@ impl Session {
     /// for the window's editor core (M-09, `ed-enrich`), and the outline,
     /// code and figures of the tool panel (M-16.5); the answer of the
     /// workspace search is taken in and the search started again when its
-    /// notes changed (UC-008 A3, M-13.1). Returns what changed
+    /// notes changed (UC-008 A3, M-13.1); git's answer about the changes is
+    /// taken in and the diff made again (UC-011, M-19). Returns what changed
     /// for the window.
     pub fn tick(&mut self, now: Instant) -> Vec<Event> {
         self.handle_outside_changes();
@@ -377,6 +388,7 @@ impl Session {
         events.extend(self.facade_events());
         events.extend(self.indexes_events(now));
         events.extend(self.search_events());
+        events.extend(self.git_events(now));
         events
     }
 
@@ -414,10 +426,13 @@ impl Session {
                 events.push(Event::Workspace(workspace));
             }
         }
+        // M-05.3: the git marks of the overview.
+        self.update_marks(dirty);
+        let marks = self.changes.marks_rev;
         let overview = self
             .open
             .as_ref()
-            .map(|open| (open.root().to_owned(), open.overview_generation));
+            .map(|open| (open.root().to_owned(), open.overview_generation, marks));
         if overview != self.told.overview {
             self.told.overview = overview;
             events.push(Event::Overview(self.overview_items()));

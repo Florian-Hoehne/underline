@@ -528,7 +528,13 @@
       <ToolPanel {shell} />
     </div>
   {:else if !todosActive}
-    <p class="hint">Select or create a note.</p>
+    <div class="note">
+      <p class="hint">Select or create a note.</p>
+      <!-- M-16.4: egui shows the git changes without an open note too. -->
+      {#if shell.changes !== null}
+        <ToolPanel {shell} />
+      {/if}
+    </div>
   {/if}
 </section>
 {#key inserting.dialog}
@@ -686,6 +692,8 @@
   }
 
   .hint {
+    flex: 1 1 auto;
+    min-width: 0;
     margin: 0;
     padding: var(--space-2);
   }

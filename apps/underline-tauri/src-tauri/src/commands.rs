@@ -27,6 +27,7 @@ use underline_session::{
     RenameStart, RestoreAnswer, Scope, Session, SettingName, SettingsAnswer, SettingsWindowView,
     StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
 };
+use underline_session::{CommitAnswer, CommitJob, DiscardQuestion};
 use underline_session::{
     DialogOutcome, ExportAnswer, ExportDialogPlan, ExportJob, ExportKindName, ExportPlaceAnswer,
     ExportShown, ExportStart, TypedExportPath,
@@ -1162,6 +1163,166 @@ pub async fn export_approximated(
     read_session(&session, move |session| session.export_approximated(index)).await
 }
 
+/// M-19.2, UC-011 step 5, A4, A5: a click on the change of `path` in the
+/// list: a note opens in a tab, whose diff the tool panel then shows; a
+/// deleted note or another file is shown without a tab. The diff follows
+/// as the event `diff`.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_choose(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    path: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.choose_change(&path)
+    })
+    .await
+}
+
+/// M-19.1, UC-012 step 3, BR-004: the change of `path` is chosen for the
+/// commit or left out; with `path` `null`, all changes ("All") or none
+/// ("None"). The event `changes` brings the choice and the proposed
+/// message.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit_choice(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    path: Option<String>,
+    chosen: bool,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.choose_for_commit(path.as_deref(), chosen);
+    })
+    .await
+}
+
+/// Runs a commit prepared under the session without it, then reports it.
+async fn run_commit(
+    session: &State<'_, SharedSession>,
+    waker: &State<'_, Waker>,
+    job: CommitJob,
+) -> Result<CommitAnswer, UiError> {
+    let outcome = blocking(move || job.run()).await?;
+    on_session(session, waker, move |session| {
+        session.finish_commit(outcome)
+    })
+    .await
+}
+
+/// M-19.4, UC-012 steps 4–7, A1 to A6: commits the chosen changes with
+/// `message` (`amend`: amends the last commit, A6), after the window sent
+/// its edits (`flushed`, ADR-025). The open notes are stored first; git
+/// runs on the blocking pool without the session (ADR-006, D-16). The
+/// answer is a refusal for the commit box (A1, A2), `identity` when git
+/// does not know the user (A3), or `committed`; the status reports the
+/// rest.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_commit(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    message: String,
+    amend: bool,
+) -> Result<CommitAnswer, UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.commit_prepare(&message, amend)
+    })
+    .await?;
+    match job {
+        Ok(job) => run_commit(&session, &waker, job).await,
+        Err(answer) => Ok(answer),
+    }
+}
+
+/// M-19.4, UC-012 A3: "Commit" of "Your name for commits": keeps `name`
+/// and `email` in the user's own git settings (BR-005), then commits as
+/// `git_commit` does, after the window sent its edits. git runs without
+/// the session. A name that could not be kept is said in the status.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_set_identity(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    name: String,
+    email: String,
+    message: String,
+    amend: bool,
+) -> Result<CommitAnswer, UiError> {
+    let job = read_session(&session, move |session| {
+        session.identity_prepare(&name, &email)
+    })
+    .await?;
+    let Some(job) = job else {
+        return Ok(CommitAnswer::Done);
+    };
+    if let Err(err) = blocking(move || job.run()).await? {
+        let problem = on_session(&session, &waker, move |session| {
+            session.identity_failed(&err)
+        })
+        .await?;
+        return Ok(CommitAnswer::NameNotKept { problem });
+    }
+    git_commit(session, waker, message, amend).await
+}
+
+/// M-19.5, UC-011 A6 step 1: "Discard…" of the note changed at `path`:
+/// the question with what is lost, after the window sent its edits; git
+/// runs without the session. `null` when the change cannot be discarded;
+/// when git could not tell what was committed, the status says why.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_discard_start(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    path: String,
+) -> Result<Option<DiscardQuestion>, UiError> {
+    let plan = on_session(&session, &waker, move |session| {
+        session.discard_start(&path)
+    })
+    .await?;
+    let Some(plan) = plan else {
+        return Ok(None);
+    };
+    match blocking(move || plan.question()).await? {
+        Ok(question) => Ok(Some(question)),
+        Err(refused) => {
+            on_session(&session, &waker, move |session| {
+                session.discard_refused(&refused);
+            })
+            .await?;
+            Ok(None)
+        }
+    }
+}
+
+/// M-19.5, UC-011 A6 steps 2–3: "Discard" of the question about `path`,
+/// after the window sent its edits: a new note goes to the deleted notes,
+/// the others get their committed content back (fetched by git without
+/// the session), an open tab shows it again. The status says what was
+/// discarded.
+#[tauri::command]
+#[specta::specta]
+pub async fn git_discard(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    path: String,
+) -> Result<(), UiError> {
+    let job = on_session(&session, &waker, move |session| {
+        session.discard_prepare(&path)
+    })
+    .await?;
+    let Some(job) = job else {
+        return Ok(());
+    };
+    let fetched = blocking(move || job.run()).await?;
+    on_session(&session, &waker, move |session| {
+        session.finish_discard(fetched);
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1242,6 +1403,12 @@ mod tests {
         "export_run",
         "export_open",
         "export_approximated",
+        "git_choose",
+        "git_commit_choice",
+        "git_commit",
+        "git_set_identity",
+        "git_discard_start",
+        "git_discard",
     ];
 
     /// A mock app whose session was started with `given` and keeps its user
@@ -1494,8 +1661,8 @@ mod tests {
         assert_eq!(
             response["snapshot"]["overview"],
             json!([
-                { "note": "Home", "label": "Home", "format": "Markdown" },
-                { "note": "Ideas", "label": "Ideas", "format": "Markdown" }
+                { "note": "Home", "label": "Home", "format": "Markdown", "mark": null },
+                { "note": "Ideas", "label": "Ideas", "format": "Markdown", "mark": null }
             ])
         );
         assert_eq!(response["snapshot"]["tabs"]["active"], json!("Home"));
@@ -2176,5 +2343,42 @@ mod tests {
         assert_eq!(answer, json!({ "kind": "done" }));
         assert_eq!(*shown.lock(), 0);
         assert_eq!(mock.status(), "Choosing where to save Plan…");
+    }
+
+    #[test]
+    fn uc012_m19_4_git_commands_without_git_change_nothing() {
+        let dir = temp_dir("git-none");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let answer = mock
+            .invoke("git_commit", json!({ "message": "Update", "amend": false }))
+            .unwrap();
+        assert_eq!(answer, json!({ "kind": "done" }));
+        let question = mock
+            .invoke("git_discard_start", json!({ "path": "Home.md" }))
+            .unwrap();
+        assert_eq!(question, Value::Null);
+        mock.invoke("git_discard", json!({ "path": "Home.md" }))
+            .unwrap();
+        mock.invoke("git_choose", json!({ "path": "Home.md" }))
+            .unwrap();
+        mock.invoke(
+            "git_commit_choice",
+            json!({ "path": null, "chosen": false }),
+        )
+        .unwrap();
+        let answer = mock
+            .invoke(
+                "git_set_identity",
+                json!({ "name": "", "email": "x", "message": "m", "amend": false }),
+            )
+            .unwrap();
+        assert_eq!(answer, json!({ "kind": "done" }));
+        assert_eq!(
+            std::fs::read_to_string(root.join("Home.md")).unwrap(),
+            "# Home\n"
+        );
     }
 }

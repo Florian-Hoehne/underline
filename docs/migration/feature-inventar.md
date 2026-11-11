@@ -96,7 +96,7 @@ Reihenfolge von links nach rechts:
   als 1 px Änderung wird die Breite sofort gespeichert. Kopf: „Notes“ und Button „New note…“.
 - [x] **M-05.2** Liste aus `note_overview`: zuletzt geöffnete zuerst, dann der Rest nach Titel A–Z (BR-008). Ein
   Klick öffnet die Notiz, die dabei nach oben wandert.
-- [ ] **M-05.3** Git-Buchstabe hinter dem Titel: N grün, D rot, R blau, C orange, sonst M amber. Tabs mit
+- [~] **M-05.3** Git-Buchstabe hinter dem Titel: N grün, D rot, R blau, C orange, sonst M amber. Tabs mit
   ungespeicherten Änderungen zeigen M, aber nur in Git-Workspaces.
 - [~] **M-05.4** Kontextmenü: „Rename…“, „Delete…“ und Untermenü „Export“ mit „{kind}…“ für jede Exportart. Das
   Untermenü überspringt die Auswahl der Art.
@@ -394,7 +394,7 @@ Reihenfolge von links nach rechts:
 - [ ] **M-16.1** Breite veränderbar (100–1000) und wird gespeichert, aber nur mit aktivem Tab.
 - [x] **M-16.2** Properties: Place, Format, Size, Last change, sonst „Not saved yet“.
 - [ ] **M-16.3** Abschnitt Todos (M-18.1).
-- [ ] **M-16.4** Commit / Changes / Diff (M-19), nur in Git-Workspaces.
+- [~] **M-16.4** Commit / Changes / Diff (M-19), nur in Git-Workspaces.
 - [~] **M-16.5** Outline / Code / Figures (N):
   - Aus den Blöcken, gecacht je Revision.
   - Einrückung 14 px je Tiefe. Leere Liste „None“.
@@ -482,31 +482,31 @@ Reihenfolge von links nach rechts:
 
 ## M-19 Git (UC-011 bis UC-015)
 
-- [ ] **M-19.1** Commit-Box:
+- [~] **M-19.1** Commit-Box:
   - Während eines Merge steht stattdessen eine Warnung.
   - Die Nachricht folgt `proposed_message`, bis der Benutzer tippt. Ctrl/Cmd+Enter committet.
   - Hinweis bei einer ersten Zeile über 72 Zeichen.
   - „Amend the last commit“ übernimmt die letzte Nachricht.
   - „Commit“/„Amend“ (deaktiviert ohne Auswahl), „All“, „None“, „Nothing is chosen.“
-- [ ] **M-19.2** Liste „Changes (N)“:
+- [~] **M-19.2** Liste „Changes (N)“:
   - Zugeklappt; Ctrl+Shift+G oder „Show changes“ öffnet sie und fokussiert die Nachricht.
   - Leer: „Nothing changed since the last commit.“ Ein Trenner „Other files“.
   - Zeile: Checkbox, farbiger Buchstabe, „Title · folder“ bzw. „New ← Old“.
   - Ein Klick öffnet die Notiz bzw. wählt sie für den Diff.
   - Aktionen: „Keep here“/„Keep remote“, „Keep“/„Delete“, „Discard…“.
-- [ ] **M-19.3** Diff (FR-049):
+- [~] **M-19.3** Diff (FR-049):
   - Live-Tabtext gegen `committed`, 3 Kontextzeilen, höchstens alle 700 ms neu.
   - Zeile „{old:>4} {new:>4} ±“ mit Wort-Hervorhebung, „(only spaces differ)“ und „(only the line ending
     differs)“.
   - Ein Klick springt im Tab zur Zeile.
   - Leertexte: „Open a note to see its changes.“, „This file is not text; …“, „The note did not change since the
     last commit.“
-- [ ] **M-19.4** Commit:
+- [~] **M-19.4** Commit:
   - Verweigert mit „A commit needs a message.“ oder „Nothing is chosen.“
   - Vorher wird alles gespeichert, sonst „Nothing was committed, because …“.
   - Erfolg „Committed {id} holding N note(s) and M file(s)“ bzw. „Amended …“, danach ein Sync.
   - NoIdentity → Dialog „Your name for commits“: Name und E-Mail mit '@', Escape bricht ab.
-- [ ] **M-19.5** Discard-Dialog:
+- [~] **M-19.5** Discard-Dialog:
   - Texte je Fall (neu, zurück wie committet, N Zeilen gehen verloren).
   - Wirkung je Art: neu → löschen; umbenannt → zurück; sonst `restore_committed`. Bei Konflikt verweigert.
   - Der Tab wird neu geladen. „Discarded the changes of X“.

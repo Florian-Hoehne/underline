@@ -5,6 +5,7 @@ use serde::Serialize;
 
 use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
 use crate::export_view::ExportOfferView;
+use crate::git_view::{ChangesView, DiffView};
 use crate::notes_view::{DeletedNoteView, StatusOffer};
 use crate::search_view::SearchView;
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
@@ -64,4 +65,10 @@ pub enum Event {
     Deleted(Vec<DeletedNoteView>),
     /// M-13.1, UC-008 step 2: the text or the result of the search changed.
     Search(SearchView),
+    /// M-19.1, M-19.2, UC-011, UC-012: the git changes of the workspace
+    /// changed; `None` without git or before git answered.
+    Changes(Option<ChangesView>),
+    /// M-19.3, UC-011 step 6: the diff of the chosen file or the active
+    /// note; `None` without either ("Open a note to see its changes.").
+    Diff(Option<DiffView>),
 }

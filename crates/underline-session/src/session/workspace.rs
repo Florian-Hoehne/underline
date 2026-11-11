@@ -10,8 +10,8 @@
 //!
 //! Feature F3 adds storing the tabs' changes before a switch or a close
 //! and the open tabs' text in the changes from outside. Left for later
-//! features, with a hook where they go: the syncer (F13), the change
-//! tracker (F12) and the window presence (F14). Feature F8 reads the deleted
+//! features, with a hook where they go: the syncer (F13) and the window
+//! presence (F14); feature F12 starts the change tracker (UC-011). Feature F8 reads the deleted
 //! notes when the workspace opens (M-05.6); feature F9 starts the searcher
 //! of the workspace (UC-008).
 //!
@@ -307,10 +307,12 @@ impl Session {
         // what changes after it; an event that arrives while `ws_start`
         // runs is newer than the snapshot, and the window keeps it.
         self.told.workspace.clone_from(&snapshot.workspace);
+        self.update_marks(true);
+        let marks = self.changes.marks_rev;
         self.told.overview = self
             .open
             .as_ref()
-            .map(|open| (open.root().to_owned(), open.overview_generation));
+            .map(|open| (open.root().to_owned(), open.overview_generation, marks));
         self.told.tabs = snapshot.tabs.clone();
         self.views_dirty = false;
         StartOpened { answer, snapshot }
@@ -370,6 +372,7 @@ impl Session {
                     .copied()
                     .unwrap_or(underline_core::NoteFormat::Markdown)
                     .into(),
+                mark: self.changes.marks.get(&entry.id).map(char::to_string),
             })
             .collect()
     }
@@ -522,8 +525,8 @@ impl Session {
         // Opening this one:
         // - F13: start a `Syncer` when it has a git remote, then a full sync
         //   (UC-014); with it the git state of the status bar (D-06).
-        // - F12: start a `ChangeTracker` when it is a git repository
-        //   (UC-011).
+        // - F12: a `ChangeTracker` when it is a git repository (UC-011),
+        //   started below.
         let wake = self.wake.clone();
         let watcher = WorkspaceWatcher::start(
             &root,
@@ -536,6 +539,8 @@ impl Session {
         let wake = self.wake.clone();
         let searcher = Searcher::start(root.clone(), move || wake.wake());
         self.search_switched();
+        // UC-011: the changes, when the workspace is a git repository.
+        self.track_changes(&root);
         self.settings.open_workspace(&root, &self.git);
         self.state.workspace_opened(&root, now());
         // UC-021 BR-005: the tab "Todos", its sort and filter come back.
@@ -817,7 +822,8 @@ impl Session {
             open.overview_generation += 1;
         }
         open.search_generation += 1;
-        // F12: the git changes are asked again here (`refresh_changes`).
+        // UC-011 A3: the git changes are asked again.
+        self.refresh_changes();
     }
 
     /// ADR-011: takes in the changes made outside Underline (UC-004 A7, A8,

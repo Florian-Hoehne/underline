@@ -26,6 +26,11 @@
   editors see the key; "Export note" and "Approximated blocks" float above
   the central area like the other dialogs (M-15.6).
 
+  M-19.2 (UC-011 BR-007): Ctrl+Shift+G (Cmd+Shift+G) opens the git changes
+  in the tool panel and puts the keyboard into the commit message, wherever
+  the keyboard is, before the editors see the key; "Discard changes" and
+  "Your name for commits" float above the central area (M-19.4, M-19.5).
+
   M-20.1 (UC-010 BR-006): Ctrl+, (Cmd+, on macOS) opens the settings window
   or closes it, wherever the keyboard is, before the editors see the key.
   The window floats above the central area, not modal, like egui's.
@@ -36,6 +41,8 @@
   import CloseQuestionDialog from './lib/CloseQuestionDialog.svelte';
   import CreateDialog from './lib/CreateDialog.svelte';
   import DeleteDialog from './lib/DeleteDialog.svelte';
+  import DiscardDialog from './lib/DiscardDialog.svelte';
+  import IdentityDialog from './lib/IdentityDialog.svelte';
   import NewNoteDialog from './lib/NewNoteDialog.svelte';
   import PurgeDialog from './lib/PurgeDialog.svelte';
   import RenameDialog from './lib/RenameDialog.svelte';
@@ -139,15 +146,30 @@
     }
   }
 
+  /** M-19.2, UC-011 BR-007: Ctrl+Shift+G (Cmd+Shift+G) opens the changes. */
+  function changesKey(event: KeyboardEvent) {
+    const mac = shell.platform === 'macos';
+    const command = mac ? event.metaKey : event.ctrlKey;
+    const other = mac ? event.ctrlKey : event.metaKey;
+    if (!command || other || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'g') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    shell.showChanges();
+  }
+
   // Before the editors see it, as egui takes F2 first.
   onMount(() => {
     window.addEventListener('keydown', renameKey, true);
+    window.addEventListener('keydown', changesKey, true);
     window.addEventListener('keydown', searchKey, true);
     window.addEventListener('keydown', settingsKey, true);
     window.addEventListener('keydown', exportKey, true);
     return () => {
       window.removeEventListener('keydown', exportKey, true);
       window.removeEventListener('keydown', renameKey, true);
+      window.removeEventListener('keydown', changesKey, true);
       window.removeEventListener('keydown', searchKey, true);
       window.removeEventListener('keydown', settingsKey, true);
     };
@@ -202,6 +224,12 @@
     {/if}
     {#if shell.notes.purge}
       <PurgeDialog {shell} dialog={shell.notes.purge} />
+    {/if}
+    {#if shell.discarding !== null}
+      <DiscardDialog {shell} question={shell.discarding} />
+    {/if}
+    {#if shell.identity !== null}
+      <IdentityDialog {shell} dialog={shell.identity} />
     {/if}
     {#if shell.closeQuestion}
       <CloseQuestionDialog {shell} question={shell.closeQuestion} />

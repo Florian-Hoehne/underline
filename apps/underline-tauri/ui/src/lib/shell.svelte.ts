@@ -1,11 +1,12 @@
 // The window's mirror of the backend session: what `app_start` returned,
 // kept current by the `status`, `settings`, `workspace`, `overview`,
-// `deleted`, `tabs`, `properties`, `indexes` and `close-question` events (ADR-022); the editor's
+// `deleted`, `tabs`, `properties`, `indexes`, `changes`, `diff` and `close-question` events (ADR-022); the editor's
 // `ed-highlight` goes to the source view shown now, `ed-changed`,
 // `ed-flush` and `ed-enrich` to the editor cores (ADR-025, `editor/sync.ts`),
 // plus the UI state that is not stored (M-22.4): the Open and Create
 // dialogs, the note dialogs (M-14), the question before closing, "Open web
-// address" (M-07.3), the
+// address" (M-07.3), the commit box with "Your name for commits" and
+// "Discard changes" (M-19), the
 // loading state and the panels' widths while they are dragged. The text of the notes is not here: each
 // open note's editor core holds it (ADR-025). No domain logic lives here:
 // every change goes to the backend, which answers with an event or with the
@@ -15,8 +16,12 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   commands,
   events,
+  type ChangesView,
   type CloseQuestion,
+  type CommitAnswer,
   type CreateAnswer,
+  type DiffView,
+  type DiscardQuestion,
   type DeletedNoteView,
   type DeleteQuestion,
   type ExportChoice,
@@ -164,6 +169,34 @@ export type ExportDialog =
       replace: string | null;
     };
 
+/**
+ * M-19.1, UC-012 steps 2–3: the commit box. The message follows the
+ * proposal (`ChangesView.proposed`) until the user types (`typed`); it is
+ * kept until a commit succeeds (BR-003). `problem` is why the last commit
+ * was refused (A1, A2); `busy` while a commit runs.
+ */
+export type CommitBox = {
+  message: string;
+  typed: boolean;
+  amend: boolean;
+  problem: string | null;
+  busy: boolean;
+};
+
+const EMPTY_COMMIT: CommitBox = {
+  message: '',
+  typed: false,
+  amend: false,
+  problem: null,
+  busy: false,
+};
+
+/**
+ * M-19.4, UC-012 A3: "Your name for commits", with why git could not keep
+ * the name (review F12; the dialog stays open with what was typed).
+ */
+export type IdentityDialog = { name: string; email: string; problem: string | null };
+
 /** The note dialogs (M-14); several may be open at once, as in egui. */
 export type NoteDialogs = {
   newNote: NewNoteDialog | null;
@@ -280,6 +313,29 @@ export class Shell {
    * note then active; the tool panel shows them while that note is.
    */
   indexes = $state.raw<IndexesView | null>(null);
+  /**
+   * M-19.1, M-19.2 (UC-011, UC-012): the git changes of the workspace, as
+   * the backend sent them last; `null` without git or before git answered.
+   */
+  changes = $state.raw<ChangesView | null>(null);
+  /** M-19.3: the diff of the file chosen in the list or of the active note. */
+  diff = $state.raw<DiffView | null>(null);
+  /** M-19.1: the commit box, kept while the user looks at other notes (BR-003). */
+  commit = $state.raw<CommitBox>(EMPTY_COMMIT);
+  /**
+   * M-19.2, UC-011 BR-007: Ctrl+Shift+G (or "Show changes", F13) asked to
+   * open the changes; grows each time, so the tool panel opens the list
+   * and puts the keyboard into the message.
+   */
+  changesAsked = $state(0);
+  /** M-19.4, UC-012 A3: "Your name for commits", while open. */
+  identity = $state.raw<IdentityDialog | null>(null);
+  /** UX review F12: grows after each commit; the tool panel puts the keyboard on "Changes (N)". */
+  committedCount = $state(0);
+  /** M-19.5, UC-011 A6: "Discard changes", while open. */
+  discarding = $state.raw<DiscardQuestion | null>(null);
+  /** "Discard changes" waits for the backend. */
+  discardBusy = $state(false);
   /** M-15.1, M-15.2: the window "Export note", or the system's dialog, while open. */
   exporting = $state.raw<ExportDialog | null>(null);
   /** M-15.6, UC-009 A2: what the window "Approximated blocks" lists, until it is closed. */
@@ -399,6 +455,9 @@ export class Shell {
         if (event.payload?.root !== this.workspace?.root) {
           // The note dialogs were of the workspace left.
           this.notes = NO_NOTE_DIALOGS;
+          // So were "Discard changes" and "Your name for commits".
+          this.discarding = null;
+          this.identity = null;
           if (this.exporting?.stage !== 'system') {
             this.exporting = null;
           }
@@ -431,6 +490,13 @@ export class Shell {
       // M-13.1, UC-008 step 2: the found notes of the search.
       events.search.listen((event) => {
         this.search.take(event.payload);
+      }),
+      // M-19, UC-011, UC-012: the git changes and the diff.
+      events.changes.listen((event) => {
+        this.#takeChanges(event.payload);
+      }),
+      events.diff.listen((event) => {
+        this.diff = event.payload;
       }),
       // The editor's events are listened to here, once for the window, and
       // handed to the source view shown now: listening per view left events
@@ -1296,6 +1362,200 @@ export class Shell {
     const result = await this.#serial(() => commands.linkOpenWeb(open));
     if (result.status === 'error') {
       this.#fail('link_open_web', result.error);
+    }
+  }
+
+  /** M-19.1: the changes came; the message follows the proposal until the user typed. */
+  #takeChanges(changes: ChangesView | null): void {
+    this.changes = changes;
+    if (changes === null) {
+      return;
+    }
+    let box = this.commit;
+    // UC-012 A6: amending is offered only while the last commit may be amended.
+    if (changes.amendable === null && box.amend) {
+      box = { ...box, amend: false };
+    }
+    if (!box.typed && box.message !== changes.proposed) {
+      box = { ...box, message: changes.proposed };
+    }
+    this.commit = box;
+  }
+
+  /** M-19.1, UC-012 step 3: the user typed the message; it no longer follows the proposal. */
+  editCommitMessage(message: string): void {
+    this.commit = { ...this.commit, message, typed: true, problem: null };
+  }
+
+  /** M-19.1, UC-012 A6: "Amend the last commit" takes over the last commit's message. */
+  setAmend(amend: boolean): void {
+    const last = this.changes?.amendable ?? null;
+    if (amend && last !== null) {
+      this.commit = { ...this.commit, amend, message: last, typed: true };
+    } else {
+      this.commit = { ...this.commit, amend: false };
+    }
+  }
+
+  /**
+   * M-19.1, UC-012 BR-004: the change of `path` chosen for the commit or
+   * left out; `null`: "All" (`chosen`) or "None".
+   */
+  async chooseForCommit(path: string | null, chosen: boolean): Promise<void> {
+    const result = await commands.gitCommitChoice(path, chosen);
+    if (result.status === 'error') {
+      this.#fail('git_commit_choice', result.error);
+    }
+  }
+
+  /** M-19.2, UC-011 step 5: a click on a change opens its note or shows its diff. */
+  async chooseChange(path: string): Promise<void> {
+    const result = await this.#serial(() => commands.gitChoose(path));
+    if (result.status === 'error') {
+      this.#fail('git_choose', result.error);
+    }
+  }
+
+  /** M-19.2, UC-011 BR-007: Ctrl+Shift+G opens the changes and puts the keyboard into the message. */
+  showChanges(): void {
+    if (this.changes !== null) {
+      this.changesAsked += 1;
+    }
+  }
+
+  /**
+   * M-19.4, UC-012 steps 4–7: "Commit"/"Amend" or Ctrl+Enter, once the
+   * window's edits reached the backend (ADR-025). The box empties after a
+   * commit; a refusal stays in it (A1, A2); git not knowing the user asks
+   * for the name (A3).
+   */
+  async commitChanges(): Promise<void> {
+    const box = this.commit;
+    if (box.busy) {
+      return;
+    }
+    await this.#runCommit(() => commands.gitCommit(box.message, box.amend), 'git_commit');
+  }
+
+  /**
+   * M-19.4, UC-012 A3: "Commit" of "Your name for commits": the name and
+   * email are kept in the user's git settings, then the commit runs.
+   */
+  async answerIdentity(name: string, email: string): Promise<void> {
+    const box = this.commit;
+    if (box.busy) {
+      return;
+    }
+    await this.#runCommit(
+      () => commands.gitSetIdentity(name, email, box.message, box.amend),
+      'git_set_identity',
+    );
+  }
+
+  /** M-19.4, UC-012 A3 step 4: Cancel or Escape: nothing is committed, the box stays. */
+  closeIdentity(): void {
+    this.identity = null;
+  }
+
+  async #runCommit(
+    call: () => Promise<{ status: 'ok'; data: CommitAnswer } | { status: 'error'; error: UiError }>,
+    command: string,
+  ): Promise<void> {
+    this.commit = { ...this.commit, busy: true, problem: null };
+    let answer: CommitAnswer | null = null;
+    try {
+      const result = await flushed(call);
+      if (result.status === 'error') {
+        this.#fail(command, result.error);
+      } else {
+        answer = result.data;
+      }
+    } catch (error) {
+      this.#fail(command, { kind: 'internal', message: String(error) });
+    }
+    const box = { ...this.commit, busy: false };
+    switch (answer?.kind) {
+      case 'committed':
+        // Step 7: the box empties; the message follows the proposal again.
+        this.commit = { ...EMPTY_COMMIT, message: this.changes?.proposed ?? '' };
+        this.identity = null;
+        this.committedCount += 1;
+        return;
+      case 'problem':
+        this.commit = { ...box, problem: answer.problem };
+        this.identity = null;
+        return;
+      case 'identity':
+        // A3: asked; asked again (with what was typed) when git still does not know the user.
+        this.commit = box;
+        this.identity = { name: '', email: '', ...this.identity, problem: null };
+        return;
+      case 'nameNotKept':
+        // Review F12: the dialog stays with what was typed and says why.
+        this.commit = box;
+        if (this.identity !== null) {
+          this.identity = { ...this.identity, problem: answer.problem };
+        }
+        return;
+      default:
+        this.commit = box;
+        this.identity = null;
+    }
+  }
+
+  /** M-19.4: the name or email typed in "Your name for commits". */
+  editIdentity(dialog: IdentityDialog, change: Partial<IdentityDialog>): void {
+    if (this.identity === dialog) {
+      this.identity = { ...dialog, ...change, problem: null };
+    }
+  }
+
+  /**
+   * M-19.5, UC-011 A6 step 1: "Discard…" asks first, naming the note and
+   * what is lost, once the window's edits reached the backend.
+   */
+  async startDiscard(path: string): Promise<void> {
+    if (this.discarding !== null) {
+      return;
+    }
+    const result = await this.#serial(() => flushed(() => commands.gitDiscardStart(path)));
+    if (result.status === 'error') {
+      this.#fail('git_discard_start', result.error);
+      return;
+    }
+    if (result.data !== null && this.discarding === null) {
+      this.discarding = result.data;
+    }
+  }
+
+  /** M-19.5, UC-011 A6 step 4: Cancel or Escape: nothing changes. */
+  closeDiscard(): void {
+    this.discarding = null;
+  }
+
+  /**
+   * M-19.5, UC-011 A6 steps 2–3: "Discard", once the window's edits reached
+   * the backend; an open tab shows the committed text again (ADR-025: a
+   * reload of its editor core).
+   */
+  async discard(): Promise<void> {
+    const question = this.discarding;
+    if (question === null || this.discardBusy) {
+      return;
+    }
+    this.discardBusy = true;
+    try {
+      const result = await this.#serial(() => flushed(() => commands.gitDiscard(question.path)));
+      if (result.status === 'error') {
+        this.#fail('git_discard', result.error);
+      }
+    } catch (error) {
+      this.#fail('git_discard', { kind: 'internal', message: String(error) });
+    } finally {
+      this.discardBusy = false;
+      if (this.discarding === question) {
+        this.discarding = null;
+      }
     }
   }
 

@@ -43,7 +43,10 @@
 //! Feature F10 adds what the settings window shows of "For me" and "This
 //! workspace" and the changes made in it (UC-010, M-20). Feature F11 adds
 //! exporting a note (UC-009, M-15): the export runs without the session,
-//! and the status bar offers "Open" and "Show" after it (M-04.8).
+//! and the status bar offers "Open" and "Show" after it (M-04.8). Feature
+//! F12 adds the git changes (UC-011, UC-012, M-19.1 to M-19.5): the list
+//! with the commit box, the diff, discarding, committing and the user's
+//! name for commits; git runs without the session.
 //!
 //! The data types crossing to the window derive `specta::Type` behind the
 //! `specta` feature, so TypeScript bindings can be generated from them.
@@ -55,6 +58,7 @@ mod error;
 mod event;
 mod export_view;
 mod facade_view;
+mod git_view;
 mod notes_view;
 mod palette;
 mod search_view;
@@ -83,6 +87,10 @@ pub use facade_view::{
     BlockKindView, BlockView, BlocksView, CellAlignName, CodeColors, FacadeAt, FacadeInput,
     FacadePatch, FacadeState, FigureView, GapView, RowsView, RunView, TableView,
 };
+pub use git_view::{
+    BranchView, ChangeKindName, ChangeView, ChangesView, CommitAnswer, DiffBody, DiffLineKind,
+    DiffLineView, DiffPartView, DiffView, DiscardQuestion, HunkView,
+};
 pub use notes_view::{
     CreateNoteAnswer, DeleteAnswer, DeleteQuestion, DeletedNoteView, NewNoteRequest, NewNoteStart,
     RenameAnswer, RenameStart, RestoreAnswer, StatusOffer,
@@ -93,8 +101,10 @@ pub use search_view::{
     SearchView,
 };
 pub use session::{
-    CreatePlan, EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed,
-    KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session, Synced,
+    CommitJob, CommitOutcome, CreatePlan, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused,
+    EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed, IdentityJob,
+    KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session, Synced, NEEDS_MESSAGE,
+    NOTHING_CHOSEN,
 };
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingChoiceView, SettingControlView,

@@ -29,6 +29,10 @@ pub struct OverviewItem {
     /// The note's format, which names the kinds of export of its menu
     /// (M-05.4, `StartInfo::export_kinds`).
     pub format: FormatName,
+    /// M-05.3, UC-011 step 2: the letter of its git change after the title
+    /// (`N`, `M`, `R`, `C`), and `M` for an open note with changes not
+    /// stored yet; only in a git workspace.
+    pub mark: Option<String>,
 }
 
 /// The editing view a tab shows its note in (UC-004 BR-003).

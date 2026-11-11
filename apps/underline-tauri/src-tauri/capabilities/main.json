@@ -58,6 +58,12 @@
     "allow-export-choose",
     "allow-export-run",
     "allow-export-open",
-    "allow-export-approximated"
+    "allow-export-approximated",
+    "allow-git-choose",
+    "allow-git-commit-choice",
+    "allow-git-commit",
+    "allow-git-set-identity",
+    "allow-git-discard-start",
+    "allow-git-discard"
   ]
 }

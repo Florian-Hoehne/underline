@@ -67,13 +67,30 @@
 // dialog at a time ("Choosing where to save {t}…"), reports of exports that
 // end together are kept, a failure is marked as an error, the status is
 // busy while one runs, and "Saved {t}" does not replace an export's status.
+//
+// Feature F12: `/home/user/Work` is a git repository (UC-011, UC-012) with
+// a fake last commit "Add the meeting notes": README is changed, the note
+// `Projects/Roadmap` is new, `Old-Minutes` is deleted and the other file
+// `assets/logo.png` (no text) is new. The changes, the overview's letters
+// and the diff come as the events `changes` and `diff`, from rough
+// stand-ins of git's diff and the proposed message (`mock-git.ts`).
+// Committing records the chosen changes in the fake commit; git does not
+// know the user at first, so the first commit asks "Your name for commits"
+// (`gitIdentity(true)` skips that; `gitIdentityFails(reason)` makes keeping
+// the name fail). `gitCommitFails(reason)` makes git
+// refuse commits (A4), `gitMerging(true)` stands for an unfinished merge
+// (BR-009), and `gitLog()` lists the commit messages, newest first.
 
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type {
   commands,
+  ChangesView,
+  ChangeView,
+  CommitAnswer,
   CreateNoteAnswer,
   DeletedNoteView,
+  DiffView,
   ExportAnswer,
   ExportChoice,
   ExportKindName,
@@ -116,6 +133,12 @@ import { loadEditorCore, MirrorCore } from './editor/core';
 import { mockDrop, useMockDrops } from './editor/drop';
 import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
 import { MockSettings, userFileOf, type MockSettingsPlace } from './mock-settings';
+import {
+  mockChangedLines,
+  mockDiff,
+  mockProposedMessage,
+  type MockProposalChange,
+} from './mock-git';
 import palettes from './palettes.generated.json';
 
 /** The success value of a command in the generated bindings. */
@@ -245,6 +268,20 @@ export type MockHandlers = {
   }) => Promise<Ok<typeof commands.exportRun>>;
   export_open: (args: { index: number }) => Promise<Ok<typeof commands.exportOpen>>;
   export_approximated: (args: { index: number }) => Ok<typeof commands.exportApproximated>;
+  git_choose: (args: { path: string }) => Promise<Ok<typeof commands.gitChoose>>;
+  git_commit_choice: (args: {
+    path: string | null;
+    chosen: boolean;
+  }) => Promise<Ok<typeof commands.gitCommitChoice>>;
+  git_commit: (args: { message: string; amend: boolean }) => Promise<Ok<typeof commands.gitCommit>>;
+  git_set_identity: (args: {
+    name: string;
+    email: string;
+    message: string;
+    amend: boolean;
+  }) => Promise<Ok<typeof commands.gitSetIdentity>>;
+  git_discard_start: (args: { path: string }) => Promise<Ok<typeof commands.gitDiscardStart>>;
+  git_discard: (args: { path: string }) => Promise<Ok<typeof commands.gitDiscard>>;
   /** ADR-025: what a test may do as the backend would (`window.__ulMock`). */
   __hooks?: MockHooks;
 };
@@ -775,6 +812,12 @@ function workspaceHandlers(
   | 'export_run'
   | 'export_open'
   | 'export_approximated'
+  | 'git_choose'
+  | 'git_commit_choice'
+  | 'git_commit'
+  | 'git_set_identity'
+  | 'git_discard_start'
+  | 'git_discard'
   | '__hooks'
 > {
   const files: Record<string, string[]> = Object.fromEntries(
@@ -820,6 +863,7 @@ function workspaceHandlers(
           count(title(note).toLowerCase()) > 1
             ? `${title(note)}  (${folder(note) ?? 'top folder'})`
             : title(note),
+        mark: gitMark(note),
       }));
   };
   /** The texts of the open notes, and their save state. */
@@ -1044,6 +1088,321 @@ function workspaceHandlers(
       // The mock was taken down meanwhile (a test ended).
     }
   };
+  /** F12: the fake git of each git workspace (UC-011, UC-012). */
+  type MockOther = { path: string; kind: 'new' | 'changed' | 'deleted'; text: string | null };
+  type MockGit = {
+    committed: Map<string, string>;
+    others: MockOther[];
+    messages: string[];
+  };
+  const gits: Record<string, MockGit> = {};
+  let gitIdentity = false;
+  let gitIdentityFails: string | null = null;
+  let gitCommitFails: string | null = null;
+  let gitMerging = false;
+  const gitLeftOut = new Set<string>();
+  let gitChosen: string | null = null;
+  let gitDiscarding: string | null = null;
+  let gitTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The fake repository of the open workspace, if it is one. */
+  const gitOf = (): MockGit | null => {
+    if (root !== '/home/user/Work') {
+      return null;
+    }
+    gits[root] ??= {
+      committed: new Map([
+        ...(FAKE_FILES['/home/user/Work'] ?? [])
+          .filter((note) => note !== 'Projects/Roadmap')
+          .map((note): [string, string] => [
+            note,
+            note === 'README'
+              ? fakeNoteText(note).replace('Type here to try', 'Type to try')
+              : fakeNoteText(note),
+          ]),
+        ['Old-Minutes', '# Old Minutes\n\nThe minutes of last year.\n'],
+      ]),
+      others: [{ path: 'assets/logo.png', kind: 'new', text: null }],
+      messages: ['Add the meeting notes'],
+    };
+    return gits[root];
+  };
+  type MockChange = {
+    path: string;
+    kind: 'new' | 'changed' | 'deleted' | 'renamed';
+    note: string | null;
+    from: string | null;
+    text: string | null;
+  };
+  /** UC-011 steps 1, 4: the changes since the fake commit, notes first (BR-002). */
+  const gitChanges = (): MockChange[] => {
+    const git = gitOf();
+    if (!git || !root) {
+      return [];
+    }
+    const notes = files[root] ?? [];
+    const changes: MockChange[] = [];
+    for (const note of notes) {
+      const now = mirrors.get(note)?.text() ?? textOf(note);
+      const was = git.committed.get(note);
+      if (was === undefined || was !== now) {
+        changes.push({
+          path: `${note}.md`,
+          kind: was === undefined ? 'new' : 'changed',
+          note,
+          from: null,
+          text: now,
+        });
+      }
+    }
+    for (const [note, was] of git.committed) {
+      if (notes.includes(note)) {
+        continue;
+      }
+      // A note deleted and one new with its text are one note renamed.
+      const renamed = changes.find((c) => c.kind === 'new' && c.text === was);
+      if (renamed) {
+        renamed.kind = 'renamed';
+        renamed.from = note;
+      } else {
+        changes.push({ path: `${note}.md`, kind: 'deleted', note, from: null, text: null });
+      }
+    }
+    changes.sort((a, b) => a.path.toLowerCase().localeCompare(b.path.toLowerCase()));
+    return [...changes, ...git.others.map((o) => ({ ...o, note: null, from: null }))];
+  };
+  const LETTERS = { new: 'N', changed: 'M', deleted: 'D', renamed: 'R' } as const;
+  /** M-05.3: the letter of `note` in the overview. */
+  const gitMark = (note: string): string | null => {
+    if (!gitOf()) {
+      return null;
+    }
+    const change = gitChanges().find((c) => c.note === note && c.kind !== 'deleted');
+    return change ? LETTERS[change.kind] : unstored.has(note) ? 'M' : null;
+  };
+  const changeName = (c: MockChange) =>
+    c.note === null
+      ? c.path
+      : c.kind === 'renamed'
+        ? `${title(c.note)} ← ${title(c.from ?? '')}`
+        : folder(c.note) !== null
+          ? `${title(c.note)} · ${folder(c.note)}`
+          : title(c.note);
+  const changesView = (): ChangesView | null => {
+    const git = gitOf();
+    if (!git) {
+      return null;
+    }
+    const changes = gitChanges();
+    for (const left of [...gitLeftOut]) {
+      if (!changes.some((c) => c.path === left)) {
+        gitLeftOut.delete(left);
+      }
+    }
+    const rows: ChangeView[] = changes.map((c) => ({
+      path: c.path,
+      kind: c.kind,
+      letter: LETTERS[c.kind],
+      name: changeName(c),
+      note: c.note !== null,
+      chosen: !gitLeftOut.has(c.path),
+    }));
+    const proposal: MockProposalChange[] = changes
+      .filter((c) => !gitLeftOut.has(c.path))
+      .map((c) => ({
+        kind: c.kind,
+        title: c.note === null ? null : title(c.note),
+        from: c.from === null ? null : title(c.from),
+      }));
+    return {
+      problem: null,
+      branch: { label: 'main', detached: false },
+      files: rows,
+      merging: gitMerging,
+      amendable: git.messages[0] ?? null,
+      proposed: mockProposedMessage(proposal),
+    };
+  };
+  /** M-19.3: the diff of the chosen file, else of the active note. */
+  const diffView = (): DiffView | null => {
+    const git = gitOf();
+    if (!git) {
+      return null;
+    }
+    const changes = gitChanges();
+    const chosen = changes.find((c) => c.path === gitChosen);
+    if (chosen && chosen.note !== active) {
+      if (chosen.note === null && chosen.text === null) {
+        const kind = chosen.kind === 'renamed' ? 'changed' : chosen.kind;
+        return {
+          path: chosen.path,
+          note: null,
+          rev: null,
+          body: { kind: 'notText', text: `This file is not text; it is ${kind}.` },
+        };
+      }
+      const was = chosen.note === null ? '' : (git.committed.get(chosen.note) ?? '');
+      const hunks = mockDiff(was, chosen.text ?? '');
+      return {
+        path: chosen.path,
+        note: null,
+        rev: null,
+        body: hunks.length === 0 ? { kind: 'unchanged' } : { kind: 'hunks', hunks },
+      };
+    }
+    if (active === null) {
+      return null;
+    }
+    const change = changes.find((c) => c.note === active);
+    const was = git.committed.get(change?.from ?? active) ?? '';
+    const mirror = mirrors.get(active);
+    const hunks = mockDiff(was, mirror?.text() ?? textOf(active), 3, true);
+    return {
+      path: `${active}.md`,
+      note: active,
+      rev: mirror?.rev ?? 1,
+      body: hunks.length === 0 ? { kind: 'unchanged' } : { kind: 'hunks', hunks },
+    };
+  };
+  /** The window is told the changes and the diff, as the backend's tick does. */
+  const sendGit = async () => {
+    if (disposed) {
+      return;
+    }
+    try {
+      await emit('changes', changesView());
+      await emit('diff', diffView());
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
+  };
+  /** UC-011 A3: a text changed; the changes and the diff follow soon. */
+  const gitAgain = () => {
+    if (gitTimer !== null || !gitOf()) {
+      return;
+    }
+    gitTimer = setTimeout(() => {
+      gitTimer = null;
+      void sendGit();
+      void emit('overview', overview()).catch(() => undefined);
+    }, 50);
+  };
+  /** UC-012 steps 5–7, A1 to A6: the fake commit. */
+  const gitCommit = async (message: string, amend: boolean): Promise<CommitAnswer> => {
+    const git = gitOf();
+    if (!git || !root || gitMerging) {
+      return { kind: 'done' };
+    }
+    const text = message.trim();
+    if (text === '') {
+      return { kind: 'problem', problem: 'A commit needs a message.' };
+    }
+    const chosen = gitChanges().filter((c) => !gitLeftOut.has(c.path));
+    const amending = amend && git.messages.length > 0;
+    if (chosen.length === 0 && !amending) {
+      return { kind: 'problem', problem: 'Nothing is chosen.' };
+    }
+    // Step 5, A5: the open notes are stored first.
+    const failures = tabs.map((tab) => store(tab.note)).filter((f): f is string => f !== null);
+    if (failures.length > 0) {
+      await sendAll();
+      await setStatus(`Nothing was committed, because ${failures.join('; ')}`);
+      return { kind: 'done' };
+    }
+    if (gitCommitFails !== null) {
+      await setStatus(`The commit failed: \`git commit\` failed: ${gitCommitFails}`);
+      return { kind: 'done' };
+    }
+    if (!gitIdentity) {
+      return { kind: 'identity' };
+    }
+    for (const change of chosen) {
+      if (change.note === null) {
+        git.others = git.others.filter((o) => o.path !== change.path);
+      } else if (change.kind === 'deleted') {
+        git.committed.delete(change.note);
+      } else {
+        git.committed.set(change.note, change.text ?? '');
+        if (change.from !== null) {
+          git.committed.delete(change.from);
+        }
+      }
+    }
+    if (amending) {
+      git.messages[0] = text;
+    } else {
+      git.messages.unshift(text);
+    }
+    const id = (0xa1b2c00 + git.messages.length * 17 + (amending ? 1 : 0)).toString(16).slice(0, 7);
+    const notes = chosen.filter((c) => c.note !== null).length;
+    const others = chosen.length - notes;
+    const held = [
+      notes > 0 ? (notes === 1 ? '1 note' : `${notes} notes`) : null,
+      others > 0 ? (others === 1 ? '1 file' : `${others} files`) : null,
+    ].filter((part) => part !== null);
+    const holding = held.length > 0 ? ` holding ${held.join(' and ')}` : '';
+    gitLeftOut.clear();
+    await sendAll();
+    await setStatus(
+      amending ? `Amended the last commit, now ${id}${holding}` : `Committed ${id}${holding}`,
+    );
+    return { kind: 'committed' };
+  };
+  /** UC-011 A6 steps 2–3: the fake discard. */
+  const gitDiscard = async (path: string) => {
+    const git = gitOf();
+    const change = gitChanges().find((c) => c.path === path);
+    if (!git || !root || !change || change.note === null) {
+      return;
+    }
+    const note = change.note;
+    const closeTabOf = (gone: string) => {
+      const at = tabs.findIndex((tab) => tab.note === gone);
+      if (at >= 0) {
+        clearTimeout(saveTimers.get(gone));
+        tabs.splice(at, 1);
+        if (active === gone) {
+          active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
+        }
+      }
+      for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
+        map.delete(gone);
+      }
+      unstored.delete(gone);
+      remember();
+    };
+    if (change.kind === 'new') {
+      // A new note goes to the deleted notes.
+      clock += 1;
+      deletedNotes[root] = [
+        { key: `${Date.now()}:${clock}:${note}`, note, text: change.text ?? '', at: Date.now() },
+        ...(deletedNotes[root] ?? []),
+      ];
+      files[root] = (files[root] ?? []).filter((n) => n !== note);
+      closeTabOf(note);
+    } else if (change.kind === 'renamed' && change.from !== null) {
+      files[root] = (files[root] ?? []).map((n) => (n === note ? change.from! : n));
+      texts.set(change.from, git.committed.get(change.from) ?? '');
+      closeTabOf(note);
+    } else {
+      const was = git.committed.get(note) ?? '';
+      if (change.kind === 'deleted') {
+        files[root] = [...(files[root] ?? []), note];
+      }
+      texts.set(note, was);
+      clearTimeout(saveTimers.get(note));
+      unstored.delete(note);
+      saveErrors.delete(note);
+      const mirror = mirrors.get(note);
+      if (mirror) {
+        const rev = mirror.reload(was);
+        followMirror(note, mirror);
+        await emit('ed-changed', { note, rev });
+      }
+    }
+    gitChosen = null;
+    await sendAll();
+    await setStatus(`Discarded the changes of ${title(note)}`);
+  };
   const label = (note: string) =>
     title(note) +
     (saveErrors.has(note) ? ' ⚠' : unstored.has(note) && !quiet.has(note) ? ' •' : '');
@@ -1203,6 +1562,7 @@ function workspaceHandlers(
       await emit('tabs', now.tabs);
       await emit('properties', properties());
       await sendIndexes();
+      await sendGit();
       if (settingsSaid !== undefined) {
         const said = settingsSaid;
         settingsSaid = undefined;
@@ -1375,6 +1735,8 @@ function workspaceHandlers(
   let settingsSaid: string | null | undefined;
   const switchTo = (dir: string) => {
     root = dir;
+    gitChosen = null;
+    gitDiscarding = null;
     settingsSaid = model.openWorkspace(dir);
     recent = [dir, ...recent.filter((r) => r !== dir)];
     const back = remembered[dir];
@@ -1701,6 +2063,7 @@ function workspaceHandlers(
       const { answer, reverted } = mirror.receive(batch);
       if (mirror.text() !== before) {
         searchAgain();
+        gitAgain();
         if (quiet.delete(note)) {
           // The user's own change: the tab shows its mark now.
           unstored.delete(note);
@@ -2111,6 +2474,83 @@ function workspaceHandlers(
       const report = reportsStatus === status() ? exportReports[index] : undefined;
       return report ? { title: report.title, lines: report.approximated } : null;
     },
+    git_choose: async ({ path }) => {
+      const change = gitChanges().find((c) => c.path === path);
+      if (!change) {
+        return null;
+      }
+      if (change.kind === 'deleted' || change.note === null) {
+        gitChosen = path;
+      } else {
+        gitChosen = null;
+        openTab(change.note);
+      }
+      await sendAll();
+      return null;
+    },
+    git_commit_choice: async ({ path, chosen }) => {
+      if (path !== null) {
+        if (chosen) {
+          gitLeftOut.delete(path);
+        } else {
+          gitLeftOut.add(path);
+        }
+      } else if (chosen) {
+        gitLeftOut.clear();
+      } else {
+        for (const change of gitChanges()) {
+          gitLeftOut.add(change.path);
+        }
+      }
+      await sendGit();
+      return null;
+    },
+    git_commit: async ({ message, amend }) => gitCommit(message, amend),
+    git_set_identity: async ({ name, email, message, amend }) => {
+      if (name.trim() === '' || !email.includes('@')) {
+        return { kind: 'done' };
+      }
+      if (gitIdentityFails !== null) {
+        const problem = `Your name could not be kept: ${gitIdentityFails}`;
+        await setStatus(problem);
+        return { kind: 'nameNotKept', problem };
+      }
+      gitIdentity = true;
+      return gitCommit(message, amend);
+    },
+    git_discard_start: async ({ path }) => {
+      const git = gitOf();
+      const change = gitChanges().find((c) => c.path === path);
+      if (!git || !change || change.note === null) {
+        return null;
+      }
+      gitDiscarding = path;
+      const consequence =
+        change.kind === 'new'
+          ? 'The note is new; it goes to the deleted notes.'
+          : change.kind === 'deleted'
+            ? 'The note comes back as it was committed.'
+            : (() => {
+                const lines = mockChangedLines(
+                  git.committed.get(change.from ?? change.note) ?? '',
+                  change.text ?? '',
+                );
+                return `${lines === 1 ? '1 changed line' : `${lines} changed lines`} will be lost and cannot be restored.`;
+              })();
+      return {
+        path,
+        question: `Discard the changes of ${title(change.note)} since the last commit?`,
+        consequence,
+      };
+    },
+    git_discard: async ({ path }) => {
+      if (gitDiscarding !== path) {
+        return null;
+      }
+      gitDiscarding = null;
+      await gitDiscard(path);
+      return null;
+    },
     link_open_web: async ({ open: answer }) => {
       const address = webAsked;
       webAsked = null;
@@ -2175,6 +2615,20 @@ function workspaceHandlers(
       keepFails = on;
     },
     openedWithSystem: () => [...opened],
+    gitIdentity: (known) => {
+      gitIdentity = known;
+    },
+    gitIdentityFails: (reason) => {
+      gitIdentityFails = reason;
+    },
+    gitCommitFails: (reason) => {
+      gitCommitFails = reason;
+    },
+    gitMerging: async (on) => {
+      gitMerging = on;
+      await sendGit();
+    },
+    gitLog: () => [...(gitOf()?.messages ?? [])],
     exportDialog: (dialog) => {
       exportDialog = dialog;
     },
@@ -2194,6 +2648,10 @@ function workspaceHandlers(
       if (searchTimer !== null) {
         clearTimeout(searchTimer);
         searchTimer = null;
+      }
+      if (gitTimer !== null) {
+        clearTimeout(gitTimer);
+        gitTimer = null;
       }
       disposed = true;
     },
@@ -2227,6 +2685,16 @@ export type MockHooks = {
   cannotKeep(on: boolean): void;
   /** F7, UC-004 BR-007: what the system's program would have opened, in order. */
   openedWithSystem(): string[];
+  /** F12, UC-012 A3: git knows the user's name and email (`true`) or not (the start). */
+  gitIdentity(known: boolean): void;
+  /** F12, UC-012 A3: git cannot keep the name and email, with `reason` (`null`: it can). */
+  gitIdentityFails(reason: string | null): void;
+  /** F12, UC-012 A4: git refuses every commit with `reason` (`null`: no more). */
+  gitCommitFails(reason: string | null): void;
+  /** F12, UC-012 BR-009: a merge waits for its conflicts (`true`) or not. */
+  gitMerging(on: boolean): Promise<void>;
+  /** F12: the messages of the fake commits of the open workspace, newest first. */
+  gitLog(): string[];
   /** F11, UC-009 step 2: what the fake save dialog does from now on. */
   exportDialog(dialog: MockExportDialog): void;
   /** F11: the files the exports wrote, by path, with the text exported. */

@@ -56,6 +56,12 @@ fn main() {
         "export_run",
         "export_open",
         "export_approximated",
+        "git_choose",
+        "git_commit_choice",
+        "git_commit",
+        "git_set_identity",
+        "git_discard_start",
+        "git_discard",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("the Tauri build script failed");

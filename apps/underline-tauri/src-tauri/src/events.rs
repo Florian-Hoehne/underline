@@ -5,9 +5,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Runtime};
 use tauri_specta::Event as _;
 use underline_session::{
-    ChangedView, CloseQuestion, DeletedNoteView, EnrichView, Event, FlushView, HighlightView,
-    IndexesView, OverviewItem, SearchView, SettingsView, SettingsWindowView, StatusView,
-    TabPropertiesView, TabsView, WorkspaceView,
+    ChangedView, ChangesView, CloseQuestion, DeletedNoteView, DiffView, EnrichView, Event,
+    FlushView, HighlightView, IndexesView, OverviewItem, SearchView, SettingsView,
+    SettingsWindowView, StatusView, TabPropertiesView, TabsView, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -91,6 +91,18 @@ pub struct DeletedEvent(pub Vec<DeletedNoteView>);
 #[tauri_specta(event_name = "search")]
 pub struct SearchEvent(pub SearchView);
 
+/// M-19.1, M-19.2, UC-011, UC-012: the git changes of the workspace;
+/// `null` without git or before git answered.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "changes")]
+pub struct ChangesEvent(pub Option<ChangesView>);
+
+/// M-19.3, UC-011 step 6: the diff of the chosen file or the active note;
+/// `null` without either.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "diff")]
+pub struct DiffEvent(pub Option<DiffView>);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -110,6 +122,8 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Indexes(indexes) => IndexesEvent(indexes).emit(app),
             Event::Deleted(deleted) => DeletedEvent(deleted).emit(app),
             Event::Search(search) => SearchEvent(search).emit(app),
+            Event::Changes(changes) => ChangesEvent(changes).emit(app),
+            Event::Diff(diff) => DiffEvent(diff).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

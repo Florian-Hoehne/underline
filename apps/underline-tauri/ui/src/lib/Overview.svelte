@@ -21,7 +21,11 @@
     {time}"), when it was deleted, "Restore" and "Remove", and "Empty the
     deleted notes".
 
-  Later features add the git letters (M-05.3, F12).
+  Feature F12 adds, as in egui, M-05.3 (UC-011 step 2, BR-003): the letter
+  of a note's git change after its title, in its colour (N new, M changed,
+  R renamed, C in conflict), `M` also for an open note with changes not
+  stored yet; only in a git workspace. Screen readers hear what it means
+  (new text, A-128).
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
@@ -42,6 +46,14 @@
     shell.overviewWidth ?? overviewWidthWithin(shell.settings?.overviewWidth ?? 200),
   );
   const active = $derived(shell.tabs.active);
+
+  /** M-05.3: what a git letter means, for screen readers (new text, A-128). */
+  const MARK_WORDS: Record<string, string> = {
+    N: 'new',
+    M: 'changed',
+    R: 'renamed',
+    C: 'in conflict',
+  };
 
   onMount(() => shell.pinOverviewWidth());
 
@@ -232,7 +244,13 @@
             aria-keyshortcuts="Delete Shift+F10"
             onclick={(event) => open(event, item.note)}
             oncontextmenu={(event) => openMenu(event, item.note, item.label)}
-            onkeydown={(event) => onEntryKey(event, item.note, item.label)}>{item.label}</button
+            onkeydown={(event) => onEntryKey(event, item.note, item.label)}
+            ><span class="label">{item.label}</span>{#if item.mark}<span
+                class="git-letter mark"
+                data-letter={item.mark}
+                aria-hidden="true">{item.mark}</span
+              ><span class="visually-hidden">, {MARK_WORDS[item.mark] ?? 'changed'}</span
+              >{/if}</button
           >
         </li>
       {/each}
@@ -435,6 +453,35 @@
   /* egui's weak text. */
   .deleted-time {
     color: var(--ui-hint);
+  }
+
+  /* M-05.3: egui puts the letter 6 px after the title, in the title's font;
+     a long title is cut, never the letter (UX review F12). */
+  .entry:has(.mark) {
+    display: flex;
+  }
+
+  .entry .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mark {
+    flex: none;
+    margin-left: 6px;
+    font-family: inherit;
+    font-weight: 400;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   /* egui's small buttons, still 24 px high for the pointer (WCAG 2.5.8). */
