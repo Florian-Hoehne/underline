@@ -824,7 +824,7 @@ fn uc019_the_answer_comes_also_when_the_tab_went() {
     {
         let open = session.open.as_mut().unwrap();
         let index = open.tabs.find(&a()).unwrap();
-        open.tabs.close(index);
+        open.close_note(index);
     }
 
     settle(&mut session, start);

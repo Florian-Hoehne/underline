@@ -46,7 +46,7 @@ pub fn blocks_to_html(blocks: &[Block], selection: Range<usize>) -> String {
                 "<p><strong>{}:</strong> {runs}</p>",
                 escape(label)
             )),
-            BlockKind::Code { .. } | BlockKind::Markup => {
+            BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Formula { .. } => {
                 out.push_str(&format!("<pre><code>{runs}</code></pre>"))
             }
             BlockKind::ThematicBreak => out.push_str("<hr>"),

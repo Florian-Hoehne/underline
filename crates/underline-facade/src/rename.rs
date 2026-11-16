@@ -23,13 +23,61 @@ pub struct LinkSpan {
 /// Every link of `source` that names a place: links, images, and
 /// references, not those in code.
 pub fn link_spans(source: &str, format: NoteFormat) -> Vec<LinkSpan> {
-    let mut spans = match format {
-        NoteFormat::Markdown => markdown_links(source),
-        NoteFormat::AsciiDoc => asciidoc_links(source),
+    scan_links(source, format, false)
+        .into_iter()
+        .map(|found| LinkSpan {
+            target: found.target,
+            text: found.text,
+        })
+        .collect()
+}
+
+/// What markup a link found in a note is (UC-004 BR-015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkMarkup {
+    /// A link with a place: `[text](place)`, a reference definition
+    /// `[label]: place`, `xref:`, `link:` or `<<place,text>>`.
+    Link,
+    /// A web address written as it is: `<https://…>`, a bare address, or
+    /// in AsciiDoc `https://…[text]`.
+    Address,
+    /// A picture: `![alt](place)`, `image:` or `image::`.
+    Image,
+    /// An AsciiDoc `include::`.
+    Include,
+}
+
+/// A link in the markup of a note, with the whole of its markup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundLink {
+    /// What markup it is.
+    pub markup: LinkMarkup,
+    /// The bytes of the whole link, from its first character to its last.
+    pub span: Range<usize>,
+    /// The bytes of the place the link names, as written.
+    pub target: Range<usize>,
+    /// The bytes of the text the link shows, when it has its own text.
+    pub text: Option<Range<usize>>,
+}
+
+/// UC-004 BR-015, FR-078, FR-079: every link of `source` in the order of
+/// the note, with its markup, also web addresses written as they are; none
+/// in code. The same scan finds the links a rename changes
+/// ([`link_spans`]), which leaves the written addresses out.
+pub fn found_links(source: &str, format: NoteFormat) -> Vec<FoundLink> {
+    scan_links(source, format, true)
+}
+
+/// The links of `source`, sorted by their place, each place once; with
+/// `addresses`, also the web addresses written as they are.
+fn scan_links(source: &str, format: NoteFormat, addresses: bool) -> Vec<FoundLink> {
+    let mut found = match format {
+        NoteFormat::Markdown => markdown_links(source, addresses),
+        NoteFormat::AsciiDoc => asciidoc_links(source, addresses),
     };
-    spans.sort_by_key(|span| span.target.start);
-    spans.dedup_by_key(|span| span.target.start);
-    spans
+    found.sort_by_key(|link| link.target.start);
+    found.dedup_by_key(|link| link.target.start);
+    found
 }
 
 /// The bytes of the text of the first heading of `source`, if it has one.
@@ -95,12 +143,16 @@ fn block_delimiter(line: &str, format: NoteFormat) -> Option<String> {
     }
 }
 
-fn markdown_links(source: &str) -> Vec<LinkSpan> {
+fn markdown_links(source: &str, addresses: bool) -> Vec<FoundLink> {
     let arena = Arena::new();
     let mut options = Options::default();
     options.extension.strikethrough = true;
     options.extension.table = true;
     options.extension.tasklist = true;
+    // GitHub shows a web address written out as a link (FR-079); a rename
+    // never changes one. Only with `addresses` are bare addresses parsed as
+    // links, so the links a rename sees stay those it always saw.
+    options.extension.autolink = addresses;
     let root = parse_document(&arena, source, &options);
     let starts: Vec<usize> = std::iter::once(0)
         .chain(source.match_indices('\n').map(|(i, _)| i + 1))
@@ -108,15 +160,28 @@ fn markdown_links(source: &str) -> Vec<LinkSpan> {
     let offset = |line: usize, column: usize| {
         starts.get(line.saturating_sub(1)).copied().unwrap_or(0) + column.saturating_sub(1)
     };
-    let mut spans = Vec::new();
+    let mut found = Vec::new();
     let mut code_lines = Vec::new();
     for node in root.descendants() {
         let data = node.data.borrow();
         match &data.value {
             NodeValue::Link(_) | NodeValue::Image(_) => {
                 let start = offset(data.sourcepos.start.line, data.sourcepos.start.column);
+                let end = offset(data.sourcepos.end.line, data.sourcepos.end.column) + 1;
+                let image = matches!(data.value, NodeValue::Image(_));
                 if let Some(span) = inline_link(source, start) {
-                    spans.push(span);
+                    found.push(FoundLink {
+                        markup: if image {
+                            LinkMarkup::Image
+                        } else {
+                            LinkMarkup::Link
+                        },
+                        span: start..end.clamp(span.target.end, source.len()),
+                        target: span.target,
+                        text: span.text,
+                    });
+                } else if addresses && !image {
+                    found.extend(written_address(source, start..end.min(source.len())));
                 }
             }
             NodeValue::CodeBlock(_) | NodeValue::HtmlBlock(_) => {
@@ -126,19 +191,114 @@ fn markdown_links(source: &str) -> Vec<LinkSpan> {
         }
     }
     // Reference definitions, `[label]: place`, outside code.
+    // A definition cannot interrupt a paragraph: it follows a blank line,
+    // the start, a heading or another definition.
+    let mut after_paragraph = false;
     for (index, line) in source.split_inclusive('\n').enumerate() {
         if code_lines.iter().any(|lines| lines.contains(&(index + 1))) {
+            after_paragraph = false;
             continue;
         }
-        if let Some(target) = definition(line) {
+        let interrupts = after_paragraph;
+        let defined = if interrupts { None } else { definition(line) };
+        let content = line.trim();
+        after_paragraph = defined.is_none() && !content.is_empty() && !content.starts_with('#');
+        if let Some(target) = defined {
             let start = starts[index];
-            spans.push(LinkSpan {
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            found.push(FoundLink {
+                markup: LinkMarkup::Link,
+                span: start + indent..start + target.end,
                 target: start + target.start..start + target.end,
                 text: None,
             });
         }
     }
-    spans
+    // BR-015: a formula (`$$` … `$$`) holds no links.
+    let math = math_bytes(source, &starts, &code_lines);
+    found.retain(|link| !math.iter().any(|range| range.contains(&link.span.start)));
+    found
+}
+
+/// The bytes of the formula blocks of a Markdown note: from a line that is
+/// `$$` (or starts one) to the line that ends with `$$`, outside code.
+fn math_bytes(
+    source: &str,
+    starts: &[usize],
+    code_lines: &[std::ops::RangeInclusive<usize>],
+) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut open: Option<usize> = None;
+    for (index, line) in source.split_inclusive('\n').enumerate() {
+        if code_lines.iter().any(|lines| lines.contains(&(index + 1))) {
+            continue;
+        }
+        let start = starts[index];
+        let content = line.trim();
+        match open {
+            Some(from) if content.ends_with("$$") => {
+                ranges.push(from..start + line.len());
+                open = None;
+            }
+            Some(_) => {}
+            None if content.starts_with("$$") => {
+                if content.len() >= 4 && content.ends_with("$$") {
+                    ranges.push(start..start + line.len());
+                } else {
+                    open = Some(start);
+                }
+            }
+            None => {}
+        }
+    }
+    if let Some(from) = open {
+        ranges.push(from..source.len());
+    }
+    ranges
+}
+
+/// A web address written as it is in Markdown at the bytes `span` of
+/// `source`: `<scheme://…>` or `<mailto:…>`, or a bare address starting
+/// with `http://`, `https://` or `mailto:`. A link by reference (`[text][label]`,
+/// `[label]`) is none: it counts once, at its definition (OQ-244); an
+/// address without its scheme (`www.…`, an e-mail address) is left out.
+fn written_address(source: &str, span: std::ops::Range<usize>) -> Option<FoundLink> {
+    let raw = source.get(span.clone())?;
+    let has_scheme = |text: &str| {
+        ["http://", "https://", "mailto:"]
+            .iter()
+            .any(|s| text.starts_with(s))
+            || {
+                text.split_once("://").is_some_and(|(scheme, _)| {
+                    !scheme.is_empty()
+                        && scheme
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '+')
+                })
+            }
+    };
+    let target = if let Some(inner) = raw.strip_prefix('<') {
+        let end = inner.find('>')?;
+        if !has_scheme(&inner[..end]) {
+            return None;
+        }
+        span.start + 1..span.start + 1 + end
+    } else {
+        if !["http://", "https://", "mailto:"]
+            .iter()
+            .any(|s| raw.starts_with(s))
+        {
+            return None;
+        }
+        let end = raw.find(char::is_whitespace).unwrap_or(raw.len());
+        span.start..span.start + end
+    };
+    (!target.is_empty()).then_some(FoundLink {
+        markup: LinkMarkup::Address,
+        span,
+        target,
+        text: None,
+    })
 }
 
 /// An inline link or image `[text](place "title")` starting at `start`.
@@ -209,23 +369,44 @@ fn definition(line: &str) -> Option<Range<usize>> {
         return None;
     }
     let close = indent + line[indent..].find("]:")?;
-    if close == indent + 1 || line[indent + 1..close].contains(['[', ']']) {
+    if close == indent + 1
+        || line[indent + 1..close].contains(['[', ']'])
+        // A footnote definition (`[^1]: text`) is no link.
+        || line[indent + 1..].starts_with('^')
+    {
         return None;
     }
     let rest = &line[close + 2..];
     let skip = rest.len() - rest.trim_start_matches([' ', '\t']).len();
     let begin = close + 2 + skip;
     let place = &line[begin..];
-    if let Some(inner) = place.strip_prefix('<') {
+    let (target, after) = if let Some(inner) = place.strip_prefix('<') {
         let end = inner.find('>')?;
-        return Some(begin + 1..begin + 1 + end);
-    }
-    let end = place.find(char::is_whitespace).unwrap_or(place.len());
-    (end > 0).then_some(begin..begin + end)
+        (begin + 1..begin + 1 + end, &inner[end + 1..])
+    } else {
+        let end = place.find(char::is_whitespace).unwrap_or(place.len());
+        (begin..begin + end, &place[end..])
+    };
+    // After the place only a title may follow (CommonMark), else the line
+    // is text such as `[Note]: remember the milk`.
+    (!target.is_empty() && is_title(after.trim())).then_some(target)
 }
 
-fn asciidoc_links(source: &str) -> Vec<LinkSpan> {
-    let mut spans = Vec::new();
+/// Whether `rest` is nothing or the title of a definition: `"…"`, `'…'` or
+/// `(…)`.
+fn is_title(rest: &str) -> bool {
+    if rest.is_empty() {
+        return true;
+    }
+    let mut chars = rest.chars();
+    let (Some(open), Some(close)) = (chars.next(), chars.next_back()) else {
+        return false;
+    };
+    rest.len() >= 2 && matches!((open, close), ('"', '"') | ('\'', '\'') | ('(', ')'))
+}
+
+fn asciidoc_links(source: &str, addresses: bool) -> Vec<FoundLink> {
+    let mut found = Vec::new();
     let mut block: Option<String> = None;
     let mut at = 0;
     for line in source.split_inclusive('\n') {
@@ -245,14 +426,25 @@ fn asciidoc_links(source: &str) -> Vec<LinkSpan> {
         if content.starts_with("//") {
             continue;
         }
-        asciidoc_line(content, start, &mut spans);
+        asciidoc_line(content, start, addresses, &mut found);
     }
-    spans
+    found
+}
+
+/// The markup of an AsciiDoc macro by its name.
+fn macro_markup(name: &str) -> LinkMarkup {
+    match name {
+        "include::" => LinkMarkup::Include,
+        "image::" | "image:" => LinkMarkup::Image,
+        _ => LinkMarkup::Link,
+    }
 }
 
 /// The links of one AsciiDoc line: `xref:`, `link:`, `image:`, `image::`,
-/// `include::` macros and `<<place,text>>` references to other documents.
-fn asciidoc_line(line: &str, start: usize, spans: &mut Vec<LinkSpan>) {
+/// `include::` macros and `<<place,text>>` references to other documents;
+/// with `addresses`, also web addresses written as they are, with or
+/// without `[text]`.
+fn asciidoc_line(line: &str, start: usize, addresses: bool, found: &mut Vec<FoundLink>) {
     let bytes = line.as_bytes();
     let mut code = false;
     let mut i = 0;
@@ -287,7 +479,9 @@ fn asciidoc_line(line: &str, start: usize, spans: &mut Vec<LinkSpan>) {
                         let from = start + i + 2 + c + 1 + skip;
                         from..from + text.trim().len()
                     });
-                    spans.push(LinkSpan {
+                    found.push(FoundLink {
+                        markup: LinkMarkup::Link,
+                        span: start + i..start + i + 2 + close + 2,
                         target: begin..begin + place.len(),
                         text: text.filter(|t| !t.is_empty()),
                     });
@@ -317,7 +511,9 @@ fn asciidoc_line(line: &str, start: usize, spans: &mut Vec<LinkSpan>) {
                         .map(|c| (open + 1, c))
                         .filter(|(from, to)| to > from && !after[*from..*to].contains('='))
                         .map(|(from, to)| begin + from..begin + to);
-                    spans.push(LinkSpan {
+                    found.push(FoundLink {
+                        markup: macro_markup(name),
+                        span: start + i..begin + close.map_or(open, |c| c + 1),
                         target: begin..begin + place.len(),
                         text,
                     });
@@ -326,8 +522,45 @@ fn asciidoc_line(line: &str, start: usize, spans: &mut Vec<LinkSpan>) {
                 continue;
             }
         }
+        if addresses {
+            if let Some(len) = asciidoc_address(rest) {
+                i += len;
+                let begin = start + i - len;
+                let place = &rest[..len];
+                let after = &rest[len..];
+                let close = after
+                    .strip_prefix('[')
+                    .and_then(|inner| inner.find(']'))
+                    .map(|c| c + 1);
+                let text = close
+                    .filter(|c| *c > 1)
+                    .map(|c| begin + len + 1..begin + len + c);
+                found.push(FoundLink {
+                    markup: LinkMarkup::Address,
+                    span: begin..begin + len + close.map_or(0, |c| c + 1),
+                    target: begin..begin + place.len(),
+                    text,
+                });
+                i += close.map_or(0, |c| c + 1);
+                continue;
+            }
+        }
         i += 1;
     }
+}
+
+/// The length of the web address `rest` starts with, written as it is in
+/// AsciiDoc: `http://`, `https://` or `mailto:` up to a space or `[`.
+fn asciidoc_address(rest: &str) -> Option<usize> {
+    let scheme = ["https://", "http://", "mailto:"]
+        .iter()
+        .find(|scheme| rest.starts_with(**scheme))?;
+    let len = rest
+        .find(|c: char| c.is_whitespace() || c == '[')
+        .unwrap_or(rest.len());
+    // A full stop or comma after an address ends the sentence.
+    let len = rest[..len].trim_end_matches(['.', ',', ';', ')']).len();
+    (len > scheme.len()).then_some(len)
 }
 
 /// Whether an AsciiDoc reference names another document, not only an id in
@@ -528,6 +761,128 @@ mod tests {
             .into_iter()
             .map(|s| (&source[s.target], s.text.map(|t| &source[t])))
             .collect()
+    }
+
+    fn found(source: &str, format: NoteFormat) -> Vec<(LinkMarkup, &str, &str, Option<&str>)> {
+        found_links(source, format)
+            .into_iter()
+            .map(|f| {
+                (
+                    f.markup,
+                    &source[f.span],
+                    &source[f.target],
+                    f.text.map(|t| &source[t]),
+                )
+            })
+            .collect()
+    }
+
+    /// FR-079, BR-015, TC-004-30: every link of a Markdown note in its
+    /// order, with its whole markup: links, web addresses written out,
+    /// pictures; none in code.
+    #[test]
+    fn uc_004_br_015_tc_004_30_found_links_of_markdown() {
+        let source = "[Plan](Plan.md), [Gone](Gone.md)\n[Goals](Plan.md#nothing) and \
+            ![Logo](img/logo.png)\n<https://example.org> or https://example.com/x.\n\
+            `[x](Code.md)`\n\n```\n[y](Y.md)\n```\n\n[ref]: Ref.md\n";
+        assert_eq!(
+            found(source, NoteFormat::Markdown),
+            [
+                (LinkMarkup::Link, "[Plan](Plan.md)", "Plan.md", Some("Plan")),
+                (LinkMarkup::Link, "[Gone](Gone.md)", "Gone.md", Some("Gone")),
+                (
+                    LinkMarkup::Link,
+                    "[Goals](Plan.md#nothing)",
+                    "Plan.md#nothing",
+                    Some("Goals")
+                ),
+                (
+                    LinkMarkup::Image,
+                    "![Logo](img/logo.png)",
+                    "img/logo.png",
+                    None
+                ),
+                (
+                    LinkMarkup::Address,
+                    "<https://example.org>",
+                    "https://example.org",
+                    None
+                ),
+                (
+                    LinkMarkup::Address,
+                    "https://example.com/x",
+                    "https://example.com/x",
+                    None
+                ),
+                (LinkMarkup::Link, "[ref]: Ref.md", "Ref.md", None),
+            ]
+        );
+        // A rename never sees the addresses written out.
+        assert_eq!(link_spans(source, NoteFormat::Markdown).len(), 5);
+    }
+
+    /// OQ-244, BR-015: a link by reference counts once, at its definition;
+    /// an e-mail address and `www.` without a scheme are no links.
+    #[test]
+    fn uc_004_br_015_references_and_addresses_without_scheme() {
+        let source = "see [ref][r] and [r] and mail a@b.com and www.x.org/a\n\n[r]: Ref.md\n";
+        assert_eq!(
+            found(source, NoteFormat::Markdown),
+            [(LinkMarkup::Link, "[r]: Ref.md", "Ref.md", None)]
+        );
+        assert_eq!(
+            found("<a@b.com> <https://x.org>", NoteFormat::Markdown)
+                .iter()
+                .map(|f| f.2)
+                .collect::<Vec<_>>(),
+            ["https://x.org"]
+        );
+    }
+
+    /// TC-004-29, BR-015: the links of an AsciiDoc note, with web
+    /// addresses written out; pictures and includes are told apart.
+    #[test]
+    fn uc_004_br_015_found_links_of_asciidoc() {
+        let source = "link:../Plan.md[Plan] and xref:Ideas.adoc#goals[Goals]\n\
+            <<Guide.adoc#,Guide>> image:logo.png[Logo] https://example.org[Site]\n\
+            include::part.adoc[]\n----\nlink:Code.md[x]\n----\n";
+        assert_eq!(
+            found(source, NoteFormat::AsciiDoc),
+            [
+                (
+                    LinkMarkup::Link,
+                    "link:../Plan.md[Plan]",
+                    "../Plan.md",
+                    Some("Plan")
+                ),
+                (
+                    LinkMarkup::Link,
+                    "xref:Ideas.adoc#goals[Goals]",
+                    "Ideas.adoc#goals",
+                    Some("Goals")
+                ),
+                (
+                    LinkMarkup::Link,
+                    "<<Guide.adoc#,Guide>>",
+                    "Guide.adoc#",
+                    Some("Guide")
+                ),
+                (LinkMarkup::Image, "image:logo.png[Logo]", "logo.png", None),
+                (
+                    LinkMarkup::Address,
+                    "https://example.org[Site]",
+                    "https://example.org",
+                    Some("Site")
+                ),
+                (
+                    LinkMarkup::Include,
+                    "include::part.adoc[]",
+                    "part.adoc",
+                    None
+                ),
+            ]
+        );
+        assert_eq!(link_spans(source, NoteFormat::AsciiDoc).len(), 5);
     }
 
     #[test]
@@ -817,6 +1172,93 @@ mod tests {
         sandbox.rename("deep/er/Road-Map", "", "Plan");
         for (path, content) in files {
             assert_eq!(sandbox.read(path), content, "{path}");
+        }
+    }
+
+    fn assert_no_markdown_link(text: &str) {
+        let found = found_links(text, NoteFormat::Markdown);
+        assert!(found.is_empty(), "{text:?} gave {found:?}");
+    }
+
+    /// UC-004 BR-015, FR-079 (chaos): a line `[Note]: remember the milk` is
+    /// no reference definition (CommonMark: the rest is no title), so it is
+    /// no outgoing link "remember".
+    #[test]
+    fn uc004_br015_chaos_bracket_word_colon_text_is_no_link() {
+        assert_no_markdown_link("[Note]: remember the milk\n");
+    }
+
+    /// UC-004 BR-015, FR-079 (chaos): a footnote definition is no link.
+    #[test]
+    fn uc004_br015_chaos_footnote_definition_is_no_link() {
+        assert_no_markdown_link("Claim[^1]\n\n[^1]: Source of the claim\n");
+    }
+
+    /// UC-004 BR-015 (chaos): a definition cannot interrupt a paragraph.
+    #[test]
+    fn uc004_br015_chaos_definition_in_a_paragraph_is_no_link() {
+        assert_no_markdown_link("Some text\n[x]: Plan.md\n");
+    }
+
+    /// UC-004 BR-015 (chaos, seed logged): whatever the text, the spans of
+    /// the links lie on character boundaries, inside the text, the target
+    /// and the text of a link inside its span.
+    #[test]
+    fn uc004_br015_chaos_spans_are_sane() {
+        const PIECES: [&str; 26] = [
+            "[",
+            "]",
+            "(",
+            ")",
+            "`",
+            "\\",
+            "<",
+            ">",
+            "!",
+            "é",
+            "日",
+            "😀",
+            " ",
+            "\n",
+            "\r\n",
+            "|",
+            "> ",
+            "- ",
+            "    ",
+            "https://x.org",
+            "Plan.md",
+            ":",
+            "xref:",
+            "<<",
+            ",",
+            "#",
+        ];
+        for format in NoteFormat::ALL {
+            let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+            eprintln!("seed start {seed:#x} {format:?}");
+            for round in 0..3000 {
+                let mut text = String::new();
+                for _ in 0..(seed % 23 + 3) {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    text.push_str(PIECES[(seed % PIECES.len() as u64) as usize]);
+                }
+                let result = std::panic::catch_unwind(|| found_links(&text, format));
+                let found = result.unwrap_or_else(|_| panic!("round {round}: panic on {text:?}"));
+                for link in found {
+                    let ok = text.get(link.span.clone()).is_some()
+                        && text.get(link.target.clone()).is_some()
+                        && link.span.start <= link.target.start
+                        && link.target.end <= link.span.end
+                        && link.text.as_ref().is_none_or(|t| {
+                            text.get(t.clone()).is_some()
+                                && link.span.start <= t.start
+                                && t.end <= link.span.end
+                        });
+                    assert!(ok, "round {round} {format:?}: {link:?} in {text:?}");
+                }
+            }
         }
     }
 }

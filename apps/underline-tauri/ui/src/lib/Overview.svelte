@@ -11,8 +11,9 @@
   - "New note…" opens the dialog "New note" (M-14.1);
   - M-05.4: the context menu of a note, "Rename…", "Delete…" and the
     submenu "Export" with "{kind}…" for each kind of export of the note's
-    format, which skips asking for the kind (UC-009 step 1); it also
-    opens with Shift+F10 or the context menu key (A-80);
+    format, which skips asking for the kind (UC-009 step 1), then
+    "Snapshots…" (UC-026 step 1); it also opens with Shift+F10 or the
+    context menu key (A-80);
   - M-05.5: the Delete key deletes the note last clicked while the
     keyboard is on it (UC-007 BR-007); a click or the keyboard elsewhere
     ends that. No arrow keys, as in egui;
@@ -31,6 +32,8 @@
   import { onMount, tick } from 'svelte';
   import ContextMenu, { asksForMenu, menuPlace, type MenuEntry } from './ContextMenu.svelte';
   import type { ExportChoice } from './bindings';
+  import { COMMAND } from './commandList';
+  import { keyText } from './commands';
   import { setFocusHint } from './focus';
   import { overviewWidthWithin, type Shell } from './shell.svelte';
 
@@ -105,6 +108,15 @@
           label: `${choice.label}…`,
           action: () => void shell.startExport(note, choice.kind),
         })),
+      },
+      // UC-026 step 1: the snapshots of the note.
+      { label: 'Snapshots…', action: () => void shell.showSnapshots(note) },
+      // UC-004 A18 (FR-096): the note opens in the other pane.
+      {
+        label: 'Open to the side',
+        separatorBefore: true,
+        shortcut: keyText(shell.commandById(COMMAND.split)?.key, shell.platform === 'macos'),
+        action: () => void shell.openToSide(note),
       },
     ];
   }

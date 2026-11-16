@@ -11,21 +11,23 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use underline_core::{Autosave, EditingView, NoteFormat, NoteProperties, NoteSaver};
+use underline_core::{
+    Autosave, NoteFormat, NoteProperties, NoteSaver, SnapshotCause, SnapshotJob, Timestamp,
+};
 use underline_editor_core::sync::{apply_remote, ChangeSet, Server, Touched};
 use underline_editor_view::EditorTab;
 use underline_facade::highlight::DocumentHighlight;
 
 use super::facade::Facade;
 use super::indexes::TabIndexes;
+use super::snapshots::TabSnapshots;
+use super::spell::TabSpell;
 use crate::editor_view::{NotePropertiesView, TabPropertiesView};
 
 /// One open tab.
 pub(super) struct Tab {
     pub(super) path: PathBuf,
     pub(super) title: String,
-    /// The editing view the tab shows (UC-004 BR-003).
-    pub(super) editing_view: EditingView,
     /// The text with its cursor and history, its keys, folds and facade
     /// blocks, as the window will hold it (ADR-025; the note's format is
     /// its `format`).
@@ -77,6 +79,14 @@ pub(super) struct Tab {
     pub(super) facade: Option<Facade>,
     /// M-16.5: the outline, code and figures of the tool panel.
     pub(super) indexes: TabIndexes,
+    /// UC-026 BR-001: where the note's snapshots are taken, and the clock.
+    pub(super) snapshots: Option<TabSnapshots>,
+    /// UC-026 BR-001: when an Editing snapshot was last asked of the saver;
+    /// none is asked again within 10 minutes, so a save does not copy the
+    /// note's text each time (the saver checks the newest snapshot itself).
+    pub(super) editing_asked: Option<Timestamp>,
+    /// FR-099, UC-005 BR-023: the spell check of the note.
+    pub(super) spell: TabSpell,
 }
 
 impl std::fmt::Debug for Tab {
@@ -93,17 +103,10 @@ impl std::fmt::Debug for Tab {
 
 impl Tab {
     /// A tab showing `body`, the text of the note in `path`.
-    pub(super) fn new(
-        path: PathBuf,
-        title: String,
-        format: NoteFormat,
-        editing_view: EditingView,
-        body: String,
-    ) -> Self {
+    pub(super) fn new(path: PathBuf, title: String, format: NoteFormat, body: String) -> Self {
         Self {
             path,
             title,
-            editing_view,
             edit: {
                 let mut edit = EditorTab::new(&body, format);
                 edit.editor.record_edits();
@@ -127,6 +130,48 @@ impl Tab {
             highlight_told: None,
             facade: None,
             indexes: TabIndexes::default(),
+            snapshots: None,
+            editing_asked: None,
+            spell: TabSpell::default(),
+        }
+    }
+
+    /// UC-026 BR-001: a snapshot of `content` for `cause`, of this tab's
+    /// note; `None` without snapshots.
+    pub(super) fn snapshot_job(
+        &self,
+        content: String,
+        cause: SnapshotCause,
+    ) -> Option<SnapshotJob> {
+        self.snapshots
+            .as_ref()
+            .and_then(|snapshots| snapshots.job(&self.path, content, cause))
+    }
+
+    /// UC-026 BR-001, OQ-223, cause Editing: before the tab's text `text`
+    /// is stored over what the file held, a snapshot of that is taken on
+    /// the saver's thread, when the newest is older than 10 minutes.
+    ///
+    /// The tab asks the saver at most once each 10 minutes of the clock
+    /// (also after the clock was set back); a snapshot that was not taken
+    /// then, because the newest held the same content, waits for the next
+    /// ask (OQ-290).
+    pub(super) fn editing_snapshot(&mut self, saver: &NoteSaver, text: &str) {
+        if self.on_disk == text {
+            return;
+        }
+        let Some(now) = self.snapshots.as_ref().map(TabSnapshots::now) else {
+            return;
+        };
+        let due = self.editing_asked.is_none_or(|asked| {
+            asked > now || now - asked > underline_core::EDITING_SNAPSHOT_AFTER_MS
+        });
+        if !due {
+            return;
+        }
+        if let Some(job) = self.snapshot_job(self.on_disk.clone(), SnapshotCause::Editing) {
+            self.editing_asked = Some(now);
+            saver.snapshot(job);
         }
     }
 
@@ -175,6 +220,7 @@ impl Tab {
         let started = Instant::now();
         let text = self.mirror.text();
         self.make_folder();
+        self.editing_snapshot(saver, &text);
         match saver.save_now(&self.path, &text) {
             Ok(()) => {
                 self.on_disk = text;

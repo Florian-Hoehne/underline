@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
 
+use crate::editor_view::SearchSwitches;
 use crate::search_view::{FoundPlace, SearchResultView, SearchView};
 use crate::{Event, Session, SettingsState};
 
@@ -76,7 +77,7 @@ fn result_for(session: &mut Session, text: &str) -> SearchResultView {
 
 /// Searches `text` and waits for its result.
 fn search(session: &mut Session, text: &str) -> SearchResultView {
-    session.search_set(text);
+    session.search_set(text, SearchSwitches::default());
     result_for(session, text)
 }
 
@@ -181,15 +182,17 @@ fn uc008_tc07_tc08_m13_1_nothing_found_and_cleared() {
     let dir = temp_dir("tc07");
     let (mut session, _) = session_with(&dir, &[("Trip.md", "ferry\n")]);
 
-    session.search_set("  zebra ");
+    session.search_set("  zebra ", SearchSwitches::default());
     let result = result_for(&mut session, "zebra");
     assert_eq!(result.total, 0);
     assert!(result.notes.is_empty());
 
-    session.search_set("   ");
+    session.search_set("   ", SearchSwitches::default());
     let events = session.tick(Instant::now());
     assert!(events.contains(&Event::Search(SearchView {
         text: String::new(),
+        switches: SearchSwitches::default(),
+        problem: None,
         result: None,
     })));
     assert!(session
@@ -282,7 +285,7 @@ fn m13_1_the_found_notes_come_in_pages() {
     assert!(session
         .search_page(result.serial.wrapping_add(1), 0)
         .is_none());
-    session.search_set("");
+    session.search_set("", SearchSwitches::default());
     session.tick(Instant::now());
     assert!(session.search_page(result.serial, 0).is_none());
 }
@@ -407,4 +410,72 @@ fn uc008_tc15_nfr003_speed_in_a_large_workspace() {
     let _ = fs::remove_dir_all(&dir);
     let slow = times.iter().filter(|t| t.as_secs_f64() > 1.0).count();
     assert!(slow <= 1, "{slow} of 20 searches took more than 1 s");
+}
+
+/// TC-008-18, TC-008-20, FR-075, UC-008 A7, A9, BR-011: the switches of the
+/// overlay; an expression that is not valid lists no notes and says why.
+#[test]
+fn uc008_tc18_tc20_fr075_search_switches() {
+    let dir = temp_dir("tc18");
+    let (mut session, _) = session_with(
+        &dir,
+        &[
+            ("A.md", "Plan for Q1\n"),
+            ("B.md", "planning day\n"),
+            ("C.md", "the plan\n"),
+            ("D.md", "Plän\n"),
+        ],
+    );
+    let sorted = |session: &mut Session, switches: SearchSwitches, text: &str| {
+        session.search_set(text, switches);
+        let start = Instant::now();
+        loop {
+            for event in session.tick(Instant::now()) {
+                if let Event::Search(SearchView {
+                    result: Some(result),
+                    ..
+                }) = event
+                {
+                    if result.text == text && result.switches == switches {
+                        let mut found: Vec<String> =
+                            result.notes.iter().map(|n| n.title.clone()).collect();
+                        found.sort();
+                        return found;
+                    }
+                }
+            }
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    let none = SearchSwitches::default();
+    assert_eq!(sorted(&mut session, none, "plan"), ["A", "B", "C"]);
+    let case = SearchSwitches {
+        match_case: true,
+        ..none
+    };
+    assert_eq!(sorted(&mut session, case, "plan"), ["B", "C"]);
+    let whole = SearchSwitches {
+        whole_word: true,
+        ..none
+    };
+    assert_eq!(sorted(&mut session, whole, "plan"), ["A", "C"]);
+    let regex = SearchSwitches {
+        regex: true,
+        ..none
+    };
+    assert_eq!(sorted(&mut session, regex, "^the"), ["C"]);
+
+    session.search_set("(plan", regex);
+    let events = session.tick(Instant::now());
+    let told = events.iter().find_map(|e| match e {
+        Event::Search(view) => Some(view.clone()),
+        _ => None,
+    });
+    let told = told.expect("told of the problem");
+    assert_eq!(
+        told.problem.as_deref(),
+        Some("Not a valid regular expression: unclosed group.")
+    );
+    assert!(told.result.is_none());
 }

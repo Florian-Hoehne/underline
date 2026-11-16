@@ -277,6 +277,12 @@ impl Workspace {
             return result;
         }
         self.rescan();
+        // UC-026 BR-003: the note's snapshots follow it. Should they not
+        // move, they stay under the old name, never lost, and it is said.
+        self.snapshot_problem = crate::snapshots::SnapshotStore::new(self.root())
+            .moved(&planned.from_file(), &planned.to_file())
+            .err()
+            .map(|error| format!("{}: {error}", planned.to.title()));
         // UC-006 BR-006, UC-020 BR-005: todo links follow the note. A todo
         // that cannot be stored keeps the old link, shown as missing.
         let _ = crate::todos::relink_todos(self.root(), &planned.from, &planned.to);

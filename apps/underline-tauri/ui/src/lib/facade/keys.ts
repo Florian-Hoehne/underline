@@ -5,8 +5,12 @@
 // the facade's, so the webview's own handling of them is stopped.
 //
 // - Normal: the editing keys, Ctrl/Cmd+A/Y/Z, the toolbar keys and the
-//   folding keys. Escape leaves the text (M-08.10). Tab, Page Up and Page
-//   Down do nothing (M-09.13).
+//   folding keys. Escape leaves the text (M-08.10). Page Up and Page Down
+//   do nothing (M-09.13).
+// - Package 4 (UC-005 A26, A27): Tab and Shift+Tab go to the core, which
+//   indents or outdents the list items at the cursor and does nothing
+//   elsewhere; Alt+Up and Alt+Down (with the arrows) move blocks and
+//   Ctrl+Shift+D (Cmd+Shift+D) duplicates them.
 // - Vim and Nano: the facade has the editor core's Vim and Nano keys (A-01:
 //   not `codemirror-vim`), so every key of the table goes to the backend, and
 //   Escape, Vim's Ctrl+R and Nano's Ctrl/Alt keys too; the keys decide what
@@ -53,7 +57,7 @@ const ALWAYS: Readonly<Record<string, KeyName>> = {
 const MEASURED: ReadonlySet<KeyName> = new Set(['ArrowUp', 'ArrowDown', 'Home', 'End']);
 
 /** M-09.13: keys that do nothing in the facade. */
-const NOTHING: ReadonlySet<string> = new Set(['Tab', 'PageUp', 'PageDown']);
+const NOTHING: ReadonlySet<string> = new Set(['PageUp', 'PageDown']);
 
 const WITH_COMMAND: ReadonlySet<string> = new Set(['A', 'Y', 'Z']);
 const TOOL_KEYS: ReadonlySet<string> = new Set(['B', 'I', 'E', 'K']);
@@ -133,7 +137,7 @@ export function routeFacadeKey(
       if (ctrl && letter === 'C') {
         return send('C');
       }
-      return NOTHING.has(event.key) ? 'swallow' : null;
+      return NOTHING.has(event.key) || event.key === 'Tab' ? 'swallow' : null;
     }
     if (event.key === 'Escape') {
       return send('Escape');
@@ -159,6 +163,13 @@ export function routeFacadeKey(
   if (NOTHING.has(event.key)) {
     return 'swallow';
   }
+  if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    // UC-005 A27: the core indents a list item; elsewhere Tab does nothing.
+    return send('Tab');
+  }
+  if (event.key === 'Tab') {
+    return 'swallow';
+  }
   if (always) {
     return send(always);
   }
@@ -170,6 +181,10 @@ export function routeFacadeKey(
   }
   if (letter !== null && command && WITH_COMMAND.has(letter)) {
     return send(letter as KeyName);
+  }
+  if (command && event.shiftKey && !event.altKey && letter === 'D') {
+    // UC-005 A26, OQ-203: duplicates the block.
+    return send('D');
   }
   if (command && event.shiftKey && letter === 'V') {
     return 'pastePlain';

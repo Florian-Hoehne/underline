@@ -1,7 +1,7 @@
 # Test Cases: Find Note
 
 **Use Case:** [UC-008 Find Note](../use_cases/UC-008-find-note.md)  
-**Requirements:** [FR-007, FR-017, FR-018, NFR-002, NFR-003, NFR-011, NFR-013](../requirements.md)
+**Requirements:** [FR-007, FR-017, FR-018, FR-075, FR-092, NFR-002, NFR-003, NFR-011, NFR-013](../requirements.md)
 
 ## Coverage
 
@@ -24,6 +24,12 @@
 | TC-008-15 | Speed in a large workspace                         | BR-005, NFR-002, NFR-003 |
 | TC-008-16 | Keyboard alone                                     | BR-007, NFR-011         |
 | TC-008-17 | Nothing remembered                                 | BR-010                  |
+| TC-008-18 | A7 Search switches in the search of the workspace  | FR-075, BR-011          |
+| TC-008-19 | A7 Search switches in the find field of the note   | FR-075, BR-011          |
+| TC-008-20 | A9 Regular expression not valid                    | BR-011                  |
+| TC-008-21 | A8 Search by tag                                   | FR-092, BR-012          |
+| TC-008-22 | A10 Replace what was found                         | UC-022                  |
+| TC-008-23 | Search switches not remembered                     | BR-010                  |
 
 ## TC-008-01: Find a note and open it at the place
 
@@ -201,3 +207,67 @@
 | Step | Action               | Expected result                                       |
 |------|----------------------|-------------------------------------------------------|
 | 1    | Restart Underline.   | The search field is empty and the note overview shows the notes. |
+
+## TC-008-18: Search switches in the search of the workspace
+
+**Flow:** A7, BR-011, FR-075  
+**Preconditions:** `A.md` holds "Plan for Q1", `B.md` holds "planning day", `C.md` holds "the plan", `D.md` holds "Plän".
+
+| Step | Action                                                   | Expected result                         |
+|------|----------------------------------------------------------|-----------------------------------------|
+| 1    | Search "plan".                                           | "A", "B", and "C" are found; "D" is not. |
+| 2    | Switch match case on.                                    | "B" and "C" are found.                  |
+| 3    | Switch match case off and whole word on.                 | "A" and "C" are found.                  |
+| 4    | Switch whole word off, regular expression on, and search `^the`. | Only "C" is found.               |
+
+## TC-008-19: Search switches in the find field of the note
+
+**Flow:** A7, BR-011  
+**Preconditions:** "Words" is open and holds "Plan plan planning".
+
+| Step | Action                                         | Expected result                       |
+|------|------------------------------------------------|---------------------------------------|
+| 1    | Press Ctrl+F and type "plan".                  | The find field shows 3.               |
+| 2    | Press Alt+C.                                   | Match case is on; it shows 2.         |
+| 3    | Press Alt+W.                                   | Whole word is on too; it shows 1.     |
+| 4    | Press Alt+R and type `pl.n`.                   | With regular expression on, 1 is shown (match case and whole word still on). |
+
+## TC-008-20: Regular expression not valid
+
+**Flow:** A9, BR-011  
+**Preconditions:** Regular expression is on in the search field.
+
+| Step | Action             | Expected result                                               |
+|------|--------------------|---------------------------------------------------------------|
+| 1    | Search `(plan`.    | The system says what is wrong with the expression; no notes are listed. |
+
+## TC-008-21: Search by tag
+
+**Flow:** A8, BR-012, FR-092  
+**Preconditions:** `Trip.md` holds "#travel" in its text; `Hydra.md` has the note attribute `tags: [travel/greece]`; `Guide.adoc` has `:tags: Travel`; `Price.md` holds "costs #42" and "travel"; "Trip" is open.
+
+| Step | Action                                                  | Expected result                                                         |
+|------|---------------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Search `#travel`.                                       | "Trip", "Hydra", and "Guide" are found, each with the line that holds the tag; "Price" is not. |
+| 2    | Search `#travel ferry`.                                 | Only notes with the tag that also hold "ferry" are found.              |
+| 3    | Search `#42`.                                           | Nothing is found by tag; "#42" is no tag.                              |
+| 4    | Choose the tag "travel" in the tool panel of "Trip".    | The search field holds `#travel` and the same notes as in step 1 are found. |
+
+## TC-008-22: Replace what was found
+
+**Flow:** A10  
+**Preconditions:** "ferry" is searched with whole word on.
+
+| Step | Action                                      | Expected result                                                         |
+|------|---------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Ask to replace from the search.             | The replace of the workspace opens with `ferry` and whole word on (UC-022). |
+
+## TC-008-23: Search switches not remembered
+
+**Flow:** BR-010  
+**Preconditions:** Match case is on in the search field, whole word in the find field of the note.
+
+| Step | Action                                         | Expected result                                       |
+|------|------------------------------------------------|-------------------------------------------------------|
+| 1    | Close and open a tab, then look at both fields. | Each keeps its own switch.                           |
+| 2    | Restart Underline.                             | Every switch is off in both fields.                   |

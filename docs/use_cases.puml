@@ -27,6 +27,11 @@ rectangle "Underline" {
     usecase "UC-019\nWrite Note as Agent" as UC019
     usecase "UC-020\nManage Todos" as UC020
     usecase "UC-021\nWork Through Todo List" as UC021
+    usecase "UC-022\nReplace in Workspace" as UC022
+    usecase "UC-023\nRun Command" as UC023
+    usecase "UC-024\nEdit Note Attributes" as UC024
+    usecase "UC-025\nOpen Daily Note" as UC025
+    usecase "UC-026\nRestore Snapshot" as UC026
 }
 
 user --> UC001
@@ -48,6 +53,11 @@ user --> UC016
 user --> UC017
 user --> UC020
 user --> UC021
+user --> UC022
+user --> UC023
+user --> UC024
+user --> UC025
+user --> UC026
 
 agent --> UC018
 agent --> UC019
@@ -59,25 +69,35 @@ UC015 .> UC014 : <<extend>>
 UC002 .> UC001 : <<extend>>
 UC001 .> UC002 : <<extend>>
 UC003 .> UC004 : <<extend>>
+UC022 .> UC008 : <<extend>>
+UC003 .> UC025 : <<extend>>
 
 note right of UC014
   Also runs on its own at the
   git sync interval (FR-045).
 end note
 
+note right of UC023
+  Runs the command of any other
+  use case by its name (FR-077).
+end note
+
 ' Traceability: use case -> functional requirements
 ' UC-001 Create Workspace ........ FR-001, FR-072
 ' UC-002 Open Workspace .......... FR-002, FR-004, FR-017, FR-018, FR-070, FR-071
-' UC-003 Create Note ............. FR-003, FR-004
+' UC-003 Create Note ............. FR-003, FR-004, FR-094
 ' UC-004 Read Note ............... FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037,
-'                                  FR-038, FR-039, FR-040, FR-041, FR-042, FR-043
+'                                  FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-076, FR-078, FR-079,
+'                                  FR-086, FR-090, FR-091, FR-096, FR-097, FR-098
 ' UC-005 Edit Note ............... FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025,
-'                                  FR-026, FR-031, FR-033, FR-034, FR-044
+'                                  FR-026, FR-031, FR-033, FR-034, FR-044, FR-073, FR-075, FR-080, FR-081,
+'                                  FR-082, FR-083, FR-084, FR-085, FR-097, FR-098, FR-099
 ' UC-006 Rename Note ............. FR-005
 ' UC-007 Delete Note ............. FR-006
-' UC-008 Find Note ............... FR-007
-' UC-009 Export Note ............. FR-014, FR-015, FR-016
-' UC-010 Adjust Settings ......... FR-022, FR-028, FR-029, FR-030, FR-032, FR-069, FR-070, FR-071
+' UC-008 Find Note ............... FR-007, FR-075, FR-092
+' UC-009 Export Note ............. FR-014, FR-015, FR-016, FR-098
+' UC-010 Adjust Settings ......... FR-022, FR-028, FR-029, FR-030, FR-032, FR-069, FR-070, FR-071, FR-087,
+'                                  FR-088, FR-089, FR-100
 ' UC-011 Review Changes .......... FR-047, FR-048, FR-049
 ' UC-012 Commit Changes .......... FR-051
 ' UC-013 Manage Branches ......... FR-050
@@ -89,6 +109,11 @@ end note
 ' UC-019 Write Note as Agent ..... FR-056, FR-057, FR-058
 ' UC-020 Manage Todos ............ FR-062, FR-063, FR-064, FR-065, FR-066, FR-068
 ' UC-021 Work Through Todo List .. FR-066, FR-067
+' UC-022 Replace in Workspace .... FR-074, FR-075
+' UC-023 Run Command ............. FR-077
+' UC-024 Edit Note Attributes .... FR-091, FR-093
+' UC-025 Open Daily Note ......... FR-094, FR-095
+' UC-026 Restore Snapshot ........ FR-101, FR-102
 ' Not in the diagram: FR-013 (Deferred)
 
 @enduml

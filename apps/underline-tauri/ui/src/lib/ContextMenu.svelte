@@ -22,6 +22,16 @@
   Left and Escape close it and give the keyboard back to the entry; Up,
   Down, Home and End to another entry close it. Near the right edge of the
   window it opens left of the menu.
+
+  UC-005 A28: a menu may name what it is about in a line at its top
+  (`header`, the word of the spell menu) and say what is still to come in a
+  line below it (`status`, such as "Looking for corrections…"); neither
+  takes the keyboard, and the opener says the status to screen readers.
+  Such a menu may open with the keyboard on itself rather than on an entry
+  (`focusMenu`), and give it to its first entry later (`focusFirst` grows);
+  `onTouched` tells that the user pressed a key or moved the pointer in it.
+  When its entries change, the menu stays inside the window, and the entry
+  that has the keyboard keeps it.
 -->
 <script lang="ts" module>
   /**
@@ -82,6 +92,16 @@
     flipAt?: number;
     /** It opens above `y` rather than below it (from the status bar). */
     above?: boolean;
+    /** UC-005 A28: a line above the entries saying what is still to come. */
+    status?: string | null;
+    /** UC-005 A28: a line at the top naming what the menu is about. */
+    header?: string | null;
+    /** UC-005 A28: the menu itself takes the keyboard when it opens, no entry. */
+    focusMenu?: boolean;
+    /** UC-005 A28: each time it grows, the first entry takes the keyboard. */
+    focusFirst?: number;
+    /** UC-005 A28: the user pressed a key or moved the pointer in the menu. */
+    onTouched?: () => void;
   };
 
   let {
@@ -94,6 +114,11 @@
     nested = false,
     flipAt,
     above = false,
+    status = null,
+    header = null,
+    focusMenu = false,
+    focusFirst = 0,
+    onTouched,
   }: Props = $props();
 
   /** The open submenu: its entry's index, where it opens, and whether it takes the keyboard. */
@@ -113,20 +138,47 @@
       ) ?? [],
     );
 
+  /** It stays inside the window. */
+  function place() {
+    const box = menu?.getBoundingClientRect();
+    if (box) {
+      const fits = x + box.width <= window.innerWidth - 4;
+      const start = !fits && flipAt !== undefined ? flipAt - box.width : x;
+      left = Math.max(4, Math.min(start, window.innerWidth - box.width - 4));
+      const from = above ? y - box.height : y;
+      top = Math.max(4, Math.min(from, window.innerHeight - box.height - 4));
+    }
+  }
+
+  // UC-005 A28: the first entry takes the keyboard when asked to.
+  let focusedFirst = 0;
+  $effect(() => {
+    const asked = focusFirst;
+    if (placed && asked > focusedFirst) {
+      focusedFirst = asked;
+      void tick().then(() => items()[0]?.focus());
+    }
+  });
+
+  // UC-005 A28: entries that come later may make it larger.
+  let placed = false;
+  $effect(() => {
+    void entries.length;
+    void status;
+    if (placed) {
+      void tick().then(place);
+    }
+  });
+
   onMount(() => {
     left = x;
     top = y;
     void tick().then(() => {
-      // It stays inside the window.
-      const box = menu?.getBoundingClientRect();
-      if (box) {
-        const fits = x + box.width <= window.innerWidth - 4;
-        const start = !fits && flipAt !== undefined ? flipAt - box.width : x;
-        left = Math.max(4, Math.min(start, window.innerWidth - box.width - 4));
-        const from = above ? y - box.height : y;
-        top = Math.max(4, Math.min(from, window.innerHeight - box.height - 4));
-      }
-      if (autofocus) {
+      place();
+      placed = true;
+      if (focusMenu) {
+        menu?.focus();
+      } else if (autofocus) {
         items()[0]?.focus();
       }
     });
@@ -207,6 +259,7 @@
   }
 
   function onKey(event: KeyboardEvent) {
+    onTouched?.();
     const all = items();
     const at = all.indexOf(document.activeElement as HTMLElement);
     // Keys of an open submenu that it did not take are not this menu's.
@@ -280,7 +333,14 @@
   onkeydown={onKey}
   onfocusout={onFocusOut}
   oncontextmenu={(event) => event.preventDefault()}
+  onpointermove={() => onTouched?.()}
 >
+  {#if header}
+    <div class="header" role="presentation" aria-hidden="true">{header}</div>
+  {/if}
+  {#if status}
+    <div class="status" role="presentation" aria-hidden="true">{status}</div>
+  {/if}
   {#each entries as entry, index (entry.label)}
     {#if 'entries' in entry}
       <button
@@ -406,6 +466,30 @@
 
   .radio.on {
     background: radial-gradient(circle, currentcolor 0 3px, transparent 3.5px);
+  }
+
+  /* UC-005 A28: what the menu is about: the word, as it is written. */
+  .header {
+    display: flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--ui-rule);
+    margin-bottom: var(--space-1);
+  }
+
+  /* UC-005 A28: what is still to come, in the hint colour, not an entry. */
+  .status {
+    display: flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    color: var(--ui-hint);
+    font-style: italic;
+    white-space: nowrap;
+    cursor: default;
   }
 
   .separator {

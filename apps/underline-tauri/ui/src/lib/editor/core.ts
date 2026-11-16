@@ -4,7 +4,13 @@
 // speaks with the DTOs of `bindings.ts`, so the views see the same patches
 // the backend's commands give (docs/migration/variante-b.md, section 2).
 
-import init, { initSync, WasmMirror, WasmTab } from '../wasm/pkg/underline_editor_wasm';
+import init, {
+  initSync,
+  lineTarget as wasmLineTarget,
+  WasmMirror,
+  WasmSuggestions,
+  WasmTab,
+} from '../wasm/pkg/underline_editor_wasm';
 import type {
   BlocksView,
   ClipAction,
@@ -19,18 +25,29 @@ import type {
   FacadePatch,
   FacadeState,
   FigureView,
+  FormulaView,
   FindAnswer,
+  FindSpec,
   FindStatus,
   FindStep,
   FormatName,
   Insertion,
   KeysStatusView,
+  LineTargetAnswer,
+  LineTargetView,
+  LinkChoice,
+  LinkContextView,
   RemoteApplied,
+  Replaced,
   RowsView,
   CopyOnSelectView,
   SyncAnswer,
   SyncBatch,
   TabViews,
+  TextStatisticsView,
+  NoteHeadView,
+  AttributeChangeView,
+  AttributeEdited,
   VimChange,
   VimState,
 } from '../bindings';
@@ -38,6 +55,8 @@ import type { InputModeName } from './keys';
 
 let loading: Promise<void> | null = null;
 let loadedIn: number | null = null;
+/** The WASM is loaded and compiled: its calls may be made at once. */
+let loaded = false;
 
 /**
  * Loads and compiles the WASM once; the window starts it at its start and
@@ -48,6 +67,7 @@ export function loadEditorCore(): Promise<void> {
     const start = performance.now();
     loading = init().then(() => {
       loadedIn = performance.now() - start;
+      loaded = true;
     });
   }
   return loading;
@@ -62,6 +82,50 @@ export function editorCoreLoadTime(): number | null {
 export function loadEditorCoreSync(module: BufferSource | WebAssembly.Module): void {
   initSync({ module });
   loading = Promise.resolve();
+  loaded = true;
+}
+
+/** Whether the WASM is loaded, so its calls may be made at once. */
+export function editorCoreLoaded(): boolean {
+  return loaded;
+}
+
+/**
+ * FR-076, FR-077 (UC-004 BR-014, UC-023 BR-002): the notes of go to note or
+ * the commands of the command palette, ranked against what the user typed
+ * by the rule of `underline_markup::suggest` in the WASM. Made once per list
+ * (the names are lowered then), ranked on every key (NFR-018); `free` lets
+ * the WASM's copy go. Needs the WASM loaded (`editorCoreLoaded`).
+ */
+export class SuggestionList {
+  #wasm: WasmSuggestions | null;
+
+  /** `names[i]` with its context `contexts[i]` (folder or menu), in the order of an empty field. */
+  constructor(names: string[], contexts: string[]) {
+    this.#wasm = new WasmSuggestions(names, contexts);
+  }
+
+  /** The indices of the suggestions matching `typed`, best first; those in `last` after all others. */
+  rank(typed: string, last: readonly number[] = []): number[] {
+    if (this.#wasm === null) {
+      return [];
+    }
+    return Array.from(this.#wasm.rank(typed, Uint32Array.from(last)));
+  }
+
+  /** Lets the WASM's copy go; `rank` finds nothing afterwards. */
+  free(): void {
+    this.#wasm?.free();
+    this.#wasm = null;
+  }
+}
+
+/**
+ * FR-086, UC-004 A16, A17: the line, and the column after a colon, that
+ * `text` names, or why it is no line number. Needs the WASM loaded.
+ */
+export function lineTarget(text: string): LineTargetAnswer {
+  return JSON.parse(wasmLineTarget(text)) as LineTargetAnswer;
 }
 
 /** What `EditorCore` calls of a tab of the WASM (a `WasmTab`). */
@@ -71,6 +135,15 @@ type Tab = Pick<
   | 'setMode'
   | 'setView'
   | 'setLooks'
+  | 'setClosePairs'
+  | 'lineCount'
+  | 'textStatistics'
+  | 'noteHead'
+  | 'attribute'
+  | 'facadeAttribute'
+  | 'lineNote'
+  | 'goToLine'
+  | 'facadeGoToLine'
   | 'setNow'
   | 'state'
   | 'input'
@@ -83,6 +156,10 @@ type Tab = Pick<
   | 'overCopied'
   | 'insert'
   | 'facadeInsert'
+  | 'linkContext'
+  | 'completeLink'
+  | 'facadeLinkContext'
+  | 'facadeCompleteLink'
   | 'facadeState'
   | 'facadeHead'
   | 'facadeInput'
@@ -93,6 +170,8 @@ type Tab = Pick<
   | 'views'
   | 'setSearch'
   | 'find'
+  | 'replace'
+  | 'facadeReplace'
   | 'findStatus'
   | 'selectedText'
   | 'text'
@@ -107,7 +186,9 @@ type Tab = Pick<
   | 'inStep'
   | 'idle'
   | 'free'
->;
+> &
+  // FR-097: the views of one note; a tab of the tests may leave them out.
+  Partial<Pick<WasmTab, 'viewOpen' | 'viewClose' | 'useView' | 'sourceSince'>>;
 
 /**
  * The tab's core failed for good (a trap of the WASM, such as a panic): it
@@ -215,6 +296,35 @@ export class EditorCore {
     return this.#call((tab) => JSON.parse(work(tab)) as T);
   }
 
+  /** FR-097: the view `id` of the window shows the note from now on. */
+  viewOpen(id: number): void {
+    this.#call((tab) => tab.viewOpen?.(id));
+  }
+
+  /** FR-097: the view `id` is gone. */
+  viewClose(id: number): void {
+    this.#call((tab) => tab.viewClose?.(id));
+  }
+
+  /**
+   * UC-005 BR-016: the calls from now on are those of the view `id`, with
+   * its own cursor, folds and blocks; `input` when the user acts in it.
+   */
+  useView(id: number, input: boolean): void {
+    this.#call((tab) => tab.useView?.(id, input));
+  }
+
+  /**
+   * FR-097: the changes that bring the source view of the view calling now
+   * from revision `base` to the text as it is; `null`: it takes the whole
+   * text again (`state`).
+   */
+  sourceSince(base: number): EditorPatch | null {
+    return this.#call((tab) =>
+      tab.sourceSince ? (JSON.parse(tab.sourceSince(base)) as EditorPatch | null) : null,
+    );
+  }
+
   /** M-11: the input mode of the settings. */
   setMode(mode: InputModeName): void {
     this.#call((tab) => tab.setMode(mode));
@@ -228,6 +338,58 @@ export class EditorCore {
   /** The theme by its name, and whether it is dark. */
   setLooks(theme: string, dark: boolean): void {
     this.#call((tab) => tab.setLooks(theme, dark));
+  }
+
+  /** UC-010 BR-001, UC-005 BR-019: close pairs is on or off. */
+  setClosePairs(on: boolean): void {
+    this.#call((tab) => tab.setClosePairs(on));
+  }
+
+  /** UC-004 A16 step 1: how many lines the note has. */
+  lineCount(): number {
+    return this.#call((tab) => tab.lineCount());
+  }
+
+  /**
+   * UC-004 BR-020 (FR-090): the words, characters and reading time of the
+   * note, and of the selection while text is selected; kept by the core for
+   * an unchanged text and selection, so asking often costs nothing.
+   */
+  textStatistics(): TextStatisticsView {
+    return this.#json((tab) => tab.textStatistics());
+  }
+
+  /**
+   * UC-024 step 2, FR-091: the note attributes and the tags of the note,
+   * kept by the core for an unchanged text, so asking often costs nothing.
+   */
+  noteHead(): NoteHeadView {
+    return this.#json((tab) => tab.noteHead());
+  }
+
+  /** UC-024 step 4: `change` written in the source view, one undo step; or why not. */
+  attribute(change: AttributeChangeView): AttributeEdited<EditorPatch> {
+    return this.#json((tab) => tab.attribute(JSON.stringify(change)));
+  }
+
+  /** UC-024 step 4: `change` written in the facade at the selection `at`; or why not. */
+  facadeAttribute(at: FacadeAt, change: AttributeChangeView): AttributeEdited<FacadePatch> {
+    return this.#json((tab) => tab.facadeAttribute(JSON.stringify(at), JSON.stringify(change)));
+  }
+
+  /** UC-004 BR-017: what the status bar says when `target` lies beyond the note; `null`: nothing. */
+  lineNote(target: LineTargetView): string | null {
+    return this.#json((tab) => tab.lineNote(JSON.stringify(target)));
+  }
+
+  /** UC-004 A16, BR-017: the source view's cursor to the line and column of `target`. */
+  goToLine(target: LineTargetView): EditorPatch {
+    return this.#json((tab) => tab.goToLine(JSON.stringify(target)));
+  }
+
+  /** UC-004 A16, BR-017: the facade's cursor to the block holding the line of `target`. */
+  facadeGoToLine(at: FacadeAt, target: LineTargetView): FacadePatch {
+    return this.#json((tab) => tab.facadeGoToLine(JSON.stringify(at), JSON.stringify(target)));
   }
 
   /** The window's clock, `performance.now()`, before an input; never back. */
@@ -295,6 +457,29 @@ export class EditorCore {
     return this.#json((tab) => tab.facadeInsert(JSON.stringify(at), JSON.stringify(insertion)));
   }
 
+  /**
+   * FR-080, UC-005 A23: the place of a link typed at the source view's
+   * cursor; `manual` for Ctrl+Space. `null`: none.
+   */
+  linkContext(manual: boolean): LinkContextView | null {
+    return this.#json((tab) => tab.linkContext(manual));
+  }
+
+  /** FR-080, UC-005 A23 step 3: writes the link chosen in the source view; `null`: the text changed. */
+  completeLink(choice: LinkChoice): EditorPatch | null {
+    return this.#json((tab) => tab.completeLink(JSON.stringify(choice)));
+  }
+
+  /** FR-080: the place of a link typed at the facade's selection `at` (`[[`, or Ctrl+Space). */
+  facadeLinkContext(at: FacadeAt, manual: boolean): LinkContextView | null {
+    return this.#json((tab) => tab.facadeLinkContext(JSON.stringify(at), manual));
+  }
+
+  /** FR-080, BR-018: writes the link chosen at the facade's selection `at`, `[[` and all. */
+  facadeCompleteLink(at: FacadeAt, choice: LinkChoice): FacadePatch | null {
+    return this.#json((tab) => tab.facadeCompleteLink(JSON.stringify(at), JSON.stringify(choice)));
+  }
+
   facadeState(): FacadeState {
     return this.#json((tab) => tab.facadeState());
   }
@@ -350,19 +535,35 @@ export class EditorCore {
     return this.#json((tab) => tab.views(ms));
   }
 
-  /** UC-008 BR-008, M-13.2: the words of `text` are marked from now on; `null`: none. */
-  setSearch(text: string | null): void {
-    this.#call((tab) => tab.setSearch(JSON.stringify(text)));
+  /**
+   * UC-008 BR-008, BR-011, M-13.2: the places of `spec` (its text with its
+   * search switches) are marked from now on; `null`: none.
+   */
+  setSearch(spec: FindSpec | null): void {
+    this.#call((tab) => tab.setSearch(JSON.stringify(spec)));
   }
 
-  /** UC-008 A6, M-13.4: a step of the find field holding `text`; `null`: nothing found. */
-  find(text: string, step: FindStep): FindAnswer | null {
-    return this.#json((tab) => tab.find(JSON.stringify(text), JSON.stringify(step)));
+  /** UC-008 A6, A7, M-13.4: a step of the find field holding `spec`; `null`: nothing found. */
+  find(spec: FindSpec, step: FindStep): FindAnswer | null {
+    return this.#json((tab) => tab.find(JSON.stringify(spec), JSON.stringify(step)));
   }
 
-  /** M-13.4: the hit selected and how many there are. */
-  findStatus(): FindStatus {
-    return this.#json((tab) => tab.findStatus());
+  /** UC-005 A20, A21: replaces the selected occurrence of `spec`, or all, in the source view. */
+  replace(spec: FindSpec, replacement: string, all: boolean): Replaced<EditorPatch> {
+    return this.#json((tab) => tab.replace(JSON.stringify(spec), replacement, all));
+  }
+
+  /** UC-005 A20, A21, BR-017: the same in the facade, in the text it shows. */
+  facadeReplace(spec: FindSpec, replacement: string, all: boolean): Replaced<FacadePatch> {
+    return this.#json((tab) => tab.facadeReplace(JSON.stringify(spec), replacement, all));
+  }
+
+  /**
+   * M-13.4, UC-005 A22: the hit selected, how many there are, and what is
+   * wrong with the search text or, while replacing, with `replacement`.
+   */
+  findStatus(replacement: string | null = null): FindStatus {
+    return this.#json((tab) => tab.findStatus(JSON.stringify(replacement)));
   }
 
   /** M-13.4: the selected markup, for the find field. */
@@ -474,7 +675,8 @@ export class MirrorCore {
 
   /**
    * For the mock: the backend's `ed-enrich` of this text, the images'
-   * figures from `images` by target, every diagram with `diagram`.
+   * figures from `images` by target, every diagram with `diagram`, every
+   * formula with the placeholder `formula` (FR-098).
    */
   enrichment(
     note: string,
@@ -483,6 +685,7 @@ export class MirrorCore {
     dark: boolean,
     images: Record<string, FigureView>,
     diagram: FigureView,
+    formula: FormulaView,
   ): EnrichView {
     return JSON.parse(
       this.#mirror.enrichment(
@@ -492,6 +695,7 @@ export class MirrorCore {
         dark,
         JSON.stringify(images),
         JSON.stringify(diagram),
+        JSON.stringify(formula),
       ),
     ) as EnrichView;
   }

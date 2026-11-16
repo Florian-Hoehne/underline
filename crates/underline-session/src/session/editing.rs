@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use underline_core::{NoteId, SaveJob, SaveResult, Theme};
+use underline_core::{NoteId, PaneSide, SaveJob, SaveResult, Theme};
 use underline_editor_core::utf16;
 use underline_facade::highlight::{DocumentHighlight, HighlightSet, Span};
 
@@ -126,8 +126,34 @@ impl Session {
     /// M-06.3, UC-004 A5: closes the tab of `note`, storing its changes
     /// first. When they cannot be stored, the tab stays and the user is
     /// asked (UC-005 A14 step 3); with `force` ("Close anyway") it closes
-    /// all the same.
+    /// all the same. The tab of the active pane, else of the pane that has
+    /// one (BR-018).
     pub fn close_tab(&mut self, note: &NoteId, force: bool) -> Option<CloseQuestion> {
+        let side = self.pane_of(note);
+        self.close_tab_in(side, note, force)
+    }
+
+    /// M-06.3, UC-004 A5, A20: closes the tab of `note` in the pane `side`.
+    /// While the note has a tab in the other pane too, its text stays open
+    /// there and nothing is stored (UC-005 BR-016); its last tab stores its
+    /// changes first, as [`Session::close_tab`] says. Closing the last tab
+    /// of a pane ends the split view.
+    pub fn close_tab_in(
+        &mut self,
+        side: PaneSide,
+        note: &NoteId,
+        force: bool,
+    ) -> Option<CloseQuestion> {
+        let open = self.open.as_mut()?;
+        if !open.panes.has(side, note) {
+            return None;
+        }
+        if open.panes.has(side.other(), note) {
+            open.panes.close(side, note);
+            open.sync_active();
+            self.persist_tabs();
+            return None;
+        }
         self.settle_saves();
         let open = self.open.as_mut()?;
         let index = open.tabs.find(note)?;
@@ -142,7 +168,9 @@ impl Session {
             });
         }
         if let Some(open) = &mut self.open {
+            open.panes.close(side, note);
             open.tabs.close(index);
+            open.sync_active();
         }
         self.persist_tabs();
         None
@@ -232,6 +260,8 @@ impl Session {
                 // branch) is stored again at its place.
                 tab.make_folder();
                 let text = tab.mirror.text();
+                // UC-026 BR-001: on the saver's thread, before this save.
+                tab.editing_snapshot(&self.saver, &text);
                 tab.saving_text = Some(text.clone());
                 self.saver.save(SaveJob {
                     path: tab.path.clone(),
@@ -400,26 +430,46 @@ impl Session {
     /// M-08.2, ADR-024: the colours of the lines the active tab's source
     /// view shows, once they changed; at most [`COLORING_BUDGET`] of work a
     /// tick, the rest in the next ones.
-    pub(super) fn highlight_event(&mut self, now: Instant) -> Option<Event> {
+    pub(super) fn highlight_event(&mut self, now: Instant) -> Vec<Event> {
+        // UC-004 BR-018: the source view of each pane's active tab, the
+        // active pane's first.
+        let notes: Vec<NoteId> = self.open.as_ref().map_or_else(Vec::new, |open| {
+            let mut notes = open.panes.shown_notes();
+            if let Some(active) = open.panes.active_note() {
+                notes.retain(|note| note != active);
+                notes.insert(0, active.clone());
+            }
+            notes
+        });
+        let mut events = Vec::new();
+        for note in notes {
+            events.extend(self.highlight_note(&note, now));
+        }
+        events
+    }
+
+    /// [`Session::highlight_event`] for the source view of `note`.
+    fn highlight_note(&mut self, note: &NoteId, now: Instant) -> Option<Event> {
         let has_viewport = self
             .open
             .as_ref()
-            .and_then(|open| open.tabs.active())
-            .is_some_and(|(_, tab)| tab.viewport.is_some());
+            .and_then(|open| open.tabs.find(note).map(|index| open.tabs.get(index)))
+            .is_some_and(|tab| tab.viewport.is_some());
         if !has_viewport {
             return None;
         }
         let wake = self.wake.clone();
         let told = {
             let open = self.open.as_ref()?;
-            let (_, tab) = open.tabs.active()?;
+            let tab = open.tabs.get(open.tabs.find(note)?);
             let wanted = tab.viewport.clone()?;
             tab.highlight_told.as_ref() == Some(&(u64::from(tab.mirror.rev()), wanted))
         };
         // The colours of a new theme reset `highlight_told`.
         let set = self.colors()?;
         let open = self.open.as_mut()?;
-        let (note, tab) = open.tabs.active_mut()?;
+        let index = open.tabs.find(note)?;
+        let tab = open.tabs.get_mut(index);
         if told && tab.highlight_told.is_some() {
             return None;
         }

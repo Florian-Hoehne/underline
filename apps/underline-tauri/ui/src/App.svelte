@@ -42,9 +42,23 @@
   M-20.1 (UC-010 BR-006): Ctrl+, (Cmd+, on macOS) opens the settings window
   or closes it, wherever the keyboard is, before the editors see the key.
   The window floats above the central area, not modal, like egui's.
+
+  Package 2 (FR-076, FR-077, UC-004 A12, A13, UC-023): every one of these
+  keys is the key of a command of the registry (`lib/commandList.ts`),
+  which one handler runs; Ctrl+P (Cmd+P) opens go to note, Ctrl+Shift+P
+  (Cmd+Shift+P) and F1 the command palette, one overlay over the window
+  like the search's (PaletteOverlay.svelte).
+
+  Package 5 (FR-088, UC-010 A12, BR-010, OQ-209): the focus mode hides the
+  top bar with the menu bar and the note overview (the note area hides its
+  toolbar and the tool panel), so the tabs and the notes take the whole
+  width; the status bar stays. Every hidden function keeps its key and its
+  command in the palette.
 -->
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
+  import { COMMAND } from './lib/commandList';
+  import { commandForKey, keyText } from './lib/commands';
   import { focusFallback } from './lib/focus';
   import CloseQuestionDialog from './lib/CloseQuestionDialog.svelte';
   import CreateDialog from './lib/CreateDialog.svelte';
@@ -57,6 +71,9 @@
   import PurgeDialog from './lib/PurgeDialog.svelte';
   import RenameDialog from './lib/RenameDialog.svelte';
   import RestoreDialog from './lib/RestoreDialog.svelte';
+  import SnapshotsDialog from './lib/SnapshotsDialog.svelte';
+  import PaletteOverlay from './lib/PaletteOverlay.svelte';
+  import LinkCompletion from './lib/LinkCompletion.svelte';
   import SearchOverlay from './lib/SearchOverlay.svelte';
   import SettingsWindow from './lib/SettingsWindow.svelte';
   import EmptyScreen from './lib/EmptyScreen.svelte';
@@ -80,129 +97,79 @@
 
   onDestroy(() => shell.disconnect());
 
-  /** M-14.2, UC-006 step 1: F2 renames the note of the active tab. */
-  function renameKey(event: KeyboardEvent) {
-    if (
-      event.key !== 'F2' ||
-      event.shiftKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      event.metaKey ||
-      shell.notes.rename !== null
-    ) {
+  /** UX review: the command palette and its key on the empty screen, from the registry. */
+  const paletteEntry = $derived.by(() => {
+    const command = shell.commandById(COMMAND.palette);
+    return command
+      ? { label: command.title, key: keyText(command.key, shell.platform === 'macos') }
+      : undefined;
+  });
+
+  /**
+   * UC-023 BR-001, BR-005: the window's keys are those of the commands of
+   * the registry (`commandList.ts`), taken before the editors see them (the
+   * Vim and Nano keys too), wherever the keyboard is, as egui takes F2
+   * first: F2 renames the note of the active tab (M-14.2); Ctrl+Shift+F
+   * and Ctrl+Shift+H open the search and the replace of the workspace
+   * (M-13.1, UC-022 BR-008; Ctrl+Shift+H only outside the text of a note,
+   * where it is the toolbar's heading, OQ-243); Ctrl+, the settings (M-20.1); Ctrl+Shift+E
+   * exports (M-15.1); Ctrl+Shift+G the changes (M-19.2); Ctrl+Shift+B the
+   * branch menu (M-19.6); Ctrl+F, Ctrl+H (Cmd+Alt+F), F3 and Shift+F3 the
+   * find field of the note (M-13.4); Ctrl+P go to note (UC-004 A12);
+   * Ctrl+Shift+P and F1 the command palette (UC-023 BR-007), these three not
+   * over a dialog that waits for an answer. Cmd stands for
+   * Ctrl on macOS. A key whose command does not take it now keeps its way.
+   */
+  function commandKey(event: KeyboardEvent) {
+    if (event.isComposing) {
       return;
     }
-    const active = shell.tabs.todoList.active ? null : shell.tabs.active;
-    if (active !== null) {
-      event.preventDefault();
-      event.stopPropagation();
-      void shell.startRename(active);
+    const command = commandForKey(event, shell.commands, shell.platform === 'macos');
+    if (command === null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const why = command.unavailable();
+    if (why === null) {
+      command.run();
+    } else {
+      // Review of package 4: a key taken that cannot run says why.
+      shell.status = why;
     }
   }
 
-  /** M-13.1, BR-007: Ctrl+Shift+F into the search field; Escape closes the overlay. */
-  function searchKey(event: KeyboardEvent) {
-    const mac = shell.platform === 'macos';
-    const command = mac ? event.metaKey : event.ctrlKey;
-    const other = mac ? event.ctrlKey : event.metaKey;
-    if (command && !other && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f') {
-      event.preventDefault();
-      event.stopPropagation();
-      shell.search.show();
+  /**
+   * M-13.1, BR-007: while the search overlay is open, Escape closes the
+   * replace first (UC-022 A8: the search keeps its text), then the overlay,
+   * wherever the keyboard is; only a dialog that has the keyboard keeps its
+   * own Escape.
+   */
+  function searchEscape(event: KeyboardEvent) {
+    const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+    if (event.key !== 'Escape' || !plain || !shell.search.open) {
       return;
     }
-    const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
-    if (event.key === 'Escape' && plain && shell.search.open) {
-      const inDialog = (document.activeElement as Element | null)?.closest?.('[role="dialog"]');
-      if (inDialog) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
+    const inDialog = (document.activeElement as Element | null)?.closest?.('[role="dialog"]');
+    if (inDialog) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (shell.search.replacing) {
+      shell.search.stopReplacing();
+    } else {
       shell.search.close();
     }
   }
 
-  /** M-20.1, UC-010 BR-006: Ctrl+, (Cmd+,) opens or closes the settings. */
-  function settingsKey(event: KeyboardEvent) {
-    const mac = shell.platform === 'macos';
-    const command = mac ? event.metaKey : event.ctrlKey;
-    const other = mac ? event.ctrlKey : event.metaKey;
-    if (command && !other && !event.altKey && !event.shiftKey && event.key === ',') {
-      event.preventDefault();
-      event.stopPropagation();
-      void shell.toggleSettings();
-    }
-  }
-
-  /** M-15.1, UC-009 BR-008: Ctrl+Shift+E (Cmd+Shift+E) exports the note of the active tab. */
-  function exportKey(event: KeyboardEvent) {
-    const mac = shell.platform === 'macos';
-    const command = mac ? event.metaKey : event.ctrlKey;
-    const other = mac ? event.ctrlKey : event.metaKey;
-    if (!command || other || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'e') {
-      return;
-    }
-    // Review F11: not while another dialog is open; "Export note" itself
-    // takes the keyboard again (startExport).
-    const dialog = document.querySelector('[role="dialog"]');
-    if (dialog !== null && shell.exporting === null) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    // egui exports the note of the active tab; with none, the key does
-    // nothing. Q-88 (F15, A-177): nor while the tab "Todos" is the active
-    // one, as F2, since no note shows.
-    if (shell.tabs.active !== null && !shell.todoListShown) {
-      void shell.startExport(shell.tabs.active);
-    }
-  }
-
-  /** M-19.2, UC-011 BR-007: Ctrl+Shift+G (Cmd+Shift+G) opens the changes. */
-  function changesKey(event: KeyboardEvent) {
-    const mac = shell.platform === 'macos';
-    const command = mac ? event.metaKey : event.ctrlKey;
-    const other = mac ? event.ctrlKey : event.metaKey;
-    if (!command || other || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'g') {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    shell.showChanges();
-  }
-
-  /** M-19.6, UC-013 BR-006: Ctrl+Shift+B (Cmd+Shift+B) opens the branch menu. */
-  function branchKey(event: KeyboardEvent) {
-    const mac = shell.platform === 'macos';
-    const command = mac ? event.metaKey : event.ctrlKey;
-    const other = mac ? event.ctrlKey : event.metaKey;
-    if (!command || other || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 'b') {
-      return;
-    }
-    if (shell.changes === null || shell.changes.problem !== null) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    void shell.openBranchMenu();
-  }
-
   // Before the editors see it, as egui takes F2 first.
   onMount(() => {
-    window.addEventListener('keydown', branchKey, true);
-    window.addEventListener('keydown', renameKey, true);
-    window.addEventListener('keydown', changesKey, true);
-    window.addEventListener('keydown', searchKey, true);
-    window.addEventListener('keydown', settingsKey, true);
-    window.addEventListener('keydown', exportKey, true);
+    window.addEventListener('keydown', commandKey, true);
+    window.addEventListener('keydown', searchEscape, true);
     return () => {
-      window.removeEventListener('keydown', exportKey, true);
-      window.removeEventListener('keydown', branchKey, true);
-      window.removeEventListener('keydown', renameKey, true);
-      window.removeEventListener('keydown', changesKey, true);
-      window.removeEventListener('keydown', searchKey, true);
-      window.removeEventListener('keydown', settingsKey, true);
+      window.removeEventListener('keydown', commandKey, true);
+      window.removeEventListener('keydown', searchEscape, true);
     };
   });
 
@@ -220,16 +187,25 @@
   });
 </script>
 
-<div class="window">
-  <TopBar {shell} onOpenWorkspace={openWorkspace} onNewWorkspace={newWorkspace} />
+<div class="window" class:focus={shell.focusMode}>
+  {#if !shell.focusMode}
+    <TopBar {shell} />
+  {/if}
   <main class="central" aria-busy={shell.starting}>
     {#if shell.starting}
       <!-- Q-04: the egui app opens before its first frame and has no text for this. -->
     {:else if shell.workspace === null}
-      <EmptyScreen onOpen={openWorkspace} onCreate={newWorkspace} />
+      <EmptyScreen
+        onOpen={openWorkspace}
+        onCreate={newWorkspace}
+        palette={paletteEntry}
+        onPalette={() => shell.palette.show('commands')}
+      />
     {:else}
       <div class="workbench">
-        <Overview {shell} />
+        {#if !shell.focusMode}
+          <Overview {shell} />
+        {/if}
         <NoteArea {shell} />
       </div>
     {/if}
@@ -255,6 +231,9 @@
     {/if}
     {#if shell.notes.purge}
       <PurgeDialog {shell} dialog={shell.notes.purge} />
+    {/if}
+    {#if shell.snapshots.note !== null}
+      <SnapshotsDialog {shell} />
     {/if}
     {#if shell.discarding !== null}
       <DiscardDialog {shell} question={shell.discarding} />
@@ -290,9 +269,18 @@
     {#if shell.search.open}
       <SearchOverlay {shell} />
     {/if}
+    {#if shell.palette.open}
+      <PaletteOverlay {shell} />
+    {/if}
+    <!-- FR-080: the list of link completion, at the link typed. -->
+    <LinkCompletion />
   </main>
   <!-- UX review F14: the agents, told politely to screen readers. -->
   <p class="announce" aria-live="polite">{shell.agentAnnouncement}</p>
+  <!-- UC-004 BR-018: the active pane of the split view, told politely. -->
+  <p class="announce" aria-live="polite">{shell.paneAnnouncement}</p>
+  <!-- FR-099, UC-005 A28: corrections and the count of misspelled words. -->
+  <p class="announce" aria-live="polite">{shell.spellAnnouncement}</p>
   <StatusBar
     root={shell.workspaceRoot}
     status={shell.status}
@@ -306,6 +294,8 @@
     onAbort={() => shell.askAbort()}
     onSyncNow={() => void shell.sync('full')}
     onUndo={() => void shell.undoDelete()}
+    onUndoReplace={() => void shell.undoReplace()}
+    onUndoRestore={() => void shell.undoRestore()}
     onOpenExport={(index) => void shell.openExport(index)}
     onShowApproximated={(index) => void shell.showApproximated(index)}
     agents={shell.agents.menu}
@@ -314,8 +304,12 @@
     onAgentSettings={() => void shell.openSettings('workspace')}
     onOpenAgentNote={(note) => void shell.openAgentNote(note)}
     overdue={shell.workspace === null ? null : (shell.todos?.overdue ?? null)}
+    spellProblem={shell.workspace === null ? null : shell.spellState.problem}
+    spellDetail={shell.spellState.detail}
+    onSpellSettings={() => void shell.openSettings('me')}
     onOverdue={() => void shell.showTodoList('open')}
     onUndoTodo={() => void shell.undoTodo()}
+    onWorkspaceSettings={() => void shell.openSettings('workspace')}
   />
 </div>
 
@@ -333,6 +327,11 @@
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
     height: 100%;
+  }
+
+  /* UC-010 BR-010: without the top bar the notes take its room. */
+  .window.focus {
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
   .central {

@@ -27,8 +27,7 @@ describe('M-09.13 the keys of the facade', () => {
     expect(routeFacadeKey(key('ArrowLeft'), false)).toMatchObject({ rows: false });
   });
 
-  it('Tab, Page Up and Page Down do nothing; Escape leaves; Ctrl+Enter enlarges', () => {
-    expect(routeFacadeKey(key('Tab'), false)).toBe('swallow');
+  it('Page Up and Page Down do nothing; Escape leaves; Ctrl+Enter enlarges', () => {
     expect(routeFacadeKey(key('PageDown'), false)).toBe('swallow');
     expect(routeFacadeKey(key('Escape'), false)).toBe('leave');
     expect(routeFacadeKey(key('Enter', { ctrlKey: true }), false)).toBe('enlarge');
@@ -100,5 +99,24 @@ describe('ADR-021 every beforeinput becomes an input of the facade', () => {
     expect(routeBeforeInput('insertCompositionText', '日')).toBe('compose');
     expect(routeBeforeInput('deleteWordBackward', null)).toBeNull();
     expect(routeBeforeInput('insertText', '')).toBeNull();
+  });
+
+  it('TC-005-36, TC-005-37: Tab and Shift+Tab go to the core; Ctrl+Shift+D duplicates', () => {
+    expect(routeFacadeKey(key('Tab'), false)).toMatchObject({ send: { key: 'Tab', shift: false } });
+    expect(routeFacadeKey(key('Tab', { shiftKey: true }), false)).toMatchObject({
+      send: { key: 'Tab', shift: true },
+    });
+    expect(routeFacadeKey(key('Tab', { ctrlKey: true }), false)).toBe('swallow');
+    expect(routeFacadeKey(key('D', { ctrlKey: true, shiftKey: true }), false)).toMatchObject({
+      send: { key: 'D', ctrl: true, shift: true },
+    });
+    expect(routeFacadeKey(key('D', { metaKey: true, shiftKey: true }), true)).toMatchObject({
+      send: { key: 'D', meta: true },
+    });
+    expect(routeFacadeKey(key('ArrowUp', { altKey: true }), false)).toMatchObject({
+      send: { key: 'ArrowUp', alt: true },
+    });
+    // The Nano search prompt keeps Tab.
+    expect(routeFacadeKey(key('Tab'), false, { mode: 'Nano', prompting: true })).toBe('swallow');
   });
 });

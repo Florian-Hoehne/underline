@@ -45,9 +45,19 @@
     cursor there, shows it and takes the keyboard (a heading a link leads
     to, M-07.3).
   - M-12.2: the minimap gets one bar per row and figures as areas.
+  - FR-080, UC-005 A23, A24: after typed text the core is asked whether
+    `[[` and the place of a link are typed at the cursor (Ctrl+Space asks
+    at the cursor without them); the list (`linkCompletion.svelte.ts`)
+    takes its keys first while it shows, and the core writes the link
+    chosen in place of `[[` and what follows it. A click elsewhere or
+    leaving the text closes it.
   - M-17.6: the agent cursors: a block holding lines an agent read or wrote
     is tinted blue with a 3 px bar left of it, and the first such block of
     each agent names it, in 80 % of the size (fixed colours, as egui).
+  - Package 4 (FR-081 to FR-083, FR-086): close pairs, moving and
+    duplicating blocks and indenting list items are the core's; the
+    palette's commands come as `edit`, and going to a line asks the core
+    for the patch (`goToLine`, UC-004 BR-017).
 -->
 <script module lang="ts">
   /**
@@ -60,29 +70,39 @@
 </script>
 
 <script lang="ts">
+  import type { Refusal } from '../editor/refusal';
   import { onMount, tick } from 'svelte';
   import { DIALOG_OPENED } from '../DialogWindow.svelte';
   import type {
+    AttributeChangeView,
     AgentMarkView,
     BlockView,
     BlocksView,
+    PaneName,
     ClipAction,
     EditorCommandName,
     EditorPatch,
     FacadeAt,
     FacadeInput,
+    EditActionName,
     FacadePatch,
     FacadeState,
     FindAnswer,
+    FindSpec,
     FindStep,
     GapView,
     Insertion,
     KeysStatusView,
+    LineTargetView,
+    LinkContextView,
     Platform,
     RowsView,
     SectionView,
+    SpellMarksView,
     ToolName,
   } from '../bindings';
+  import SpellMenu, { CHANGED_SINCE } from '../SpellMenu.svelte';
+  import { correctionOf, type ShownWord } from '../editor/spellWord';
   import { onPointerReleased } from '../editor/clipboard';
   import type { EditorInfo } from '../editor/info.svelte';
   import type { InputModeName, KeysState } from '../editor/keys';
@@ -90,7 +110,8 @@
   import { tabId } from '../tabs';
   import { runJump, takeJump } from '../editor/jump';
   import { coreInStep } from '../editor/sync';
-  import { setActiveFacade, type ActiveFacade, type CursorMark } from './active';
+  import { linkCompletion, type CompletionTarget } from '../editor/linkCompletion.svelte';
+  import { setActiveFacade, type ActiveFacade, type CursorMark, type ReplaceDone } from './active';
   import { type FacadeBackend } from './backend';
   import { wasmFacadeBackend } from './wasmBackend';
   import Block from './Block.svelte';
@@ -112,7 +133,9 @@
     LINE_HEIGHT,
     pointOf,
     revealIndex,
+    shownWordIn,
     sourceAt,
+    spellAt,
     spliceBlocks,
   } from './model';
 
@@ -132,12 +155,25 @@
     /** M-10.9: the keys ask to store the note or close its tab. */
     onCommand?: (command: EditorCommandName) => void;
     /** M-07.3, UC-004 BR-006: a Ctrl+click (Cmd+click) on a link follows the link at `at` (markup, web units). */
-    onFollow?: (at: number) => void;
+    onFollow?: (at: number, side: boolean) => void;
     backend?: FacadeBackend;
     /** ADR-024 measuring point: called when a patch is in place. */
     probe?: ((start: number, patched: number) => void) | null;
     /** M-17.6: the agent cursors in this note. */
     agentMarks?: AgentMarkView[];
+    /** FR-099: the last marks of the spell check in this note. */
+    spellMarks?: SpellMarksView | null;
+    /** UC-005 A28: a correction was made ("Corrected to ferry"). */
+    onCorrected?: (suggestion: string) => void;
+    /** UC-010 BR-009: the editor zoom in percent; figures keep their size. */
+    zoom?: number;
+    /**
+     * UC-010 BR-011, OQ-211: tables, code and markup wrap; paragraphs, lists
+     * and headings always do.
+     */
+    softWrap?: boolean;
+    /** UC-004 BR-018: the pane of the split view the facade is in. */
+    pane?: PaneName;
   };
 
   let {
@@ -150,10 +186,18 @@
     onError,
     onCommand,
     onFollow,
-    backend = wasmFacadeBackend(platform === 'macos'),
+    pane = 'left',
+    backend = wasmFacadeBackend(platform === 'macos', pane),
     probe = null,
     agentMarks = [],
+    spellMarks = null,
+    onCorrected,
+    zoom = 100,
+    softWrap = true,
   }: Props = $props();
+
+  /** UC-010 BR-009: the text's size as a share of its normal size. */
+  const scale = $derived(zoom / 100);
 
   /**
    * M-17.6 (UC-019 BR-006): the agent marking each block that holds lines
@@ -199,6 +243,23 @@
   let sections = $state.raw<SectionView[]>([]);
   /** M-13.2: the marked hits, sorted, in web units of the markup. */
   let found = $state.raw<HitRange[]>([]);
+  /**
+   * FR-099, UC-005 BR-023: the words the spell check marks, sorted, in web
+   * units of the markup; they follow the edits until the next marks come.
+   */
+  let spell = $state.raw<HitRange[]>([]);
+  /** FR-099: marks of a revision the core has not reached yet. */
+  let pendingSpell: SpellMarksView | null = null;
+  /** UC-005 A28: the spell menu open now: the mark, the word shown, where. */
+  let spellMenu = $state<{
+    from: number;
+    to: number;
+    shown: ShownWord;
+    x: number;
+    y: number;
+    /** The revision of the text the word was marked in. */
+    rev: number;
+  } | null>(null);
   /** The cursor and the other end of the selection, in web units. */
   let head = $state(0);
   let anchor = $state(0);
@@ -271,6 +332,11 @@
     vimInsert: keys?.mode === 'INSERT',
     prompting: keys?.prompting ?? false,
   });
+  /**
+   * OQ-268: the user went into the text (a key or a click); until then the
+   * front matter keeps its table, though the cursor starts in it.
+   */
+  let touched = $state(false);
   /** M-09.8: the figure holding the cursor. */
   const editing = $derived.by(() => {
     if (gap) {
@@ -281,8 +347,13 @@
       return -1;
     }
     const block = blocks[index];
+    if (block.kind.type === 'table' && block.kind.table.frontMatter && !touched) {
+      return -1;
+    }
     return isFigure(block) && head <= block.start + block.length ? index : -1;
   });
+  /** FR-098: the block holding the cursor, for the inline formulas it shows as markup. */
+  const cursorBlock = $derived(gap ? -1 : blockAt(blocks, head));
   /** The blocks in the DOM: those near the part in view, without the hidden ones. */
   const shown = $derived.by(() => {
     void layout;
@@ -321,7 +392,9 @@
   );
 
   function estimate(index: number): number {
-    return folding.hidden.has(index) ? 0 : estimateHeight(blocks[index], textWidth);
+    return folding.hidden.has(index)
+      ? 0
+      : estimateHeight(blocks[index], textWidth, scale, softWrap);
   }
 
   function notify(change: MinimapChange) {
@@ -366,7 +439,7 @@
     waiting.clear();
     format = state.format;
     blocks = state.blocks;
-    heights.reset(state.blocks.map((block) => estimateHeight(block, textWidth)));
+    heights.reset(state.blocks.map((block) => estimateHeight(block, textWidth, scale, softWrap)));
     anchor = state.anchor;
     head = state.head;
     gap = state.gap;
@@ -411,9 +484,12 @@
           if (info) info.found++;
         }
       },
-      synced: () => {},
+      // FR-099: the spell check's marks wait for the core's revision.
+      synced: () => takePendingSpell(),
       reopened: () => void open(),
       blocks: (changes) => takeBlocks(changes),
+      // FR-097: the note's other view changed the text; its blocks follow.
+      sibling: () => enqueue(performance.now(), () => backend.refresh(note)),
     });
   }
 
@@ -434,11 +510,16 @@
     let index = before.index;
     const next = blocks.slice();
     let hits = found;
+    let marks = spell;
     for (const change of changes) {
       // M-13.2: the hits follow a change of the text until the core finds
       // them again; the backend's colours and figures change no text.
       if (change.rev !== rev && hits.length > 0) {
         hits = mapHits(hits, next, change);
+      }
+      // FR-099: so do the spell check's marks, until the next ones come.
+      if (change.rev !== rev && marks.length > 0) {
+        marks = mapHits(marks, next, change);
       }
       // A block changed in place keeps its height until it is measured again.
       const kept = Math.min(change.removed, change.blocks.length);
@@ -448,7 +529,7 @@
         change.blocks.map((block, k) =>
           k < kept && heights.measured(change.from + k)
             ? heights.get(change.from + k)
-            : estimateHeight(block, textWidth),
+            : estimateHeight(block, textWidth, scale, softWrap),
         ),
       );
       const end = change.from + change.removed;
@@ -464,6 +545,9 @@
     blocks = next;
     if (hits !== found) {
       found = hits;
+    }
+    if (marks !== spell) {
+      spell = marks;
     }
     if (scroller && before.index !== index) {
       scroller.scrollTop = PADDING + heights.top(index) + before.into;
@@ -563,13 +647,13 @@
    * the facade shows it (egui's `scroll_to_cursor`); the keyboard stays in
    * the find field, so the hit shows as the selection without it.
    */
-  function find(text: string, step: FindStep): Promise<FindAnswer | null> {
+  function find(spec: FindSpec, step: FindStep): Promise<FindAnswer | null> {
     return opened.then(async () => {
       await queue;
       if (destroyed) {
         return null;
       }
-      const answer = await backend.find(note, text, step);
+      const answer = await backend.find(note, spec, step);
       if (!answer || destroyed || answer.rev !== rev) {
         return answer;
       }
@@ -588,6 +672,33 @@
     });
   }
 
+  /**
+   * UC-005 A20, A21, BR-017: replaces the selected occurrence of `spec`, or
+   * all, in the text the facade shows, after the inputs before it; the
+   * facade shows the change and the next occurrence selected.
+   */
+  function replace(spec: FindSpec, replacement: string, all: boolean): Promise<ReplaceDone | null> {
+    return opened.then(
+      () =>
+        new Promise<ReplaceDone | null>((resolve, reject) => {
+          enqueue(performance.now(), async () => {
+            if (destroyed) {
+              resolve(null);
+              return null;
+            }
+            try {
+              const done = await backend.replace(note, spec, replacement, all);
+              resolve({ replaced: done.replaced, status: done.status });
+              return done.patch;
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(message(error)));
+              return null;
+            }
+          });
+        }),
+    );
+  }
+
   /** M-09.16: block `offset` to the top, the cursor where it is. */
   function reveal(offset: number) {
     if (blocks.length === 0) {
@@ -604,7 +715,9 @@
       if (hidden.has(i)) {
         changed = heights.set(i, 0, false) !== 0 || changed;
       } else if (heights.get(i) === 0) {
-        changed = heights.set(i, estimateHeight(blocks[i], textWidth), false) !== 0 || changed;
+        changed =
+          heights.set(i, estimateHeight(blocks[i], textWidth, scale, softWrap), false) !== 0 ||
+          changed;
       }
     }
     if (changed) {
@@ -621,6 +734,25 @@
       return;
     }
     lastWidth = now;
+    const before = anchorOf();
+    heights.reestimate(estimate, true);
+    if (scroller) {
+      scroller.scrollTop = PADDING + heights.top(before.index) + before.into;
+    }
+    relayout();
+  });
+
+  // UC-010 A11, A3: another zoom or soft wrap lays the text out anew: every
+  // height is a guess again until measured, and the block in view stays at
+  // the top, so the place the user reads stays in view.
+  let laidOut: string | null = null;
+  $effect(() => {
+    const now = `${scale}:${softWrap}`;
+    if (laidOut === null || laidOut === now || blocks.length === 0) {
+      laidOut = now;
+      return;
+    }
+    laidOut = now;
     const before = anchorOf();
     heights.reestimate(estimate, true);
     if (scroller) {
@@ -703,14 +835,48 @@
     if (!block) {
       return null;
     }
+    // UC-004 A21: the reason after a formula's source stands for the end
+    // of that formula.
+    const reason = element?.closest<HTMLElement>('.reason');
+    const reasonOf = reason?.previousElementSibling;
+    if (reason && reasonOf instanceof HTMLElement && reasonOf.dataset.r !== undefined) {
+      const run = block.runs[Number(reasonOf.dataset.r)];
+      if (run) {
+        return block.start + run.end;
+      }
+    }
     const runElement = element?.closest<HTMLElement>('[data-r]');
     if (!runElement || !blockElement.contains(runElement)) {
+      // FR-098: a place between the elements of the runs, as next to a
+      // typeset formula: the end of the run before it, or the start of
+      // the one after it.
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const before = node.childNodes[offset - 1];
+        const after = node.childNodes[offset];
+        const ran = (child: ChildNode | undefined) =>
+          child instanceof HTMLElement && child.dataset.r !== undefined
+            ? block.runs[Number(child.dataset.r)]
+            : undefined;
+        const previous = ran(before);
+        if (previous) {
+          return block.start + previous.end;
+        }
+        const next = ran(after);
+        if (next) {
+          return sourceAt(block, next, 0);
+        }
+      }
       const first = block.runs[0];
       return first ? sourceAt(block, first, 0) : block.start;
     }
     const run = block.runs[Number(runElement.dataset.r)];
     if (!run) {
       return null;
+    }
+    if (runElement.dataset.formula !== undefined) {
+      // FR-098: before or after a typeset formula.
+      const atStart = node === runElement && offset === 0;
+      return atStart ? sourceAt(block, run, 0) : block.start + run.end;
     }
     const range = document.createRange();
     range.setStart(runElement, 0);
@@ -726,6 +892,12 @@
       : null;
     if (!point || !runElement) {
       return null;
+    }
+    const parent = runElement.parentNode;
+    if (runElement instanceof HTMLElement && runElement.dataset.formula !== undefined && parent) {
+      // FR-098: a typeset formula has no text: before it or after it.
+      const at = Array.prototype.indexOf.call(parent.childNodes, runElement) as number;
+      return { node: parent, offset: point.unit === 0 ? at : at + 1 };
     }
     const walker = document.createTreeWalker(runElement, NodeFilter.SHOW_TEXT);
     let left = point.unit;
@@ -771,6 +943,7 @@
     link: null,
     offsets: [],
     end: 0,
+    formula: null,
   };
 
   /** Puts the DOM selection at these markup offsets, where their text is drawn. */
@@ -835,6 +1008,65 @@
       const measured = rows && !destroyed ? measureRows() : null;
       return backend.input(note, at(), input, measured, clipboard);
     });
+    // FR-080: after typed text, or any input while the list shows.
+    if (input.kind === 'text' || linkCompletion.active(note)) {
+      queue = queue.then(() => askLink(false));
+    }
+  }
+
+  /** FR-080: this facade as the link completion writes into it. */
+  const linkTarget: CompletionTarget = {
+    get note() {
+      return note;
+    },
+    complete: (choice) => {
+      const complete = backend.completeLink;
+      if (complete) {
+        enqueue(performance.now(), () => complete(note, at(), choice));
+      }
+    },
+    place: (from) => (destroyed ? null : linkPlace(from)),
+  };
+  /** FR-080: the text names the list of link completion while it shows. */
+  const linkAria = $derived(linkCompletion.aria(note));
+
+  /** FR-080, UC-005 A23: asks the core for the link typed at the cursor and offers it to the list. */
+  function askLink(manual: boolean) {
+    const ask = backend.linkContext;
+    if (!ask || destroyed) {
+      return;
+    }
+    let context: LinkContextView | null;
+    try {
+      context = ask(note, at(), manual);
+    } catch (error) {
+      onError(message(error));
+      return;
+    }
+    linkCompletion.offer(linkTarget, context, context ? linkPlace(context.from) : null, manual);
+  }
+
+  /** Where the link starting at `from` is on the screen, else the cursor. */
+  function linkPlace(from: number): { left: number; top: number; bottom: number } | null {
+    const point = domPoint(from) ?? domPoint(head);
+    if (!point) {
+      return null;
+    }
+    let rect: DOMRect | undefined;
+    try {
+      const range = document.createRange();
+      range.setStart(point.node, point.offset);
+      range.collapse(true);
+      rect = range.getClientRects?.()[0] ?? range.getBoundingClientRect?.();
+    } catch {
+      // A webview that lays out no ranges (or a test's) has no place for it.
+      rect = undefined;
+    }
+    if (!rect || (rect.top === 0 && rect.bottom === 0 && rect.left === 0)) {
+      const box = content?.getBoundingClientRect();
+      return box ? { left: box.left + LEFT, top: box.top, bottom: box.top + 20 } : null;
+    }
+    return { left: rect.left, top: rect.top, bottom: rect.bottom };
   }
 
   /** M-09.14: copy, cut or paste through the backend. */
@@ -971,6 +1203,16 @@
     }
     await tick();
     if (destroyed) {
+      return;
+    }
+    // UC-022 A4, app-tester: the selection is put into the text only while
+    // the text has the keyboard; else it would take it from the find field
+    // or the search overlay (a change from outside, an agent, a replace).
+    const active = document.activeElement;
+    if (content && active && active !== document.body && !content.contains(active)) {
+      if (patch.scroll) {
+        showCursor();
+      }
       return;
     }
     placeSelection(anchor, head);
@@ -1123,6 +1365,21 @@
     head = to;
     gap = null;
     sendSelection();
+    // FR-080: the cursor went elsewhere; the list closes.
+    linkCompletion.close(note);
+  }
+
+  /** FR-098, TC-005-42 step 3: a click on an inline formula puts the cursor into its source. */
+  async function onFormula(offset: number) {
+    touched = true;
+    selections++;
+    anchor = offset;
+    head = offset;
+    gap = null;
+    sendSelection();
+    content?.focus({ preventScroll: true });
+    await tick();
+    placeSelection(offset, offset);
   }
 
   /** M-09.8: a click on a figure puts the cursor at the start of its markup. */
@@ -1171,12 +1428,165 @@
 
   /** Escape: the keyboard goes to the note's tab (M-08.10, NFR-011). */
   function leave() {
-    document.getElementById(tabId(note))?.focus();
+    document.getElementById(tabId(note, pane))?.focus();
+  }
+
+  /** FR-099: whether the core holds the backend's text of revision `of`. */
+  function spellInStep(of: number): boolean {
+    return backend.inStep ? backend.inStep(note, of) : coreInStep(note, of);
+  }
+
+  /** FR-099, UC-005 BR-023: the marks of the spell check, once of the core's text. */
+  function takeSpell(marks: SpellMarksView) {
+    if (marks.note !== note || destroyed) {
+      return;
+    }
+    if (!loading && spellInStep(marks.rev)) {
+      pendingSpell = null;
+      spell = marks.marks;
+    } else {
+      pendingSpell = marks;
+    }
+  }
+
+  function takePendingSpell() {
+    const marks = pendingSpell;
+    if (marks && !loading && spellInStep(marks.rev)) {
+      pendingSpell = null;
+      spell = marks.marks;
+    }
+  }
+
+  $effect(() => {
+    if (spellMarks) {
+      takeSpell(spellMarks);
+    }
+  });
+
+  /**
+   * UC-005 A28: opens the spell menu for the marked word at the markup
+   * offset `offset`, at `x`, `y`; false when no word is marked there.
+   */
+  function openSpellMenu(offset: number, x: number, y: number): boolean {
+    const word = spellAt(spell, offset);
+    const shown = word ? shownWordIn(blocks, word[0], word[1]) : null;
+    if (!word || !shown) {
+      return false;
+    }
+    const first = shown.places[0];
+    const end = shown.places[shown.places.length - 1];
+    const markup = backend.markupOf?.(note, first, end) ?? undefined;
+    // Below the word's line, so the word stays readable.
+    const below = linkPlace(first);
+    spellMenu = {
+      from: word[0],
+      to: word[1],
+      shown: markup === undefined ? shown : { ...shown, markup, from: first },
+      x: below?.left ?? x,
+      y: below?.bottom ?? y,
+      rev,
+    };
+    return true;
+  }
+
+  /** UC-005 A28: the cursor to the next marked word (`back`: the one before). */
+  function stepSpell(back: boolean): boolean {
+    if (spell.length === 0) {
+      return false;
+    }
+    const next = back
+      ? ([...spell].reverse().find(([, to]) => to < head) ?? spell[spell.length - 1])
+      : (spell.find(([from]) => from > head) ?? spell[0]);
+    jump(next[0]);
+    return true;
+  }
+
+  /** The context menu by the mouse: the spell menu on a marked word. */
+  function onContextMenu(event: MouseEvent) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest('[data-spell]')) {
+      return;
+    }
+    const point = caretAt(event.clientX, event.clientY);
+    const offset = point ? offsetOf(point.node, point.offset) : null;
+    if (offset !== null && openSpellMenu(offset, event.clientX, event.clientY)) {
+      event.preventDefault();
+    }
+  }
+
+  /** Shift+F10 or the menu key: the spell menu of the marked word at the cursor. */
+  function spellMenuAtCursor(): boolean {
+    const place = linkPlace(head);
+    return place !== null && openSpellMenu(head, place.left, place.bottom);
+  }
+
+  /**
+   * UC-005 A28 step 2, TC-005-39: the marked word becomes `suggestion`, as
+   * one change undone alone; only the units that differ change, so markup
+   * inside the word stays. Nothing changes when the word is gone.
+   */
+  function correct(menu: NonNullable<typeof spellMenu>, suggestion: string) {
+    const now = shownWordIn(blocks, menu.from, menu.to);
+    const change = correctionOf(menu.shown, suggestion);
+    if (!now || now.word !== menu.shown.word || change === null || menu.rev !== rev) {
+      // ADR-030: the text changed since the word was marked.
+      onError(CHANGED_SINCE);
+      return;
+    }
+    onCorrected?.(suggestion);
+    enqueue(performance.now(), () =>
+      backend.insert(
+        note,
+        { rev, anchor: change.from, head: change.to },
+        { kind: 'correction', text: change.text },
+      ),
+    );
+  }
+
+  /**
+   * The menu closes before the entry chosen acts; the mark stays until
+   * then, so a correction still knows its word.
+   */
+  function closeSpellMenu(back: boolean) {
+    const closing = spellMenu;
+    queueMicrotask(() => {
+      if (spellMenu === closing) spellMenu = null;
+    });
+    if (back) {
+      content?.focus();
+    }
   }
 
   function onKeyDown(event: KeyboardEvent) {
     if (event.defaultPrevented) {
       return;
+    }
+    if (
+      ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') &&
+      !composing &&
+      spellMenuAtCursor()
+    ) {
+      // UC-005 A28: the spell menu of the word at the cursor.
+      event.preventDefault();
+      return;
+    }
+    // FR-080: the list's keys while it shows, and Ctrl+Space.
+    if (backend.linkContext && !composing) {
+      if (linkCompletion.key(event, note)) {
+        event.preventDefault();
+        return;
+      }
+      if (
+        event.key === ' ' &&
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        queue = queue.then(() => askLink(true));
+        return;
+      }
     }
     const start = performance.now();
     const route = routeFacadeKey(event, mac, keysState);
@@ -1198,8 +1608,25 @@
         clipboardAction('paste', true);
         return;
       default:
+        if (movesBlocks(route.send)) {
+          // Review: a key right after a click acts on the new caret, also
+          // before the webview told the click (`selectionchange`).
+          onSelectionChange();
+        }
         send(route.send, route.rows, start);
     }
+  }
+
+  /** UC-005 A26, A27: a key that moves, copies or indents the blocks at the caret. */
+  function movesBlocks(input: FacadeInput): boolean {
+    if (input.kind !== 'key') {
+      return false;
+    }
+    return (
+      input.key === 'Tab' ||
+      input.key === 'D' ||
+      (input.alt && (input.key === 'ArrowUp' || input.key === 'ArrowDown'))
+    );
   }
 
   /**
@@ -1297,7 +1724,8 @@
     const block = blocks[index];
     const run = block?.runs[Number(element?.dataset.r)];
     if (run?.link) {
-      onFollow(sourceAt(block, run, 0));
+      // UC-004 A18: with Shift held too, the note opens to the side.
+      onFollow(sourceAt(block, run, 0), event.shiftKey);
     }
   }
 
@@ -1345,7 +1773,7 @@
     }
     scrollTop = scroller.scrollTop;
     if (restored && !loading) {
-      scrolled.set(note, anchorOf());
+      scrolled.set(`${pane}:${note}`, anchorOf());
     }
     tooltip = null;
     notify('scroll');
@@ -1395,6 +1823,48 @@
     content?.focus({ preventScroll: true });
   }
 
+  /** UC-005 A26, A27: an action of the editing comfort from the command palette. */
+  function edit(action: EditActionName) {
+    send({ kind: 'edit', action });
+    content?.focus({ preventScroll: true });
+  }
+
+  /**
+   * UC-024 step 4, BR-006: writes `change` of a note attribute, after the
+   * inputs before it, as one undo step; resolves once shown, with why
+   * nothing was written (A3, A4), else `null`.
+   */
+  function attribute(change: AttributeChangeView): Promise<Refusal | null> {
+    const write = backend.attribute;
+    if (!write) {
+      return Promise.resolve({
+        problem: 'The note attributes cannot be changed here.',
+        about: 'note',
+      });
+    }
+    let refusal: Refusal | null = null;
+    enqueue(performance.now(), async () => {
+      const edited = await write(note, at(), change);
+      refusal = edited.problem === null ? null : { problem: edited.problem, about: edited.about };
+      return edited.patch;
+    });
+    return queue.then(() => refusal);
+  }
+
+  /** UC-024 BR-006: undoes the last change of the note, as Ctrl+Z (Cmd+Z) in it does. */
+  function undo() {
+    send({ kind: 'key', key: 'Z', ctrl: !mac, alt: false, shift: false, meta: mac });
+  }
+
+  /** UC-004 A16 step 3, BR-017: the cursor to the block holding the line of `target`. */
+  function goToLine(target: LineTargetView) {
+    const go = backend.goToLine;
+    if (go) {
+      enqueue(performance.now(), () => go(note, at(), target));
+    }
+    void focusCursor();
+  }
+
   /** M-12: what the minimap shows of the facade. */
   const minimap: MinimapSource = {
     geometry: () => {
@@ -1442,17 +1912,29 @@
     reveal,
     jump,
     find,
+    replace,
     focus: () => void focusCursor(),
     tool,
     settled: () => queue,
     insert,
     placeAt,
     mark,
+    completeLink: () => {
+      void focusCursor();
+      queue = queue.then(() => askLink(true));
+    },
     back,
+    edit,
+    lineCount: () => backend.lineCount?.(note) ?? null,
+    goToLine,
+    attribute,
+    undo,
+    stepSpell,
+    spellMenuAtCursor,
   };
 
   onMount(() => {
-    setActiveFacade(controller);
+    setActiveFacade(controller, pane);
     // A dialog that shows hides the hint of a link (app-tester F8).
     const hideTooltip = () => (tooltip = null);
     // The note this view showed; the prop may name the next tab's by the
@@ -1483,7 +1965,7 @@
       if (destroyed || !scroller) {
         return;
       }
-      const place = scrolled.get(note);
+      const place = scrolled.get(`${pane}:${note}`);
       if (place && place.index < blocks.length) {
         holdAt(place.index, place.into, 800);
       }
@@ -1500,6 +1982,7 @@
     }
     return () => {
       destroyed = true;
+      linkCompletion.close(shownNote);
       window.removeEventListener(DIALOG_OPENED, hideTooltip);
       backend.leave(shownNote, detach && !loading ? { version, blocks } : null);
       detach?.();
@@ -1515,7 +1998,7 @@
       if (waitingTimer !== null) {
         clearTimeout(waitingTimer);
       }
-      setActiveFacade(null);
+      setActiveFacade(null, pane, controller);
       if (info?.facade === controller) {
         info.facade = null;
         info.place = '';
@@ -1528,7 +2011,13 @@
   });
 </script>
 
-<div class="facade" aria-busy={loading} bind:clientWidth={width}>
+<div
+  class="facade"
+  class:nowrap={!softWrap}
+  aria-busy={loading}
+  bind:clientWidth={width}
+  style:--editor-zoom={scale}
+>
   <div class="scroller" bind:this={scroller} bind:clientHeight={viewHeight} onscroll={onScroll}>
     <div
       class="facade-text"
@@ -1540,6 +2029,9 @@
       tabindex="0"
       aria-multiline="true"
       aria-label={label}
+      aria-haspopup="listbox"
+      aria-controls={linkAria.controls}
+      aria-activedescendant={linkAria.active}
       {@attach describe}
       style:padding="{PADDING}px {PADDING}px {PADDING}px {LEFT}px"
       onbeforeinput={onBeforeInput}
@@ -1551,10 +2043,15 @@
       ondrop={refuse}
       ondragstart={refuse}
       onkeydown={onKeyDown}
+      onkeydowncapture={() => (touched = true)}
+      onblur={() => linkCompletion.close(note)}
+      onfocus={() => backend.focused?.(note)}
       onmousedown={onMouseDown}
+      onmousedowncapture={() => (touched = true)}
       onclick={onClick}
       onpointermove={onPointerMove}
       onpointerleave={() => (tooltip = null)}
+      oncontextmenu={onContextMenu}
     >
       <div class="space" style:height="{spaceAbove}px" contenteditable="false"></div>
       {#key drawn}
@@ -1577,10 +2074,13 @@
               editing={editing === index}
               section={folding.headings.get(index) ?? null}
               hits={found.length > 0 ? blockHits(blocks[index], found) : []}
+              spell={spell.length > 0 ? blockHits(blocks[index], spell) : []}
               {current}
               onFold={fold}
               onEnlarge={(url, w, h) => (enlarged = { url, width: w, height: h })}
               {onFigure}
+              cursor={cursorBlock === index ? head : null}
+              {onFormula}
             />
           </div>
         {/each}
@@ -1605,6 +2105,17 @@
       {tooltip.text}
     </div>
   {/if}
+  {#if spellMenu}
+    {@const menu = spellMenu}
+    <SpellMenu
+      word={menu.shown.word}
+      x={menu.x}
+      y={menu.y}
+      onChoose={(suggestion) => correct(menu, suggestion)}
+      {onError}
+      onClose={closeSpellMenu}
+    />
+  {/if}
   {#if enlarged}
     <Enlarged
       url={enlarged.url}
@@ -1623,7 +2134,7 @@
     class="gap"
     data-gap
     style:padding-bottom="{BLOCK_GAP}px"
-    style:--row="{BODY_SIZE * LINE_HEIGHT}px"
+    style:--row="{BODY_SIZE * scale * LINE_HEIGHT}px"
   >
     {#each gapLines as line (line)}<div class="gap-line"><br /></div>{/each}
   </div>
@@ -1690,7 +2201,7 @@
     min-height: 100%;
     box-sizing: border-box;
     font-family: var(--font-ui);
-    font-size: 15px;
+    font-size: calc(15px * var(--editor-zoom, 1));
     caret-color: var(--palette-foreground);
     outline: none;
   }
@@ -1705,7 +2216,7 @@
 
   .gap-line {
     height: var(--row);
-    font-size: 15px;
+    font-size: calc(15px * var(--editor-zoom, 1));
     line-height: 1.25;
   }
 

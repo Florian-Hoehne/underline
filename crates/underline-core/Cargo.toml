@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# ADR-026: the searches of the workspace match regular expressions with the
+# fast engines; the WASM editor core leaves them out to stay small.
+regex = { workspace = true, features = ["perf"] }
 underline-markup.workspace = true
 serde.workspace = true
 thiserror.workspace = true
@@ -16,5 +19,7 @@ directories.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 jiff = "0.2"
+# OQ-206, ADR-030: the system's language, the spell check's default.
+sys-locale = "0.3"
 # Line and word diffs of notes against their last commit (UC-011).
 similar = { version = "2", features = ["inline"] }

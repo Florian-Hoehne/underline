@@ -79,6 +79,13 @@
   --font-ui: 'DejaVu Sans', sans-serif;
   --font-mono: 'DejaVu Sans Mono', monospace;
 
+  /* FR-099, UC-005 BR-023 (ADR-030): the wave under a word the spell check
+     marks, in the theme's colour for errors (`--ui-overdue`, darker on light
+     themes, lighter on dark ones; theme.ts), in both editing views. */
+  --ui-spell: var(--ui-overdue, #a80000);
+  --ui-spell-thickness: 1.5px;
+  --ui-spell-offset: 3px;
+
   color-scheme: light dark;
   font-family: var(--font-ui);
   font-size: 14px;
@@ -141,6 +148,12 @@ body {
  * the system's highlight, as the theme's colours are replaced there.
  */
 @media (forced-colors: active) {
+  /* FR-099: the wave stays, in the text colour of the forced palette. */
+  .cm-ul-spell,
+  .spell {
+    --ui-spell: CanvasText;
+  }
+
   .cm-ul-found,
   .cm-searchMatch,
   .hit {

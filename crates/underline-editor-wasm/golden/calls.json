@@ -39,7 +39,7 @@
         ],
         "call": "input",
         "out": {
-          "error": "The input is not valid: unknown variant `nothing`, expected one of `text`, `key`, `tool` at line 1 column 17"
+          "error": "The input is not valid: unknown variant `nothing`, expected one of `text`, `key`, `tool`, `edit` at line 1 column 17"
         }
       },
       {
@@ -1047,6 +1047,7 @@
                   "bold": false,
                   "code": false,
                   "end": 8,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1076,6 +1077,7 @@
                   "bold": false,
                   "code": false,
                   "end": 17,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1091,6 +1093,7 @@
                   "bold": true,
                   "code": false,
                   "end": 23,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1106,6 +1109,7 @@
                   "bold": false,
                   "code": false,
                   "end": 38,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1136,6 +1140,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1166,6 +1171,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1196,6 +1202,7 @@
                   "bold": false,
                   "code": false,
                   "end": 9,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1226,6 +1233,7 @@
                   "bold": false,
                   "code": true,
                   "end": 18,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1250,6 +1258,7 @@
                     "left"
                   ],
                   "caption": null,
+                  "frontMatter": false,
                   "header": true,
                   "rows": [
                     [
@@ -1258,6 +1267,7 @@
                           "bold": false,
                           "code": false,
                           "end": 3,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -1275,6 +1285,7 @@
                           "bold": false,
                           "code": false,
                           "end": 7,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -1294,6 +1305,7 @@
                           "bold": false,
                           "code": false,
                           "end": 23,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -1311,6 +1323,7 @@
                           "bold": false,
                           "code": false,
                           "end": 27,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -1337,6 +1350,7 @@
                   "bold": false,
                   "code": false,
                   "end": 29,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -1429,7 +1443,7 @@
         ],
         "call": "facadeInsert",
         "out": {
-          "error": "The insertion is not valid: unknown variant `x`, expected one of `link`, `image`, `file`, `dropped`, `text` at line 1 column 11"
+          "error": "The insertion is not valid: unknown variant `x`, expected one of `link`, `image`, `file`, `dropped`, `text`, `correction` at line 1 column 11"
         }
       },
       {
@@ -1469,6 +1483,7 @@
                       "bold": false,
                       "code": false,
                       "end": 22,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1492,6 +1507,7 @@
                       "bold": true,
                       "code": false,
                       "end": 28,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1507,6 +1523,7 @@
                       "bold": false,
                       "code": false,
                       "end": 43,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1574,6 +1591,37 @@
                   "colors": null,
                   "figure": null,
                   "kind": {
+                    "level": 1,
+                    "type": "heading"
+                  },
+                  "length": 9,
+                  "line": 0,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 8,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "Facade"
+                    }
+                  ],
+                  "start": 0
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
                     "type": "paragraph"
                   },
                   "length": 10,
@@ -1585,6 +1633,7 @@
                       "bold": false,
                       "code": false,
                       "end": 9,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1622,6 +1671,7 @@
                       "bold": false,
                       "code": false,
                       "end": 13,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1637,6 +1687,7 @@
                       "bold": true,
                       "code": false,
                       "end": 19,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1652,6 +1703,7 @@
                       "bold": false,
                       "code": false,
                       "end": 34,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1682,6 +1734,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1712,6 +1765,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1742,6 +1796,7 @@
                       "bold": false,
                       "code": false,
                       "end": 9,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1755,12 +1810,160 @@
                     }
                   ],
                   "start": 80
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "language": "rust",
+                    "type": "code"
+                  },
+                  "length": 23,
+                  "line": 11,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": true,
+                      "end": 18,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          8
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "let x = 1;"
+                    }
+                  ],
+                  "start": 91
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "table": {
+                      "align": [
+                        "left",
+                        "left"
+                      ],
+                      "caption": null,
+                      "frontMatter": false,
+                      "header": true,
+                      "rows": [
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 3,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  2
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "a"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 7,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  6
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "b"
+                            }
+                          ]
+                        ],
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 23,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  22
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 27,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  26
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "2"
+                            }
+                          ]
+                        ]
+                      ]
+                    },
+                    "type": "table"
+                  },
+                  "length": 30,
+                  "line": 15,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 29,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "| a | b |\n|---|---|\n| 1 | 2 |"
+                    }
+                  ],
+                  "start": 115
                 }
               ],
-              "from": 1,
+              "from": 0,
               "lineShift": 2,
               "note": "Home",
-              "removed": 4,
+              "removed": 7,
               "rev": 2,
               "shift": 2,
               "version": 3
@@ -1809,6 +2012,37 @@
                   "colors": null,
                   "figure": null,
                   "kind": {
+                    "level": 1,
+                    "type": "heading"
+                  },
+                  "length": 9,
+                  "line": 0,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 8,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "Facade"
+                    }
+                  ],
+                  "start": 0
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
                     "type": "paragraph"
                   },
                   "length": 44,
@@ -1820,6 +2054,7 @@
                       "bold": false,
                       "code": false,
                       "end": 22,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1843,6 +2078,7 @@
                       "bold": true,
                       "code": false,
                       "end": 28,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1858,6 +2094,7 @@
                       "bold": false,
                       "code": false,
                       "end": 43,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1888,6 +2125,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1918,6 +2156,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1948,6 +2187,7 @@
                       "bold": false,
                       "code": false,
                       "end": 9,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -1961,12 +2201,160 @@
                     }
                   ],
                   "start": 78
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "language": "rust",
+                    "type": "code"
+                  },
+                  "length": 23,
+                  "line": 9,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": true,
+                      "end": 18,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          8
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "let x = 1;"
+                    }
+                  ],
+                  "start": 89
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "table": {
+                      "align": [
+                        "left",
+                        "left"
+                      ],
+                      "caption": null,
+                      "frontMatter": false,
+                      "header": true,
+                      "rows": [
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 3,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  2
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "a"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 7,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  6
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "b"
+                            }
+                          ]
+                        ],
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 23,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  22
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 27,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  26
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "2"
+                            }
+                          ]
+                        ]
+                      ]
+                    },
+                    "type": "table"
+                  },
+                  "length": 30,
+                  "line": 13,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 29,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "| a | b |\n|---|---|\n| 1 | 2 |"
+                    }
+                  ],
+                  "start": 113
                 }
               ],
-              "from": 1,
+              "from": 0,
               "lineShift": -2,
               "note": "Home",
-              "removed": 5,
+              "removed": 8,
               "rev": 3,
               "shift": -2,
               "version": 4
@@ -2092,6 +2480,37 @@
                     "colors": null,
                     "figure": null,
                     "kind": {
+                      "level": 1,
+                      "type": "heading"
+                    },
+                    "length": 9,
+                    "line": 0,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 8,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "Facade"
+                      }
+                    ],
+                    "start": 0
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
                       "type": "paragraph"
                     },
                     "length": 45,
@@ -2103,6 +2522,7 @@
                         "bold": false,
                         "code": false,
                         "end": 23,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2126,6 +2546,7 @@
                         "bold": true,
                         "code": false,
                         "end": 29,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2141,6 +2562,7 @@
                         "bold": false,
                         "code": false,
                         "end": 44,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2171,6 +2593,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2201,6 +2624,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2231,6 +2655,7 @@
                         "bold": false,
                         "code": false,
                         "end": 9,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2244,12 +2669,160 @@
                       }
                     ],
                     "start": 79
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "language": "rust",
+                      "type": "code"
+                    },
+                    "length": 23,
+                    "line": 9,
+                    "lines": 3,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": true,
+                        "end": 18,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            8
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "let x = 1;"
+                      }
+                    ],
+                    "start": 90
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "table": {
+                        "align": [
+                          "left",
+                          "left"
+                        ],
+                        "caption": null,
+                        "frontMatter": false,
+                        "header": true,
+                        "rows": [
+                          [
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 3,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    2
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "a"
+                              }
+                            ],
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 7,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    6
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "b"
+                              }
+                            ]
+                          ],
+                          [
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 23,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    22
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "1"
+                              }
+                            ],
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 27,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    26
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "2"
+                              }
+                            ]
+                          ]
+                        ]
+                      },
+                      "type": "table"
+                    },
+                    "length": 30,
+                    "line": 13,
+                    "lines": 3,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 29,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            0
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "| a | b |\n|---|---|\n| 1 | 2 |"
+                      }
+                    ],
+                    "start": 114
                   }
                 ],
-                "from": 1,
+                "from": 0,
                 "lineShift": 0,
                 "note": "Home",
-                "removed": 4,
+                "removed": 7,
                 "rev": 4,
                 "shift": 1,
                 "version": 5
@@ -2311,6 +2884,7 @@
                         "bold": false,
                         "code": false,
                         "end": 32,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2342,6 +2916,7 @@
                         "bold": true,
                         "code": false,
                         "end": 38,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2357,6 +2932,7 @@
                         "bold": false,
                         "code": false,
                         "end": 53,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2426,6 +3002,37 @@
                     "colors": null,
                     "figure": null,
                     "kind": {
+                      "level": 1,
+                      "type": "heading"
+                    },
+                    "length": 9,
+                    "line": 0,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 8,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "Facade"
+                      }
+                    ],
+                    "start": 0
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
                       "type": "paragraph"
                     },
                     "length": 19,
@@ -2437,6 +3044,7 @@
                         "bold": false,
                         "code": false,
                         "end": 18,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2483,6 +3091,7 @@
                         "bold": false,
                         "code": false,
                         "end": 7,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2512,6 +3121,7 @@
                         "bold": false,
                         "code": false,
                         "end": 5,
+                        "formula": null,
                         "italic": true,
                         "link": null,
                         "offsets": [
@@ -2541,6 +3151,7 @@
                         "bold": false,
                         "code": false,
                         "end": 14,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2556,6 +3167,7 @@
                         "bold": true,
                         "code": false,
                         "end": 20,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2571,6 +3183,7 @@
                         "bold": false,
                         "code": false,
                         "end": 35,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2601,6 +3214,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2631,6 +3245,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2661,6 +3276,7 @@
                         "bold": false,
                         "code": false,
                         "end": 9,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -2674,12 +3290,160 @@
                       }
                     ],
                     "start": 107
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "language": "rust",
+                      "type": "code"
+                    },
+                    "length": 23,
+                    "line": 15,
+                    "lines": 3,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": true,
+                        "end": 18,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            8
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "let x = 1;"
+                      }
+                    ],
+                    "start": 118
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "table": {
+                        "align": [
+                          "left",
+                          "left"
+                        ],
+                        "caption": null,
+                        "frontMatter": false,
+                        "header": true,
+                        "rows": [
+                          [
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 3,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    2
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "a"
+                              }
+                            ],
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 7,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    6
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "b"
+                              }
+                            ]
+                          ],
+                          [
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 23,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    22
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "1"
+                              }
+                            ],
+                            [
+                              {
+                                "bold": false,
+                                "code": false,
+                                "end": 27,
+                                "formula": null,
+                                "italic": false,
+                                "link": null,
+                                "offsets": [
+                                  [
+                                    0,
+                                    26
+                                  ]
+                                ],
+                                "strike": false,
+                                "text": "2"
+                              }
+                            ]
+                          ]
+                        ]
+                      },
+                      "type": "table"
+                    },
+                    "length": 30,
+                    "line": 19,
+                    "lines": 3,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 29,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            0
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "| a | b |\n|---|---|\n| 1 | 2 |"
+                      }
+                    ],
+                    "start": 142
                   }
                 ],
-                "from": 1,
+                "from": 0,
                 "lineShift": 6,
                 "note": "Home",
-                "removed": 4,
+                "removed": 7,
                 "rev": 6,
                 "shift": 19,
                 "version": 7
@@ -2721,6 +3485,144 @@
               "blocks": [
                 {
                   "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "level": 1,
+                    "type": "heading"
+                  },
+                  "length": 9,
+                  "line": 0,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 8,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "Facade"
+                    }
+                  ],
+                  "start": 0
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 19,
+                  "line": 2,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 18,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ],
+                        [
+                          4,
+                          5
+                        ],
+                        [
+                          6,
+                          8
+                        ],
+                        [
+                          7,
+                          10
+                        ],
+                        [
+                          13,
+                          17
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "A pa*x**plain*"
+                    }
+                  ],
+                  "start": 10
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "level": 2,
+                    "type": "heading"
+                  },
+                  "length": 8,
+                  "line": 4,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 7,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          3
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "From"
+                    }
+                  ],
+                  "start": 30
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 7,
+                  "line": 6,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 5,
+                      "formula": null,
+                      "italic": true,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          1
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "html"
+                    }
+                  ],
+                  "start": 39
+                },
+                {
+                  "colors": null,
                   "figure": {
                     "caption": null,
                     "failed": false,
@@ -2744,6 +3646,7 @@
                       "bold": false,
                       "code": false,
                       "end": 29,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2773,6 +3676,7 @@
                       "bold": false,
                       "code": false,
                       "end": 14,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2788,6 +3692,7 @@
                       "bold": true,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2803,6 +3708,7 @@
                       "bold": false,
                       "code": false,
                       "end": 35,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2833,6 +3739,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2863,6 +3770,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2893,6 +3801,7 @@
                       "bold": false,
                       "code": false,
                       "end": 9,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2906,12 +3815,160 @@
                     }
                   ],
                   "start": 138
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "language": "rust",
+                    "type": "code"
+                  },
+                  "length": 23,
+                  "line": 17,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": true,
+                      "end": 18,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          8
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "let x = 1;"
+                    }
+                  ],
+                  "start": 149
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "table": {
+                      "align": [
+                        "left",
+                        "left"
+                      ],
+                      "caption": null,
+                      "frontMatter": false,
+                      "header": true,
+                      "rows": [
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 3,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  2
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "a"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 7,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  6
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "b"
+                            }
+                          ]
+                        ],
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 23,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  22
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 27,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  26
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "2"
+                            }
+                          ]
+                        ]
+                      ]
+                    },
+                    "type": "table"
+                  },
+                  "length": 30,
+                  "line": 21,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 29,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "| a | b |\n|---|---|\n| 1 | 2 |"
+                    }
+                  ],
+                  "start": 173
                 }
               ],
-              "from": 4,
+              "from": 0,
               "lineShift": 2,
               "note": "Home",
-              "removed": 4,
+              "removed": 10,
               "rev": 7,
               "shift": 31,
               "version": 8
@@ -2977,6 +4034,7 @@
                       "bold": false,
                       "code": false,
                       "end": 12,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -2990,12 +4048,462 @@
                     }
                   ],
                   "start": 0
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 19,
+                  "line": 2,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 18,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ],
+                        [
+                          4,
+                          5
+                        ],
+                        [
+                          6,
+                          8
+                        ],
+                        [
+                          7,
+                          10
+                        ],
+                        [
+                          13,
+                          17
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "A pa*x**plain*"
+                    }
+                  ],
+                  "start": 14
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "level": 2,
+                    "type": "heading"
+                  },
+                  "length": 8,
+                  "line": 4,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 7,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          3
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "From"
+                    }
+                  ],
+                  "start": 34
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 7,
+                  "line": 6,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 5,
+                      "formula": null,
+                      "italic": true,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          1
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "html"
+                    }
+                  ],
+                  "start": 43
+                },
+                {
+                  "colors": null,
+                  "figure": {
+                    "caption": null,
+                    "failed": false,
+                    "loading": "Loading Plan-2026-11-10-0930.png…",
+                    "message": null,
+                    "picture": null,
+                    "sourceShown": false,
+                    "unreadable": null
+                  },
+                  "kind": {
+                    "alt": "",
+                    "target": "Plan-2026-11-10-0930.png",
+                    "type": "image"
+                  },
+                  "length": 30,
+                  "line": 8,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 29,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "![](Plan-2026-11-10-0930.png)"
+                    }
+                  ],
+                  "start": 51
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 36,
+                  "line": 10,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 14,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "*ragraph with "
+                    },
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 20,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          16
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "bold"
+                    },
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 35,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          22
+                        ]
+                      ],
+                      "strike": false,
+                      "text": " and 😀 here."
+                    }
+                  ],
+                  "start": 82
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "depth": 0,
+                    "type": "listItem"
+                  },
+                  "length": 11,
+                  "line": 12,
+                  "lines": 1,
+                  "prefix": "•  ",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 10,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "item one"
+                    }
+                  ],
+                  "start": 119
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "depth": 0,
+                    "type": "listItem"
+                  },
+                  "length": 11,
+                  "line": 13,
+                  "lines": 1,
+                  "prefix": "•  ",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 10,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "item two"
+                    }
+                  ],
+                  "start": 130
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "depth": 1,
+                    "type": "quote"
+                  },
+                  "length": 10,
+                  "line": 15,
+                  "lines": 1,
+                  "prefix": "    ",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 9,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "a quote"
+                    }
+                  ],
+                  "start": 142
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "language": "rust",
+                    "type": "code"
+                  },
+                  "length": 23,
+                  "line": 17,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": true,
+                      "end": 18,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          8
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "let x = 1;"
+                    }
+                  ],
+                  "start": 153
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "table": {
+                      "align": [
+                        "left",
+                        "left"
+                      ],
+                      "caption": null,
+                      "frontMatter": false,
+                      "header": true,
+                      "rows": [
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 3,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  2
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "a"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 7,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  6
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "b"
+                            }
+                          ]
+                        ],
+                        [
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 23,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  22
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "bold": false,
+                              "code": false,
+                              "end": 27,
+                              "formula": null,
+                              "italic": false,
+                              "link": null,
+                              "offsets": [
+                                [
+                                  0,
+                                  26
+                                ]
+                              ],
+                              "strike": false,
+                              "text": "2"
+                            }
+                          ]
+                        ]
+                      ]
+                    },
+                    "type": "table"
+                  },
+                  "length": 30,
+                  "line": 21,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 29,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "| a | b |\n|---|---|\n| 1 | 2 |"
+                    }
+                  ],
+                  "start": 177
                 }
               ],
               "from": 0,
               "lineShift": 0,
               "note": "Home",
-              "removed": 1,
+              "removed": 11,
               "rev": 8,
               "shift": 4,
               "version": 9
@@ -3095,6 +4603,7 @@
                   "bold": false,
                   "code": false,
                   "end": 12,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3124,6 +4633,7 @@
                   "bold": false,
                   "code": false,
                   "end": 18,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3170,6 +4680,7 @@
                   "bold": false,
                   "code": false,
                   "end": 7,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3199,6 +4710,7 @@
                   "bold": false,
                   "code": false,
                   "end": 5,
+                  "formula": null,
                   "italic": true,
                   "link": null,
                   "offsets": [
@@ -3238,6 +4750,7 @@
                   "bold": false,
                   "code": false,
                   "end": 29,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3267,6 +4780,7 @@
                   "bold": false,
                   "code": false,
                   "end": 14,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3282,6 +4796,7 @@
                   "bold": true,
                   "code": false,
                   "end": 20,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3297,6 +4812,7 @@
                   "bold": false,
                   "code": false,
                   "end": 35,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3327,6 +4843,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3357,6 +4874,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3387,6 +4905,7 @@
                   "bold": false,
                   "code": false,
                   "end": 9,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3417,6 +4936,7 @@
                   "bold": false,
                   "code": true,
                   "end": 18,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3441,6 +4961,7 @@
                     "left"
                   ],
                   "caption": null,
+                  "frontMatter": false,
                   "header": true,
                   "rows": [
                     [
@@ -3449,6 +4970,7 @@
                           "bold": false,
                           "code": false,
                           "end": 3,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -3466,6 +4988,7 @@
                           "bold": false,
                           "code": false,
                           "end": 7,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -3485,6 +5008,7 @@
                           "bold": false,
                           "code": false,
                           "end": 23,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -3502,6 +5026,7 @@
                           "bold": false,
                           "code": false,
                           "end": 27,
+                          "formula": null,
                           "italic": false,
                           "link": null,
                           "offsets": [
@@ -3528,6 +5053,7 @@
                   "bold": false,
                   "code": false,
                   "end": 29,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3766,6 +5292,7 @@
                   "bold": false,
                   "code": false,
                   "end": 8,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3795,6 +5322,7 @@
                   "bold": false,
                   "code": false,
                   "end": 17,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3810,6 +5338,7 @@
                   "bold": true,
                   "code": false,
                   "end": 22,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3825,6 +5354,7 @@
                   "bold": false,
                   "code": false,
                   "end": 29,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3855,6 +5385,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3885,6 +5416,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3915,6 +5447,7 @@
                   "bold": false,
                   "code": false,
                   "end": 20,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -3945,6 +5478,7 @@
                   "bold": false,
                   "code": true,
                   "end": 13,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -4037,7 +5571,7 @@
         ],
         "call": "facadeInsert",
         "out": {
-          "error": "The insertion is not valid: unknown variant `x`, expected one of `link`, `image`, `file`, `dropped`, `text` at line 1 column 11"
+          "error": "The insertion is not valid: unknown variant `x`, expected one of `link`, `image`, `file`, `dropped`, `text`, `correction` at line 1 column 11"
         }
       },
       {
@@ -4077,6 +5611,7 @@
                       "bold": false,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4092,6 +5627,7 @@
                       "bold": true,
                       "code": false,
                       "end": 25,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4107,6 +5643,7 @@
                       "bold": false,
                       "code": false,
                       "end": 32,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4137,6 +5674,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4167,6 +5705,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4197,6 +5736,7 @@
                       "bold": false,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4275,6 +5815,7 @@
                       "bold": false,
                       "code": false,
                       "end": 7,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4304,6 +5845,7 @@
                       "bold": false,
                       "code": false,
                       "end": 13,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4319,6 +5861,7 @@
                       "bold": true,
                       "code": false,
                       "end": 18,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4334,6 +5877,7 @@
                       "bold": false,
                       "code": false,
                       "end": 25,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4364,6 +5908,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4394,6 +5939,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4424,6 +5970,7 @@
                       "bold": false,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4502,6 +6049,7 @@
                       "bold": false,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4517,6 +6065,7 @@
                       "bold": true,
                       "code": false,
                       "end": 25,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4532,6 +6081,7 @@
                       "bold": false,
                       "code": false,
                       "end": 32,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4562,6 +6112,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4592,6 +6143,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4622,6 +6174,7 @@
                       "bold": false,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -4777,6 +6330,7 @@
                         "bold": false,
                         "code": false,
                         "end": 7,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4792,6 +6346,7 @@
                         "bold": true,
                         "code": false,
                         "end": 26,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4807,6 +6362,7 @@
                         "bold": false,
                         "code": false,
                         "end": 33,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4837,6 +6393,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4867,6 +6424,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4897,6 +6455,7 @@
                         "bold": false,
                         "code": false,
                         "end": 20,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4977,6 +6536,7 @@
                         "bold": false,
                         "code": false,
                         "end": 6,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -4992,6 +6552,7 @@
                         "bold": true,
                         "code": false,
                         "end": 13,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5007,6 +6568,7 @@
                         "bold": false,
                         "code": false,
                         "end": 28,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5022,6 +6584,7 @@
                         "bold": true,
                         "code": false,
                         "end": 33,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5037,6 +6600,7 @@
                         "bold": false,
                         "code": false,
                         "end": 40,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5067,6 +6631,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5097,6 +6662,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5127,6 +6693,7 @@
                         "bold": false,
                         "code": false,
                         "end": 20,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5196,6 +6763,37 @@
                     "colors": null,
                     "figure": null,
                     "kind": {
+                      "level": 1,
+                      "type": "heading"
+                    },
+                    "length": 9,
+                    "line": 0,
+                    "lines": 1,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": false,
+                        "end": 8,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            2
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "Facade"
+                      }
+                    ],
+                    "start": 0
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
                       "type": "paragraph"
                     },
                     "length": 15,
@@ -5207,6 +6805,7 @@
                         "bold": false,
                         "code": false,
                         "end": 7,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5222,6 +6821,7 @@
                         "bold": true,
                         "code": false,
                         "end": 13,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5251,6 +6851,7 @@
                         "bold": false,
                         "code": false,
                         "end": 7,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5280,6 +6881,7 @@
                         "bold": true,
                         "code": false,
                         "end": 5,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5309,6 +6911,7 @@
                         "bold": true,
                         "code": false,
                         "end": 19,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5324,6 +6927,7 @@
                         "bold": false,
                         "code": false,
                         "end": 26,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5354,6 +6958,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5384,6 +6989,7 @@
                         "bold": false,
                         "code": false,
                         "end": 10,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5414,6 +7020,7 @@
                         "bold": false,
                         "code": false,
                         "end": 20,
+                        "formula": null,
                         "italic": false,
                         "link": null,
                         "offsets": [
@@ -5427,12 +7034,43 @@
                       }
                     ],
                     "start": 94
+                  },
+                  {
+                    "colors": null,
+                    "figure": null,
+                    "kind": {
+                      "language": "python",
+                      "type": "code"
+                    },
+                    "length": 19,
+                    "line": 16,
+                    "lines": 3,
+                    "prefix": "",
+                    "runs": [
+                      {
+                        "bold": false,
+                        "code": true,
+                        "end": 13,
+                        "formula": null,
+                        "italic": false,
+                        "link": null,
+                        "offsets": [
+                          [
+                            0,
+                            5
+                          ]
+                        ],
+                        "strike": false,
+                        "text": "print(1)"
+                      }
+                    ],
+                    "start": 132
                   }
                 ],
-                "from": 1,
+                "from": 0,
                 "lineShift": 6,
                 "note": "Home",
-                "removed": 4,
+                "removed": 6,
                 "rev": 6,
                 "shift": 19,
                 "version": 7
@@ -5474,6 +7112,143 @@
               "blocks": [
                 {
                   "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "level": 1,
+                    "type": "heading"
+                  },
+                  "length": 9,
+                  "line": 0,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 8,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "Facade"
+                    }
+                  ],
+                  "start": 0
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 15,
+                  "line": 2,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 7,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "A pa*x*"
+                    },
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 13,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          8
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "plain"
+                    }
+                  ],
+                  "start": 10
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 8,
+                  "line": 4,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 7,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "## From"
+                    }
+                  ],
+                  "start": 26
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 7,
+                  "line": 6,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 5,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          1
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "html"
+                    }
+                  ],
+                  "start": 35
+                },
+                {
+                  "colors": null,
                   "figure": {
                     "caption": null,
                     "failed": false,
@@ -5497,6 +7272,7 @@
                       "bold": false,
                       "code": false,
                       "end": 33,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5526,6 +7302,7 @@
                       "bold": true,
                       "code": false,
                       "end": 19,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5541,6 +7318,7 @@
                       "bold": false,
                       "code": false,
                       "end": 26,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5571,6 +7349,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5601,6 +7380,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5631,6 +7411,7 @@
                       "bold": false,
                       "code": false,
                       "end": 20,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5644,12 +7425,43 @@
                     }
                   ],
                   "start": 129
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "language": "python",
+                    "type": "code"
+                  },
+                  "length": 19,
+                  "line": 18,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": true,
+                      "end": 13,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          5
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "print(1)"
+                    }
+                  ],
+                  "start": 167
                 }
               ],
-              "from": 4,
+              "from": 0,
               "lineShift": 2,
               "note": "Home",
-              "removed": 4,
+              "removed": 9,
               "rev": 7,
               "shift": 35,
               "version": 8
@@ -5715,6 +7527,7 @@
                       "bold": false,
                       "code": false,
                       "end": 10,
+                      "formula": null,
                       "italic": false,
                       "link": null,
                       "offsets": [
@@ -5728,12 +7541,328 @@
                     }
                   ],
                   "start": 0
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 15,
+                  "line": 2,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 7,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "A pa*x*"
+                    },
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 13,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          8
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "plain"
+                    }
+                  ],
+                  "start": 12
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 8,
+                  "line": 4,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 7,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "## From"
+                    }
+                  ],
+                  "start": 28
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 7,
+                  "line": 6,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 5,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          1
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "html"
+                    }
+                  ],
+                  "start": 37
+                },
+                {
+                  "colors": null,
+                  "figure": {
+                    "caption": null,
+                    "failed": false,
+                    "loading": "Loading Plan-2026-11-10-0930.png…",
+                    "message": null,
+                    "picture": null,
+                    "sourceShown": false,
+                    "unreadable": null
+                  },
+                  "kind": {
+                    "alt": "Plan-2026-11-10-0930",
+                    "target": "Plan-2026-11-10-0930.png",
+                    "type": "image"
+                  },
+                  "length": 34,
+                  "line": 8,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 33,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          0
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "image::Plan-2026-11-10-0930.png[]"
+                    }
+                  ],
+                  "start": 45
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "type": "paragraph"
+                  },
+                  "length": 27,
+                  "line": 10,
+                  "lines": 1,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": true,
+                      "code": false,
+                      "end": 19,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          1
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "ragraph with *bold"
+                    },
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 26,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          20
+                        ]
+                      ],
+                      "strike": false,
+                      "text": " here."
+                    }
+                  ],
+                  "start": 80
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "depth": 0,
+                    "type": "listItem"
+                  },
+                  "length": 11,
+                  "line": 12,
+                  "lines": 1,
+                  "prefix": "•  ",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 10,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "item one"
+                    }
+                  ],
+                  "start": 108
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "depth": 0,
+                    "type": "listItem"
+                  },
+                  "length": 11,
+                  "line": 13,
+                  "lines": 1,
+                  "prefix": "•  ",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 10,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          2
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "item two"
+                    }
+                  ],
+                  "start": 119
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "label": "NOTE",
+                    "type": "admonition"
+                  },
+                  "length": 21,
+                  "line": 15,
+                  "lines": 1,
+                  "prefix": "    NOTE  ",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": false,
+                      "end": 20,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          6
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "An admonition."
+                    }
+                  ],
+                  "start": 131
+                },
+                {
+                  "colors": null,
+                  "figure": null,
+                  "kind": {
+                    "language": "python",
+                    "type": "code"
+                  },
+                  "length": 19,
+                  "line": 18,
+                  "lines": 3,
+                  "prefix": "",
+                  "runs": [
+                    {
+                      "bold": false,
+                      "code": true,
+                      "end": 13,
+                      "formula": null,
+                      "italic": false,
+                      "link": null,
+                      "offsets": [
+                        [
+                          0,
+                          5
+                        ]
+                      ],
+                      "strike": false,
+                      "text": "print(1)"
+                    }
+                  ],
+                  "start": 169
                 }
               ],
               "from": 0,
               "lineShift": 0,
               "note": "Home",
-              "removed": 1,
+              "removed": 10,
               "rev": 8,
               "shift": 2,
               "version": 9
@@ -5833,6 +7962,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -5862,6 +7992,7 @@
                   "bold": false,
                   "code": false,
                   "end": 7,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -5877,6 +8008,7 @@
                   "bold": true,
                   "code": false,
                   "end": 13,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -5906,6 +8038,7 @@
                   "bold": false,
                   "code": false,
                   "end": 7,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -5935,6 +8068,7 @@
                   "bold": true,
                   "code": false,
                   "end": 5,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -5974,6 +8108,7 @@
                   "bold": false,
                   "code": false,
                   "end": 33,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -6003,6 +8138,7 @@
                   "bold": true,
                   "code": false,
                   "end": 19,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -6018,6 +8154,7 @@
                   "bold": false,
                   "code": false,
                   "end": 26,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -6048,6 +8185,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -6078,6 +8216,7 @@
                   "bold": false,
                   "code": false,
                   "end": 10,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -6108,6 +8247,7 @@
                   "bold": false,
                   "code": false,
                   "end": 20,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [
@@ -6138,6 +8278,7 @@
                   "bold": false,
                   "code": true,
                   "end": 13,
+                  "formula": null,
                   "italic": false,
                   "link": null,
                   "offsets": [

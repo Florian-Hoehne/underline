@@ -31,6 +31,9 @@
     "copyright": "Copyright (c) 2026 Florian Höhne",
     "license": "MIT",
     "licenseFile": "../../../LICENSE",
+    "resources": {
+      "resources/dictionaries/": "dictionaries/"
+    },
     "homepage": "https://github.com/Florian-Hoehne/underline",
     "category": "Productivity",
     "shortDescription": "Notes in Markdown or AsciiDoc, shared with AI agents",

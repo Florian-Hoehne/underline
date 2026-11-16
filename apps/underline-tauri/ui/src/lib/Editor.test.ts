@@ -171,7 +171,9 @@ describe('M-07.2 the switch of the editing view', () => {
     await fireEvent.click(source);
 
     await waitFor(() => expect(panel()).toHaveAttribute('data-view', 'source'));
-    await waitFor(() => expect(setView).toHaveBeenCalledWith({ note: 'Home', view: 'source' }));
+    await waitFor(() =>
+      expect(setView).toHaveBeenCalledWith({ note: 'Home', view: 'source', pane: 'left' }),
+    );
     expect(source).toHaveAttribute('aria-pressed', 'true');
     await textField();
     await waitFor(() => expect(document.activeElement).toBe(document.querySelector('.cm-content')));

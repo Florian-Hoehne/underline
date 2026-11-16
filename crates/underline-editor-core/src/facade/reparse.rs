@@ -12,7 +12,7 @@
 //! reference definitions is parsed whole, as only that sees them all.
 
 use ropey::Rope;
-use underline_markup::blocks::{parse_blocks, Block, BlockKind};
+use underline_markup::blocks::{parse_blocks, parse_region, Block, BlockKind, Region};
 use underline_markup::NoteFormat;
 
 use super::rules::{byte_text, ext_end, has_reference_definitions, shift_block};
@@ -155,12 +155,22 @@ fn placed(mut block: Block, origin: usize) -> Block {
     block
 }
 
-/// The blocks of `blocks`, which were those of the text before `change`,
-/// made those of `rope`, the text after it, parsing as little as needed.
-/// `refs` says whether the note may hold link reference definitions; it is
-/// set when the parsed region holds one.
+/// The blocks of `blocks`, which were those of the text `old` before
+/// `change`, made those of `rope`, the text after it, parsing as little as
+/// needed. `refs` says whether the note may hold link reference
+/// definitions; it is set when the parsed region holds one.
+///
+/// Correctness before speed (FR-097, package 7a review): the blocks around
+/// the edit are parsed alone only when the lines the edit touched, before
+/// and after it, and the line on each side of them hold no line that can
+/// reach beyond its block (`reaching_line`: fences, delimiters, front
+/// matter, block attributes, reference definitions, headings, table rows,
+/// HTML, an empty list marker, a `\r`), and not in the first block of the
+/// note, where a front matter or a document header stands; else the whole
+/// note is parsed.
 pub(super) fn reparse(
     blocks: &mut Vec<Block>,
+    old: &Rope,
     rope: &Rope,
     format: NoteFormat,
     change: Change,
@@ -168,6 +178,9 @@ pub(super) fn reparse(
 ) -> Spliced {
     let markdown = format == NoteFormat::Markdown;
     if markdown && *refs {
+        return parse_whole(blocks, rope, format, refs);
+    }
+    if !local_is_safe(blocks, old, rope, format, change) {
         return parse_whole(blocks, rope, format, refs);
     }
     let n = blocks.len();
@@ -187,6 +200,9 @@ pub(super) fn reparse(
     while trail < n && is_container(&blocks[trail].kind) {
         trail += 1;
     }
+    // FR-098, OQ-222: whether the AsciiDoc header sets `:stem: latexmath`,
+    // which a part of the note parsed alone does not hold.
+    let stem = format == NoteFormat::AsciiDoc && underline_markup::stem_in_lines(lines_of(rope));
     let (mut before, mut after) = (1, 1);
     loop {
         let mut lo = lead.saturating_sub(before);
@@ -214,7 +230,12 @@ pub(super) fn reparse(
             *refs = true;
             return parse_whole(blocks, rope, format, refs);
         }
-        let parsed: Vec<Block> = parse_blocks(&text, format)
+        // A part of the note is no front matter of its own (UC-024 BR-001).
+        let region = Region {
+            at_start: r0 == 0,
+            stem,
+        };
+        let parsed: Vec<Block> = parse_region(&text, format, &region)
             .into_iter()
             .map(|block| placed(block, r0))
             .collect();
@@ -288,6 +309,141 @@ fn parse_whole(
     }
 }
 
+/// ADR-025, FR-097: the blocks of `blocks`, which were those of the text
+/// `old`, made those of `new`, parsing only the blocks around what changed
+/// between them (one view of a note follows the edits of another, UC-005
+/// BR-016). Returns the changed blocks by their indices now, `None` when the
+/// texts are the same. Where parsing around the change could differ from a
+/// full parse (see `reaching_line`), the whole note is parsed, and every
+/// block is changed.
+#[must_use = "the changed blocks are to be made anew"]
+pub fn reparse_between(
+    blocks: &mut Vec<Block>,
+    old: &Rope,
+    new: &Rope,
+    format: NoteFormat,
+    refs: &mut bool,
+) -> Option<std::ops::Range<usize>> {
+    let change = changed_bytes(old, new)?;
+    let spliced = reparse(blocks, old, new, format, change, refs);
+    Some(spliced.from..spliced.from + spliced.added)
+}
+
+/// The lines of `rope` as the parsers split a note: at `\n` only. The rope
+/// also breaks a line at U+000B, U+000C, U+0085, U+2028, U+2029 and a lone
+/// `\r`, which comrak and the AsciiDoc parser do not.
+fn lines_of(rope: &Rope) -> impl Iterator<Item = String> + '_ {
+    let mut chars = rope.chars().peekable();
+    std::iter::from_fn(move || {
+        chars.peek()?;
+        let mut line = String::new();
+        for c in chars.by_ref() {
+            if c == '\n' {
+                break;
+            }
+            line.push(c);
+        }
+        Some(line)
+    })
+}
+
+/// Whether `line` (a line of the rope, its break included) ends or holds a
+/// break the rope knows but the parsers do not (see [`lines_of`]).
+fn holds_rope_only_break(line: &str) -> bool {
+    line.contains(['\u{b}', '\u{c}', '\u{85}', '\u{2028}', '\u{2029}'])
+        || line.trim_end_matches(['\r', '\n']).contains('\r')
+        || (line.ends_with('\r') && !line.ends_with("\r\n"))
+}
+
+/// The lines of `rope` from the one holding byte `from` to the one holding
+/// byte `to`, with the line before and the line after them.
+fn lines_around(rope: &Rope, from: usize, to: usize) -> std::ops::Range<usize> {
+    let bytes = rope.len_bytes();
+    let first = rope.byte_to_line(from.min(bytes));
+    let last = rope.byte_to_line(to.min(bytes));
+    first.saturating_sub(1)..(last + 2).min(rope.len_lines())
+}
+
+/// Whether parsing the blocks around `change` alone gives what a full
+/// parse gives: no line touched (in `old` or in `rope`) nor next to it can
+/// reach beyond its block, and the edit is not in the first block of the
+/// note.
+fn local_is_safe(
+    blocks: &[Block],
+    old: &Rope,
+    rope: &Rope,
+    format: NoteFormat,
+    change: Change,
+) -> bool {
+    // A front matter or an AsciiDoc document header is the start of the note.
+    if blocks.first().is_none_or(|b| change.start <= ext_end(b)) {
+        return false;
+    }
+    let lines_ok = |text: &Rope, end: usize| {
+        let edited = {
+            let bytes = text.len_bytes();
+            text.byte_to_line(change.start.min(bytes))..=text.byte_to_line(end.min(bytes))
+        };
+        lines_around(text, change.start, end).all(|line| {
+            let line_text = text.line(line).to_string();
+            // The rope's lines are the parsers' lines only without the
+            // breaks the rope alone knows; with one, the note is parsed whole.
+            if holds_rope_only_break(&line_text) {
+                return false;
+            }
+            // An ATX heading next to the edit stays one whatever the line
+            // beside it says.
+            let heading_beside = format == NoteFormat::Markdown
+                && !edited.contains(&line)
+                && line_text.trim_start_matches(' ').starts_with('#');
+            heading_beside || !reaching_line(&line_text, format)
+        })
+    };
+    lines_ok(old, change.old_end) && lines_ok(rope, change.new_end)
+}
+
+/// FR-097, ADR-024: whether `line` may change blocks beyond its own: a
+/// fence, a delimiter or thematic break, a front matter or setext line, a
+/// table row, a heading or document title, a block attribute or anchor, an
+/// attribute entry or directive, a reference definition, HTML, an empty
+/// list marker, or a `\r`.
+fn reaching_line(line: &str, format: NoteFormat) -> bool {
+    if line.contains('\r') {
+        return true;
+    }
+    let text = line.trim_end_matches(['\n', ' ', '\t']);
+    let s = text.trim_start_matches([' ', '\t']);
+    let Some(first) = s.chars().next() else {
+        return false;
+    };
+    // FR-098: `$…$` and `$$…$$` are inline in comrak, so they never reach
+    // beyond their paragraph; a paragraph of one display formula is a block
+    // formula by its own text.
+    if s.starts_with("```") || s.starts_with("~~~") || s.contains("]:") {
+        return true;
+    }
+    if matches!(first, '#' | '=' | '[' | '<' | '|' | ':' | '.' | '/' | '+') {
+        return true;
+    }
+    if format == NoteFormat::Markdown && s.contains('|') {
+        return true;
+    }
+    if format == NoteFormat::AsciiDoc && (s.contains("::") || s.contains("===")) {
+        return true;
+    }
+    // A line of one sign repeated (`---`, `***`, `___`, `....`, `--`).
+    let signs: String = s.chars().filter(|c| *c != ' ').collect();
+    if signs.len() >= 2
+        && signs.chars().all(|c| c == first)
+        && matches!(first, '-' | '*' | '_' | '~' | '`' | '=')
+    {
+        return true;
+    }
+    // A list marker with nothing after it.
+    let marker = s.trim_start_matches(|c: char| c.is_ascii_digit());
+    matches!(s, "-" | "*" | "+") || (marker.len() < s.len() && matches!(marker, "." | ")"))
+}
+
 /// The blocks of `text` and whether a Markdown note may hold link
 /// reference definitions.
 pub fn parse_all(text: &str, format: NoteFormat) -> (Vec<Block>, bool) {
@@ -298,6 +454,31 @@ pub fn parse_all(text: &str, format: NoteFormat) -> (Vec<Block>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FR-097, UC-005 BR-016: the blocks of one view follow the text
+    /// another view changed, as a full parse gives them.
+    #[test]
+    fn fr097_reparse_between_two_texts_as_a_full_parse() {
+        let old = "# Title\n\nFirst para.\n\n- one\n- two\n\nLast para.\n".repeat(50);
+        let mut new = old.clone();
+        new.insert_str(400, "more words ");
+        let mut blocks = parse_blocks(&old, NoteFormat::Markdown);
+        let mut refs = false;
+        let dirty = reparse_between(
+            &mut blocks,
+            &Rope::from_str(&old),
+            &Rope::from_str(&new),
+            NoteFormat::Markdown,
+            &mut refs,
+        );
+        assert!(dirty.is_some());
+        assert_eq!(blocks, parse_blocks(&new, NoteFormat::Markdown));
+        let same = Rope::from_str(&new);
+        assert_eq!(
+            reparse_between(&mut blocks, &same, &same, NoteFormat::Markdown, &mut refs),
+            None
+        );
+    }
 
     /// Applies the replacement of `old[range]` by `insert` to the blocks of
     /// `old`, incrementally, and checks them against a full parse.
@@ -312,7 +493,14 @@ mod tests {
             new_end: range.start,
         });
         let mut refs = has_reference_definitions(old);
-        let spliced = reparse(&mut blocks, &rope, format, change, &mut refs);
+        let spliced = reparse(
+            &mut blocks,
+            &Rope::from_str(old),
+            &rope,
+            format,
+            change,
+            &mut refs,
+        );
         assert_eq!(
             blocks,
             parse_blocks(&new, format),
@@ -486,5 +674,432 @@ mod tests {
             (change.old_end - change.start, change.new_end - change.start),
             (1, 0)
         );
+    }
+
+    /// UC-024 BR-001, OQ-216: edits in and after a front matter, and after
+    /// a rule that looks like the start of one, parse as the whole note.
+    #[test]
+    fn uc024_front_matter_reparsed() {
+        let note = "---\nstatus: draft\n---\n# Plan\n\nText\n\n---\na: b\n---\n\nEnd\n";
+        for at in [5, 13, 22, 30, 36, 40, 45] {
+            check(note, at..at, "x", NoteFormat::Markdown);
+            check(note, at..at + 1, "", NoteFormat::Markdown);
+        }
+        // Breaking and mending the front matter.
+        check(note, 4..5, ":", NoteFormat::Markdown);
+        check(note, 0..1, "", NoteFormat::Markdown);
+    }
+
+    /// A tiny deterministic generator, so a failing seed can be replayed.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> usize {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) as usize
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            self.next() % n
+        }
+    }
+
+    const PIECES: &[&str] = &[
+        "# H\n",
+        "## Sub\n",
+        "text *em* here",
+        "\n",
+        "\n\n",
+        "\r\n",
+        "- item\n",
+        "  - inner\n",
+        "1. one\n",
+        "> quote\n",
+        "```\n",
+        "```rust\n",
+        "~~~\n",
+        "---\n",
+        "| a | b |\n",
+        "|---|---|\n",
+        "| 1 | 2 |\n",
+        "[x]: http://e.org\n",
+        "[x]",
+        "\u{1F600}",
+        "\u{e9}",
+        "= Doc\n",
+        "== Two\n",
+        "----\n",
+        "|===\n",
+        "NOTE: n\n",
+        "* a\n",
+        ". x\n",
+        "[source]\n",
+        "    code\n",
+        "<div>\n",
+        "$$\n",
+        "$x$ ",
+        "$`y`$",
+        "$$z$$",
+        "```math\n",
+        ":stem: latexmath\n",
+        "stem:[a]",
+        "latexmath:[b]",
+        "[latexmath]\n",
+        "[stem]\n",
+        "++++\n",
+        "word ",
+        // Breaks the rope knows but the parsers do not (FR-098 review).
+        "\r",
+        "\u{85}",
+        "\u{b}",
+        "\u{2028}",
+        "  ",
+        "\t",
+    ];
+
+    fn text_of(rng: &mut Lcg, pieces: usize) -> String {
+        (0..pieces)
+            .map(|_| PIECES[rng.below(PIECES.len())])
+            .collect()
+    }
+
+    /// FR-097, UC-005 BR-016 (property): whatever changed between two
+    /// texts (one to three edits anywhere, at char boundaries), the blocks of
+    /// the old text brought up to the new one equal a full parse. Seeds are
+    /// printed on failure; 2500 per format (about 5000 in all) keep the run
+    /// short, and the seeds that failed are cases of their own above.
+    #[test]
+    fn fr097_reparse_between_random_edits_equals_the_full_parse() {
+        for format in [NoteFormat::Markdown, NoteFormat::AsciiDoc] {
+            for seed in 0..2500u64 {
+                let mut rng = Lcg(seed * 7919 + 13);
+                let n = 1 + rng.below(120);
+                let old = text_of(&mut rng, n);
+                let mut new = old.clone();
+                for _ in 0..=rng.below(3) {
+                    let chars: Vec<usize> = new
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .chain([new.len()])
+                        .collect();
+                    let a = chars[rng.below(chars.len())];
+                    let b = chars[rng.below(chars.len())];
+                    let (a, b) = (a.min(b), a.max(b));
+                    let n = rng.below(4);
+                    let insert = text_of(&mut rng, n);
+                    new.replace_range(a..b, &insert);
+                }
+                let mut blocks = parse_blocks(&old, format);
+                let mut refs = has_reference_definitions(&old);
+                let _ = reparse_between(
+                    &mut blocks,
+                    &Rope::from_str(&old),
+                    &Rope::from_str(&new),
+                    format,
+                    &mut refs,
+                );
+                assert_eq!(
+                    blocks,
+                    parse_blocks(&new, format),
+                    "{format:?} seed {seed}: {old:?} -> {new:?}"
+                );
+            }
+        }
+    }
+
+    /// UC-024 BR-001, FR-097: a front matter is the start of the note, so
+    /// an edit that closes (or opens) one further down changes the first
+    /// block too; the blocks stay those of a full parse. Found by the
+    /// property test with seed 4263 (before: a thematic break and a
+    /// paragraph, after: the front matter).
+    #[test]
+    fn uc024_br001_closing_a_front_matter_below_a_blank_line_parses_as_a_whole() {
+        let old = "---\nword\n\n---x\n";
+        let at = old.find('x').unwrap();
+        check(old, at..at + 1, "", NoteFormat::Markdown);
+        let mut blocks = parse_blocks(old, NoteFormat::Markdown);
+        let new = "---\nword\n\n---\n";
+        let mut refs = false;
+        let _ = reparse_between(
+            &mut blocks,
+            &Rope::from_str(old),
+            &Rope::from_str(new),
+            NoteFormat::Markdown,
+            &mut refs,
+        );
+        assert_eq!(blocks, parse_blocks(new, NoteFormat::Markdown));
+    }
+
+    /// The blocks of `old` brought to `new` by `reparse_between` against a
+    /// full parse of `new`.
+    fn between(old: &str, new: &str, format: NoteFormat) {
+        let mut blocks = parse_blocks(old, format);
+        let mut refs = has_reference_definitions(old);
+        let _ = reparse_between(
+            &mut blocks,
+            &Rope::from_str(old),
+            &Rope::from_str(new),
+            format,
+            &mut refs,
+        );
+        assert_eq!(blocks, parse_blocks(new, format), "{old:?} -> {new:?}");
+    }
+
+    /// FR-097, ADR-024: a fence that stays unclosed runs to the end of the
+    /// note; opening one at the top level (it was inside a list item that
+    /// the next item ended) takes in the blocks after it.
+    #[test]
+    fn fr097_an_unclosed_fence_taking_in_the_blocks_after_it_parses_as_a_whole() {
+        between(
+            "- a\n  ~~~\n- item\n",
+            "a\n  ~~~\n- item\n",
+            NoteFormat::Markdown,
+        );
+    }
+
+    /// FR-097, ADR-024: a link reference definition inside a list item
+    /// turns the `[x]` of an earlier block into a link; the note parses as
+    /// a whole.
+    #[test]
+    fn fr097_a_reference_definition_in_a_list_item_parses_as_a_whole() {
+        between("[x]\n\n|\n#", "[x]\n\n|\n#\n* [x]:h", NoteFormat::Markdown);
+    }
+
+    /// FR-097, ADR-024: taking the marker of an empty list item away.
+    #[test]
+    fn fr097_taking_the_marker_of_an_empty_list_item_away_equals_the_full_parse() {
+        between("-\n  <v>\n1", "\n  <v>\n1", NoteFormat::Markdown);
+    }
+
+    /// FR-098, OQ-222, ADR-029: typing in a formula, and in a paragraph of
+    /// a note whose header sets `:stem: latexmath`, parses only around the
+    /// key and gives what a full parse gives; changing the header changes
+    /// every `stem:[…]`.
+    #[test]
+    fn fr098_formulas_reparse_as_a_full_parse() {
+        let md = "# T\n\nSome $x^2$ text.\n\n$$\ny\n$$\n\nEnd $a$.\n";
+        let at = md.find("x^2").unwrap() + 1;
+        check(md, at..at, "+1", NoteFormat::Markdown);
+        check(md, at..at, "$", NoteFormat::Markdown);
+        let y = md.find("\ny\n").unwrap() + 1;
+        check(md, y..y, "z", NoteFormat::Markdown);
+        let adoc =
+            "= T\n:stem: latexmath\n\nA para.\n\nSee stem:[a^2] here.\n\n[stem]\n++++\nb\n++++\n";
+        let at = adoc.find("a^2").unwrap() + 1;
+        check(adoc, at..at, "+1", NoteFormat::AsciiDoc);
+        let b = adoc.find("\nb\n").unwrap() + 1;
+        check(adoc, b..b, "c", NoteFormat::AsciiDoc);
+        let value = adoc.find("latexmath\n").unwrap();
+        check(adoc, value..value + 5, "ascii", NoteFormat::AsciiDoc);
+        let mut blocks = parse_blocks(adoc, NoteFormat::AsciiDoc);
+        let new = adoc.replace(":stem: latexmath", ":stem:");
+        let mut refs = false;
+        let _ = reparse_between(
+            &mut blocks,
+            &Rope::from_str(adoc),
+            &Rope::from_str(&new),
+            NoteFormat::AsciiDoc,
+            &mut refs,
+        );
+        assert_eq!(blocks, parse_blocks(&new, NoteFormat::AsciiDoc));
+        assert!(blocks
+            .iter()
+            .all(|b| !matches!(b.kind, BlockKind::Formula { .. })));
+    }
+
+    /// FR-097, ADR-024: AsciiDoc, a title after block attributes.
+    #[test]
+    fn fr097_asciidoc_a_title_after_block_attributes_equals_the_full_parse() {
+        between("t\n\n[]\n= ", "t\n\n[]\n= m\n<", NoteFormat::AsciiDoc);
+        between("$\n\n= c\nn", "\n= c\nn", NoteFormat::AsciiDoc);
+    }
+
+    /// NFR-002, FR-097 (review): how often typing parses the whole note.
+    /// Letters, spaces and Enter typed at places all over a note with
+    /// headings, paragraphs, lists, a quote, a code block and a table: most
+    /// keys parse only around them (the share is printed).
+    #[test]
+    fn nfr002_typing_mostly_parses_only_around_the_key() {
+        let section = "## Section\nRight below the heading.\n\nSome text of a paragraph, with *emphasis* and a [link](x.md).\nIts second line goes on.\n\n- one item\n- two items\n  - inner item\n\n> a quote\n> more\n\n```rust\nfn main() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n";
+        let original = format!("# Title\n\nIntro paragraph.\n\n{}", section.repeat(20));
+        let mut text = original.clone();
+        let mut rng = Lcg(42);
+        let (mut keys, mut whole) = (0, 0);
+        for _ in 0..2000 {
+            let at = {
+                let chars: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+                chars[rng.below(chars.len())]
+            };
+            let typed = match rng.below(20) {
+                0 => "\n",
+                1..=4 => " ",
+                _ => "e",
+            };
+            let old = Rope::from_str(&text);
+            let mut new = text.clone();
+            new.insert_str(at, typed);
+            let new_rope = Rope::from_str(&new);
+            let mut blocks = parse_blocks(&text, NoteFormat::Markdown);
+            let change = Change {
+                start: at,
+                old_end: at,
+                new_end: at + typed.len(),
+            };
+            keys += 1;
+            if !local_is_safe(&blocks, &old, &new_rope, NoteFormat::Markdown, change) {
+                whole += 1;
+            }
+            // And what is parsed around the key is what a full parse gives.
+            let mut refs = has_reference_definitions(&text);
+            reparse(
+                &mut blocks,
+                &old,
+                &new_rope,
+                NoteFormat::Markdown,
+                change,
+                &mut refs,
+            );
+            assert_eq!(
+                blocks,
+                parse_blocks(&new, NoteFormat::Markdown),
+                "{typed:?} at {at}"
+            );
+            text = new;
+        }
+        // Typing on in one paragraph, as one writes.
+        text = original;
+        let first = text.find("Its second line").unwrap() + 3;
+        let mut in_paragraph = 0;
+        for (k, at) in (first..first + 300).enumerate() {
+            let typed = if k % 6 == 5 { " " } else { "w" };
+            let old = Rope::from_str(&text);
+            let mut new = text.clone();
+            new.insert_str(at, typed);
+            let blocks = parse_blocks(&text, NoteFormat::Markdown);
+            let change = Change {
+                start: at,
+                old_end: at,
+                new_end: at + 1,
+            };
+            if !local_is_safe(
+                &blocks,
+                &old,
+                &Rope::from_str(&new),
+                NoteFormat::Markdown,
+                change,
+            ) {
+                in_paragraph += 1;
+            }
+            text = new;
+        }
+        println!(
+            "NFR-002: {in_paragraph} of 300 keys typed on in a paragraph parse the whole note"
+        );
+        assert_eq!(in_paragraph, 0);
+        let share = f64::from(whole) / f64::from(keys);
+        println!(
+            "NFR-002: {whole} of {keys} keys parse the whole note ({:.1} %)",
+            share * 100.0
+        );
+        assert!(share < 0.5, "{share}");
+    }
+    /// FR-098, OQ-222, UC-005 BR-016 (property, test monkey): random edits
+    /// that add or remove `$`, `$$`, backticks, `\$`, `latexmath:[`,
+    /// `stem:[`, `]`, `\]`, `++++`, `[stem]`, header lines of `:stem:`,
+    /// CRLF and emoji leave the blocks of the old text, brought up to the
+    /// new one, equal to a full parse. The seed is in the failure message.
+    #[test]
+    fn fr098_random_formula_edits_equal_the_full_parse() {
+        const TOKENS: &[&str] = &[
+            "$",
+            "$$",
+            "`",
+            "\\$",
+            "\\",
+            "latexmath:[",
+            "stem:[",
+            "]",
+            "\\]",
+            "++++\n",
+            "[stem]\n",
+            "[latexmath]\n",
+            ":stem: latexmath\n",
+            ":stem:\n",
+            "\r\n",
+            "\n",
+            "\n\n",
+            "\u{1F600}",
+            "x",
+            "a^2",
+            " ",
+            "```math\n",
+            "```\n",
+            "$`",
+            "`$",
+            "*",
+            "_",
+            "....\n",
+            "// c\n",
+            "[",
+            "stem:[a]",
+            "$x$",
+            "$$\nx\n$$",
+            "$$x$$",
+        ];
+        let pick = |rng: &mut Lcg, n: usize| -> String {
+            (0..n).map(|_| TOKENS[rng.below(TOKENS.len())]).collect()
+        };
+        for format in [NoteFormat::Markdown, NoteFormat::AsciiDoc] {
+            for seed in 0..4000u64 {
+                let mut rng = Lcg(seed * 15_485_863 + 99);
+                let n = 5 + rng.below(70);
+                let old = pick(&mut rng, n);
+                let mut new = old.clone();
+                for _ in 0..=rng.below(2) {
+                    let chars: Vec<usize> = new
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .chain([new.len()])
+                        .collect();
+                    let a = chars[rng.below(chars.len())];
+                    let b = chars[rng.below(chars.len())];
+                    let k = rng.below(3);
+                    let insert = pick(&mut rng, k);
+                    new.replace_range(a.min(b)..a.max(b), &insert);
+                }
+                let mut blocks = parse_blocks(&old, format);
+                let mut refs = has_reference_definitions(&old);
+                let _ = reparse_between(
+                    &mut blocks,
+                    &Rope::from_str(&old),
+                    &Rope::from_str(&new),
+                    format,
+                    &mut refs,
+                );
+                assert_eq!(
+                    blocks,
+                    parse_blocks(&new, format),
+                    "{format:?} seed {seed}: {old:?} -> {new:?}"
+                );
+            }
+        }
+    }
+
+    /// FR-098, OQ-222 (found by the test monkey): the header is read the
+    /// same for the rope of a window's reparse and for the string of a full
+    /// parse. The rope also breaks a line at U+2028 or U+0085, which `str`
+    /// does not, so `= T` and `:stem: latexmath` split by U+2028 were a header with `:stem:` for
+    /// the reparse only, and `stem:[a]` was a formula in one and not in the
+    /// other.
+    #[test]
+    fn fr098_the_stem_header_is_read_alike_after_a_unicode_line_break() {
+        for separator in ["\u{2028}", "\u{85}", "\u{b}", "\u{c}"] {
+            let adoc = format!("= T{separator}:stem: latexmath\n\nSee stem:[a] here.\n");
+            let at = adoc.find("[a").unwrap() + 2;
+            check(&adoc, at..at, "b", NoteFormat::AsciiDoc);
+        }
     }
 }

@@ -7,6 +7,7 @@
 use std::fmt;
 use std::fs;
 use std::io;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -165,6 +166,140 @@ impl AgentAccess {
     }
 }
 
+/// FR-100, UC-010 BR-001, ADR-030: the language of the spell check, or
+/// off. The settings file names it by its code (`en-US`), the settings
+/// window by its name ("English (US)"); either is read, without regard to
+/// case, spaces, dashes and underscores. Only languages whose dictionary
+/// comes with Underline are offered (OQ-206, OQ-298).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum SpellCheckLanguage {
+    /// No word is marked.
+    #[default]
+    Off,
+    /// English as written in the United States.
+    EnglishUs,
+    /// English as written in the United Kingdom.
+    EnglishUk,
+    /// French.
+    French,
+    /// Spanish.
+    Spanish,
+}
+
+impl SpellCheckLanguage {
+    /// Every value, off first, in the order the settings window offers them.
+    pub const ALL: &'static [SpellCheckLanguage] = &[
+        SpellCheckLanguage::Off,
+        SpellCheckLanguage::EnglishUs,
+        SpellCheckLanguage::EnglishUk,
+        SpellCheckLanguage::French,
+        SpellCheckLanguage::Spanish,
+    ];
+
+    /// The value as the settings file holds it: `off` or a language code.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            SpellCheckLanguage::Off => "off",
+            SpellCheckLanguage::EnglishUs => "en-US",
+            SpellCheckLanguage::EnglishUk => "en-GB",
+            SpellCheckLanguage::French => "fr-FR",
+            SpellCheckLanguage::Spanish => "es-ES",
+        }
+    }
+
+    /// The name the settings window shows.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            SpellCheckLanguage::Off => "Off",
+            SpellCheckLanguage::EnglishUs => "English (US)",
+            SpellCheckLanguage::EnglishUk => "English (UK)",
+            SpellCheckLanguage::French => "French (France)",
+            SpellCheckLanguage::Spanish => "Spanish (Spain)",
+        }
+    }
+
+    /// The code of the language's dictionary, the name of its folder
+    /// (ADR-030); `None` when the spell check is off.
+    #[must_use]
+    pub fn dictionary(self) -> Option<&'static str> {
+        (self != SpellCheckLanguage::Off).then(|| self.code())
+    }
+
+    /// OQ-206, OQ-298: the offered language a locale of the system names,
+    /// such as `en_GB.UTF-8`, `de-CH` or `fr`; `None` for any other. English
+    /// without a region counts as English (US); French and Spanish of any
+    /// region as French and Spanish; English of another region than the US
+    /// and the UK as none.
+    #[must_use]
+    pub fn of_locale(locale: &str) -> Option<Self> {
+        let locale = locale
+            .split(['.', '@'])
+            .next()
+            .unwrap_or_default()
+            .replace('_', "-");
+        let mut parts = locale.split('-');
+        let language = parts.next().unwrap_or_default().to_ascii_lowercase();
+        let region = parts
+            .find(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()))
+            .map(str::to_ascii_uppercase);
+        match (language.as_str(), region.as_deref()) {
+            ("en", None | Some("US")) => Some(SpellCheckLanguage::EnglishUs),
+            ("en", Some("GB")) => Some(SpellCheckLanguage::EnglishUk),
+            ("fr", _) => Some(SpellCheckLanguage::French),
+            ("es", _) => Some(SpellCheckLanguage::Spanish),
+            _ => None,
+        }
+    }
+}
+
+impl FromStr for SpellCheckLanguage {
+    type Err = String;
+    fn from_str(text: &str) -> Result<Self, String> {
+        let wanted = simplify(text);
+        SpellCheckLanguage::ALL
+            .iter()
+            .copied()
+            .find(|value| simplify(value.code()) == wanted || simplify(value.label()) == wanted)
+            .ok_or_else(|| {
+                let codes: Vec<&str> = SpellCheckLanguage::ALL.iter().map(|v| v.code()).collect();
+                format!("{text:?} is none of {}", codes.join(", "))
+            })
+    }
+}
+
+impl fmt::Display for SpellCheckLanguage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+impl Serialize for SpellCheckLanguage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for SpellCheckLanguage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(de::Error::custom)
+    }
+}
+
+/// OQ-206: the spell check language of the system's locale, when it is one
+/// of the offered languages; read once per process.
+#[must_use]
+pub fn system_spell_language() -> Option<SpellCheckLanguage> {
+    static SYSTEM: std::sync::OnceLock<Option<SpellCheckLanguage>> = std::sync::OnceLock::new();
+    *SYSTEM.get_or_init(|| {
+        sys_locale::get_locale()
+            .as_deref()
+            .and_then(SpellCheckLanguage::of_locale)
+    })
+}
+
 /// The key under which earlier versions kept the MCP server switch; `true`
 /// is read as read and write, `false` as off (UC-017 BR-002).
 pub const LEGACY_MCP_KEY: &str = "mcp_server_enabled";
@@ -179,6 +314,16 @@ pub enum SettingKey {
     LineNumberSide,
     ShowMinimap,
     CopyOnSelect,
+    /// UC-005 BR-019: close pairs while typing.
+    ClosePairs,
+    /// FR-100, UC-005 BR-023: the language of the spell check, or off.
+    SpellCheckLanguage,
+    /// UC-010 BR-009: the size of the text of the notes, in percent.
+    EditorZoom,
+    /// UC-010 BR-011: long lines wrap at the edge of the editor.
+    SoftWrap,
+    /// UC-010 BR-010: the overview, the tool panel and the toolbars hidden.
+    FocusMode,
     GitSyncInterval,
     AgentAccess,
     OverviewWidth,
@@ -188,10 +333,16 @@ pub enum SettingKey {
     ShowMenuBar,
     /// UC-008 BR-008: search hits blink in the minimap.
     BlinkFoundInMinimap,
+    /// UC-003 BR-008: the template folder; only for a workspace.
+    TemplateFolder,
+    /// UC-025 BR-002: the daily note folder; only for a workspace.
+    DailyNoteFolder,
+    /// UC-025 BR-003: the daily note template; only for a workspace.
+    DailyNoteTemplate,
 }
 
 impl SettingKey {
-    pub const ALL: [SettingKey; 13] = [
+    pub const ALL: [SettingKey; 21] = [
         SettingKey::DefaultFormat,
         SettingKey::Theme,
         SettingKey::InputMode,
@@ -199,13 +350,34 @@ impl SettingKey {
         SettingKey::LineNumberSide,
         SettingKey::ShowMinimap,
         SettingKey::CopyOnSelect,
+        SettingKey::ClosePairs,
+        SettingKey::SpellCheckLanguage,
+        SettingKey::EditorZoom,
+        SettingKey::SoftWrap,
+        SettingKey::FocusMode,
         SettingKey::GitSyncInterval,
         SettingKey::AgentAccess,
         SettingKey::OverviewWidth,
         SettingKey::ToolPanelWidth,
         SettingKey::ShowMenuBar,
         SettingKey::BlinkFoundInMinimap,
+        SettingKey::TemplateFolder,
+        SettingKey::DailyNoteFolder,
+        SettingKey::DailyNoteTemplate,
     ];
+
+    /// UC-010 BR-001, BR-002: the settings that exist only for a workspace:
+    /// the default format, the template folder, the daily note folder and
+    /// the daily note template; the user settings never give them.
+    pub fn workspace_only(self) -> bool {
+        matches!(
+            self,
+            SettingKey::DefaultFormat
+                | SettingKey::TemplateFolder
+                | SettingKey::DailyNoteFolder
+                | SettingKey::DailyNoteTemplate
+        )
+    }
 
     /// The key in the settings file.
     pub fn key(self) -> &'static str {
@@ -217,12 +389,20 @@ impl SettingKey {
             SettingKey::LineNumberSide => "line_number_side",
             SettingKey::ShowMinimap => "show_minimap",
             SettingKey::CopyOnSelect => "copy_on_select",
+            SettingKey::ClosePairs => "close_pairs",
+            SettingKey::SpellCheckLanguage => "spell_check_language",
+            SettingKey::EditorZoom => "editor_zoom",
+            SettingKey::SoftWrap => "soft_wrap",
+            SettingKey::FocusMode => "focus_mode",
             SettingKey::GitSyncInterval => "git_sync_interval",
             SettingKey::AgentAccess => "agent_access",
             SettingKey::OverviewWidth => "overview_width",
             SettingKey::ToolPanelWidth => "tool_panel_width",
             SettingKey::ShowMenuBar => "show_menu_bar",
             SettingKey::BlinkFoundInMinimap => "blink_found_in_minimap",
+            SettingKey::TemplateFolder => "template_folder",
+            SettingKey::DailyNoteFolder => "daily_note_folder",
+            SettingKey::DailyNoteTemplate => "daily_note_template",
         }
     }
 }
@@ -249,6 +429,23 @@ pub struct Settings {
     pub show_minimap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub copy_on_select: Option<bool>,
+    /// UC-005 BR-019: close pairs while typing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_pairs: Option<bool>,
+    /// FR-100, UC-005 BR-023: the language of the spell check, or off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spell_check_language: Option<SpellCheckLanguage>,
+    /// UC-010 BR-009: the editor zoom in percent, 50 to 300, kept as the
+    /// file says it: a value between two steps stays in the file and is
+    /// shown on the nearest step ([`Effective::editor_zoom`], [`zoom_step`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editor_zoom: Option<u32>,
+    /// UC-010 BR-011: soft wrap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soft_wrap: Option<bool>,
+    /// UC-010 BR-010: the focus mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_mode: Option<bool>,
     /// Minutes between two git syncs, 1 to 60.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_sync_interval: Option<u32>,
@@ -268,6 +465,19 @@ pub struct Settings {
     pub show_menu_bar: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blink_found_in_minimap: Option<bool>,
+    /// UC-003 BR-008: the folder of the workspace that holds its templates;
+    /// only in workspace settings, `templates` when not given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_folder: Option<String>,
+    /// UC-025 BR-002: the folder of the workspace that holds its daily
+    /// notes; only in workspace settings, `daily` when not given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_note_folder: Option<String>,
+    /// UC-025 BR-003: the template a new daily note starts from, by its
+    /// place in the workspace (`templates/Day.md`); only in workspace
+    /// settings, the template titled Daily when not given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_note_template: Option<String>,
 }
 
 /// The settings of a workspace settings file (UC-001, UC-002).
@@ -340,6 +550,12 @@ impl Settings {
                 60,
             ),
             (
+                SettingKey::EditorZoom,
+                settings.editor_zoom,
+                *EDITOR_ZOOM.start(),
+                *EDITOR_ZOOM.end(),
+            ),
+            (
                 SettingKey::OverviewWidth,
                 settings.overview_width,
                 100,
@@ -378,12 +594,22 @@ impl Settings {
             SettingKey::LineNumberSide => self.line_number_side.map(|s| s.label().to_owned()),
             SettingKey::ShowMinimap => self.show_minimap.map(bool_text),
             SettingKey::CopyOnSelect => self.copy_on_select.map(bool_text),
+            SettingKey::ClosePairs => self.close_pairs.map(bool_text),
+            SettingKey::SpellCheckLanguage => {
+                self.spell_check_language.map(|l| l.code().to_owned())
+            }
+            SettingKey::EditorZoom => self.editor_zoom.map(|v| v.to_string()),
+            SettingKey::SoftWrap => self.soft_wrap.map(bool_text),
+            SettingKey::FocusMode => self.focus_mode.map(bool_text),
             SettingKey::GitSyncInterval => self.git_sync_interval.map(|v| v.to_string()),
             SettingKey::AgentAccess => self.agent_access.map(|a| a.label().to_owned()),
             SettingKey::OverviewWidth => self.overview_width.map(|v| v.to_string()),
             SettingKey::ToolPanelWidth => self.tool_panel_width.map(|v| v.to_string()),
             SettingKey::ShowMenuBar => self.show_menu_bar.map(bool_text),
             SettingKey::BlinkFoundInMinimap => self.blink_found_in_minimap.map(bool_text),
+            SettingKey::TemplateFolder => self.template_folder.clone(),
+            SettingKey::DailyNoteFolder => self.daily_note_folder.clone(),
+            SettingKey::DailyNoteTemplate => self.daily_note_template.clone(),
         }
     }
 
@@ -401,6 +627,13 @@ impl Settings {
             SettingKey::LineNumberSide => self.line_number_side = parsed.line_number_side,
             SettingKey::ShowMinimap => self.show_minimap = parsed.show_minimap,
             SettingKey::CopyOnSelect => self.copy_on_select = parsed.copy_on_select,
+            SettingKey::ClosePairs => self.close_pairs = parsed.close_pairs,
+            SettingKey::SpellCheckLanguage => {
+                self.spell_check_language = parsed.spell_check_language;
+            }
+            SettingKey::EditorZoom => self.editor_zoom = parsed.editor_zoom,
+            SettingKey::SoftWrap => self.soft_wrap = parsed.soft_wrap,
+            SettingKey::FocusMode => self.focus_mode = parsed.focus_mode,
             SettingKey::GitSyncInterval => self.git_sync_interval = parsed.git_sync_interval,
             SettingKey::AgentAccess => {
                 self.agent_access = parsed.agent_access;
@@ -411,6 +644,11 @@ impl Settings {
             SettingKey::ShowMenuBar => self.show_menu_bar = parsed.show_menu_bar,
             SettingKey::BlinkFoundInMinimap => {
                 self.blink_found_in_minimap = parsed.blink_found_in_minimap;
+            }
+            SettingKey::TemplateFolder => self.template_folder = parsed.template_folder,
+            SettingKey::DailyNoteFolder => self.daily_note_folder = parsed.daily_note_folder,
+            SettingKey::DailyNoteTemplate => {
+                self.daily_note_template = parsed.daily_note_template;
             }
         }
         Ok(())
@@ -486,12 +724,19 @@ pub fn set_key(text: &str, key: &str, value: Option<&str>) -> String {
     out
 }
 
+/// Plain scalars YAML reads as null, which a text such as a folder named
+/// `null` must not become (UC-010 BR-001).
+const YAML_NULLS: [&str; 4] = ["~", "null", "Null", "NULL"];
+
 /// A value as a YAML scalar, quoted only when it needs to be.
 fn yaml_scalar(value: &str) -> String {
     let needs_quotes = value.is_empty()
+        || YAML_NULLS.contains(&value)
         || value.contains([':', '#', '"', '\''])
-        || value.starts_with(['-', '[', '{', '!', '&', '*', '|', '>', '%', '@', '`', ' '])
-        || value.ends_with(' ');
+        || value.starts_with([
+            '-', '[', ']', '{', '}', ',', '?', '!', '&', '*', '|', '>', '%', '@', '`', ' ', '\t',
+        ])
+        || value.ends_with([' ', '\t']);
     if needs_quotes {
         format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
@@ -545,6 +790,20 @@ pub struct Effective {
     pub line_number_side: LineSide,
     pub show_minimap: bool,
     pub copy_on_select: bool,
+    /// UC-005 BR-019: close pairs while typing; on by default.
+    pub close_pairs: bool,
+    /// FR-100, UC-005 BR-023: the language of the spell check, or off; by
+    /// default the system's language when it is offered, else off
+    /// (OQ-206).
+    pub spell_check_language: SpellCheckLanguage,
+    /// UC-010 BR-009: the editor zoom in percent, a step of
+    /// [`EDITOR_ZOOM_STEP`] within [`EDITOR_ZOOM`]; [`EDITOR_ZOOM_DEFAULT`]
+    /// by default. A file's value between two steps shows as the nearest.
+    pub editor_zoom: u32,
+    /// UC-010 BR-011: soft wrap; on by default.
+    pub soft_wrap: bool,
+    /// UC-010 BR-010: the focus mode; off by default.
+    pub focus_mode: bool,
     pub git_sync_interval: u32,
     /// UC-017 BR-002: the user's level, lowered by the workspace.
     pub agent_access: AgentAccess,
@@ -563,15 +822,29 @@ pub struct Effective {
 }
 
 impl Default for Effective {
+    /// The built-in defaults on a system whose language is not offered: the
+    /// spell check is off.
     fn default() -> Self {
-        Effective::of(&Settings::default(), None)
+        Effective::of_with_system(&Settings::default(), None, None)
     }
 }
 
 impl Effective {
     /// UC-010 BR-001, BR-002, BR-008: the settings in effect for `user` and,
-    /// with a workspace open, `workspace`.
+    /// with a workspace open, `workspace`; the spell check language
+    /// defaults to the system's ([`system_spell_language`]).
     pub fn of(user: &Settings, workspace: Option<&Settings>) -> Self {
+        Self::of_with_system(user, workspace, system_spell_language())
+    }
+
+    /// [`Effective::of`] on a system whose language is `system` (OQ-206):
+    /// the spell check language neither settings file gives is `system`,
+    /// else off.
+    pub fn of_with_system(
+        user: &Settings,
+        workspace: Option<&Settings>,
+        system: Option<SpellCheckLanguage>,
+    ) -> Self {
         let empty = Settings::default();
         let ws = workspace.unwrap_or(&empty);
         let user_access = user.agent_access.unwrap_or_default();
@@ -588,6 +861,19 @@ impl Effective {
                 .unwrap_or_default(),
             show_minimap: ws.show_minimap.or(user.show_minimap).unwrap_or(true),
             copy_on_select: ws.copy_on_select.or(user.copy_on_select).unwrap_or(true),
+            close_pairs: ws.close_pairs.or(user.close_pairs).unwrap_or(true),
+            spell_check_language: ws
+                .spell_check_language
+                .or(user.spell_check_language)
+                .or(system)
+                .unwrap_or_default(),
+            editor_zoom: zoom_step(
+                ws.editor_zoom
+                    .or(user.editor_zoom)
+                    .unwrap_or(EDITOR_ZOOM_DEFAULT),
+            ),
+            soft_wrap: ws.soft_wrap.or(user.soft_wrap).unwrap_or(true),
+            focus_mode: ws.focus_mode.or(user.focus_mode).unwrap_or(false),
             git_sync_interval: ws.git_sync_interval.or(user.git_sync_interval).unwrap_or(5),
             // A workspace can only lower agent access.
             agent_access: ws.agent_access.map_or(user_access, |w| w.min(user_access)),
@@ -602,6 +888,24 @@ impl Effective {
             agent_access_refused: ws.agent_access.is_some_and(|w| w > user_access),
         }
     }
+}
+
+/// UC-010 BR-009: the editor zoom's smallest and largest value, in percent.
+pub const EDITOR_ZOOM: RangeInclusive<u32> = 50..=300;
+
+/// UC-010 BR-001: the editor zoom's built-in default, in percent.
+pub const EDITOR_ZOOM_DEFAULT: u32 = 100;
+
+/// UC-010 BR-009: the editor zoom changes in steps of this many percent.
+pub const EDITOR_ZOOM_STEP: u32 = 10;
+
+/// UC-010 BR-009: `percent` on the nearest step of the editor zoom, within
+/// its range; a file may hold a value between two steps.
+#[must_use]
+pub fn zoom_step(percent: u32) -> u32 {
+    let stepped =
+        percent.saturating_add(EDITOR_ZOOM_STEP / 2) / EDITOR_ZOOM_STEP * EDITOR_ZOOM_STEP;
+    stepped.clamp(*EDITOR_ZOOM.start(), *EDITOR_ZOOM.end())
 }
 
 /// The directory that holds the user settings file: the user's home
@@ -628,6 +932,61 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// TC-010-22 step 3: the template folder, the daily note folder and the
+    /// daily note template are written and read as text, a number or a
+    /// path with a colon too; they exist only for a workspace.
+    #[test]
+    fn uc010_tc22_template_and_daily_note_settings() {
+        let mut settings = Settings::default();
+        for (key, value) in [
+            (SettingKey::TemplateFolder, "tpl"),
+            (SettingKey::DailyNoteFolder, "2026"),
+            (SettingKey::DailyNoteTemplate, "templates/Day: one.md"),
+        ] {
+            settings.set(key, Some(value)).unwrap();
+            assert_eq!(settings.value_text(key).as_deref(), Some(value));
+            assert!(key.workspace_only());
+            let text = set_key("", key.key(), Some(value));
+            let read = Settings::parse(&text, Path::new(SETTINGS_FILE_NAME)).unwrap();
+            assert_eq!(read.value_text(key).as_deref(), Some(value), "{text}");
+        }
+        assert_eq!(settings.template_folder.as_deref(), Some("tpl"));
+        settings.set(SettingKey::TemplateFolder, None).unwrap();
+        assert_eq!(settings.template_folder, None);
+        assert!(!SettingKey::Theme.workspace_only());
+        assert!(SettingKey::DefaultFormat.workspace_only());
+    }
+
+    /// UC-010 BR-001, UC-025 BR-002 (monkey): a folder named `~` or `null` is
+    /// a legal folder name; written to the file and read back it must stay
+    /// that value, not turn into YAML null (which silently restores the
+    /// default folder).
+    #[test]
+    fn uc010_br001_folder_named_like_yaml_null_round_trips() {
+        for value in ["~", "null", "Null", "NULL"] {
+            for key in [
+                SettingKey::TemplateFolder,
+                SettingKey::DailyNoteFolder,
+                SettingKey::DailyNoteTemplate,
+            ] {
+                let text = set_key("", key.key(), Some(value));
+                let read = Settings::parse(&text, Path::new(SETTINGS_FILE_NAME)).unwrap();
+                assert_eq!(read.value_text(key).as_deref(), Some(value), "{text:?}");
+            }
+        }
+    }
+
+    /// UC-010 BR-001 (monkey): `,x` is a legal folder name but `set` refuses
+    /// it with a YAML error, because it is written unquoted.
+    #[test]
+    fn uc010_br001_folder_starting_with_comma_can_be_set() {
+        let mut settings = Settings::default();
+        settings
+            .set(SettingKey::DailyNoteFolder, Some(",x"))
+            .unwrap();
+        assert_eq!(settings.daily_note_folder.as_deref(), Some(",x"));
     }
 
     #[test]
@@ -680,6 +1039,86 @@ mod tests {
         );
         assert!(!effective.show_menu_bar, "the menu bar starts hidden");
         assert!(effective.blink_found_in_minimap);
+    }
+
+    /// TC-010-18, TC-010-19, TC-010-20, UC-010 BR-001: editor zoom 100
+    /// percent, soft wrap on, focus mode off at first.
+    #[test]
+    fn uc010_br001_zoom_soft_wrap_and_focus_mode_defaults() {
+        let effective = Effective::default();
+        assert_eq!(effective.editor_zoom, 100);
+        assert!(effective.soft_wrap);
+        assert!(!effective.focus_mode);
+    }
+
+    /// TC-010-18 step 2, UC-010 BR-009: the editor zoom is stored and read
+    /// back; a value between two steps is shown on the nearest step, and one
+    /// beyond 50 to 300 percent is an error that names its line.
+    #[test]
+    fn tc010_18_editor_zoom_is_stored_within_its_range() {
+        let dir = temp_dir("zoom");
+        let path = dir.join(SETTINGS_FILE_NAME);
+        store_setting(&path, SettingKey::EditorZoom, Some("120")).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "editor_zoom: 120\n");
+        let settings = Settings::load_file(&path).unwrap();
+        assert_eq!(Effective::of(&settings, None).editor_zoom, 120);
+
+        let odd = Settings::parse("editor_zoom: 124\n", &path).unwrap();
+        assert_eq!(Effective::of(&odd, None).editor_zoom, 120);
+        for wrong in ["editor_zoom: 40\n", "theme: Nord\neditor_zoom: 310\n"] {
+            match Settings::parse(wrong, &path) {
+                Err(SettingsError::Invalid { line, message, .. }) => {
+                    assert_eq!(line, Some(wrong.lines().count()), "{message}");
+                    assert!(message.contains("from 50 to 300"), "{message}");
+                }
+                other => panic!("{wrong:?} gave {other:?}"),
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// UC-010 BR-009: the steps of the editor zoom.
+    #[test]
+    fn uc010_br009_zoom_steps() {
+        assert_eq!(zoom_step(100), 100);
+        assert_eq!(zoom_step(104), 100);
+        assert_eq!(zoom_step(105), 110);
+        assert_eq!(zoom_step(0), 50);
+        assert_eq!(zoom_step(u32::MAX), 300);
+    }
+
+    /// TC-010-19 step 3, TC-010-20 step 2, UC-010 BR-010, BR-011: the focus
+    /// mode and soft wrap are settings like any other; a workspace value
+    /// wins.
+    #[test]
+    fn uc010_br010_br011_focus_mode_and_soft_wrap_are_layered() {
+        let user = Settings {
+            focus_mode: Some(true),
+            soft_wrap: Some(false),
+            editor_zoom: Some(150),
+            ..Settings::default()
+        };
+        let workspace = Settings {
+            soft_wrap: Some(true),
+            editor_zoom: Some(80),
+            ..Settings::default()
+        };
+        let effective = Effective::of(&user, Some(&workspace));
+        assert!(effective.focus_mode);
+        assert!(effective.soft_wrap);
+        assert_eq!(effective.editor_zoom, 80);
+        let mut set = Settings::default();
+        set.set(SettingKey::FocusMode, Some("true")).unwrap();
+        set.set(SettingKey::SoftWrap, Some("false")).unwrap();
+        assert_eq!(
+            set.value_text(SettingKey::FocusMode).as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            set.value_text(SettingKey::SoftWrap).as_deref(),
+            Some("false")
+        );
+        assert!(set.set(SettingKey::EditorZoom, Some("20")).is_err());
     }
 
     /// The burger button's switch of the menu bar is stored like any
@@ -863,5 +1302,81 @@ mod tests {
         store_setting(&path, SettingKey::Theme, None).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "show_minimap: false\n");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// FR-100, UC-010 BR-001: the spell check language is written by its
+    /// code and read by its code or its name.
+    #[test]
+    fn fr100_the_spell_check_language_by_code_or_name() {
+        let parsed = Settings::parse("spell_check_language: en-GB\n", Path::new("u.yaml")).unwrap();
+        assert_eq!(
+            parsed.spell_check_language,
+            Some(SpellCheckLanguage::EnglishUk)
+        );
+        let named =
+            Settings::parse("spell_check_language: English (US)\n", Path::new("u.yaml")).unwrap();
+        assert_eq!(
+            named.spell_check_language,
+            Some(SpellCheckLanguage::EnglishUs)
+        );
+        let off = Settings::parse("spell_check_language: off\n", Path::new("u.yaml")).unwrap();
+        assert_eq!(off.spell_check_language, Some(SpellCheckLanguage::Off));
+        let error = Settings::parse("spell_check_language: de-CH\n", Path::new("u.yaml"))
+            .expect_err("German is not offered (OQ-299)");
+        assert!(error.to_string().contains("en-US"), "{error}");
+        let mut settings = Settings::default();
+        settings
+            .set(SettingKey::SpellCheckLanguage, Some("fr-FR"))
+            .unwrap();
+        assert_eq!(
+            settings
+                .value_text(SettingKey::SpellCheckLanguage)
+                .as_deref(),
+            Some("fr-FR")
+        );
+        assert_eq!(SpellCheckLanguage::French.dictionary(), Some("fr-FR"));
+        assert_eq!(SpellCheckLanguage::Off.dictionary(), None);
+    }
+
+    /// OQ-206, OQ-298, TC-010-21: the default is the system's language when
+    /// it is offered, else off; the workspace's value wins over the user's.
+    #[test]
+    fn oq206_the_spell_check_language_defaults_to_the_systems() {
+        let of = SpellCheckLanguage::of_locale;
+        assert_eq!(of("en_GB.UTF-8"), Some(SpellCheckLanguage::EnglishUk));
+        assert_eq!(of("en-US"), Some(SpellCheckLanguage::EnglishUs));
+        assert_eq!(of("en"), Some(SpellCheckLanguage::EnglishUs));
+        assert_eq!(of("fr-CA"), Some(SpellCheckLanguage::French));
+        assert_eq!(of("es_MX@euro"), Some(SpellCheckLanguage::Spanish));
+        assert_eq!(of("de-CH"), None);
+        assert_eq!(of("en-AU"), None);
+        assert_eq!(of("C"), None);
+
+        let user = Settings::default();
+        let uk = Some(SpellCheckLanguage::EnglishUk);
+        assert_eq!(
+            Effective::of_with_system(&user, None, uk).spell_check_language,
+            SpellCheckLanguage::EnglishUk
+        );
+        assert_eq!(
+            Effective::of_with_system(&user, None, None).spell_check_language,
+            SpellCheckLanguage::Off
+        );
+        let me = Settings {
+            spell_check_language: Some(SpellCheckLanguage::Off),
+            ..Settings::default()
+        };
+        let workspace = Settings {
+            spell_check_language: Some(SpellCheckLanguage::EnglishUk),
+            ..Settings::default()
+        };
+        assert_eq!(
+            Effective::of_with_system(&me, None, uk).spell_check_language,
+            SpellCheckLanguage::Off
+        );
+        assert_eq!(
+            Effective::of_with_system(&me, Some(&workspace), None).spell_check_language,
+            SpellCheckLanguage::EnglishUk
+        );
     }
 }

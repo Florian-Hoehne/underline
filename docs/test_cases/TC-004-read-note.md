@@ -1,7 +1,7 @@
 # Test Cases: Read Note
 
 **Use Case:** [UC-004 Read Note](../use_cases/UC-004-read-note.md)  
-**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, C-003, C-004, C-005](../requirements.md)
+**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, FR-076, FR-078, FR-079, FR-086, FR-090, FR-091, FR-092, FR-096, FR-097, FR-098, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, NFR-018, NFR-019, C-003, C-004, C-005](../requirements.md)
 
 ## Coverage
 
@@ -31,6 +31,22 @@
 | TC-004-22 | A10 Note cannot be read                            | —                               |
 | TC-004-23 | A11 Diagram cannot be rendered                     | BR-002                          |
 | TC-004-24 | Closing a tab stores pending changes               | NFR-005, BR-008                 |
+| TC-004-25 | A12 Go to note                                     | FR-076, BR-014                  |
+| TC-004-26 | Go to note: matching and order                     | BR-014                          |
+| TC-004-27 | A13 No note matches in go to note                  | BR-014                          |
+| TC-004-28 | Go to note in a large workspace                    | NFR-018, BR-014                 |
+| TC-004-29 | Backlinks and A14 going to one                     | FR-078, BR-015                  |
+| TC-004-30 | Outgoing links and broken links                    | FR-079, BR-015                  |
+| TC-004-31 | Links follow changes                               | NFR-019, BR-015                 |
+| TC-004-32 | Tags of the note and A15 search by tag             | FR-091, FR-092, BR-016          |
+| TC-004-33 | A16 Go to line, A17 not a line number              | FR-086, BR-017                  |
+| TC-004-34 | A18 Open in the split view                         | FR-096, BR-018                  |
+| TC-004-35 | A19 The same note on both sides                    | FR-097, BR-001, BR-018          |
+| TC-004-36 | A20 End the split view                             | BR-018                          |
+| TC-004-37 | Split view remembered after a restart              | BR-018, BR-008                  |
+| TC-004-38 | Formulas and A21 a formula with an error           | FR-098, BR-019, NFR-014         |
+| TC-004-39 | Text statistics                                    | FR-090, BR-020                  |
+| TC-004-40 | Front matter and note attributes shown             | BR-004, BR-010                  |
 
 ## TC-004-01: Open a note in a tab
 
@@ -289,3 +305,177 @@
 |------|---------------------------------------------------------------|-------------------------------------------------------|
 | 1    | Type `last words` and close the tab at once.                  | —                                                     |
 | 2    | Look at `Plan.md` with another program.                       | It holds `last words`.                                |
+
+## TC-004-25: Go to note
+
+**Flow:** A12, BR-014, FR-076  
+**Preconditions:** The workspace `notes` holds `Plan.md`, `travel/Packing.md`, and `Ideas.md`; "Ideas" is open with the focus in its text; the input mode is Normal.
+
+| Step | Action                                   | Expected result                                                                    |
+|------|------------------------------------------|------------------------------------------------------------------------------------|
+| 1    | Press Ctrl+P and type `pack`.            | Go to note lists "Packing" with its folder `travel`, chosen.                       |
+| 2    | Press Enter.                             | "Packing" opens in a new tab right of "Ideas" and is listed first in the note overview. |
+| 3    | Press Ctrl+P, type `ide`, and press Enter. | The tab of "Ideas" becomes the active tab (A1).                                  |
+
+## TC-004-26: Go to note: matching and order
+
+**Flow:** BR-014  
+**Preconditions:** `Plan.md` (opened yesterday), `Release-Plan.md` (opened today), `travel/Plane-Tickets.md`, and `Explanation.md` (never opened); `Über-uns.md`.
+
+| Step | Action                          | Expected result                                                                       |
+|------|---------------------------------|---------------------------------------------------------------------------------------|
+| 1    | Type `plan`.                    | "Plan" and "Plane Tickets" (title starts with it) come first, the recently opened first, then "Release Plan" (a word starts with it), then "Explanation". |
+| 2    | Type `travel tick`.             | Only "Plane Tickets" (folder and title).                                              |
+| 3    | Type `uber`, then `ÜBER`.       | Nothing for `uber`; "Über uns" for `ÜBER`.                                            |
+| 4    | Empty the field.                | The notes are listed in the order of the note overview.                               |
+
+## TC-004-27: No note matches in go to note
+
+**Flow:** A13  
+**Preconditions:** No note title holds "Budget".
+
+| Step | Action                                        | Expected result                                                    |
+|------|-----------------------------------------------|--------------------------------------------------------------------|
+| 1    | Press Ctrl+P and type `Budget 2027`.          | Go to note says no note matches and offers to create "Budget 2027". |
+| 2    | Accept.                                       | The dialog to create a note opens with the title "Budget 2027" (UC-003). |
+
+## TC-004-28: Go to note in a large workspace
+
+**Flow:** BR-014, NFR-018  
+**Preconditions:** A workspace of 10,000 notes.
+
+| Step | Action                                                      | Expected result                                      |
+|------|-------------------------------------------------------------|------------------------------------------------------|
+| 1    | Type 20 different texts into go to note, measuring each key. | The list follows within 200 milliseconds of each key. |
+
+## TC-004-29: Backlinks and going to one
+
+**Flow:** A14, BR-015, FR-078  
+**Preconditions:** `Plan.md` has the heading "Goals". `Ideas.md` holds `[the plan](Plan.md)` on line 4 and `[goals](Plan.md#goals)` on line 9; `travel/Trip.adoc` holds `link:../Plan.md[Plan]` on line 2; `Code.md` holds `` `[x](Plan.md)` `` in a code span; `Plan.md` holds `[top](#goals)`.
+
+| Step | Action                                            | Expected result                                                                       |
+|------|---------------------------------------------------|---------------------------------------------------------------------------------------|
+| 1    | Open "Plan" and look at the backlinks.            | The section says 3; "Ideas" with lines 4 and 9 and "Trip" with line 2, each with the link marked; "Code" and "Plan" itself are not listed. |
+| 2    | Choose the backlink of line 9 of "Ideas".         | "Ideas" opens with the cursor on the link in line 9.                                 |
+
+## TC-004-30: Outgoing links and broken links
+
+**Flow:** BR-015, FR-079, A14  
+**Preconditions:** `Hub.md` holds, in this order, `[Plan](Plan.md)`, `[Gone](Gone.md)`, `[Goals](Plan.md#nothing)`, `[Logo](img/logo.png)`, and `<https://example.org>`; `Plan.md` exists without a heading "nothing"; `img/logo.png` exists; `Gone.md` does not.
+
+| Step | Action                                         | Expected result                                                                        |
+|------|------------------------------------------------|----------------------------------------------------------------------------------------|
+| 1    | Open "Hub" and look at the outgoing links.     | The section says 5 and lists them in this order; "Gone" and "Goals" are marked as broken links; the web address is not marked. |
+| 2    | Choose "Plan".                                 | The cursor is on the link to "Plan" in "Hub".                                          |
+| 3    | Choose "Plan" with the Ctrl key held.           | "Plan" opens (A2).                                                                     |
+
+## TC-004-31: Links follow changes
+
+**Flow:** BR-015, NFR-019  
+**Preconditions:** As TC-004-29, "Plan" is open.
+
+| Step | Action                                                               | Expected result                                                  |
+|------|----------------------------------------------------------------------|------------------------------------------------------------------|
+| 1    | Add `[plan](Plan.md)` to `Log.md` with another program.              | Within 2 seconds "Log" appears among the backlinks of "Plan".    |
+| 2    | Open "Ideas" in another tab, delete its link of line 4, and go back to "Plan" without waiting for autosave. | The backlinks of "Ideas" show only line 9. |
+| 3    | Create `Gone.md`, then look at the outgoing links of "Hub" (TC-004-30). | "Gone" is no longer marked as broken.                         |
+
+## TC-004-32: Tags of the note and search by tag
+
+**Flow:** BR-016, A15, FR-091, FR-092  
+**Preconditions:** `Trip.md` has the front matter `tags: [Travel]` and the text "Ferry to #hydra and #Project/alpha, issue #12, C#, `#code`, [link](#ferry)"; `Guide.adoc` has `:tags: travel, docs` and the text "a #highlight# word".
+
+| Step | Action                                     | Expected result                                                          |
+|------|--------------------------------------------|--------------------------------------------------------------------------|
+| 1    | Open "Trip" and look at the tags.          | travel, hydra, project/alpha; not 12, not C#, not code, not ferry.      |
+| 2    | Look at the facade.                        | "#hydra" is shown as plain text.                                         |
+| 3    | Open "Guide" and look at the tags.         | travel and docs; "highlight" is no tag.                                  |
+| 4    | Choose the tag "travel".                   | The search of the workspace finds "Trip" and "Guide" (UC-008 A8).        |
+
+## TC-004-33: Go to line
+
+**Flow:** A16, A17, BR-017, FR-086  
+**Preconditions:** `Long.md` has 300 lines; line 120 is in a paragraph that starts on line 118, in the section "Results", which is folded. The note is open in the source view.
+
+| Step | Action                                         | Expected result                                                         |
+|------|------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Press Ctrl+G.                                  | The system asks for a line number and shows that the note has 300 lines. |
+| 2    | Enter `120:8`.                                 | "Results" expands; the cursor is in line 120 at column 8, in view.      |
+| 3    | Switch to the facade, press Ctrl+G, enter `120`. | The cursor is in the paragraph that holds line 120, at the start of that line. |
+| 4    | Press Ctrl+G and enter `999`; then press Ctrl+G and enter `5:400`, line 5 being 20 characters long. | The cursor goes to line 300, then to the end of line 5. |
+| 5    | Press Ctrl+G and enter `abc`.                  | The system says a line number is expected; the cursor stays.           |
+
+## TC-004-34: Open in the split view
+
+**Flow:** A18, BR-018, FR-096  
+**Preconditions:** "Plan" and "Ideas" are open in the left pane; "Plan" is active.
+
+| Step | Action                                                    | Expected result                                                            |
+|------|-----------------------------------------------------------|----------------------------------------------------------------------------|
+| 1    | Open "Trip" to the side from the note overview.           | The middle shows two equal panes; "Plan" and "Ideas" stay left; "Trip" opens right; the right pane is active and the tool panel shows "Trip". |
+| 2    | Choose "Packing" in the note overview.                    | "Packing" opens in the right pane.                                        |
+| 3    | Click into "Plan" and choose "Log" in the note overview.  | "Log" opens in the left pane.                                              |
+| 4    | Drag the border between the panes.                        | The panes change their width.                                              |
+
+## TC-004-35: The same note on both sides
+
+**Flow:** A19, BR-001, BR-018, FR-097  
+**Preconditions:** "Plan" is open in the facade in the left pane; no split view.
+
+| Step | Action                                         | Expected result                                                         |
+|------|------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Press Ctrl+\ in "Plan".                        | "Plan" is shown in the left pane in the facade and in the right pane in the source view. |
+| 2    | Type `hello` in the source view.               | The facade shows `hello` at once (UC-005 BR-016).                       |
+| 3    | Choose "Plan" in the note overview while the right pane is active. | Its tab in the right pane is the active tab; no third tab opens. |
+
+## TC-004-36: End the split view
+
+**Flow:** A20, BR-018  
+**Preconditions:** Left pane: "Plan", "Ideas"; right pane: "Plan", "Trip".
+
+| Step | Action                                     | Expected result                                                                 |
+|------|--------------------------------------------|---------------------------------------------------------------------------------|
+| 1    | Ask to end the split view.                 | One pane with "Plan", "Ideas", "Trip" in this order.                           |
+| 2    | Split again with "Trip" to the side, then close "Trip" in the right pane. | The split view ends; the left pane is unchanged.          |
+
+## TC-004-37: Split view remembered after a restart
+
+**Flow:** BR-018, BR-008  
+**Preconditions:** Left pane: "Plan" (active), "Ideas"; right pane: "Plan" in the source view (active), "Trip"; 99 tabs open in the left pane in another try.
+
+| Step | Action                                         | Expected result                                                         |
+|------|------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Restart Underline.                             | Both panes come back with their tabs, editing views, and active tabs; the left pane is active. |
+| 2    | With 99 tabs left and 1 right, open one more note. | The tab used longest ago is closed (A6): 100 tabs in both panes together. |
+
+## TC-004-38: Formulas
+
+**Flow:** BR-019, A21, FR-098, NFR-014  
+**Preconditions:** The network is off. `Math.md` holds "Energy $E=mc^2$ and price 5$ or 6$", a block `$$\sum_{i=1}^n i$$`, a code block of the language `math` with `\sqrt{2}`, and `$$\frac{1}{$$`. `Math.adoc` sets `:stem: latexmath` and holds `stem:[a^2]` and `latexmath:[b^2]`. The theme is Dark.
+
+| Step | Action                     | Expected result                                                                         |
+|------|----------------------------|-----------------------------------------------------------------------------------------|
+| 1    | Open `Math.md`.            | `E=mc^2` is typeset inline; "5$ or 6$" stays text; the sum and the root are typeset as blocks in the colors of Dark; `\frac{1}{` is shown as its source with the error. |
+| 2    | Switch to the source view. | The markup is shown.                                                                    |
+| 3    | Open `Math.adoc`.          | Both formulas are typeset inline.                                                       |
+| 4    | Look at both files.        | They are unchanged.                                                                     |
+
+## TC-004-39: Text statistics
+
+**Flow:** BR-020, FR-090  
+**Preconditions:** `Count.md` holds `# Title`, the paragraph "It's a well-known [fact](https://example.org/a-b-c)." and a code block with `let x = 1;`.
+
+| Step | Action                                             | Expected result                                                         |
+|------|----------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Open "Count" and look at the note properties.      | 8 words (Title, It's, a, well-known, fact, let, x, 1), the number of characters of the text shown without markup and link address, and a reading time of 1 minute. |
+| 2    | Select "well-known fact".                          | The note properties also show 2 words and 15 characters of the selection. |
+| 3    | Add 400 words.                                     | Within 1 second the reading time shows 3 minutes.                       |
+
+## TC-004-40: Front matter and note attributes shown
+
+**Flow:** BR-004, BR-010  
+**Preconditions:** `Plan.md` starts with a front matter holding `status: draft`.
+
+| Step | Action                              | Expected result                                                          |
+|------|-------------------------------------|--------------------------------------------------------------------------|
+| 1    | Open "Plan".                        | The facade shows a table with "status" and "draft" at the start; the note properties show "status" as a note attribute (UC-024). |

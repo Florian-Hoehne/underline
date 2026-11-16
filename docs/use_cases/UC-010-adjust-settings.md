@@ -6,10 +6,10 @@
 **Use Case Name:** Adjust Settings  
 **Primary Actor:** User  
 **Goal:** Underline looks and behaves as the user wants it, in every workspace by default and differently in a workspace where they want that, and keeps it after a restart.  
-**Trigger:** The user opens the settings, uses a quick switch of the toolbar, or changes the size of a panel.  
+**Trigger:** The user opens the settings, uses a quick switch of the toolbar, changes the size of a panel, zooms the editor font, or switches the focus mode.  
 **Status:** Reviewed  
 
-**Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-059, FR-069, FR-070, FR-071, NFR-009, NFR-010, NFR-011, NFR-013, NFR-015, NFR-016, C-006](../requirements.md)
+**Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-059, FR-069, FR-070, FR-071, FR-081, FR-087, FR-088, FR-089, FR-094, FR-095, FR-100, NFR-009, NFR-010, NFR-011, NFR-013, NFR-015, NFR-016, C-006](../requirements.md)
 
 ## Preconditions
 
@@ -43,7 +43,7 @@
 
 ### A3: Quick switch in the toolbar
 
-**Trigger:** The user switches the minimap, copy on select, or the input mode in the toolbar (step 1)  
+**Trigger:** The user switches the minimap, copy on select, soft wrap, or the input mode in the toolbar, or soft wrap with Alt+Z (step 1)  
 **Flow:**
 
 1. The system applies the change at once and stores it like a change in the settings: in the workspace settings file when the workspace has a value of its own for it, otherwise in the user settings file (BR-003).
@@ -107,6 +107,24 @@
 1. Nothing is changed.
 2. Use case ends.
 
+### A11: Zoom the editor font
+
+**Trigger:** The user presses Ctrl+Plus, Ctrl+Minus, or Ctrl+0 (Cmd on macOS), or turns the mouse wheel over a note with the Ctrl key held (step 1)  
+**Flow:**
+
+1. The system makes the text of the notes larger or smaller by 10 percent of its normal size, within 50 and 300 percent, or gives it its normal size again, in both editing views of every tab, keeps the cursor and the place the user reads in view, and shows the new editor zoom in the status bar (BR-009).
+2. The system stores the editor zoom as A3 stores a change.
+3. Use case ends.
+
+### A12: Focus mode
+
+**Trigger:** The user switches the focus mode with Ctrl+Alt+F (Cmd+Ctrl+F on macOS) or the command palette (UC-023) (step 1)  
+**Flow:**
+
+1. The system hides the note overview, the tool panel, and the toolbars, or shows them again; the tabs, the notes, the split view, and the status bar stay (BR-010).
+2. The system stores the focus mode as A3 stores a change.
+3. Use case ends.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -137,6 +155,14 @@
 | Note overview width    | 100 to 1,000 pixels                                                    | 200 pixels       |
 | Tool panel width       | 100 to 1,000 pixels                                                    | 240 pixels       |
 | Default format         | Markdown or AsciiDoc; only for a workspace (UC-001 BR-005)             | —                |
+| Editor zoom            | 50 to 300 percent, in steps of 10 percent (BR-009)                     | 100 percent      |
+| Soft wrap              | On or off (BR-011)                                                     | On               |
+| Focus mode             | On or off (BR-010)                                                     | Off              |
+| Close pairs            | On or off (UC-005 BR-019)                                              | On               |
+| Spell check language   | Off, English (US), English (UK), German (Germany), German (Switzerland), French, Italian, Spanish (UC-005 BR-023) | The language of the system when it is one of these, otherwise off |
+| Template folder        | A folder of the workspace; only for a workspace (UC-003 BR-008)       | `templates`      |
+| Daily note folder      | A folder of the workspace; only for a workspace (UC-025 BR-002)       | `daily`          |
+| Daily note template    | A template of the workspace; only for a workspace (UC-025 BR-003)     | The template titled Daily, if there is one |
 
 What git sync and the MCP server do is described in UC-014 and UC-017; this use case only sets them. The git sync interval applies only to a workspace that is a git repository with a remote. Line numbers are shown only in the source view; the lines of the facade are not lines of the note's file.
 
@@ -158,7 +184,7 @@ A changed setting is written to its settings file within 1 second (NFR-009), nev
 
 ### BR-006: Keyboard
 
-The settings open with `Ctrl+,` (`Cmd+,` on macOS) and with a settings button in the top bar; every setting can be changed by keyboard alone (NFR-011).
+The settings open with `Ctrl+,` (`Cmd+,` on macOS) and with a settings button in the top bar; every setting can be changed by keyboard alone (NFR-011). The editor zoom changes with `Ctrl+Plus`, `Ctrl+Minus`, and `Ctrl+0` (`Cmd` on macOS), soft wrap with `Alt+Z`, and the focus mode with `Ctrl+Alt+F` (`Cmd+Ctrl+F` on macOS); every setting can also be changed through the command palette (UC-023).
 
 ### BR-007: Shared workspace settings
 
@@ -167,3 +193,16 @@ The workspace settings file lies in the workspace, so when the workspace is a gi
 ### BR-008: The MCP server only with the user's consent
 
 Only the user settings can let agents read or write the notes (FR-059). A workspace can lower agent access for itself, to read only or off, but a workspace settings file that raises it is not followed and the status bar says so, so a workspace taken from someone else, for example by cloning a repository, never gives an agent access to the notes (NFR-015, NFR-016).
+
+### BR-009: Editor zoom
+
+The editor zoom changes the size of the text of the notes, code and formulas included, in both editing views; the note overview, the tool panel, the toolbars, and the status bar keep their size, and images and diagrams keep their size as the note shows them (FR-087). It changes in steps of 10 percent between 50 and 300 percent; a step beyond these limits does nothing. Zooming never changes a note.
+
+### BR-010: Focus mode
+
+The focus mode hides the note overview, the tool panel, and the toolbars, so that the tabs and the notes take the whole width of the window (FR-088); the status bar stays, so a message such as a note that cannot be stored is still seen. Every hidden function stays reachable by its key and through the command palette (UC-023). The focus mode is a setting like any other, so it is kept after a restart.
+
+### BR-011: Soft wrap
+
+With soft wrap on, a line longer than the editor is wide is shown on several lines on screen; with soft wrap off, it runs on and the editor scrolls sideways (FR-089). In the facade, paragraphs, lists, and headings always wrap as the note is rendered; tables, code blocks, and the frames of markup follow soft wrap. Soft wrap never changes a note: line numbers, go to line (UC-004 BR-017), and the Vim keys count the lines of the note.
+

@@ -19,18 +19,57 @@
 
 import {
   commands,
+  type FindSpec,
   type FoundNoteView,
   type FoundPlace,
   type SearchResultView,
+  type SearchSwitches,
   type SearchView,
 } from './bindings';
 import { focusFallback } from './focus';
+import { ReplaceState } from './replace.svelte';
 
 /** An entry of the found list: a note (`line` null) or one of its lines. */
 export type FoundEntry = { note: number; line: number | null };
 
-/** M-13.4: the find field of the active note (UC-008 A6). */
-export type FindField = { text: string };
+/**
+ * M-13.4: the find field of the active note (UC-008 A6), open for
+ * replacing or not (UC-005 A20).
+ */
+export type FindField = { text: string; replacing: boolean };
+
+/** FR-075: the name of a search switch. */
+export type SwitchName = keyof SearchSwitches;
+
+/** UC-008 BR-011: every search switch off. */
+export const NO_SWITCHES: SearchSwitches = { matchCase: false, wholeWord: false, regex: false };
+
+/**
+ * UC-008 BR-011, UC-005 BR-017, UX: Alt+C, Alt+W and Alt+R switch the
+ * search switches in a search field. The physical key counts (`code`), so
+ * Option with a letter on macOS, which types a character, switches too
+ * (OQ-195).
+ */
+export function switchKey(event: KeyboardEvent): SwitchName | null {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+    return null;
+  }
+  switch (event.code) {
+    case 'KeyC':
+      return 'matchCase';
+    case 'KeyW':
+      return 'wholeWord';
+    case 'KeyR':
+      return 'regex';
+    default:
+      return null;
+  }
+}
+
+/** `switches` with `name` switched. */
+export function switched(switches: SearchSwitches, name: SwitchName): SearchSwitches {
+  return { ...switches, [name]: !switches[name] };
+}
 
 /** What opening an entry needs: the note and the place to select. */
 export type FoundChoice = { note: string; place: FoundPlace | null };
@@ -73,6 +112,18 @@ export class SearchState {
   findFocusAsked = $state(0);
   /** UX review F9: why the last text could not be searched; shown in the overlay. */
   error = $state<string | null>(null);
+  /** FR-075, UC-008 A7: the search switches of the overlay (BR-010: not stored). */
+  switches = $state<SearchSwitches>(NO_SWITCHES);
+  /** UC-008 A9: what is wrong with the text, as the backend says. */
+  problem = $state<string | null>(null);
+  /** FR-075: the search switches of the find field, its own (BR-010). */
+  findSwitches = $state<SearchSwitches>(NO_SWITCHES);
+  /** UC-005 A20: the replacement of the find field, kept while it closes. */
+  findReplacement = $state('');
+  /** UC-022: the overlay replaces in the workspace (UC-008 A10). */
+  replacing = $state(false);
+  /** UC-022: the places of the replace of the workspace. */
+  readonly replace: ReplaceState;
   /** UX review F9: where the keyboard was when the overlay opened. */
   #before: HTMLElement | null = null;
 
@@ -83,6 +134,71 @@ export class SearchState {
   /** `fail` reports a failed command in the status bar. */
   constructor(fail: (command: string, message: string) => void) {
     this.#fail = fail;
+    this.replace = new ReplaceState(fail);
+  }
+
+  /**
+   * UC-008 BR-008, UC-022: what the overlay marks in the notes: its text
+   * with its switches, one text while it replaces.
+   */
+  get overlaySpec(): FindSpec {
+    return {
+      text: this.replacing ? this.text : this.searched,
+      switches: this.switches,
+      oneText: this.replacing,
+      shownOnly: false,
+    };
+  }
+
+  /** UC-008 A7: a switch of the overlay changed; it searches again. */
+  toggleSwitch(name: SwitchName): void {
+    this.switches = switched(this.switches, name);
+    this.setText(this.text);
+  }
+
+  /**
+   * UC-022 step 1, BR-008, UC-008 A10: Ctrl+Shift+H, or "Replace" in the
+   * overlay: the overlay opens for replacing, with the text and the
+   * switches of the search taken over; the replace field takes the
+   * keyboard when the search text is there already.
+   */
+  showReplace(): void {
+    this.#openOverlay();
+    if (!this.replacing) {
+      this.replacing = true;
+      this.cursor = null;
+      this.#sendReplace();
+    }
+    if (this.text === '') {
+      this.focusAsked++;
+    } else {
+      this.replace.focusAsked++;
+    }
+  }
+
+  /**
+   * UC-022 A8: the replace closes without replacing; the overlay shows the
+   * search of the workspace with the search text.
+   */
+  stopReplacing(): void {
+    if (!this.replacing) {
+      return;
+    }
+    this.replacing = false;
+    this.replace.close();
+    this.setText(this.text);
+    this.focusAsked++;
+  }
+
+  /** UC-022 step 1: the replacement typed. */
+  setReplacement(text: string): void {
+    this.replace.replacement = text;
+    this.#sendReplace();
+  }
+
+  /** UC-022 step 2: the places are found again for the text, replacement and switches. */
+  #sendReplace(): void {
+    this.replace.set(this.text, this.replace.replacement, this.switches);
   }
 
   /** The field's text without the spaces around it: what is searched. */
@@ -97,12 +213,17 @@ export class SearchState {
 
   /** M-03.2, BR-007: Ctrl+Shift+F, or the magnifier: open, the field takes the keyboard. */
   show(): void {
+    this.#openOverlay();
+    this.focusAsked++;
+  }
+
+  /** The overlay opens, remembering where the keyboard was. */
+  #openOverlay(): void {
     if (!this.open) {
       const active = document.activeElement;
       this.#before = active instanceof HTMLElement && active !== document.body ? active : null;
     }
     this.open = true;
-    this.focusAsked++;
   }
 
   /** M-03.2: the magnifier opens the overlay, or closes it. */
@@ -121,6 +242,10 @@ export class SearchState {
    * click on a button outside); when that place is gone, to the overview.
    */
   close(restore = true): void {
+    if (this.replacing) {
+      this.replacing = false;
+      this.replace.close();
+    }
     this.open = false;
     if (this.text !== '') {
       this.setText('');
@@ -154,12 +279,19 @@ export class SearchState {
     if (text.trim() === '') {
       this.result = null;
       this.notes = [];
+      this.problem = null;
+    }
+    if (this.replacing) {
+      // UC-022: the places of the replace are found instead.
+      this.#sendReplace();
+      return;
     }
     const sent = text;
+    const switches = this.switches;
     this.#sending = this.#sending.then(async () => {
       let failure: string | null = null;
       try {
-        const answer = await commands.searchSet(sent);
+        const answer = await commands.searchSet(sent, switches);
         if (answer.status === 'error') {
           failure = answer.error.message;
         }
@@ -182,8 +314,17 @@ export class SearchState {
    * stays, as in egui.
    */
   take(view: SearchView): void {
+    if (view.text === this.searched && sameSwitches(view.switches, this.switches)) {
+      // UC-008 A9: what is wrong with the text held now.
+      this.problem = view.problem;
+    }
     const result = view.result;
-    if (!result || result.text !== this.searched || this.searched === '') {
+    if (
+      !result ||
+      result.text !== this.searched ||
+      this.searched === '' ||
+      !sameSwitches(result.switches, this.switches)
+    ) {
       return;
     }
     if (result.serial === this.result?.serial) {
@@ -230,7 +371,10 @@ export class SearchState {
    * the field holds; a newer one is on its way.
    */
   get stale(): boolean {
-    return this.result !== null && this.result.text !== this.searched;
+    return (
+      this.result !== null &&
+      (this.result.text !== this.searched || !sameSwitches(this.result.switches, this.switches))
+    );
   }
 
   /** Whether the result holds more notes than are loaded. */
@@ -270,17 +414,50 @@ export class SearchState {
     }
   }
 
-  /** M-13.4, UC-008 A6: Ctrl+F opens the find field with `text`, or takes the keyboard to it. */
-  openFind(text: string): void {
-    this.find = { text };
+  /**
+   * M-13.4, UC-008 A6, UC-005 A20: Ctrl+F opens the find field with
+   * `text`, Ctrl+H open for replacing, or takes the keyboard to it.
+   */
+  openFind(text: string, replacing = false): void {
+    this.find = { text, replacing };
     this.findFocusAsked++;
   }
 
   /** M-13.4: the find field's text changed. */
   setFindText(text: string): void {
     if (this.find) {
-      this.find = { text };
+      this.find = { ...this.find, text };
     }
+  }
+
+  /** UC-005 A20, UC-008 A6: the replace field of the find field shows or hides. */
+  setFindReplacing(replacing: boolean): void {
+    if (this.find) {
+      this.find = { ...this.find, replacing };
+    }
+  }
+
+  /** UC-008 A7: a switch of the find field. */
+  toggleFindSwitch(name: SwitchName): void {
+    this.findSwitches = switched(this.findSwitches, name);
+  }
+
+  /**
+   * UC-008 A6, A7, UC-005 BR-017: what the find field finds: its text with
+   * its switches, one text while it replaces, in the facade only the text
+   * it shows (`facade`).
+   */
+  findSpec(facade: boolean): FindSpec | null {
+    const find = this.find;
+    if (!find) {
+      return null;
+    }
+    return {
+      text: find.text,
+      switches: this.findSwitches,
+      oneText: find.replacing,
+      shownOnly: find.replacing && facade,
+    };
   }
 
   /** M-13.4: Escape or "×" closes the find field. */
@@ -291,8 +468,14 @@ export class SearchState {
   /** M-21.3: another workspace: the find field closes (egui); the overlay keeps its text. */
   workspaceChanged(): void {
     this.find = null;
+    this.replace.workspaceChanged();
     this.result = null;
     this.notes = [];
     this.cursor = null;
   }
+}
+
+/** Whether two sets of switches are the same. */
+export function sameSwitches(a: SearchSwitches, b: SearchSwitches): boolean {
+  return a.matchCase === b.matchCase && a.wholeWord === b.wholeWord && a.regex === b.regex;
 }

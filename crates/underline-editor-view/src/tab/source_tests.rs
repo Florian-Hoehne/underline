@@ -12,8 +12,8 @@ use underline_markup::NoteFormat;
 
 use super::*;
 use crate::editor_view::{
-    ClipContentView, CopyOnSelectView, EditorCommandName, EditorInput, Insertion, KeyName,
-    TextChange, ToolName, VimChange, VimModeName, VimState,
+    ClipContentView, CopyOnSelectView, EditActionName, EditorCommandName, EditorInput, Insertion,
+    KeyName, LineTargetView, TextChange, ToolName, VimChange, VimModeName, VimState,
 };
 
 /// What the clipboard holds: `text` alone.
@@ -774,4 +774,242 @@ fn m07_3_the_link_is_found_at_web_offsets() {
     // 🙂 is two units, the pair one: the bracket is at 3, the label at 4.
     assert_eq!(link(text, NoteFormat::Markdown, 4).as_deref(), Some("y.md"));
     assert_eq!(link(text, NoteFormat::Markdown, 3), None);
+}
+
+/// TC-005-35, UC-005 A25, BR-019: close pairs in the source view, through
+/// the inputs the window sends: `(`, typing over `)`, Backspace taking the
+/// pair, `**`, a selection enclosed; switched off only `(` is typed
+/// (TC-010-22, UC-010 BR-001).
+#[test]
+fn tc_005_35_close_pairs_in_the_source_view() {
+    let mut tab = tab_with("Pairs\n", KeysInputMode::Normal);
+    input(&mut tab, key(KeyName::End));
+    let patch = input(&mut tab, text("("));
+    assert_eq!(tab.editor.text(), "Pairs()\n");
+    assert_eq!((patch.anchor, patch.head), (6, 6), "between the brackets");
+    input(&mut tab, text("a"));
+    input(&mut tab, text(")"));
+    assert_eq!(tab.editor.text(), "Pairs(a)\n");
+    input(&mut tab, text("("));
+    input(&mut tab, key(KeyName::Backspace));
+    assert_eq!(tab.editor.text(), "Pairs(a)\n");
+    input(&mut tab, text(" "));
+    input(&mut tab, text("*"));
+    input(&mut tab, text("*"));
+    assert_eq!(tab.editor.text(), "Pairs(a) ****\n");
+
+    let mut selected = tab_with("a wörd\n", KeysInputMode::Normal);
+    selected.select(rev(&selected), 2, 6);
+    let patch = input(&mut selected, text("_"));
+    assert_eq!(selected.editor.text(), "a _wörd_\n");
+    assert_eq!((patch.anchor, patch.head), (3, 7), "still selected");
+
+    let mut off = tab_with("x\n", KeysInputMode::Normal);
+    off.set_close_pairs(false);
+    input(&mut off, key(KeyName::End));
+    input(&mut off, text("("));
+    assert_eq!(off.editor.text(), "x(\n");
+}
+
+/// TC-005-35 step 5: `* item` at the start of a line stays a list item;
+/// close pairs works in the Nano input mode too, and in AsciiDoc `#`
+/// encloses a selection.
+#[test]
+fn tc_005_35_a_list_item_and_the_nano_keys() {
+    let mut tab = tab_with("", KeysInputMode::Nano);
+    for c in ["*", " ", "i", "t", "e", "m", " ", "["] {
+        input(&mut tab, text(c));
+    }
+    assert_eq!(tab.editor.text(), "* item []");
+    let mut adoc = EditorTab::new("a b\n", NoteFormat::AsciiDoc);
+    adoc.select(rev(&adoc), 2, 3);
+    input(&mut adoc, text("#"));
+    assert_eq!(adoc.editor.text(), "a #b#\n");
+}
+
+/// TC-005-36 steps 1 to 3, UC-005 A26: Alt+Down moves "two" below "three",
+/// Ctrl+Shift+D copies it with the cursor in the copy, and two undos give
+/// the lines back; the palette's actions do the same.
+#[test]
+fn tc_005_36_move_and_duplicate_lines_in_the_source_view() {
+    let mut tab = tab_with("one\ntwo\nthree\n", KeysInputMode::Normal);
+    input(&mut tab, key(KeyName::ArrowDown));
+    let moved = input(&mut tab, alt(KeyName::ArrowDown));
+    assert_eq!(tab.editor.text(), "one\nthree\ntwo\n");
+    assert_eq!(moved.place, "Ln 3, Col 1");
+    let copied = input(&mut tab, command(KeyName::D, true));
+    assert_eq!(tab.editor.text(), "one\nthree\ntwo\ntwo\n");
+    assert_eq!(copied.place, "Ln 4, Col 1");
+    input(&mut tab, ctrl(KeyName::Z));
+    input(&mut tab, ctrl(KeyName::Z));
+    assert_eq!(tab.editor.text(), "one\ntwo\nthree\n");
+
+    tab.select(rev(&tab), 5, 5);
+    input(
+        &mut tab,
+        EditorInput::Edit {
+            action: EditActionName::MoveLineUp,
+        },
+    );
+    assert_eq!(tab.editor.text(), "two\none\nthree\n");
+    let still = input(&mut tab, alt(KeyName::ArrowUp));
+    assert!(still.changes.is_empty(), "the first line stays");
+}
+
+/// TC-005-37 step 5, UC-005 A27: Tab in an AsciiDoc list item adds a `*`;
+/// Shift+Tab takes it away; outside a list Tab writes four spaces as
+/// before (OQ-204).
+#[test]
+fn tc_005_37_tab_in_the_source_view() {
+    let mut tab = EditorTab::new("* a\n* b\n\nplain", NoteFormat::AsciiDoc);
+    tab.select(rev(&tab), 6, 6);
+    input(&mut tab, key(KeyName::Tab));
+    assert_eq!(tab.editor.text(), "* a\n** b\n\nplain");
+    input(&mut tab, keyed(KeyName::Tab, false, false, true));
+    assert_eq!(tab.editor.text(), "* a\n* b\n\nplain");
+    let end = u32::try_from("* a\n* b\n\nplain".len()).unwrap();
+    tab.select(rev(&tab), end, end);
+    input(&mut tab, key(KeyName::Tab));
+    assert!(tab.editor.text().ends_with("plain    "));
+}
+
+/// TC-004-33 steps 2 and 4, UC-004 A16, BR-017: going to a line and
+/// column expands the folded section that holds it; beyond the note it
+/// goes to the last line, beyond a line to its end.
+#[test]
+fn tc_004_33_go_to_line_in_the_source_view() {
+    let body = "# Results\none\ntwo three\n# Next\nlast line\n";
+    let mut tab = tab_with(body, KeysInputMode::Normal);
+    tab.fold_line(0);
+    assert!(tab.sections_view("Home", 1000.0).unwrap().sections[0].folded);
+    let patch = tab
+        .source_go_to_line(LineTargetView {
+            line: 3,
+            column: Some(5),
+        })
+        .patch;
+    assert_eq!(patch.place, "Ln 3, Col 5");
+    assert!(patch.scroll);
+    assert!(!tab.sections_view("Home", 2000.0).unwrap().sections[0].folded);
+    let last = tab
+        .source_go_to_line(LineTargetView {
+            line: 999,
+            column: None,
+        })
+        .patch;
+    assert_eq!(last.place, "Ln 6, Col 1");
+    let end = tab
+        .source_go_to_line(LineTargetView {
+            line: 5,
+            column: Some(400),
+        })
+        .patch;
+    assert_eq!(end.place, "Ln 5, Col 10");
+    assert_eq!(tab.line_count(), 6);
+}
+
+/// UC-005 A28 step 2, TC-005-39 step 3: a correction of the spell check
+/// takes the place of the selected word as one change; Ctrl+Z brings the
+/// word back, and the typing before it stays.
+#[test]
+fn tc005_39_a_correction_is_one_undo_step_in_the_source_view() {
+    let mut tab = tab_with("", KeysInputMode::Normal);
+    for c in ["T", "h", "e", " ", "f", "e", "r", "r", "i"] {
+        input(&mut tab, text(c));
+    }
+    input(&mut tab, text(" leaves"));
+    tab.select(rev(&tab), 4, 9);
+    tab.source_insert(Insertion::Correction {
+        text: "ferry".into(),
+    });
+    assert_eq!(tab.editor.text(), "The ferry leaves");
+    input(&mut tab, text("!"));
+    input(&mut tab, command(KeyName::Z, false));
+    assert_eq!(tab.editor.text(), "The ferry leaves");
+    input(&mut tab, command(KeyName::Z, false));
+    assert_eq!(tab.editor.text(), "The ferri leaves");
+}
+
+/// Test monkey 8b, UC-005 A28 step 2, TC-005-39: random selections and
+/// corrections: the text is the old one with the selection replaced by
+/// the correction as it is, and Ctrl+Z gives back the exact old text.
+#[test]
+fn tc005_39_chaos_a_correction_replaces_the_selection_exactly_and_undoes() {
+    let pieces = [
+        "ferri",
+        " ",
+        "\n",
+        "\r\n",
+        "😀",
+        "e\u{301}",
+        "שלום",
+        "日本語",
+        "**",
+        "_",
+        "`",
+        "- ",
+        "# ",
+        "> ",
+        "[a](b)",
+        "\t",
+        "  ",
+        "(",
+        "[",
+    ];
+    let corrections = [
+        "ferry",
+        "don't",
+        "well-known",
+        "😀",
+        "",
+        "x\ny",
+        "**b**",
+        "(",
+        "[",
+        "- a",
+        "  ",
+        "\t",
+        "é",
+        "e\u{301}",
+    ];
+    for seed in 1..600u64 {
+        let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut body = String::new();
+        for _ in 0..(next() % 12) {
+            body.push_str(pieces[(next() % pieces.len() as u64) as usize]);
+        }
+        let mut tab = tab_with(&body, KeysInputMode::Normal);
+        let chars: Vec<char> = tab.editor.text().chars().collect();
+        let a = (next() % (chars.len() as u64 + 1)) as usize;
+        let b = (next() % (chars.len() as u64 + 1)) as usize;
+        let correction = corrections[(next() % corrections.len() as u64) as usize];
+        tab.editor.set_selection(a, b);
+        let before = tab.editor.text();
+        let (lo, hi) = (a.min(b), a.max(b));
+        let expected: String = chars[..lo]
+            .iter()
+            .chain(correction.chars().collect::<Vec<_>>().iter())
+            .chain(chars[hi..].iter())
+            .collect();
+        tab.source_insert(Insertion::Correction {
+            text: correction.into(),
+        });
+        assert_eq!(
+            tab.editor.text(),
+            expected,
+            "seed {seed}: body {body:?} {a}..{b} -> {correction:?}"
+        );
+        input(&mut tab, command(KeyName::Z, false));
+        assert_eq!(
+            tab.editor.text(),
+            before,
+            "seed {seed}: undo of {correction:?} in {body:?} {a}..{b}"
+        );
+    }
 }

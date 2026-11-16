@@ -165,13 +165,19 @@
       !steps.has(element.id)
     ) {
       element.value = String(control.value);
+    } else if (
+      element instanceof HTMLInputElement &&
+      control.kind === 'text' &&
+      !dirty.has(element.id)
+    ) {
+      element.value = control.value;
     }
   }
 
   // The numbers follow the view, except while one is typed or stepped.
   $effect(() => {
     for (const row of rows) {
-      if (row.control.kind === 'number') {
+      if (row.control.kind === 'number' || row.control.kind === 'text') {
         const element = document.getElementById(controlId(scope, row.key));
         if (element) {
           show(element, row.control);
@@ -225,8 +231,71 @@
     }
   }
 
+  /**
+   * TC-010-22: a folder typed (the template or daily note folder): sent when
+   * the field is left, with Enter, or on closing; an emptied field gives the
+   * built-in default again.
+   */
+  function commitText(input: HTMLInputElement, part: Scope, key: SettingName) {
+    dirty.delete(input.id);
+    const control = rowOf(part, key)?.control;
+    const current = control?.kind === 'text' ? control.value : null;
+    const typed = input.value.trim();
+    if (typed === current && !(input.id in fieldProblems)) {
+      return;
+    }
+    void sendText(input, part, key, typed);
+  }
+
+  /**
+   * OQ-274 (b): why the folder typed into a field was refused, by the
+   * field's id; it stands under the field, which keeps what was typed.
+   */
+  let fieldProblems = $state<Record<string, string>>({});
+
+  async function sendText(input: HTMLInputElement, part: Scope, key: SettingName, typed: string) {
+    const id = input.id;
+    await send(part, key, typed === '' ? null : typed);
+    const problem = shell.settingsProblem;
+    if (problem !== null) {
+      fieldProblems = { ...fieldProblems, [id]: problem };
+      shell.settingsProblem = null;
+      input.value = typed;
+      dirty.add(id);
+    } else if (id in fieldProblems) {
+      fieldProblems = Object.fromEntries(
+        Object.entries(fieldProblems).filter(([field]) => field !== id),
+      );
+    }
+  }
+
+  /** The ids that describe the control `id` of `row`: its note, help and problem. */
+  function describedBy(id: string, row: SettingRowView): string | undefined {
+    const ids = [
+      row.note === null ? null : `${id}-note`,
+      row.help === null ? null : `${id}-help`,
+      id in fieldProblems ? `${id}-problem` : null,
+    ].filter((part) => part !== null);
+    return ids.length === 0 ? undefined : ids.join(' ');
+  }
+
+  /** A field of the part `part` sends what it holds: a number or a folder. */
+  function commit(input: HTMLInputElement, part: Scope, key: SettingName) {
+    if (rowOf(part, key)?.control.kind === 'text') {
+      commitText(input, part, key);
+    } else {
+      commitNumber(input, part, key);
+    }
+  }
+
   /** Enter sends; arrow and page keys step and send once the keys rest. */
-  function onNumberKey(row: SettingRowView, min: number, max: number, event: KeyboardEvent) {
+  function onNumberKey(
+    row: SettingRowView,
+    min: number,
+    max: number,
+    by: number,
+    event: KeyboardEvent,
+  ) {
     const input = event.currentTarget as HTMLInputElement;
     const part = scope;
     if (event.key === 'Enter') {
@@ -243,7 +312,8 @@
     event.preventDefault();
     const now = Number(input.value);
     const from = Number.isFinite(now) && input.value.trim() !== '' ? now : min;
-    const next = Math.min(max, Math.max(min, Math.round(from) + step));
+    // UC-010 BR-009: the editor zoom steps by 10 from a step of 10.
+    const next = Math.min(max, Math.max(min, Math.round(from / by) * by + step * by));
     input.value = String(next);
     const waiting = steps.get(input.id);
     if (waiting !== undefined) {
@@ -261,7 +331,7 @@
       const input = document.getElementById(id);
       const [, part, ...key] = id.split('-');
       if (input instanceof HTMLInputElement) {
-        commitNumber(input, part as Scope, key.join('-') as SettingName);
+        commit(input, part as Scope, key.join('-') as SettingName);
       }
     }
   }
@@ -388,6 +458,10 @@
         <div class="grid" class:with-notes={rows.some((row) => row.note !== null)}>
           {#each rows as row, at (row.key)}
             {@const id = controlId(scope, row.key)}
+            {#if row.section !== null}
+              <!-- TC-010-22: the settings of templates and daily notes, as a group. -->
+              <h3 class="section">{row.section}</h3>
+            {/if}
             {@const control = row.control}
             {@const noteId = row.note === null ? undefined : `${id}-note`}
             {@const first = at === 0 && scopes.length === 1 ? 'true' : undefined}
@@ -411,7 +485,7 @@
                 <select
                   {id}
                   value={choiceValue(control)}
-                  aria-describedby={noteId}
+                  aria-describedby={describedBy(id, row)}
                   data-autofocus={first}
                   onchange={(event) => onChoice(row, control.choices, event)}
                 >
@@ -422,6 +496,26 @@
                     <option value={String(n)}>{choice.label}</option>
                   {/each}
                 </select>
+              {:else if control.kind === 'text'}
+                <input
+                  {id}
+                  class="text"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder={control.default}
+                  aria-describedby={describedBy(id, row)}
+                  aria-invalid={id in fieldProblems ? 'true' : undefined}
+                  data-autofocus={first}
+                  oninput={() => dirty.add(id)}
+                  onchange={(event) => commitText(event.currentTarget, scope, row.key)}
+                  onkeydown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      commitText(event.currentTarget, scope, row.key);
+                    }
+                  }}
+                />
               {:else}
                 <input
                   {id}
@@ -430,13 +524,14 @@
                   inputmode="numeric"
                   min={control.min}
                   max={control.max}
-                  step="1"
+                  step={control.step}
                   title={`${control.min}–${control.max}`}
                   aria-describedby={noteId}
                   data-autofocus={first}
                   oninput={() => dirty.add(id)}
                   onchange={(event) => commitNumber(event.currentTarget, scope, row.key)}
-                  onkeydown={(event) => onNumberKey(row, control.min, control.max, event)}
+                  onkeydown={(event) =>
+                    onNumberKey(row, control.min, control.max, control.step, event)}
                 />
               {/if}
             {/if}
@@ -455,6 +550,16 @@
                 <span class="weak">{row.note.text}</span>
               {/if}
             </span>
+            {#if row.help !== null || id in fieldProblems}
+              <div class="below">
+                {#if id in fieldProblems}
+                  <p class="problem" role="alert" id={`${id}-problem`}>{fieldProblems[id]}</p>
+                {/if}
+                {#if row.help !== null}
+                  <p class="weak help" id={`${id}-help`}>{row.help}</p>
+                {/if}
+              </div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -619,6 +724,25 @@
     overflow-wrap: break-word;
   }
 
+  /* TC-010-22: a group's heading across the rows, set apart from the row above. */
+  .section {
+    grid-column: 1 / -1;
+    margin: var(--space-3) 0 0;
+    font-size: inherit;
+    font-weight: 600;
+  }
+
+  /* What a setting does, and why a folder was refused, under its control. */
+  .below {
+    grid-column: 2 / -1;
+    margin-top: calc(-1 * var(--space-1));
+  }
+
+  .below p {
+    margin: 0;
+    max-width: 40ch;
+  }
+
   .check {
     display: flex;
     align-items: center;
@@ -635,7 +759,8 @@
   }
 
   select,
-  .number {
+  .number,
+  .text {
     box-sizing: border-box;
     min-height: 28px;
     font: inherit;
@@ -647,6 +772,14 @@
   select {
     max-width: 100%;
     background: var(--ui-button);
+  }
+
+  /* TC-010-22: a folder of the workspace, as wide as a choice. */
+  .text {
+    width: 100%;
+    max-width: 24ch;
+    padding: 0 var(--space-1);
+    background: var(--ui-field);
   }
 
   .number {
@@ -739,6 +872,11 @@
     .grid.with-notes {
       grid-template-columns: minmax(0, 1fr);
       row-gap: 2px;
+    }
+
+    .below {
+      grid-column: 1 / -1;
+      margin-top: 0;
     }
 
     .name:not(:first-child) {

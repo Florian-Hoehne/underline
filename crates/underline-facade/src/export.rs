@@ -2,17 +2,20 @@
 //! format, as one HTML file, or as a PDF set by Typst. Every export starts
 //! from the facade's blocks, so the three agree on what a note holds.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use underline_core::{
     asciidoc_anchor, heading_anchor, relative, resolve_link, LinkTarget, NoteFormat,
 };
 
-use crate::blocks::{parse_blocks, Block, BlockKind, CellAlign, ListMarker, Run, Table};
+use crate::blocks::{parse_blocks, Block, BlockKind, CellAlign, Formula, ListMarker, Run, Table};
 use crate::diagram::{renderer, DiagramLanguage};
 use crate::highlight::{highlight_code, HighlightSet};
 use crate::images::{self, ImageSource};
+use crate::math::{self, MathError, Typeset};
 use underline_core::Theme;
 
 /// What a note is exported to (UC-009 step 1).
@@ -192,7 +195,16 @@ impl<'a> MarkupWriter<'a> {
 
     fn write(mut self, blocks: &[Block]) -> Exported {
         let mut previous: Option<&BlockKind> = None;
-        for block in blocks {
+        // UC-024 BR-001: the front matter of a Markdown note becomes the
+        // document attributes, below the document title.
+        let (head, blocks) = self.head(blocks);
+        let mut titled = false;
+        for (at, block) in blocks.iter().enumerate() {
+            if at == 1 && titled {
+                if let Some(head) = &head {
+                    self.out.push_str(head);
+                }
+            }
             let tight = matches!(
                 (previous, &block.kind),
                 (
@@ -206,8 +218,27 @@ impl<'a> MarkupWriter<'a> {
             if !self.out.is_empty() {
                 self.out.push_str(if tight { "\n" } else { "\n\n" });
             }
+            if at == 0 && head.is_some() && matches!(block.kind, BlockKind::Heading(1)) {
+                titled = true;
+            } else if at == 0 {
+                if let Some(head) = &head {
+                    // No title: the attributes start the note.
+                    self.out.push_str(head.trim_start_matches('\n'));
+                    self.out.push_str("\n\n");
+                }
+            }
             self.block(block);
             previous = Some(&block.kind);
+        }
+        if blocks.len() == 1 && titled {
+            if let Some(head) = &head {
+                self.out.push_str(head);
+            }
+        }
+        if blocks.is_empty() {
+            if let Some(head) = &head {
+                self.out.push_str(head.trim_start_matches('\n'));
+            }
         }
         self.out.push('\n');
         Exported {
@@ -317,6 +348,7 @@ impl<'a> MarkupWriter<'a> {
                 }
             }
             BlockKind::Table(table) => self.table(block, table),
+            BlockKind::Formula { source } => self.formula_block(source),
             BlockKind::Image {
                 target,
                 alt,
@@ -339,7 +371,35 @@ impl<'a> MarkupWriter<'a> {
         }
     }
 
+    /// FR-098, UC-009 BR-002: a block formula in the notation of the other
+    /// format, ```` ```math ```` and a `[latexmath]` block; one with an
+    /// error as its source in a literal block (OQ-284). The fences and
+    /// delimiters are longer than any such run or line of the source.
+    fn formula_block(&mut self, source: &str) {
+        let md = self.to == NoteFormat::Markdown;
+        let parses = math::parses(source);
+        match (md, parses) {
+            (true, _) => {
+                let fence = "`".repeat(longest_run(source, '`').max(2) + 1);
+                let language = if parses { "math" } else { "" };
+                let _ = write!(self.out, "{fence}{language}\n{source}\n{fence}");
+            }
+            (false, true) => {
+                let delimiter = "+".repeat(longest_line_of(source, '+').max(3) + 1);
+                let _ = write!(self.out, "[latexmath]\n{delimiter}\n{source}\n{delimiter}");
+            }
+            (false, false) => {
+                let delimiter = ".".repeat(longest_line_of(source, '.').max(3) + 1);
+                let _ = write!(self.out, "{delimiter}\n{source}\n{delimiter}");
+            }
+        }
+    }
+
     fn table(&mut self, block: &Block, table: &Table) {
+        if table.front_matter {
+            self.front_matter(block, table);
+            return;
+        }
         let columns = table.columns().max(1);
         let cell = |writer: &Self, row: &[Vec<Run>], i: usize| {
             row.get(i)
@@ -404,6 +464,69 @@ impl<'a> MarkupWriter<'a> {
         }
     }
 
+    /// UC-024 BR-001: a front matter stays one in Markdown, as it is (only
+    /// an AsciiDoc note is exported to Markdown, and it has none).
+    fn front_matter(&mut self, block: &Block, _table: &Table) {
+        self.out.push_str(&block.text().replace("\r\n", "\n"));
+    }
+
+    /// UC-024 BR-001: for an export to AsciiDoc, the head that the front
+    /// matter `blocks` start with becomes, each line led by `\n`: the
+    /// attributes as document attribute entries; one that AsciiDoc cannot
+    /// hold (nested, a name it cannot write, a value going on in the next
+    /// line, a list item with a comma) as a comment, approximated; a front
+    /// matter that cannot be read (A5) as a comment block. The blocks after
+    /// it are returned.
+    fn head<'b>(&mut self, blocks: &'b [Block]) -> (Option<String>, &'b [Block]) {
+        use underline_markup::attributes::{checked_name, note_head, AttributeKind};
+        let Some(first) = blocks.first() else {
+            return (None, blocks);
+        };
+        let text = &self.request.text;
+        let front = underline_markup::statistics::front_matter_end(text);
+        if self.to != NoteFormat::AsciiDoc || front == 0 || first.span.end > front {
+            return (None, blocks);
+        }
+        let rest = &blocks[1..];
+        if !matches!(&first.kind, BlockKind::Table(table) if table.front_matter) {
+            if first.kind == BlockKind::Markup {
+                self.approximate(first);
+                let markup = first.text().replace("\r\n", "\n");
+                return (Some(format!("\n\n////\n{markup}\n////")), rest);
+            }
+            return (None, blocks);
+        }
+        let mut out = String::new();
+        for attribute in note_head(text, NoteFormat::Markdown).attributes {
+            let name = checked_name(&attribute.name, NoteFormat::AsciiDoc).ok();
+            let value = match attribute.kind {
+                AttributeKind::Nested => None,
+                AttributeKind::List if attribute.items.iter().any(|i| i.contains(',')) => None,
+                AttributeKind::List => Some(attribute.items.join(", ")),
+                _ => Some(attribute.value.clone()),
+            }
+            .filter(|value| !value.contains(['\n', '\r']) && !value.ends_with('\\'));
+            match (name, value) {
+                (Some(name), Some(value)) if value.is_empty() => {
+                    let _ = write!(out, "\n:{name}:");
+                }
+                (Some(name), Some(value)) => {
+                    let _ = write!(out, "\n:{name}: {value}");
+                }
+                _ => {
+                    let line = line_of(text, attribute.span.start);
+                    if !self.approximated.contains(&line) {
+                        self.approximated.push(line);
+                    }
+                    for line in text[attribute.span.clone()].lines() {
+                        let _ = write!(out, "\n// {line}");
+                    }
+                }
+            }
+        }
+        (Some(out), rest)
+    }
+
     /// The runs in the markup of the other format, links following the
     /// export's place.
     fn inline(&self, runs: &[Run]) -> String {
@@ -440,6 +563,9 @@ impl<'a> MarkupWriter<'a> {
 
     fn styled(&self, run: &Run, at_start: bool) -> String {
         let style = &run.style;
+        if let Some(formula) = &style.formula {
+            return self.inline_formula(formula);
+        }
         if self.to == NoteFormat::Markdown {
             if style.code {
                 let fence = if run.text.contains('`') { "``" } else { "`" };
@@ -460,7 +586,8 @@ impl<'a> MarkupWriter<'a> {
             if style.code {
                 return format!("`+{}+`", run.text);
             }
-            let mut text = run.text.clone();
+            // FR-098: text naming a formula macro stays text.
+            let mut text = escape_formula_macros(&run.text);
             if style.bold {
                 text = format!("**{text}**");
             }
@@ -473,6 +600,91 @@ impl<'a> MarkupWriter<'a> {
             text
         }
     }
+}
+
+impl MarkupWriter<'_> {
+    /// FR-098, UC-009 BR-002: an inline formula in the notation of the
+    /// other format, `$…$` and `latexmath:[…]`; one with an error as its
+    /// source in code (OQ-284). Of the ways to write it, the first that the
+    /// parser reads back as this formula is taken. AsciiDoc has no display
+    /// formula in a line, so `$$…$$` within a paragraph becomes one in the
+    /// line there (OQ-284).
+    fn inline_formula(&self, formula: &Formula) -> String {
+        let source = &formula.source;
+        if !math::parses(source) {
+            if self.to != NoteFormat::Markdown {
+                return format!("`+{source}+`");
+            }
+            let fence = "`".repeat(longest_run(source, '`') + 1);
+            let pad = if source.starts_with('`') || source.ends_with('`') {
+                " "
+            } else {
+                ""
+            };
+            return format!("{fence}{pad}{source}{pad}{fence}");
+        }
+        let candidates: Vec<String> = if self.to == NoteFormat::Markdown {
+            let mut candidates = vec![
+                format!("${source}$"),
+                format!("$`{source}`$"),
+                format!("$`{source} `$"),
+            ];
+            if formula.display {
+                candidates.insert(0, format!("$${source}$$"));
+            }
+            candidates
+        } else {
+            let escaped = source.replace(']', "\\]");
+            // A `]` after a backslash would be escaped: a space keeps it the end.
+            let pad = if escaped.ends_with('\\') { " " } else { "" };
+            vec![format!("latexmath:[{escaped}{pad}]")]
+        };
+        let reads_back = |written: &str| {
+            let blocks = parse_blocks(&format!("x {written} x\n"), self.to);
+            let found: Vec<&Formula> = blocks
+                .iter()
+                .flat_map(|b| &b.runs)
+                .filter_map(|r| r.style.formula.as_ref())
+                .collect();
+            found.len() == 1 && found[0].source == *source
+        };
+        candidates
+            .iter()
+            .find(|written| reads_back(written))
+            .unwrap_or(&candidates[0])
+            .clone()
+    }
+}
+
+/// The longest run of `c` in `text`.
+fn longest_run(text: &str, c: char) -> usize {
+    let mut longest = 0;
+    let mut run = 0;
+    for found in text.chars() {
+        run = if found == c { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    longest
+}
+
+/// The longest line of `text` made only of `c`.
+fn longest_line_of(text: &str, c: char) -> usize {
+    text.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty() && line.chars().all(|found| found == c))
+        .map(str::len)
+        .max()
+        .unwrap_or(0)
+}
+
+/// FR-098: AsciiDoc text in which `latexmath:[` and `stem:[` stay text: a
+/// backslash before them, as Asciidoctor escapes a macro.
+fn escape_formula_macros(text: &str) -> String {
+    if !text.contains(":[") {
+        return text.to_owned();
+    }
+    text.replace("latexmath:[", "\\latexmath:[")
+        .replace("stem:[", "\\stem:[")
 }
 
 /// Whether a place names a note file.
@@ -496,8 +708,11 @@ fn title_case(label: &str) -> String {
 fn escape_markdown(text: &str, at_start: bool) -> String {
     let mut out = String::with_capacity(text.len());
     for (i, c) in text.chars().enumerate() {
-        if matches!(c, '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '>' | '~')
-            || (at_start && i == 0 && matches!(c, '#' | '-' | '+' | '|'))
+        // FR-098: a `$` of AsciiDoc text starts no formula in Markdown.
+        if matches!(
+            c,
+            '\\' | '*' | '_' | '`' | '[' | ']' | '<' | '>' | '~' | '$'
+        ) || (at_start && i == 0 && matches!(c, '#' | '-' | '+' | '|'))
         {
             out.push('\\');
         }
@@ -577,6 +792,47 @@ fn diagram_svg(language: &str, source: &str) -> Option<Result<String, String>> {
     )
 }
 
+/// The formulas typeset for the exports, by source and display style, so
+/// a formula that stands several times is typeset once; bounded.
+type FormulaCache = HashMap<(String, bool), Result<Typeset, MathError>>;
+
+/// FR-098, ADR-029: a formula typeset for the exports, in black, kept for
+/// the next use of it.
+fn formula_svg(source: &str, display: bool) -> Result<Typeset, MathError> {
+    static CACHE: OnceLock<Mutex<FormulaCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Mutex::default);
+    let key = (source.to_owned(), display);
+    if let Some(done) = cache
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+    {
+        return done.clone();
+    }
+    let done = math::typeset(source, display, [0, 0, 0]);
+    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if cache.len() >= 256 {
+        cache.clear();
+    }
+    cache.insert(key, done.clone());
+    done
+}
+
+/// FR-098, UC-009 BR-003: the inline SVG of a typeset formula in the HTML
+/// export, in the colour of the text around it (light and dark), labelled
+/// with its source. Only the paints of the drawing take the text's colour;
+/// a part set `\color{black}` takes it too, which is black on a light page.
+fn formula_html(formula: &Typeset, source: &str) -> String {
+    let painted = Typeset {
+        svg: formula
+            .svg
+            .replace("fill=\"rgba(0,0,0,1)\"", "fill=\"currentColor\"")
+            .replace("stroke=\"rgba(0,0,0,1)\"", "stroke=\"currentColor\""),
+        ..formula.clone()
+    };
+    painted.inline_svg(source)
+}
+
 fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -616,6 +872,9 @@ th { background: var(--code); }
 img, svg { max-width: 100%; height: auto; }
 figure { margin: 1em 0; }
 figure.diagram { display: inline-block; background: #ffffff; padding: 8px; border-radius: 6px; }
+.formula { text-align: center; margin: 1em 0; }
+.formula-display { display: block; text-align: center; margin: .5em 0; }
+svg[role="img"] { max-width: none; }
 figcaption, caption { color: var(--weak); font-size: 90%; }
 .admonition { border-left: .25em solid var(--note); padding: .5em 1em; margin: 1em 0; }
 .missing { color: var(--weak); font-style: italic; }
@@ -772,6 +1031,16 @@ impl<'a> HtmlWriter<'a> {
                 let _ = writeln!(self.out, "<pre>{}</pre>", escape_html(&block.text()));
             }
             BlockKind::Table(table) => self.table(table),
+            BlockKind::Formula { source } => match formula_svg(source, true) {
+                Ok(formula) => {
+                    let svg = formula_html(&formula, source);
+                    let _ = writeln!(self.out, "<p class=\"formula\">{svg}</p>");
+                }
+                // UC-009, UC-004 A21: a formula with an error as its source.
+                Err(_) => {
+                    let _ = writeln!(self.out, "<pre><code>{}</code></pre>", escape_html(source));
+                }
+            },
             BlockKind::Image {
                 target,
                 alt,
@@ -897,9 +1166,20 @@ impl<'a> HtmlWriter<'a> {
 }
 
 fn styled_html(run: &Run) -> String {
-    let mut text = escape_html(&run.text);
     let style = &run.style;
-    if style.code {
+    let mut text = match &style.formula {
+        // FR-098: an inline formula typeset, or its source in code.
+        Some(formula) => match formula_svg(&formula.source, formula.display) {
+            Ok(typeset) if formula.display => format!(
+                "<span class=\"formula-display\">{}</span>",
+                formula_html(&typeset, &formula.source)
+            ),
+            Ok(typeset) => formula_html(&typeset, &formula.source),
+            Err(_) => format!("<code>{}</code>", escape_html(&formula.source)),
+        },
+        None => escape_html(&run.text),
+    };
+    if style.code && style.formula.is_none() {
         text = format!("<code>{text}</code>");
     }
     if style.bold {
@@ -1017,7 +1297,7 @@ impl TypstWriter<'_> {
     fn block(&mut self, block: &Block) {
         match &block.kind {
             BlockKind::Heading(level) => {
-                let text = inline_typst(&block.runs);
+                let text = inline_typst(&block.runs, &mut self.files);
                 let label = typst_string(&self.anchor(&block.text()));
                 let _ = write!(
                     self.out,
@@ -1025,13 +1305,15 @@ impl TypstWriter<'_> {
                     (*level).clamp(1, 6)
                 );
             }
-            BlockKind::Paragraph => self.out.push_str(&inline_typst(&block.runs)),
+            BlockKind::Paragraph => self
+                .out
+                .push_str(&inline_typst(&block.runs, &mut self.files)),
             BlockKind::ListItem {
                 depth,
                 marker,
                 checked,
             } => {
-                let text = inline_typst(&block.runs);
+                let text = inline_typst(&block.runs, &mut self.files);
                 let check = match checked {
                     Some(true) => "#\"☒ \"",
                     Some(false) => "#\"☐ \"",
@@ -1051,7 +1333,7 @@ impl TypstWriter<'_> {
                 }
             }
             BlockKind::Quote(_) => {
-                let text = inline_typst(&block.runs);
+                let text = inline_typst(&block.runs, &mut self.files);
                 let _ = write!(self.out, "#quote(block: true)[{text}]");
             }
             BlockKind::Code { language } => {
@@ -1082,7 +1364,7 @@ impl TypstWriter<'_> {
             }
             BlockKind::ThematicBreak => self.out.push_str("#line(length: 100%, stroke: luma(200))"),
             BlockKind::Admonition(label) => {
-                let text = inline_typst(&block.runs);
+                let text = inline_typst(&block.runs, &mut self.files);
                 let _ = write!(
                     self.out,
                     "#block(stroke: (left: 3pt + rgb(\"#0969da\")), inset: (left: 10pt, y: 6pt))[#strong({})\\ {text}]",
@@ -1097,6 +1379,27 @@ impl TypstWriter<'_> {
                 );
             }
             BlockKind::Table(table) => self.table(table),
+            BlockKind::Formula { source } => match formula_svg(source, true) {
+                // FR-098: the same SVG as the facade's, centred.
+                Ok(formula) => {
+                    // A formula wider than the text of a page (11 pt, at
+                    // most about 450 pt wide) is scaled into it.
+                    let size = if formula.width * 11.0 > 440.0 {
+                        "width: 100%".to_owned()
+                    } else {
+                        format!("height: {:.3}em", formula.height)
+                    };
+                    let name = self.file("svg", formula.svg.into_bytes());
+                    let _ = write!(
+                        self.out,
+                        "#block(breakable: false, width: 100%, align(center, image({}, {size})))",
+                        typst_string(&name),
+                    );
+                }
+                Err(_) => {
+                    let _ = write!(self.out, "#raw(block: true, {})", typst_string(source));
+                }
+            },
             BlockKind::Image {
                 target,
                 alt,
@@ -1131,12 +1434,15 @@ impl TypstWriter<'_> {
                 _ => "left",
             })
             .collect();
-        let cells = |row: &Vec<Vec<Run>>| -> Vec<String> {
+        let files = &mut self.files;
+        let mut cells = |row: &Vec<Vec<Run>>| -> Vec<String> {
             (0..columns)
                 .map(|i| {
                     format!(
                         "[{}]",
-                        row.get(i).map(|r| inline_typst(r)).unwrap_or_default()
+                        row.get(i)
+                            .map(|r| inline_typst(r, files))
+                            .unwrap_or_default()
                     )
                 })
                 .collect()
@@ -1172,15 +1478,30 @@ impl TypstWriter<'_> {
 }
 
 /// The runs as Typst expressions; text goes in as strings, so no markup of
-/// Typst can sneak in. BR-005 decides which links stay links.
-fn inline_typst(runs: &[Run]) -> String {
+/// Typst can sneak in. BR-005 decides which links stay links. An inline
+/// formula (FR-098) is its SVG in `files`, boxed at its baseline.
+fn inline_typst(runs: &[Run], files: &mut Vec<(String, Vec<u8>)>) -> String {
     let mut out = String::new();
     for run in runs {
         let style = &run.style;
-        let mut expr = if style.code {
-            format!("raw({})", typst_string(&run.text))
-        } else {
-            typst_string(&run.text)
+        let formula = style
+            .formula
+            .as_ref()
+            .map(|formula| (formula, formula_svg(&formula.source, formula.display)));
+        let mut expr = match formula {
+            Some((_, Ok(typeset))) => {
+                let name = format!("file-{}.svg", files.len());
+                files.push((name.clone(), typeset.svg.into_bytes()));
+                format!(
+                    "box(baseline: {:.3}em, image({}, height: {:.3}em))",
+                    typeset.depth,
+                    typst_string(&name),
+                    typeset.height
+                )
+            }
+            Some((formula, Err(_))) => format!("raw({})", typst_string(&formula.source)),
+            None if style.code => format!("raw({})", typst_string(&run.text)),
+            None => typst_string(&run.text),
         };
         if style.bold {
             expr = format!("strong({expr})");
@@ -1386,6 +1707,50 @@ mod tests {
         );
     }
 
+    /// UC-024 BR-001, OQ-268: the front matter of a Markdown note becomes
+    /// document attributes below the title; a nested value, a list item
+    /// with a comma and a name AsciiDoc cannot write are comments, and
+    /// approximated.
+    #[test]
+    fn uc024_front_matter_to_asciidoc_attributes() {
+        let sandbox = Sandbox::new("front");
+        let md = "---\r\nstatus: draft\r\nauthor:\r\n  name: Ann\r\ntags: [a, \"b,c\"]\r\nlist: [x, y]\r\nempty:\r\n---\r\n# Plan\r\n\r\nText\r\n";
+        let request = sandbox.request(md, NoteFormat::Markdown, "out/Plan.adoc");
+        let exported = export(&request, ExportKind::OtherFormat).unwrap();
+        let adoc = String::from_utf8(exported.bytes).unwrap();
+        assert_eq!(
+            adoc,
+            "= Plan\n:status: draft\n// author:\n//   name: Ann\n// tags: [a, \"b,c\"]\n:list: x, y\n:empty:\n\nText\n"
+        );
+        assert_eq!(exported.approximated, [3, 5]);
+        let head = underline_markup::attributes::note_head(&adoc, NoteFormat::AsciiDoc);
+        let names: Vec<&str> = head.attributes.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["status", "list", "empty"]);
+
+        // Without a title the attributes start the note.
+        let untitled =
+            sandbox.request("---\na: 1\n---\nText\n", NoteFormat::Markdown, "out/U.adoc");
+        let adoc =
+            String::from_utf8(export(&untitled, ExportKind::OtherFormat).unwrap().bytes).unwrap();
+        assert_eq!(adoc, ":a: 1\n\nText\n");
+    }
+
+    /// UC-024 A5: a front matter that cannot be read is kept as a comment
+    /// block below the title, and approximated.
+    #[test]
+    fn uc024_a5_unreadable_front_matter_to_asciidoc() {
+        let sandbox = Sandbox::new("broken");
+        let md = "---\nstatus: draft\njust text\n---\n# Plan\n\nText\n";
+        let request = sandbox.request(md, NoteFormat::Markdown, "out/Plan.adoc");
+        let exported = export(&request, ExportKind::OtherFormat).unwrap();
+        let adoc = String::from_utf8(exported.bytes).unwrap();
+        assert_eq!(
+            adoc,
+            "= Plan\n\n////\n---\nstatus: draft\njust text\n---\n////\n\nText\n"
+        );
+        assert_eq!(exported.approximated, [1]);
+    }
+
     /// TC-009-02 / TC-009-09: AsciiDoc to Markdown; an admonition is only
     /// approximated and named by its line.
     #[test]
@@ -1452,10 +1817,325 @@ mod tests {
         assert_eq!(Paper::of_region("en-CA"), Paper::Letter);
     }
 
+    const MATH: &str = "# Math\n\nEuler: $e^{i\\pi}+1=0$, wrong $\\frac{a$.\n\n$$\\int_0^1 x\\,dx$$\n\n$$\\frac{1}{$$\n";
+
+    /// TC-009-18 step 1, FR-098, UC-009 BR-003: both correct formulas are
+    /// typeset as inline SVG labelled with their source, the block one
+    /// centred; the one with an error is its source; nothing is missing.
+    #[test]
+    fn tc009_18_formulas_in_html() {
+        let sandbox = Sandbox::new("tc18html");
+        let request = sandbox.request(MATH, NoteFormat::Markdown, "out/Math.html");
+        let exported = export(&request, ExportKind::Html).unwrap();
+        let html = String::from_utf8(exported.bytes).unwrap();
+        assert_eq!(html.matches("<svg role=\"img\"").count(), 2, "{html}");
+        assert!(html.contains("aria-label=\"e^{i\\pi}+1=0\""));
+        assert!(
+            html.contains("<p class=\"formula\"><svg role=\"img\" aria-label=\"\\int_0^1 x\\,dx\"")
+        );
+        assert!(html.contains("<pre><code>\\frac{1}{</code></pre>"));
+        assert!(html.contains("<code>\\frac{a</code>"));
+        assert!(
+            html.contains("currentColor"),
+            "formulas follow the text colour"
+        );
+        assert!(
+            !html.contains("src=\"http") && !html.contains("href=\"http"),
+            "nothing from the network"
+        );
+        assert!(exported.missing.is_empty());
+    }
+
+    /// TC-009-18 step 2: the same SVG goes into the PDF.
+    #[test]
+    fn tc009_18_formulas_in_pdf() {
+        let sandbox = Sandbox::new("tc18pdf");
+        let request = sandbox.request(MATH, NoteFormat::Markdown, "out/Math.pdf");
+        let exported = export(&request, ExportKind::Pdf).unwrap();
+        assert!(exported.bytes.starts_with(b"%PDF"));
+        let mut writer = TypstWriter {
+            request: &request,
+            out: String::new(),
+            files: Vec::new(),
+            missing: Vec::new(),
+        };
+        for block in parse_blocks(MATH, NoteFormat::Markdown) {
+            writer.block(&block);
+        }
+        assert_eq!(writer.files.len(), 2, "{}", writer.out);
+        assert!(writer.out.contains("#box(baseline: "), "{}", writer.out);
+        assert!(
+            writer.out.contains("align(center, image("),
+            "{}",
+            writer.out
+        );
+        assert!(
+            writer.out.contains("#raw(block: true, \"\\\\frac{1}{\")"),
+            "{}",
+            writer.out
+        );
+    }
+
+    /// TC-009-18 step 3, FR-098, OQ-284: to AsciiDoc as `latexmath:[…]` and
+    /// a `[latexmath]` block, the one with an error as its source; and
+    /// back to Markdown as `$…$` and ```` ```math ````.
+    #[test]
+    fn tc009_18_formulas_to_the_other_format() {
+        let sandbox = Sandbox::new("tc18adoc");
+        let request = sandbox.request(MATH, NoteFormat::Markdown, "out/Math.adoc");
+        let exported = export(&request, ExportKind::OtherFormat).unwrap();
+        let adoc = String::from_utf8(exported.bytes).unwrap();
+        assert!(
+            adoc.contains("Euler: latexmath:[e^{i\\pi}+1=0], wrong `+\\frac{a+`."),
+            "{adoc}"
+        );
+        assert!(
+            adoc.contains("[latexmath]\n++++\n\\int_0^1 x\\,dx\n++++"),
+            "{adoc}"
+        );
+        assert!(adoc.contains("....\n\\frac{1}{\n...."), "{adoc}");
+
+        let back = sandbox.request(
+            "Price $5 and latexmath:[a^2] and latexmath:[x\\]y].\n\n[latexmath]\n++++\n\\sqrt{2}\n++++\n",
+            NoteFormat::AsciiDoc,
+            "out/Math.md",
+        );
+        let exported = export(&back, ExportKind::OtherFormat).unwrap();
+        let md = String::from_utf8(exported.bytes).unwrap();
+        assert!(md.contains("Price \\$5 and $a^2$ and $x]y$."), "{md}");
+        assert!(md.contains("```math\n\\sqrt{2}\n```"), "{md}");
+        let blocks = parse_blocks(&md, NoteFormat::Markdown);
+        assert_eq!(
+            blocks[1].kind,
+            BlockKind::Formula {
+                source: "\\sqrt{2}".into()
+            }
+        );
+    }
+
     #[test]
     fn base64_as_the_standard_says() {
         assert_eq!(base64(b"Man"), "TWFu");
         assert_eq!(base64(b"Ma"), "TWE=");
         assert_eq!(base64(b"M"), "TQ==");
+    }
+
+    /// The formulas of a note, inline (`I:`) and as blocks (`B:`), by source.
+    fn formulas_of(text: &str, format: NoteFormat) -> Vec<String> {
+        let mut out = Vec::new();
+        for block in parse_blocks(text, format) {
+            if let BlockKind::Formula { source } = &block.kind {
+                out.push(format!("B:{source}"));
+            }
+            for run in &block.runs {
+                if let Some(formula) = &run.style.formula {
+                    out.push(format!("I:{}", formula.source));
+                }
+            }
+        }
+        out
+    }
+
+    fn export_text(text: &str, format: NoteFormat, target: &str, kind: ExportKind) -> String {
+        let sandbox = Sandbox::new(&format!("monkey{}", target.len()));
+        let request = sandbox.request(text, format, target);
+        String::from_utf8_lossy(&export(&request, kind).unwrap().bytes).into_owned()
+    }
+
+    /// TC-009-18, FR-098, UC-009 BR-003 (test monkey, passes): whatever a
+    /// formula holds, the HTML export has no markup of it: no `<script`, and
+    /// the label of the picture and the source of one with an error are
+    /// escaped.
+    #[test]
+    fn tc009_18_the_html_of_a_hostile_formula_holds_no_markup_of_it() {
+        let note = "$\\text{<script>alert(1)</script>}$ $\\verb|<svg onload=x>|$ \
+                    $\\href{javascript:alert(1)}{x}$ $\\frac{<script>alert(2)</script>$ \
+                    $\\text{\"onload=\"alert(3)}$\n\n\
+                    $$\\text{<script>alert(4)</script>}$$\n\n\
+                    $$\\bad<script>alert(5)</script>$$\n\n\
+                    ```math\n</svg><script>alert(6)</script>\n```\n";
+        let html = export_text(note, NoteFormat::Markdown, "out/H.html", ExportKind::Html);
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("onload=\""), "an unescaped quote: {html}");
+    }
+
+    /// TC-009-18, FR-098, NFR-007 (found by the test monkey): a control
+    /// character in a formula (`\verb|` with U+0001 is typeset) makes the
+    /// SVG an XML error, and with it the whole PDF fails: "failed to parse
+    /// SVG (a non-XML character)". One formula must not stop the export.
+    #[test]
+    fn tc009_18_a_control_character_in_a_formula_does_not_fail_the_pdf() {
+        let sandbox = Sandbox::new("monkeyctrl");
+        let note = "Text $\\verb|\u{1}|$ more.\n\n$$\\text{\u{fffe}}$$\n";
+        let request = sandbox.request(note, NoteFormat::Markdown, "out/C.pdf");
+        let exported = export(&request, ExportKind::Pdf);
+        assert!(exported.is_ok(), "{:?}", exported.err());
+    }
+
+    /// TC-009-18, FR-098, UC-009 BR-003 (found by the test monkey): a block
+    /// formula wider than the page is scaled into it. It is an image of its
+    /// height only, so a sum of forty terms (170 em) runs over both edges of
+    /// the A4 page, and rendered shows `a_13 … a_28` only.
+    #[test]
+    fn tc009_18_a_wide_block_formula_is_scaled_into_the_page_of_the_pdf() {
+        let terms: Vec<String> = (1..=40).map(|i| format!("a_{{{i}}}")).collect();
+        let note = format!("$${}$$\n", terms.join(" + "));
+        let sandbox = Sandbox::new("monkeywide");
+        let request = sandbox.request(&note, NoteFormat::Markdown, "out/W.pdf");
+        let mut writer = TypstWriter {
+            request: &request,
+            out: String::new(),
+            files: Vec::new(),
+            missing: Vec::new(),
+        };
+        for block in parse_blocks(&note, NoteFormat::Markdown) {
+            writer.block(&block);
+        }
+        let call = &writer.out[writer.out.find("image(").expect("an image")..];
+        assert!(
+            call.contains("width:") || call.contains("fit:") || call.contains("scale("),
+            "the image has no bound for its width: {}",
+            writer.out
+        );
+    }
+
+    /// TC-009-18, FR-098, UC-009 BR-003 (found by the test monkey): the
+    /// label of a picture is the formula's source. The HTML writer sets the
+    /// text colour by replacing `rgba(0,0,0,1)` in the whole picture, the
+    /// label too, so a source that holds that text is labelled `currentColor`.
+    #[test]
+    fn tc009_18_the_label_of_a_formula_is_its_source_whatever_it_holds() {
+        let note = "$\\text{rgba(0,0,0,1)}$\n";
+        let html = export_text(note, NoteFormat::Markdown, "out/L.html", ExportKind::Html);
+        assert!(
+            html.contains("aria-label=\"\\text{rgba(0,0,0,1)}\""),
+            "{}",
+            &html[html.find("<svg").unwrap()..][..200]
+        );
+    }
+
+    /// TC-009-18, FR-098, OQ-284 (found by the test monkey): a formula that
+    /// ends in a line break (`\\`, which typesets) goes to AsciiDoc as
+    /// `latexmath:[x\\]`, whose `]` follows a backslash, so it is no longer
+    /// the end of the macro: the formula is lost on the way back and in
+    /// Asciidoctor.
+    #[test]
+    fn tc009_18_a_formula_ending_in_a_line_break_survives_the_other_format() {
+        let note = "T $$x\\\\$$ U\n";
+        assert_eq!(formulas_of(note, NoteFormat::Markdown), ["I:x\\\\"]);
+        let adoc = export_text(
+            note,
+            NoteFormat::Markdown,
+            "out/E.adoc",
+            ExportKind::OtherFormat,
+        );
+        assert_eq!(
+            formulas_of(&adoc, NoteFormat::AsciiDoc),
+            ["I:x\\\\"],
+            "{adoc}"
+        );
+    }
+
+    /// TC-009-18, FR-098 (found by the test monkey): Markdown text that only
+    /// names the macro (`latexmath:[x]`) is written as it is, so in AsciiDoc
+    /// it is a formula. A `$` of AsciiDoc text is escaped for Markdown, and
+    /// the macro's name must be for AsciiDoc as well (`\latexmath:[x]`).
+    #[test]
+    fn tc009_18_markdown_text_naming_the_macro_stays_text_in_asciidoc() {
+        let note = "See latexmath:[x] here.\n";
+        assert!(formulas_of(note, NoteFormat::Markdown).is_empty());
+        let adoc = export_text(
+            note,
+            NoteFormat::Markdown,
+            "out/M.adoc",
+            ExportKind::OtherFormat,
+        );
+        assert!(
+            formulas_of(&adoc, NoteFormat::AsciiDoc).is_empty(),
+            "{adoc}"
+        );
+    }
+
+    /// TC-009-18, FR-098 (found by the test monkey): inline code that names
+    /// the macro is written `` `+latexmath:[x]+` `` for AsciiDoc and must
+    /// read back as code.
+    #[test]
+    fn tc009_18_markdown_code_naming_the_macro_stays_code_in_asciidoc() {
+        let note = "See `latexmath:[x]` here.\n";
+        let adoc = export_text(
+            note,
+            NoteFormat::Markdown,
+            "out/N.adoc",
+            ExportKind::OtherFormat,
+        );
+        assert!(
+            formulas_of(&adoc, NoteFormat::AsciiDoc).is_empty(),
+            "{adoc}"
+        );
+    }
+
+    /// TC-009-18, FR-098, UC-009 BR-002 (test monkey, passes): formulas with
+    /// the characters of both notations (`]`, `\]`, `$`, backticks, `++++`,
+    /// brackets, emoji) go to the other format and back with their source.
+    #[test]
+    fn tc009_18_formulas_round_trip_through_the_other_format() {
+        let sources = [
+            "a^2",
+            "a]b",
+            "x\\$y",
+            "a+b",
+            "\\frac{a}{b}",
+            "a`b",
+            "a\\\\b",
+            "x_1",
+            "a++++b",
+            "a]]b",
+            "[a]",
+            "a[b",
+            "a b",
+            "a*b*c",
+            "a_b_c",
+            "é😀",
+            "a|b",
+            "a<b>c",
+            "a'b",
+        ];
+        for source in sources {
+            for template in [
+                "T $S$ U\n",
+                "T $$S$$ U\n",
+                "$$S$$\n",
+                "```math\nS\n```\n",
+                "T $`S`$ U\n",
+            ] {
+                let note = template.replace('S', source);
+                let want = formulas_of(&note, NoteFormat::Markdown);
+                if want.is_empty() || formula_svg(source, false).is_err() {
+                    continue;
+                }
+                let adoc = export_text(
+                    &note,
+                    NoteFormat::Markdown,
+                    "out/R.adoc",
+                    ExportKind::OtherFormat,
+                );
+                assert_eq!(
+                    formulas_of(&adoc, NoteFormat::AsciiDoc),
+                    want,
+                    "{note:?} {adoc:?}"
+                );
+                let back = export_text(
+                    &adoc,
+                    NoteFormat::AsciiDoc,
+                    "out/R.md",
+                    ExportKind::OtherFormat,
+                );
+                assert_eq!(
+                    formulas_of(&back, NoteFormat::Markdown),
+                    want,
+                    "{adoc:?} {back:?}"
+                );
+            }
+        }
     }
 }

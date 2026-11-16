@@ -170,6 +170,8 @@ impl Git {
             self.network(dir, &ssh, &["fetch", "--quiet", &remote])?;
             pulled = self.distance(dir).behind;
             if pulled > 0 {
+                // UC-026 BR-001: the notes the pull changes are kept first.
+                self.snapshot_before(dir, &["HEAD...@{upstream}"]);
                 // BR-003: as the user's git setup says, merging by default.
                 let mut pull = vec!["pull", "--quiet", "--no-edit"];
                 if self.run(dir, &["config", "--get", "pull.rebase"]).is_err() {
@@ -470,6 +472,37 @@ mod tests {
             }
         );
         assert_eq!(s.git.distance(&s.dir("a")), Distance::default());
+    }
+
+    /// TC-026-03 step 3, TC-026-11 step 2, UC-026 BR-001, BR-002: before a
+    /// pull changes a note, a snapshot with the cause Git keeps its content;
+    /// git never sees the snapshots.
+    #[test]
+    fn uc026_tc03_a_pull_keeps_the_notes_it_changes() {
+        let s = Setup::new("snapshot-pull", "");
+        s.write("b", "Plan.md", "one\ntwo\nthree\nfrom b\n");
+        assert!(matches!(
+            s.sync("b", SyncMode::Full),
+            SyncOutcome::Synced { pushed: 1, .. }
+        ));
+
+        let outcome = s.sync("a", SyncMode::Pull);
+
+        assert!(
+            matches!(outcome, SyncOutcome::Synced { pulled: 1, .. }),
+            "{outcome:?}"
+        );
+        let store = crate::snapshots::SnapshotStore::new(&s.dir("a"));
+        let listed = store.list("Plan.md", crate::state::now());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].cause, crate::snapshots::SnapshotCause::Git);
+        assert_eq!(listed[0].content().unwrap(), "one\ntwo\nthree\n");
+        assert!(store.list("Ideas.md", crate::state::now()).is_empty());
+        let status = s
+            .git
+            .run(&s.dir("a"), &["status", "--porcelain", "--ignored=no"])
+            .unwrap();
+        assert_eq!(status, "", "no snapshot is a change");
     }
 
     /// TC-014-06: with `pull.rebase`, local commits go on top.

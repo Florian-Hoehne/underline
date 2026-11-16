@@ -20,7 +20,8 @@ use underline_markup::diagram::DiagramLanguage;
 
 use crate::editor_view::units;
 use crate::facade_view::{
-    BlockKindView, BlockView, CellAlignName, CodeColors, FigureView, RunView, TableView,
+    BlockKindView, BlockView, CellAlignName, CodeColors, FigureView, FormulaView, RunView,
+    TableView,
 };
 
 /// Turns byte offsets of the markup into web offsets (`utf16`), walking
@@ -137,6 +138,7 @@ fn run_view(run: &Run, walker: &mut WebWalker<'_>, base: usize) -> RunView {
         link: run.style.link.clone(),
         offsets,
         end: units(end),
+        formula: None,
     }
 }
 
@@ -236,6 +238,91 @@ pub fn diagram_key(language: DiagramLanguage, code: &str, dark: bool) -> String 
     format!("{:016x}", diagram_hash(language, code, dark))
 }
 
+/// FR-098, ADR-029: the hash of a formula with `source`, set as a display
+/// formula or in the line, in the theme named `theme` (whose text colour it
+/// is drawn in); the backend names the formula's picture by it
+/// (`formula/{hash:016x}.svg`).
+#[must_use]
+pub fn formula_hash(theme: &str, display: bool, source: &str) -> u64 {
+    Fnv1a::new()
+        .field("formula")
+        .field(theme)
+        .field(if display { "display" } else { "inline" })
+        .field(source)
+        .finish()
+}
+
+/// FR-098, ADR-025: the key the picture of a formula is kept by:
+/// [`formula_hash`] as 16 hex digits, the name of its picture.
+#[must_use]
+pub fn formula_key(theme: &str, display: bool, source: &str) -> String {
+    format!("{:016x}", formula_hash(theme, display, source))
+}
+
+/// FR-098: a formula still being typeset: it shows its source.
+#[must_use]
+pub fn pending_formula(source: &str, display: bool) -> FormulaView {
+    FormulaView {
+        source: source.to_owned(),
+        display,
+        ..FormulaView::default()
+    }
+}
+
+/// FR-098: the formulas of `block` in its view `view` (block `index`) as
+/// `formula` gives them now (an [`Enrich::formula`]): the block formula and
+/// the inline ones of its runs and table cells; whether any changed.
+pub fn refresh_formulas(
+    block: &Block,
+    view: &mut BlockView,
+    index: usize,
+    formula: &mut dyn FnMut(Option<usize>, &str, bool) -> FormulaView,
+) -> bool {
+    let mut changed = false;
+    if let (BlockKind::Formula { source }, BlockKindView::Formula { formula: shown }) =
+        (&block.kind, &mut view.kind)
+    {
+        let now = formula(Some(index), source, true);
+        if *shown != now {
+            *shown = now;
+            changed = true;
+        }
+    }
+    changed |= run_formulas(&block.runs, &mut view.runs, formula);
+    if let (BlockKind::Table(table), BlockKindView::Table { table: shown }) =
+        (&block.kind, &mut view.kind)
+    {
+        for (row, shown_row) in table.rows.iter().zip(&mut shown.rows) {
+            for (cell, shown_cell) in row.iter().zip(shown_row) {
+                changed |= run_formulas(cell, shown_cell, formula);
+            }
+        }
+    }
+    changed
+}
+
+/// FR-098: the inline formulas of `runs` in their views `shown`, one view
+/// per run; whether any changed.
+fn run_formulas(
+    runs: &[Run],
+    shown: &mut [RunView],
+    formula: &mut dyn FnMut(Option<usize>, &str, bool) -> FormulaView,
+) -> bool {
+    let mut changed = false;
+    for (run, view) in runs.iter().zip(shown) {
+        let now = run
+            .style
+            .formula
+            .as_ref()
+            .map(|inline| formula(None, &inline.source, inline.display));
+        if view.formula != now {
+            view.formula = now;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// ADR-025: what a block shows besides its text: the colours of code and
 /// the pictures of diagrams and images. The backend makes them from its
 /// highlighting, diagrams and files; the webview takes what the backend
@@ -258,6 +345,11 @@ pub trait Enrich {
     /// M-09.6: the figure of the image `target` described by `alt`, without
     /// its caption.
     fn image(&mut self, target: &str, alt: &str) -> FigureView;
+
+    /// FR-098: the formula with `source`, set as a display formula or in
+    /// the line; `block` is the index of a block formula (whose last
+    /// picture may stay while it changes), `None` for an inline one.
+    fn formula(&mut self, block: Option<usize>, source: &str, display: bool) -> FormulaView;
 }
 
 /// Makes the views of blocks, in order, with what `enrich` adds to them.
@@ -377,6 +469,7 @@ impl<'a, E: Enrich + ?Sized> ViewMaker<'a, E> {
                             })
                             .collect(),
                         caption,
+                        front_matter: table.front_matter,
                     },
                 }
             }
@@ -397,6 +490,10 @@ impl<'a, E: Enrich + ?Sized> ViewMaker<'a, E> {
                     alt: alt.clone(),
                 }
             }
+            // Typeset below, with the inline formulas.
+            BlockKind::Formula { source } => BlockKindView::Formula {
+                formula: pending_formula(source, true),
+            },
         };
         let end = walker.at(block.span.end);
         let first = rope.byte_to_line(block.span.start.min(len));
@@ -408,7 +505,7 @@ impl<'a, E: Enrich + ?Sized> ViewMaker<'a, E> {
                 .max(block.span.start)
                 .min(len),
         );
-        BlockView {
+        let mut view = BlockView {
             kind,
             start: units(base),
             line: units(first),
@@ -418,7 +515,13 @@ impl<'a, E: Enrich + ?Sized> ViewMaker<'a, E> {
             runs,
             colors,
             figure,
-        }
+        };
+        // FR-098: the inline formulas of the runs and table cells.
+        let enrich = &mut *self.enrich;
+        refresh_formulas(block, &mut view, index, &mut |at, source, display| {
+            enrich.formula(at, source, display)
+        });
+        view
     }
 }
 

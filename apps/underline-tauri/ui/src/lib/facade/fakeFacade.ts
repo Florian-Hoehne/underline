@@ -103,6 +103,7 @@ function run(text: string, at: number): RunView {
     link: null,
     offsets: text.length > 0 ? [[0, at]] : [],
     end: at + text.length,
+    formula: null,
   };
 }
 
@@ -206,7 +207,13 @@ export function fakeBlocks(text: string): BlockView[] {
         block(
           {
             type: 'table',
-            table: { header: true, align: ['left', 'right'], rows, caption: null },
+            table: {
+              header: true,
+              align: ['left', 'right'],
+              rows,
+              caption: null,
+              frontMatter: false,
+            },
           },
           start,
           i,

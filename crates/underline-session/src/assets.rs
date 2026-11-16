@@ -8,7 +8,9 @@
 //!   `..` and symbolic links are resolved, and not in a hidden folder (such
 //!   as `.git` or `.underline`, which the workspace's notes never are in);
 //!   `path` is relative to the root, each segment percent-encoded;
-//! - `diagram/{key}.svg`: a diagram rendered by the facade (ADR-009).
+//! - `diagram/{key}.svg`: a diagram rendered by the facade (ADR-009);
+//! - `formula/{key}.svg`: a formula typeset by the facade (FR-098,
+//!   ADR-029).
 //!
 //! Every other path is refused. Web images (ADR-013) are not served yet:
 //! the window loads none until the user's consent is settled (Q-19).
@@ -22,7 +24,7 @@ use std::sync::Arc;
 
 pub use underline_facade::images::MAX_BYTES;
 
-use crate::session::SvgDiagrams;
+use crate::session::{SvgDiagrams, SvgFormulas};
 
 /// Why `ul-asset` does not serve a path.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -61,6 +63,10 @@ enum Plan {
         diagrams: Arc<SvgDiagrams>,
         name: String,
     },
+    Formula {
+        formulas: Arc<SvgFormulas>,
+        name: String,
+    },
     File {
         root: PathBuf,
         relative: String,
@@ -72,6 +78,14 @@ impl AssetPlan {
     pub(crate) fn diagram(diagrams: Arc<SvgDiagrams>, name: &str) -> Self {
         Self(Plan::Diagram {
             diagrams,
+            name: name.to_owned(),
+        })
+    }
+
+    /// FR-098: the formula `name` of `formulas`.
+    pub(crate) fn formula(formulas: Arc<SvgFormulas>, name: &str) -> Self {
+        Self(Plan::Formula {
+            formulas,
             name: name.to_owned(),
         })
     }
@@ -91,6 +105,10 @@ impl AssetPlan {
     pub fn resolve(self) -> Result<Asset, AssetError> {
         match self.0 {
             Plan::Diagram { diagrams, name } => diagrams
+                .svg(&name)
+                .map(Asset::Svg)
+                .ok_or(AssetError::NotFound),
+            Plan::Formula { formulas, name } => formulas
                 .svg(&name)
                 .map(Asset::Svg)
                 .ok_or(AssetError::NotFound),

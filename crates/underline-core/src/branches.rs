@@ -126,6 +126,8 @@ impl Git {
     /// UC-013 step 4: switches to the local branch `name`, carrying along
     /// the changes that are not committed (BR-003).
     pub fn switch_branch(&self, dir: &Path, name: &str) -> Result<(), SwitchError> {
+        // UC-026 BR-001: the notes the switch changes are kept first.
+        self.snapshot_before(dir, &["HEAD", name]);
         self.switching(dir, &["switch", "--quiet", name])
     }
 
@@ -138,6 +140,8 @@ impl Git {
     /// UC-013 A4: a local branch following the remote branch `remote`
     /// (`origin/review`), switched to.
     pub fn track_branch(&self, dir: &Path, remote: &str) -> Result<(), SwitchError> {
+        // UC-026 BR-001: the notes the switch changes are kept first.
+        self.snapshot_before(dir, &["HEAD", remote]);
         self.switching(dir, &["switch", "--quiet", "--track", remote])
     }
 
@@ -242,6 +246,35 @@ mod tests {
             repo.git.create_branch(&repo.dir, "drafts"),
             Err(SwitchError::Git(_))
         ));
+    }
+
+    /// UC-026 BR-001: before a switch of branch changes notes, a snapshot
+    /// with the cause Git keeps each as it was; notes the switch leaves
+    /// alone get none.
+    #[test]
+    fn uc026_br001_a_switch_keeps_the_notes_it_changes() {
+        let repo = Repo::new("switch-snapshots");
+        repo.write("Plan.md", "plan\n");
+        repo.write("Ideas.md", "ideas\n");
+        repo.commit();
+        repo.git.create_branch(&repo.dir, "drafts").unwrap();
+        repo.write("Plan.md", "draft plan\n");
+        repo.write("Sketch.md", "sketch\n");
+        repo.commit();
+
+        repo.git.switch_branch(&repo.dir, "main").unwrap();
+
+        let store = crate::snapshots::SnapshotStore::new(&repo.dir);
+        let now = crate::state::now();
+        let plan = store.list("Plan.md", now);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].cause, crate::snapshots::SnapshotCause::Git);
+        assert_eq!(plan[0].content().unwrap(), "draft plan\n");
+        assert_eq!(
+            store.list("Sketch.md", now)[0].content().unwrap(),
+            "sketch\n"
+        );
+        assert!(store.list("Ideas.md", now).is_empty());
     }
 
     /// TC-013-06: names git would not take.

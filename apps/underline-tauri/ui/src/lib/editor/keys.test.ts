@@ -138,4 +138,31 @@ describe('M-11, M-10.2, M-08.8 keys by input mode', () => {
     });
     expect(routeKey(key('x'), false, 1, insert)).toBeNull();
   });
+
+  it('TC-005-36: Ctrl+Shift+D (Cmd+Shift+D) and Alt+Up go to the core, not in Vim normal mode', () => {
+    const vim = { mode: 'Vim' as const };
+    const insert = { mode: 'Vim' as const, vimInsert: true };
+    const nano = { mode: 'Nano' as const };
+    const sent = (route: ReturnType<typeof routeKey>) =>
+      route !== null && route !== 'swallow' ? route.send : null;
+    const duplicate = key('d', { ctrlKey: true, shiftKey: true, code: 'KeyD' });
+    expect(sent(routeKey(duplicate, false, 1))).toMatchObject({
+      key: 'D',
+      ctrl: true,
+      shift: true,
+    });
+    expect(sent(routeKey(duplicate, false, 1, insert))).toMatchObject({ key: 'D' });
+    expect(sent(routeKey(duplicate, false, 1, nano))).toMatchObject({ key: 'D' });
+    expect(routeKey(duplicate, false, 1, vim)).toBeNull();
+    expect(sent(routeKey(key('D', { metaKey: true, shiftKey: true }), true, 1))).toMatchObject({
+      key: 'D',
+      meta: true,
+    });
+    expect(routeKey(key('d', { ctrlKey: true }), false, 1)).toBeNull();
+    expect(sent(routeKey(key('ArrowUp', { altKey: true }), false, 1))).toMatchObject({
+      key: 'ArrowUp',
+      alt: true,
+    });
+    expect(routeKey(key('ArrowUp', { altKey: true }), false, 1, vim)).toBe('swallow');
+  });
 });

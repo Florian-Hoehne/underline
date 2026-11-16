@@ -14,6 +14,7 @@ use crate::format::NoteFormat;
 use crate::new_note::{NewNote, NewNoteProblem};
 use crate::note::NoteId;
 use crate::rename::Rename;
+use crate::snapshots::{SnapshotStore, DELETED_SNAPSHOTS_FOLDER};
 use crate::state::{underline_folder, Timestamp, UNDERLINE_FOLDER};
 use crate::workspace::Workspace;
 
@@ -38,6 +39,11 @@ impl DeletedNote {
     /// The content of the note when it was deleted.
     pub fn content(&self) -> io::Result<String> {
         fs::read_to_string(&self.file)
+    }
+
+    /// The note's file as it lay in the workspace (`Projects/Plan.md`).
+    fn file_name(&self) -> String {
+        self.id.file_name(self.format)
     }
 }
 
@@ -104,6 +110,12 @@ impl Workspace {
             let _ = fs::remove_dir_all(&folder);
             return Err(io("remove the note")(err));
         }
+        // UC-026 BR-003: the note's snapshots are kept with it. Should they
+        // not move, they stay where they are, never lost, and it is said.
+        self.snapshot_problem = SnapshotStore::new(self.root())
+            .to_deleted(&name, &folder)
+            .err()
+            .map(|error| format!("{}: {error}", id.title()));
         self.rescan();
         Ok(DeletedNote {
             id: id.clone(),
@@ -131,6 +143,8 @@ impl Workspace {
                 source,
             }
         })?;
+        // UC-026 BR-003: its snapshots go with it.
+        SnapshotStore::new(self.root()).remove(&id.file_name(format));
         self.rescan();
         Ok(())
     }
@@ -148,7 +162,8 @@ impl Workspace {
                 continue;
             };
             let mut files = Vec::new();
-            collect_files(&folder, &mut files);
+            // UC-026 BR-003: the snapshots kept with the note are no note.
+            collect_files(&folder, &mut files, Some(DELETED_SNAPSHOTS_FOLDER));
             for file in files {
                 let Ok(relative) = file.strip_prefix(&folder) else {
                     continue;
@@ -202,13 +217,35 @@ impl Workspace {
             },
         };
         let id = self.create_note(&new, &content)?;
-        let _ = self.forget_deleted(deleted);
+        // UC-026 BR-003: its snapshots come back with it, under its new
+        // name when it got another place (A6). Those that cannot come back
+        // stay with the deleted note's folder and are never removed with it
+        // before 30 days are over; it is said.
+        let back = SnapshotStore::new(self.root()).back_from_deleted(
+            &deleted.folder,
+            &deleted.file_name(),
+            &id.file_name(deleted.format),
+        );
+        self.snapshot_problem = back
+            .as_ref()
+            .err()
+            .map(|error| format!("{}: {error}", id.title()));
+        let _ = self.forget_deleted_note(deleted, back.is_ok());
         Ok(id)
     }
 
-    /// UC-007 A7: removes a deleted note for good.
+    /// UC-007 A7: removes a deleted note for good, with its snapshots.
     pub fn forget_deleted(&self, deleted: &DeletedNote) -> io::Result<()> {
+        self.forget_deleted_note(deleted, true)
+    }
+
+    /// Removes the deleted note's file, and its snapshots with `snapshots`.
+    fn forget_deleted_note(&self, deleted: &DeletedNote, snapshots: bool) -> io::Result<()> {
         fs::remove_file(&deleted.file)?;
+        // UC-026 BR-003: the snapshots kept with it go too.
+        if snapshots {
+            SnapshotStore::new(self.root()).forget_deleted(&deleted.folder, &deleted.file_name());
+        }
         // Folders left empty by it go too, the deletion's own folder last.
         let mut dir = deleted.file.parent();
         while let Some(folder) = dir {
@@ -223,22 +260,54 @@ impl Workspace {
     /// UC-007 BR-005: removes the notes deleted more than 30 days before
     /// `now`; returns how many.
     pub fn purge_deleted(&self, now: Timestamp) -> usize {
+        self.purge_left_snapshots(now);
         self.deleted_notes()
             .iter()
             .filter(|d| now.saturating_sub(d.deleted_at) > KEEP_DELETED_MS)
             .filter(|d| self.forget_deleted(d).is_ok())
             .count()
     }
+
+    /// UC-026 BR-003: snapshots left in the folder of a deletion whose note
+    /// was restored without them go after 30 days too, as the deleted
+    /// notes do. Links are removed, never followed.
+    fn purge_left_snapshots(&self, now: Timestamp) {
+        let Ok(entries) = fs::read_dir(self.deleted_folder()) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Ok(deleted_at) = name.split('-').next().unwrap_or("").parse::<Timestamp>() else {
+                continue;
+            };
+            if now.saturating_sub(deleted_at) <= KEEP_DELETED_MS
+                || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+            {
+                continue;
+            }
+            let folder = entry.path();
+            let only_snapshots = fs::read_dir(&folder).is_ok_and(|mut inside| {
+                inside.all(|e| e.is_ok_and(|e| e.file_name() == DELETED_SNAPSHOTS_FOLDER))
+            });
+            if only_snapshots {
+                let _ = fs::remove_dir_all(folder.join(DELETED_SNAPSHOTS_FOLDER));
+                let _ = fs::remove_dir(&folder);
+            }
+        }
+    }
 }
 
-fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) {
+fn collect_files(dir: &Path, files: &mut Vec<PathBuf>, skip: Option<&str>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
+        if skip.is_some_and(|skip| entry.file_name() == skip) {
+            continue;
+        }
         if path.is_dir() {
-            collect_files(&path, files);
+            collect_files(&path, files, None);
         } else {
             files.push(path);
         }

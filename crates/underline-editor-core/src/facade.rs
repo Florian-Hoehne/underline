@@ -21,11 +21,14 @@ mod reparse;
 mod rules;
 mod splice;
 
-pub use edit::{cursor_in_code, gap_at, Dirty, FacadeEdit, FacadeTarget, Gap, Gathered, Rows};
+pub use edit::{
+    cursor_in_code, gap_at, in_formula, kept_after, Dirty, FacadeEdit, FacadeTarget, Gap, Gathered,
+    Rows,
+};
 pub use refresh::{
     captions, carry_spans, moved_indices, refresh, Before, MakeViews, Part, Refreshed,
 };
-pub use reparse::parse_all;
+pub use reparse::{parse_all, reparse_between};
 pub use splice::{splices, ShownBlock, Splice};
 
 #[cfg(test)]

@@ -615,6 +615,13 @@ impl Session {
             Err(problem) => return Some(AgentAnswer::refused(&problem)),
         };
         let edit = [(merged.range.clone(), merged.replacement.clone())];
+        // UC-026 BR-001: the content before the agent's change, kept on the
+        // saver's thread before the change is stored.
+        if let Some(job) =
+            tab.snapshot_job(current.clone(), underline_core::SnapshotCause::AgentChange)
+        {
+            self.saver.snapshot(job);
+        }
         if let Err(error) = self.backend_edit(note, &edit, true) {
             return Some(AgentAnswer::refused(&WriteProblem::Write {
                 note: entry.id.as_str().to_owned(),

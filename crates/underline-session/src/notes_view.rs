@@ -17,6 +17,26 @@ pub struct NewNoteStart {
     pub folder: String,
     /// The default format of new notes (UC-001 BR-001).
     pub format: FormatName,
+    /// UC-003 A7, BR-008: the templates of the workspace the dialog offers
+    /// besides "No template", by their place; none without templates.
+    pub templates: Vec<TemplateView>,
+    /// UC-003 BR-008: the template folder, as the settings give it
+    /// (`templates`), for saying where templates are kept.
+    pub template_folder: String,
+}
+
+/// UC-003 BR-008: one template the dialog "New note" offers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateView {
+    /// The template's note, sent back in [`NewNoteRequest::template`].
+    pub note: String,
+    /// What the dialog shows: its title, with the folder below the template
+    /// folder after it when it lies deeper ("Retro (work)").
+    pub label: String,
+    /// Its note format, which the new note gets (A7 step 1).
+    pub format: FormatName,
 }
 
 /// UC-003 steps 2–3: what the user entered in "New note".
@@ -30,6 +50,15 @@ pub struct NewNoteRequest {
     pub folder: String,
     /// "Note format:".
     pub format: FormatName,
+    /// UC-003 A7: "Template:", the template's note; `None` for "No
+    /// template".
+    #[serde(default)]
+    pub template: Option<String>,
+    /// UC-004 A18 (FR-096): the note opens to the side, as the link that
+    /// offered it was followed (Ctrl+Shift+click, "Follow link to the
+    /// side").
+    #[serde(default)]
+    pub side: bool,
 }
 
 /// The answer to "Create" in "New note" (UC-003 steps 4–6).
@@ -173,6 +202,36 @@ pub enum RestoreAnswer {
     },
 }
 
+/// UC-025 steps 1 and 4, A1, A2: the answer to asking for a daily note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DailyNoteAnswer {
+    /// No note opened; the status bar says why (A2, A4, A5).
+    Done,
+    /// A2, OQ-271: the active note is no daily note, so there is none
+    /// before or after it; the window says so with the key of today's.
+    NotDaily,
+    /// The daily note `note` is in the active tab, its cursor where it was:
+    /// its open tab became the active tab (A1), or the daily note of
+    /// another day opened (A2). The view takes the keyboard.
+    Shown {
+        /// The daily note.
+        note: String,
+    },
+    /// The daily note is open in the active tab; its cursor goes to
+    /// `offset`, which the view shows with the keyboard (step 4, A1).
+    Opened {
+        /// The daily note.
+        note: String,
+        /// The revision of the backend's text `offset` is in.
+        rev: u32,
+        /// Where the template put the cursor, else the end of the text, in
+        /// web units.
+        offset: u32,
+    },
+}
+
 /// What the status bar offers beside the status message, while it shows
 /// the report the offer belongs to (M-04.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -188,4 +247,14 @@ pub enum StatusOffer {
     /// UC-021 step 8, M-04.6: "Undo" before the report "Marked todo {name}
     /// done/open" (`todo_undo`).
     UndoTodoMark,
+    /// UC-022 A6: "Undo" after the report of a replacement in the workspace
+    /// (`replace_undo`).
+    UndoReplace,
+    /// UC-026 A3: "Undo" after the report of a restored snapshot
+    /// (`snapshot_undo_restore`).
+    UndoRestore,
+    /// UC-025 A4: "Open settings" after the report that the
+    /// daily note folder is not allowed (`settings_open`, "This
+    /// workspace").
+    WorkspaceSettings,
 }

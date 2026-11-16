@@ -139,6 +139,9 @@ export function applyPalette(
   for (const [role, colour] of Object.entries(TODO_COLORS[palette.dark ? 'dark' : 'light'])) {
     style.setProperty(`--ui-${kebab(role)}`, colour);
   }
+  // FR-084 (review): the current line needs more of the text colour to show
+  // on a dark background.
+  style.setProperty('--ui-current-line-mix', palette.dark ? '11%' : '7%');
   root.dataset.scheme = palette.dark ? 'dark' : 'light';
   root.dataset.theme = palette.theme;
 }

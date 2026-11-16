@@ -29,21 +29,26 @@ use underline_session::{
     TodoJob, TodoSortName,
 };
 use underline_session::{
-    clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, CreateNoteAnswer, DeleteAnswer,
-    DeleteQuestion, DragName, EditingViewName, EmbedAnswer, FormatName, Insertion, LinkAnswer,
-    MirrorView, NewNoteRequest, NewNoteStart, NewWorkspaceRequest, OpenAnswer, RenameAnswer,
-    RenameStart, RestoreAnswer, Scope, Session, SettingName, SettingsAnswer, SettingsWindowView,
-    StartInfo, StartOpened, SyncAnswer, SyncBatch, Synced, UiError, UiErrorKind,
+    clipboard_view, ClipContentView, CloseQuestion, CreateAnswer, CreateNoteAnswer,
+    DailyNoteAnswer, DeleteAnswer, DeleteQuestion, DragName, EditingViewName, EmbedAnswer,
+    FormatName, Insertion, LinkAnswer, MirrorView, NewNoteRequest, NewNoteStart,
+    NewWorkspaceRequest, OpenAnswer, PaneName, RenameAnswer, RenameStart, RestoreAnswer, Scope,
+    Session, SettingName, SettingsAnswer, SettingsWindowView, StartInfo, StartOpened, SyncAnswer,
+    SyncBatch, Synced, UiError, UiErrorKind,
 };
 use underline_session::{AgentAction, AgentLevelName, AgentsSectionView};
 use underline_session::{
     BranchMenuView, BranchNameView, BranchTarget, ChoiceName, SideName, SwitchAnswer, SyncModeName,
 };
 use underline_session::{
+    ChosenView, FoundNoteView, FoundPlace, HeadingView, LinkPlace, ReplaceJob, ReplaceNoteView,
+    SearchOpened, SearchSwitches,
+};
+use underline_session::{
     DialogOutcome, ExportAnswer, ExportDialogPlan, ExportJob, ExportKindName, ExportPlaceAnswer,
     ExportShown, ExportStart, TypedExportPath,
 };
-use underline_session::{FoundNoteView, FoundPlace, SearchOpened};
+use underline_session::{SnapshotDiffView, SnapshotWholeView, SnapshotsView};
 
 use crate::clipboard::SystemClipboard;
 use crate::events::CloseQuestionEvent;
@@ -263,18 +268,65 @@ pub async fn tab_open(
     .await
 }
 
-/// M-06.2, UC-004 A5: activates the tab of `note`.
+/// UC-004 A18, A19, FR-096, FR-097: opens the note `note` to the side, in
+/// the other pane of the split view, which shows when it does not; the note
+/// of the active tab opens in the other editing view.
+#[tauri::command]
+#[specta::specta]
+pub async fn tab_open_side(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.open_note_to_side(&NoteId::from_relative(&note));
+    })
+    .await
+}
+
+/// M-06.2, UC-004 A5, BR-018: activates the tab of `note` in the pane
+/// `pane` (the active pane, or the one with a tab of it, when `None`).
 #[tauri::command]
 #[specta::specta]
 pub async fn tab_activate(
     session: State<'_, SharedSession>,
     waker: State<'_, Waker>,
     note: String,
+    pane: Option<PaneName>,
 ) -> Result<(), UiError> {
     on_session(&session, &waker, move |session| {
-        session.activate_tab(&NoteId::from_relative(&note));
+        let note = NoteId::from_relative(&note);
+        match pane {
+            Some(pane) => session.activate_tab_in(pane.into(), &note),
+            None => session.activate_tab(&note),
+        }
     })
     .await
+}
+
+/// UC-004 BR-018: the user works in the pane `pane` now; the tool panel
+/// shows its active note.
+#[tauri::command]
+#[specta::specta]
+pub async fn pane_focus(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    pane: PaneName,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.focus_pane(pane.into());
+    })
+    .await
+}
+
+/// UC-004 A20: ends the split view; the right pane's tabs join the left.
+#[tauri::command]
+#[specta::specta]
+pub async fn split_end(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, Session::end_split).await
 }
 
 /// M-06.3, UC-004 A5: closes the tab of `note`, storing its changes first.
@@ -289,13 +341,19 @@ pub async fn tab_close(
     clipboard: State<'_, SharedClipboard>,
     note: String,
     force: bool,
+    pane: Option<PaneName>,
 ) -> Result<Option<CloseQuestion>, UiError> {
     let id = NoteId::from_relative(&note);
-    let question = on_session(&session, &waker, move |session| {
-        session.close_tab(&id, force)
+    let (question, gone) = on_session(&session, &waker, move |session| {
+        let question = match pane {
+            Some(pane) => session.close_tab_in(pane.into(), &id, force),
+            None => session.close_tab(&id, force),
+        };
+        // UC-005 BR-016: the note stays open while its other tab does.
+        (question, !session.has_tab(&id))
     })
     .await?;
-    if question.is_none() {
+    if question.is_none() && gone {
         // BR-011: what copy on select kept for the tab goes with it.
         clipboard.lock().forget(&note);
     }
@@ -326,9 +384,14 @@ pub async fn tab_set_view(
     waker: State<'_, Waker>,
     note: String,
     view: EditingViewName,
+    pane: Option<PaneName>,
 ) -> Result<(), UiError> {
     on_session(&session, &waker, move |session| {
-        session.set_editing_view(&NoteId::from_relative(&note), view)
+        let note = NoteId::from_relative(&note);
+        match pane {
+            Some(pane) => session.set_editing_view_in(pane.into(), &note, view),
+            None => session.set_editing_view(&note, view),
+        }
     })
     .await?
 }
@@ -582,10 +645,11 @@ pub async fn ed_follow_link(
     note: String,
     at: u32,
     rev: u32,
+    side: bool,
 ) -> Result<LinkAnswer, UiError> {
     let id = NoteId::from_relative(&note);
     let followed = on_session(&session, &waker, move |session| {
-        session.follow_link(&id, at, rev)
+        session.follow_link_to(&id, at, rev, side)
     })
     .await??;
     if let Some(target) = followed.open {
@@ -902,6 +966,34 @@ pub async fn note_create(
     .await
 }
 
+/// UC-025 steps 1 to 4, A1, A3 to A5: opens the daily note of today,
+/// created first from the daily note template when it does not exist; the
+/// answer puts the cursor where the template marks it or at the end of the
+/// note. Creating a folder may run git, so it runs on the blocking pool.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_daily_open(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<DailyNoteAnswer, UiError> {
+    on_session(&session, &waker, Session::open_daily_note).await
+}
+
+/// UC-025 A2: opens the daily note before (`later` false) or after the one
+/// in the active tab; the status bar says when there is none.
+#[tauri::command]
+#[specta::specta]
+pub async fn note_daily_step(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    later: bool,
+) -> Result<DailyNoteAnswer, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.step_daily_note(later)
+    })
+    .await
+}
+
 /// M-14.2, UC-006 step 1: what "Rename note" starts with for `note`;
 /// `null` when it is refused (the status bar says why).
 #[tauri::command]
@@ -1052,17 +1144,22 @@ pub async fn ws_purge(
     .await
 }
 
-/// M-13.1, UC-008 steps 1–2, A2: the search overlay holds `text`; the
-/// search of the workspace starts again on its own thread, and its result
-/// comes as the event `search`. Only spaces end the search.
+/// M-13.1, UC-008 steps 1–2, A2, A7, A9: the search overlay holds `text`
+/// with the search switches `switches` (FR-075); the search of the
+/// workspace starts again on its own thread, and its result comes as the
+/// event `search`. Only spaces end the search.
 #[tauri::command]
 #[specta::specta]
 pub async fn search_set(
     session: State<'_, SharedSession>,
     waker: State<'_, Waker>,
     text: String,
+    switches: SearchSwitches,
 ) -> Result<(), UiError> {
-    on_session(&session, &waker, move |session| session.search_set(&text)).await
+    on_session(&session, &waker, move |session| {
+        session.search_set(&text, switches);
+    })
+    .await
 }
 
 /// M-13.1, UC-008 step 2: more found notes of the result `serial`, from the
@@ -1095,6 +1192,310 @@ pub async fn search_open(
         session.search_open(&id, place)
     })
     .await?
+}
+
+/// UC-004 A14, FR-078: opens the note `note` that holds a backlink as the
+/// note overview does, with the cursor at the start of the link at `place`
+/// (bytes of the text the backlinks were found in), once the window's edits
+/// reached the backend (`flushed`, ADR-025). `null` when the note did not
+/// open (the status says why).
+#[tauri::command]
+#[specta::specta]
+pub async fn links_open(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    place: LinkPlace,
+) -> Result<Option<SearchOpened>, UiError> {
+    let id = NoteId::from_relative(&note);
+    on_session(&session, &waker, move |session| {
+        session.links_open(&id, place)
+    })
+    .await?
+}
+
+/// UC-004 A14 step 2, FR-079: follows the outgoing link of the tab `note`
+/// that starts at `at` (web units of the backend's revision `rev`, as the
+/// tool panel listed it), once the window's edits reached the backend, as
+/// a Ctrl+click follows a link (`ed_follow_link`): the session finds the
+/// link in its own text, so the window never names what is opened.
+#[tauri::command]
+#[specta::specta]
+pub async fn links_follow(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    at: u32,
+    rev: u32,
+) -> Result<LinkAnswer, UiError> {
+    let id = NoteId::from_relative(&note);
+    let followed = on_session(&session, &waker, move |session| {
+        session.follow_outgoing(&id, at, rev)
+    })
+    .await??;
+    if let Some(target) = followed.open {
+        open_with_system(&session, &waker, target).await?;
+    }
+    Ok(followed.answer)
+}
+
+/// UC-005 A23, BR-018 (FR-080): the headings of the note `note` that link
+/// completion offers after a `#`, with their anchors; of its tab when it is
+/// open, else of its file; none when it cannot be read.
+#[tauri::command]
+#[specta::specta]
+pub async fn links_headings(
+    session: State<'_, SharedSession>,
+    note: String,
+) -> Result<Vec<HeadingView>, UiError> {
+    let id = NoteId::from_relative(&note);
+    // The file is read without holding the session.
+    let plan = read_session(&session, move |session| session.headings_plan(&id)).await?;
+    blocking(move || plan.read()).await
+}
+
+/// UC-022 steps 1–2, A1, A2 (FR-074): the replace of the workspace holds
+/// `text`, `replacement` and the search switches `switches`; its places are
+/// found on the search thread and come as the event `replace`. The number
+/// of this request, which the places name.
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_set(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    text: String,
+    replacement: String,
+    switches: SearchSwitches,
+) -> Result<u32, UiError> {
+    on_session(&session, &waker, move |session| {
+        session.replace_set(&text, &replacement, switches)
+    })
+    .await
+}
+
+/// UC-022 step 2: more notes of the places `serial`, from the `from`th on;
+/// `null` when newer places replaced them.
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_page(
+    session: State<'_, SharedSession>,
+    serial: u32,
+    from: u32,
+) -> Result<Option<Vec<ReplaceNoteView>>, UiError> {
+    read_session(&session, move |session| session.replace_page(serial, from)).await
+}
+
+/// UC-022 step 3: leaves the note `note` out (`out`) or takes it in again;
+/// with `at`, only its place starting there. What is chosen now, or `null`
+/// when the places `serial` are no longer the newest.
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_leave_out(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    serial: u32,
+    note: String,
+    at: Option<u32>,
+    out: bool,
+) -> Result<Option<ChosenView>, UiError> {
+    let id = NoteId::from_relative(&note);
+    on_session(&session, &waker, move |session| {
+        session.replace_leave_out(serial, &id, at, out)
+    })
+    .await
+}
+
+/// Runs a replacement or its undo in three parts: planned with the session
+/// held, the closed notes read and written without it, finished with it
+/// held again (UC-022, ADR-005). The status, which says what was done.
+async fn run_replace(
+    session: &State<'_, SharedSession>,
+    waker: &State<'_, Waker>,
+    plan: impl FnOnce(&mut Session) -> Option<ReplaceJob> + Send + 'static,
+) -> Result<String, UiError> {
+    let shared = Arc::clone(session);
+    let waker = waker.inner().clone();
+    blocking(move || {
+        let job = plan(&mut shared.lock());
+        let status = match job {
+            Some(job) => {
+                let done = job.run();
+                shared.lock().replace_finish(done)
+            }
+            None => shared.lock().status().to_owned(),
+        };
+        waker.wake();
+        status
+    })
+    .await
+}
+
+/// UC-022 steps 4–6, A3, A5: replaces the chosen places of the places
+/// `serial`, in every note or only in `note`; the window's edits reached
+/// the backend first (`flushed`, ADR-025). The status, which says what was
+/// done; the closed notes are read and written without holding the
+/// session.
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_confirm(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    serial: u32,
+    note: Option<String>,
+) -> Result<String, UiError> {
+    let only = note.map(|note| NoteId::from_relative(&note));
+    run_replace(&session, &waker, move |session| {
+        session.replace_plan(serial, only.as_ref())
+    })
+    .await
+}
+
+/// UC-022 A6: "Undo" of the status bar takes the last replacement back;
+/// the status, which says what was done.
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_undo(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<String, UiError> {
+    run_replace(&session, &waker, Session::replace_undo_plan).await
+}
+
+/// UC-026 steps 1–2, A1, A4: the snapshots of `note`, the newest first;
+/// the files are read without holding the session. The window is told
+/// with `snapshots-changed` when the note or its snapshots change, until
+/// `snapshots_close`.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshots_list(
+    session: State<'_, SharedSession>,
+    note: String,
+) -> Result<SnapshotsView, UiError> {
+    let shared = Arc::clone(&session);
+    let note = NoteId::from_relative(&note);
+    blocking(move || {
+        let job = shared.lock().snapshots_plan(&note)?;
+        Ok(job.run())
+    })
+    .await?
+}
+
+/// UC-026 step 4: the differences between the snapshot `key` of `note`
+/// and the note as it is now.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshot_diff(
+    session: State<'_, SharedSession>,
+    note: String,
+    key: String,
+) -> Result<SnapshotDiffView, UiError> {
+    let shared = Arc::clone(&session);
+    let note = NoteId::from_relative(&note);
+    blocking(move || {
+        let job = shared.lock().snapshot_plan(&note, &key)?;
+        Ok(job.diff())
+    })
+    .await?
+}
+
+/// UC-026 A2: the whole snapshot `key` of `note` as the facade's blocks.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshot_whole(
+    session: State<'_, SharedSession>,
+    note: String,
+    key: String,
+) -> Result<SnapshotWholeView, UiError> {
+    let shared = Arc::clone(&session);
+    let note = NoteId::from_relative(&note);
+    blocking(move || {
+        let job = shared.lock().snapshot_plan(&note, &key)?;
+        Ok(job.whole())
+    })
+    .await?
+}
+
+/// UC-026 steps 5–7, A5: `note` gets the content of its snapshot `key`;
+/// the window's edits reached the backend first (`flushed`, ADR-025). The
+/// status, which says what was done and offers to undo.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshot_restore(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+    key: String,
+) -> Result<String, UiError> {
+    let note = NoteId::from_relative(&note);
+    on_session(&session, &waker, move |session| {
+        session.snapshot_restore(&note, &key)
+    })
+    .await?
+}
+
+/// UC-026 A3: "Undo" of the status bar takes the last restore back; the
+/// status, which says what was done.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshot_undo_restore(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<String, UiError> {
+    on_session(&session, &waker, Session::snapshot_undo_restore).await
+}
+
+/// UC-026 A6: the snapshots are no longer shown.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshots_close(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, Session::snapshots_close).await
+}
+
+/// UC-005 A28, ADR-030: up to five corrections for `word`, the likeliest
+/// first, from the dictionary of the spell check language. They are worked
+/// out off the session (a dictionary may take a while to suggest), so the
+/// menu shows "Add to dictionary" at once and the corrections when they
+/// come.
+#[tauri::command]
+#[specta::specta]
+pub async fn spell_suggest(
+    session: State<'_, SharedSession>,
+    word: String,
+) -> Result<Vec<String>, UiError> {
+    let shared = Arc::clone(&session);
+    blocking(move || {
+        let job = shared.lock().spell_suggest_job(&word);
+        job.run()
+    })
+    .await?
+}
+
+/// UC-005 A28 step 2: adds `word` to the user's dictionary; every open note
+/// is checked again, so it loses its mark everywhere.
+#[tauri::command]
+#[specta::specta]
+pub async fn spell_add_word(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    word: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.spell_add_word(&word)
+    })
+    .await?
+}
+
+/// UC-022 A8: the replace of the workspace closed.
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_close(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, Session::replace_close).await
 }
 
 /// UC-009 step 2, ADR-016: the system's save dialog for an export, managed
@@ -1849,7 +2250,10 @@ mod tests {
         "ws_check_new",
         "ws_create",
         "tab_open",
+        "tab_open_side",
         "tab_activate",
+        "pane_focus",
+        "split_end",
         "tab_close",
         "tab_store",
         "tab_set_view",
@@ -1886,6 +2290,20 @@ mod tests {
         "search_set",
         "search_page",
         "search_open",
+        "replace_set",
+        "replace_page",
+        "replace_leave_out",
+        "replace_confirm",
+        "replace_undo",
+        "replace_close",
+        "snapshots_list",
+        "snapshot_diff",
+        "snapshot_whole",
+        "snapshot_restore",
+        "snapshot_undo_restore",
+        "snapshots_close",
+        "spell_suggest",
+        "spell_add_word",
         "export_start",
         "export_choose",
         "export_run",
@@ -2086,7 +2504,10 @@ mod tests {
         );
 
         let answer = response.unwrap();
-        assert_eq!(answer["view"]["me"][6]["control"]["value"], json!(15));
+        // "Close pairs" (package 4), "Spell check language" (package 8b),
+        // "Editor zoom", "Soft wrap" and "Focus mode" (package 5) stand
+        // before it.
+        assert_eq!(answer["view"]["me"][11]["control"]["value"], json!(15));
         assert_eq!(answer["problem"], Value::Null);
         assert_eq!(
             std::fs::read_to_string(dir.join(SETTINGS_FILE_NAME)).unwrap(),
@@ -2094,7 +2515,7 @@ mod tests {
         );
         assert_eq!(mock.wakes.try_recv(), Ok(()));
         let view = mock.invoke("settings_window", json!({})).unwrap();
-        assert_eq!(view["me"][6]["control"]["value"], json!(15));
+        assert_eq!(view["me"][11]["control"]["value"], json!(15));
     }
 
     #[test]
@@ -2170,8 +2591,14 @@ mod tests {
         assert_eq!(
             response["snapshot"]["overview"],
             json!([
-                { "note": "Home", "label": "Home", "format": "Markdown", "mark": null },
-                { "note": "Ideas", "label": "Ideas", "format": "Markdown", "mark": null }
+                {
+                    "note": "Home", "label": "Home", "title": "Home", "folder": null,
+                    "format": "Markdown", "mark": null
+                },
+                {
+                    "note": "Ideas", "label": "Ideas", "title": "Ideas", "folder": null,
+                    "format": "Markdown", "mark": null
+                }
             ])
         );
         assert_eq!(response["snapshot"]["tabs"]["active"], json!("Home"));
@@ -2246,6 +2673,33 @@ mod tests {
         assert_eq!(snapshot.tabs.active.as_deref(), Some("Home"));
     }
 
+    /// UC-025 steps 1 to 4, A2: the daily note of today is created and
+    /// opened with the cursor at its end; there is no daily note before it.
+    #[test]
+    fn uc025_daily_note_commands_open_and_step() {
+        let dir = temp_dir("daily");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+
+        let opened = mock.invoke("note_daily_open", json!({})).unwrap();
+
+        assert_eq!(opened["kind"], json!("opened"));
+        let note = opened["note"].as_str().unwrap().to_owned();
+        assert!(note.starts_with("daily/"), "{note}");
+        assert!(root.join(format!("{note}.md")).exists());
+        let again = mock.invoke("note_daily_open", json!({})).unwrap();
+        assert_eq!(again, json!({ "kind": "shown", "note": note }));
+        let step = mock
+            .invoke("note_daily_step", json!({ "later": false }))
+            .unwrap();
+        assert_eq!(step, json!({ "kind": "done" }));
+        assert_eq!(
+            mock.app.state::<SharedSession>().lock().status(),
+            "There is no earlier daily note"
+        );
+    }
+
     /// UC-003, UC-006, UC-007, M-14: a note is created, renamed, deleted,
     /// put back by the undo, deleted again and removed for good, with the
     /// commands' arguments in camelCase as the window sends them.
@@ -2258,7 +2712,17 @@ mod tests {
         let request = json!({ "request": { "title": "Plan", "folder": "", "format": "Markdown" } });
 
         let start = mock.invoke("note_new_start", json!({})).unwrap();
-        assert_eq!(start, json!({ "folder": "", "format": "Markdown" }));
+        // UC-003 BR-008: no templates in a workspace without a template
+        // folder; a request without "template" is one without a template.
+        assert_eq!(
+            start,
+            json!({
+                "folder": "",
+                "format": "Markdown",
+                "templates": [],
+                "templateFolder": "templates"
+            })
+        );
         assert_eq!(
             mock.invoke("note_plan", request.clone()).unwrap(),
             json!("Plan.md")

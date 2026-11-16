@@ -3,7 +3,7 @@
 //! UC-002). Paths cross as display strings.
 
 use serde::{Deserialize, Serialize};
-use underline_core::{EditingView, NoteFormat};
+use underline_core::{EditingView, NoteFormat, PaneSide};
 
 /// The open workspace as the window names it (M-03.3, M-04.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -26,6 +26,11 @@ pub struct OverviewItem {
     pub note: String,
     /// The title, with the folder when the title occurs more than once.
     pub label: String,
+    /// The title alone, which go to note matches (UC-004 A12, BR-014).
+    pub title: String,
+    /// The folder, `None` for the top folder, which go to note matches and
+    /// shows (UC-004 A12 step 2).
+    pub folder: Option<String>,
     /// The note's format, which names the kinds of export of its menu
     /// (M-05.4, `StartInfo::export_kinds`).
     pub format: FormatName,
@@ -62,6 +67,54 @@ impl From<EditingViewName> for EditingView {
             EditingViewName::Facade => Self::Facade,
         }
     }
+}
+
+/// UC-004 BR-018: a pane of the split view; without it, every tab is in
+/// the left one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "lowercase")]
+pub enum PaneName {
+    /// The left pane, the only one without the split view.
+    #[default]
+    Left,
+    /// The right pane of the split view.
+    Right,
+}
+
+impl From<PaneSide> for PaneName {
+    fn from(side: PaneSide) -> Self {
+        match side {
+            PaneSide::Left => Self::Left,
+            PaneSide::Right => Self::Right,
+        }
+    }
+}
+
+impl From<PaneName> for PaneSide {
+    fn from(name: PaneName) -> Self {
+        match name {
+            PaneName::Left => Self::Left,
+            PaneName::Right => Self::Right,
+        }
+    }
+}
+
+/// UC-004 BR-018, FR-096: the split view while it is shown: the right
+/// pane's tabs, the active tab of each pane and the active pane. The left
+/// pane's tabs are [`TabsView::tabs`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct SplitView {
+    /// The tabs of the right pane, left to right.
+    pub right: Vec<TabView>,
+    /// The note of the left pane's active tab.
+    pub left_active: Option<String>,
+    /// The note of the right pane's active tab.
+    pub right_active: Option<String>,
+    /// The active pane: the one the user last worked in.
+    pub pane: PaneName,
 }
 
 /// One tab of the tab bar (M-06.1).
@@ -102,14 +155,18 @@ pub struct TodoTabView {
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct TabsView {
-    /// The note tabs, left to right.
+    /// The note tabs, left to right; with the split view, those of the left
+    /// pane.
     pub tabs: Vec<TabView>,
-    /// The note of the active note tab; `None` without tabs. The note
-    /// overview marks it even while the tab "Todos" is the active one; the
-    /// tab bar then marks the tab "Todos" instead.
+    /// The note of the active note tab, of the active pane with the split
+    /// view (UC-004 BR-018); `None` without tabs. The note overview marks it
+    /// even while the tab "Todos" is the active one; the tab bar then marks
+    /// the tab "Todos" instead.
     pub active: Option<String>,
     /// The tab "Todos"; its list comes with feature F15.
     pub todo_list: TodoTabView,
+    /// FR-096: the split view, while it is shown.
+    pub split: Option<SplitView>,
 }
 
 /// The workspace part of the window at once: what `ws_start` returns, so

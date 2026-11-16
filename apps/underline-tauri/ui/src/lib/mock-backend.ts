@@ -25,6 +25,13 @@
 // small fake world outside the workspace (`FAKE_OUTSIDE`), and
 // `dragEnter`/`drop` deliver dragged files as Tauri would.
 //
+// Package 2 (go to note and the command palette): `/home/user/Plans` holds
+// the notes of TC-004-25 to TC-004-27 (`Plan`, `Release-Plan`,
+// `travel/Plane-Tickets`, `travel/Packing`, `Explanation`, `Ideas`,
+// `Über-uns`), and `/home/user/Large` 10,000 notes in 13 folders for
+// NFR-018 (TC-004-28, TC-023-10). Both overlays rank in the editor's WASM,
+// so the mock answers nothing new for them.
+//
 // Feature F8: notes are created, renamed (the links to them in the other
 // notes follow, roughly), deleted with the undo of the status bar, and
 // restored or removed from the deleted notes; `/home/user/Notes` starts
@@ -40,6 +47,19 @@
 // blocks. The note `Link-Tour` of `/home/user/Work` holds a link of every
 // kind.
 //
+// Package 3 (FR-078 to FR-080, UC-004 A14, UC-005 A23, A24): the backlinks
+// and outgoing links of the active note come as the event `links`, made by
+// a rough stand-in for the backend's link index (`mockLinks`: Markdown
+// links and `<address>` outside code, resolved as `followLink` does, over
+// the fake notes and the open texts); `links_open` opens a linking note at
+// its link, `links_headings` gives the headings link completion lists.
+// `/home/user/Links` holds the notes of TC-004-29 to TC-004-31 and
+// TC-005-33 (`Guide` is an AsciiDoc note, for its step 5) (`Project-Plan` with "Goals", `Brainstorm` linking to it on
+// lines 4 and 9, `travel/Itinerary` on line 2, `Snippets` only in code,
+// `Hub` with a link of every kind and two broken ones, `travel/Checklist`
+// with "Clothes" and "Papers"); `img/logo.png` is a file there. Completing
+// a link is the window's editor core's, so the mock answers nothing more.
+//
 // Feature F9: the search of the overlay (`search_set`) runs over the fake
 // notes and the open texts with a rough stand-in for `search_notes` (words,
 // quotes, case, title and folder first), answers as the event `search`
@@ -47,6 +67,26 @@
 // `search_open` opens a found note at its word. It searches again when a
 // text or the overview changes (UC-008 A3). `Trip` and `Log` of
 // `/home/user/Notes` hold "ferry" and "deploy" in many places.
+//
+// Package 1 (FR-073 to FR-075, UC-022): the search switches of the overlay
+// are matched roughly with JavaScript's regular expressions; the replace of
+// the workspace (`replace_set`, `replace_page`, `replace_leave_out`,
+// `replace_confirm`, `replace_undo`, `replace_close`) finds its places with
+// the same rough rules, answers as the event `replace`, changes an open
+// note through its mirror (one undo step) and a closed one in the fake
+// files, refuses notes listed in `failingSaves` (A5), and offers the undo
+// in the status. Replacing in the find field of a note is the real one, in
+// the window's editor core. The rules themselves are tested in Rust.
+//
+// Package 6b (FR-094, FR-095, UC-003 A7, A8, UC-025): `/home/user/Templates`
+// holds the templates of TC-003-17 (`templates/Meeting`, `templates/Spec` in
+// AsciiDoc) and TC-025-01 (`templates/Daily` in AsciiDoc) and the daily note
+// `daily/2026-11-05` (TC-025-04). New notes are made from a template with
+// its placeholders filled in (a rough stand-in for `fill_template`), and the
+// daily note is opened or created in the daily note folder the workspace
+// settings name (the settings window has the template folder, the daily
+// note folder and the daily note template). The clock is `MockStart.now` or
+// the hook `setNow` (`2026-11-11T08:15`), else the browser's.
 //
 // Feature F10: the settings are a user file and one file per workspace
 // (`mock-settings.ts`); the settings window shows and changes them
@@ -127,6 +167,14 @@ import { MockAgents, levelOf, type MockToolState } from './mock-agents';
 import { MockTodos, mockCalendar, type MockTodo } from './mock-todos';
 import { emit } from '@tauri-apps/api/event';
 import type {
+  ChosenView,
+  DiffLineKind,
+  HunkView,
+  PaneName,
+  ReplaceNoteView,
+  SearchSwitches,
+} from './bindings';
+import type {
   commands,
   AgentAction,
   AgentLevelName,
@@ -148,6 +196,7 @@ import type {
   TodoSortName,
   CommitAnswer,
   CreateNoteAnswer,
+  DailyNoteAnswer,
   DeletedNoteView,
   DiffView,
   ExportAnswer,
@@ -175,6 +224,7 @@ import type {
   SettingsView,
   StartInfo,
   FigureView,
+  FormulaView,
   IndexEntryView,
   IndexesView,
   LinkAnswer,
@@ -187,11 +237,23 @@ import type {
   FoundLineView,
   FoundNoteView,
   FoundPlace,
+  BacklinkNoteView,
+  HeadingView,
+  LinkPlace,
+  LinksView,
+  OutgoingLinkView,
 } from './bindings';
 import { loadEditorCore, MirrorCore } from './editor/core';
 import { mockDrop, useMockDrops } from './editor/drop';
 import { fakeBlocks, TOUR_NOTE, TOUR_TEXT } from './facade/fakeFacade';
 import { MockSettings, userFileOf, type MockSettingsPlace } from './mock-settings';
+import {
+  MOCK_SPELL_LANGUAGE,
+  MockSpeller,
+  SPELL,
+  SPELL_TEXTS,
+  spellLanguageName,
+} from './mock-spell';
 import {
   mockChangedLines,
   mockDiff,
@@ -209,6 +271,7 @@ import {
   type MockSyncOutcome,
 } from './mock-remote';
 import palettes from './palettes.generated.json';
+import { mockTitle } from './mock-title';
 
 /** The success value of a command in the generated bindings. */
 type Ok<C extends (...args: never[]) => Promise<{ status: string }>> = Extract<
@@ -244,12 +307,23 @@ export type MockHandlers = {
     request: NewWorkspaceRequest;
   }) => Ok<typeof commands.wsCreate> | Promise<Ok<typeof commands.wsCreate>>;
   tab_open: (args: { note: string }) => Promise<Ok<typeof commands.tabOpen>>;
-  tab_activate: (args: { note: string }) => Promise<Ok<typeof commands.tabActivate>>;
-  tab_close: (args: { note: string; force: boolean }) => Promise<Ok<typeof commands.tabClose>>;
+  tab_open_side: (args: { note: string }) => Promise<Ok<typeof commands.tabOpenSide>>;
+  tab_activate: (args: {
+    note: string;
+    pane?: PaneName | null;
+  }) => Promise<Ok<typeof commands.tabActivate>>;
+  pane_focus: (args: { pane: PaneName }) => Promise<Ok<typeof commands.paneFocus>>;
+  split_end: () => Promise<Ok<typeof commands.splitEnd>>;
+  tab_close: (args: {
+    note: string;
+    force: boolean;
+    pane?: PaneName | null;
+  }) => Promise<Ok<typeof commands.tabClose>>;
   tab_store: (args: { note: string }) => Promise<Ok<typeof commands.tabStore>>;
   tab_set_view: (args: {
     note: string;
     view: EditingViewName;
+    pane?: PaneName | null;
   }) => Promise<Ok<typeof commands.tabSetView>>;
   ed_viewport: (args: {
     note: string;
@@ -291,11 +365,14 @@ export type MockHandlers = {
     note: string;
     at: number;
     rev: number;
+    side?: boolean;
   }) => Promise<Ok<typeof commands.edFollowLink>>;
   link_open_web: (args: { open: boolean }) => Promise<Ok<typeof commands.linkOpenWeb>>;
   note_new_start: () => Ok<typeof commands.noteNewStart>;
   note_plan: (args: { request: NewNoteRequest }) => Ok<typeof commands.notePlan>;
   note_create: (args: { request: NewNoteRequest }) => Promise<Ok<typeof commands.noteCreate>>;
+  note_daily_open: () => Promise<Ok<typeof commands.noteDailyOpen>>;
+  note_daily_step: (args: { later: boolean }) => Promise<Ok<typeof commands.noteDailyStep>>;
   note_rename_start: (args: { note: string }) => Ok<typeof commands.noteRenameStart>;
   note_plan_rename: (args: {
     note: string;
@@ -319,12 +396,51 @@ export type MockHandlers = {
     folder: string;
   }) => Promise<Ok<typeof commands.wsRestoreAs>>;
   ws_purge: (args: { key: string | null }) => Promise<Ok<typeof commands.wsPurge>>;
-  search_set: (args: { text: string }) => Promise<Ok<typeof commands.searchSet>>;
+  search_set: (args: {
+    text: string;
+    switches: SearchSwitches;
+  }) => Promise<Ok<typeof commands.searchSet>>;
+  replace_set: (args: {
+    text: string;
+    replacement: string;
+    switches: SearchSwitches;
+  }) => Promise<Ok<typeof commands.replaceSet>>;
+  replace_page: (args: { serial: number; from: number }) => Ok<typeof commands.replacePage>;
+  replace_leave_out: (args: {
+    serial: number;
+    note: string;
+    at: number | null;
+    out: boolean;
+  }) => Ok<typeof commands.replaceLeaveOut>;
+  replace_confirm: (args: {
+    serial: number;
+    note: string | null;
+  }) => Promise<Ok<typeof commands.replaceConfirm>>;
+  replace_undo: () => Promise<Ok<typeof commands.replaceUndo>>;
+  replace_close: () => Ok<typeof commands.replaceClose>;
+  snapshots_list: (args: { note: string }) => Ok<typeof commands.snapshotsList>;
+  snapshot_diff: (args: { note: string; key: string }) => Ok<typeof commands.snapshotDiff>;
+  snapshot_whole: (args: { note: string; key: string }) => Ok<typeof commands.snapshotWhole>;
+  snapshot_restore: (args: {
+    note: string;
+    key: string;
+  }) => Promise<Ok<typeof commands.snapshotRestore>>;
+  snapshot_undo_restore: () => Promise<Ok<typeof commands.snapshotUndoRestore>>;
+  snapshots_close: () => Ok<typeof commands.snapshotsClose>;
+  spell_suggest: (args: { word: string }) => Promise<Ok<typeof commands.spellSuggest>>;
+  spell_add_word: (args: { word: string }) => Promise<Ok<typeof commands.spellAddWord>>;
   search_page: (args: { serial: number; from: number }) => Ok<typeof commands.searchPage>;
   search_open: (args: {
     note: string;
     place: FoundPlace | null;
   }) => Promise<Ok<typeof commands.searchOpen>>;
+  links_open: (args: { note: string; place: LinkPlace }) => Promise<Ok<typeof commands.linksOpen>>;
+  links_headings: (args: { note: string }) => Ok<typeof commands.linksHeadings>;
+  links_follow: (args: {
+    note: string;
+    at: number;
+    rev: number;
+  }) => Promise<Ok<typeof commands.linksFollow>>;
   export_start: (args: { note: string }) => Promise<Ok<typeof commands.exportStart>>;
   export_choose: (args: {
     note: string;
@@ -472,6 +588,194 @@ export const MAX_TABS = 100;
 export const MANY = '/home/user/Many';
 
 /**
+ * Package 2, TC-004-25 to TC-004-27: a workspace for go to note, with the
+ * notes of the test cases' preconditions.
+ */
+export const PLANS = '/home/user/Plans';
+
+/** Package 2, NFR-018, TC-004-28, TC-023-10: a workspace of 10,000 notes. */
+export const LARGE = '/home/user/Large';
+
+/** Package 3, TC-004-29 to TC-004-31, TC-005-33: notes that link to each other. */
+export const LINKS = '/home/user/Links';
+
+/** The texts of the notes of `LINKS`, by note. */
+export const LINKS_TEXTS: Readonly<Record<string, string>> = {
+  'Project-Plan': '# Project Plan\n\n## Goals\n\nShip it. See [the goals](#goals).\n',
+  Brainstorm:
+    '# Brainstorm\n\nOne idea\n[the plan](Project-Plan.md) first\n\nTwo\n\nThree\n[goals](Project-Plan.md#goals)\n',
+  'travel/Itinerary': '# Itinerary\n[Plan](../Project-Plan.md) for the trip\n',
+  Snippets: '# Snippets\n\n`[x](Project-Plan.md)`\n\n```\n[y](Project-Plan.md)\n```\n',
+  Hub:
+    '# Hub\n\n[Project Plan](Project-Plan.md)\n[Gone](Gone.md)\n[Goals](Project-Plan.md#nothing)\n' +
+    '[Logo](img/logo.png)\n<https://example.org>\n',
+  Diary: '# Diary\n\nNothing linked yet.\n',
+  'travel/Checklist': '# Checklist\n\n## Clothes\n\n## Papers\n',
+  Guide: '= Guide\n\nType xref: here to link a note.\n',
+};
+
+/**
+ * Package 4 (FR-081 to FR-086): the notes of TC-005-35 to TC-005-38 and
+ * TC-004-33, to try close pairs, moving lines, indenting list items, the
+ * current line and the matching bracket, and going to a line.
+ */
+export const COMFORT = '/home/user/Comfort';
+
+/** TC-004-33: `Long` has 300 lines; line 120 is in a paragraph from line 118, in "Results". */
+function longText(): string {
+  const lines = Array.from({ length: 300 }, (_, at) => `Line ${at + 1} of the long note.`);
+  lines[0] = '# Long';
+  lines[1] = '';
+  lines[98] = '';
+  lines[99] = '## Results';
+  lines[100] = '';
+  lines[116] = '';
+  lines[200] = '';
+  lines[201] = '## Later';
+  lines[202] = '';
+  return lines.join('\n');
+}
+
+/** The texts of the notes of `COMFORT`, by note. */
+export const COMFORT_TEXTS: Readonly<Record<string, string>> = {
+  Pairs: '# Pairs\n\nType a word here\n',
+  Lines: 'one\ntwo\nthree\n\nfour\nfive\n\n- a\n  - a1\n- b\n',
+  List: '- a\n- b\n- c\n',
+  Bullets: '* a\n* b\n',
+  Code: 'f(a[1], {b})\ng((x)\n',
+  Long: longText(),
+};
+
+/**
+ * Package 5 (FR-087 to FR-090): the notes of TC-004-39 (text statistics)
+ * and TC-010-18 to TC-010-20 (editor zoom, focus mode, soft wrap).
+ */
+export const READING = '/home/user/Reading';
+
+/** TC-010-20: a line and a paragraph of 400 characters, a wide table and a code line of 300. */
+function wideText(): string {
+  const words = (count: number) =>
+    Array.from({ length: count }, (_, at) => `word${String(at).padStart(3, '0')}`)
+      .join(' ')
+      .slice(0, count);
+  const table = `| ${Array.from({ length: 12 }, (_, at) => `Column ${at + 1} heading`).join(' | ')} |`;
+  return [
+    '# Wide',
+    '',
+    words(400),
+    '',
+    words(400),
+    '',
+    table,
+    `|${Array.from({ length: 12 }, () => '---').join('|')}|`,
+    `| ${Array.from({ length: 12 }, (_, at) => `cell ${at + 1}`).join(' | ')} |`,
+    '',
+    '```text',
+    'x'.repeat(300),
+    '```',
+    '',
+  ].join('\n');
+}
+
+/**
+ * FR-098 (plan section 10): the mock's stand-in for a typeset formula, a
+ * placeholder picture 0.6 em wide per character of its source (the mirror
+ * widens it), as the backend's RaTeX picture comes through `ul-asset`.
+ */
+const MOCK_FORMULA: FormulaView = {
+  source: '',
+  display: false,
+  picture: `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 120" preserveAspectRatio="none">' +
+      '<rect x="2" y="10" width="56" height="100" rx="8" fill="#8a8f98" fill-opacity="0.35"/>' +
+      '<path d="M14 90 L30 30 L46 90" stroke="#8a8f98" stroke-width="6" fill="none"/></svg>',
+  )}`,
+  width: 600,
+  height: 1200,
+  depth: 300,
+  error: null,
+};
+
+/** The texts of the notes of `READING`, by note. */
+export const READING_TEXTS: Readonly<Record<string, string>> = {
+  Count:
+    "# Title\n\nIt's a well-known [fact](https://example.org/a-b-c).\n\n```rust\nlet x = 1;\n```\n",
+  'Count-AsciiDoc':
+    "= Title\n:toc:\n\nIt's a well-known https://example.org/a-b-c[fact].\n\n[source,rust]\n----\nlet x = 1;\n----\n",
+  Wide: wideText(),
+  // FR-098: TC-004-38 (`Math.md`, `Math.adoc`), TC-005-42 and TC-009-18.
+  Math: 'Energy $E=mc^2$ and price 5$ or 6$\n\n$$\\sum_{i=1}^n i$$\n\n```math\n\\sqrt{2}\n```\n\n$$\\frac{1}{$$\n',
+  'Math-AsciiDoc': '= Math\n:stem: latexmath\n\nSee stem:[a^2] and latexmath:[b^2].\n',
+  'Math-Edit': '$$a^2$$\n\nThe inline formula $b$ here.\n',
+  'Math-Export': 'Euler $e^{i\\pi}+1=0$.\n\n$$\\int_0^1 x\\,dx$$\n\n$$\\frac{1}{$$\n',
+};
+
+/**
+ * Package 6a (FR-091 to FR-093): the notes of TC-024 (note attributes),
+ * TC-004-32 and TC-008-21 (tags and search by tag). The TCs' `Plan.md`,
+ * `Trip.md` and `Guide.adoc` are `Quarter-Plan`, `Ferry-Trip` and
+ * `Travel-Guide` here, as the mock keeps one text per note name; `Plain.adoc`
+ * is `Plain-AsciiDoc`.
+ */
+export const ATTRIBUTES = '/home/user/Attributes';
+
+/** The texts of the notes of `ATTRIBUTES`, by note. */
+export const ATTRIBUTE_TEXTS: Readonly<Record<string, string>> = {
+  'Quarter-Plan': '---\nstatus: draft\ndue: 2026-12-01\n---\n# Plan\n\nThe plan of the quarter.\n',
+  Handbook: '= Guide\n:author: Ann\n\nThe handbook.\n',
+  Mixed: '---\n# Kept as written\ntags: [a, b]\n\ntitle:  "Mixed"\n---\n# Mixed\n',
+  Kinds:
+    '---\ntitle: Kinds\ntags: [a, b]\nweight: 2.5\ndue: 2026-12-01\ndone: false\n---\n# Kinds\n',
+  Plain: '# Plain\n',
+  'Plain-AsciiDoc': '= Plain\n',
+  Broken: '---\nstatus: draft\njust text\n---\n# Broken\n',
+  Nested: '---\nauthor:\n  name: Ann\n  mail: ann@example.org\nstatus: draft\n---\n# Nested\n',
+  'Ferry-Trip':
+    '---\ntags: [Travel]\n---\nFerry to #hydra and #Project/alpha, issue #12, C#, `#code`, [link](#ferry)\n\nsee #greece\n',
+  'Travel-Guide': '= Guide\n:tags: travel, docs\n\na #highlight# word\n',
+  Hydra: '---\ntags: [travel/greece]\n---\n# Hydra\n\nThe island.\n',
+  Price: '# Price\n\ncosts #42\n\ntravel\n',
+};
+
+/** Package 6b: the workspace of the templates and the daily notes (TC-003-17, TC-025). */
+export const TEMPLATES = '/home/user/Templates';
+
+/** The texts of the notes of `TEMPLATES`, by note. */
+export const TEMPLATE_TEXTS: Readonly<Record<string, string>> = {
+  'templates/Meeting': '# {{title}}\nDate: {{date}} {{time}}\n{{cursor}}\nOwner: {{owner}}\n',
+  'templates/Spec': '= {{title}}\n\n{{cursor}}\n',
+  'templates/Daily': '= {{title}}\n\n{{cursor}}\n== Done\n',
+  'daily/2026-11-05': '# 2026-11-05\n\nAn earlier day.\n',
+};
+
+/** The notes of the mock written in AsciiDoc (TC-005-33 step 5, TC-005-37); all others are Markdown. */
+const ASCIIDOC_NOTES: ReadonlySet<string> = new Set([
+  'templates/Spec',
+  'templates/Daily',
+  'Guide',
+  'Bullets',
+  'Count-AsciiDoc',
+  'Handbook',
+  'Plain-AsciiDoc',
+  'Travel-Guide',
+  'Math-AsciiDoc',
+]);
+
+/** The note format of a fake note. */
+export function mockFormat(note: string): FormatName {
+  return ASCIIDOC_NOTES.has(note) ? 'AsciiDoc' : 'Markdown';
+}
+
+/** The files of `LINKS` that are no notes. */
+const LINKS_FILES: readonly string[] = ['img/logo.png'];
+
+/** The notes of `LARGE`: 10,000 in 13 folders. */
+const LARGE_NOTES: readonly string[] = Array.from(
+  { length: 10_000 },
+  (_, n) => `area-${n % 13}/Meeting-${String(n).padStart(5, '0')}-project-${n % 97}`,
+);
+
+/**
  * The fake file system: workspaces by their root with their notes' ids, and
  * `/home/user/Letters`, a directory with files that is no workspace yet.
  */
@@ -489,6 +793,23 @@ export const FAKE_FILES: Readonly<Record<string, readonly string[]>> = {
   '/home/user/Work': ['README', 'Meetings', 'Projects/Roadmap', TOUR_NOTE, LINK_TOUR_NOTE],
   '/home/user/Letters': ['Draft'],
   '/home/user/Team': ['Home', 'Plan', 'Meetings'],
+  [PLANS]: [
+    'Plan',
+    'Release-Plan',
+    'travel/Plane-Tickets',
+    'travel/Packing',
+    'Explanation',
+    'Ideas',
+    'Über-uns',
+  ],
+  [LARGE]: LARGE_NOTES,
+  [LINKS]: Object.keys(LINKS_TEXTS),
+  [COMFORT]: Object.keys(COMFORT_TEXTS),
+  [READING]: Object.keys(READING_TEXTS),
+  [ATTRIBUTES]: Object.keys(ATTRIBUTE_TEXTS),
+  [TEMPLATES]: ['Home', ...Object.keys(TEMPLATE_TEXTS)],
+  // Package 8b: TC-005-39, TC-005-40.
+  [SPELL]: Object.keys(SPELL_TEXTS),
   // F16, M-06.6: one note more than tabs may be open.
   [MANY]: [
     'Home',
@@ -585,19 +906,84 @@ export type MockStart = Partial<Omit<StartInfo, 'settings'>> & {
   failingSaves?: string[];
   /** M-07.2: the view a newly opened tab shows; the backend's is the facade. */
   view?: EditingViewName;
+  /** Package 6b: the local clock, `2026-11-11T08:15`; the browser's when not given. */
+  now?: string;
 };
 
 /** M-10.2: the toolbar's buttons, as the backend gives them (`Tool::label`, `Tool::hint`). */
 export const FAKE_TOOLS: readonly ToolView[] = [
-  { tool: 'heading', label: 'H', hint: 'Heading (Ctrl+Shift+H)' },
-  { tool: 'bold', label: 'B', hint: 'Bold (Ctrl+B)' },
-  { tool: 'italic', label: 'I', hint: 'Italic (Ctrl+I)' },
-  { tool: 'code', label: '</>', hint: 'Code (Ctrl+E)' },
-  { tool: 'list', label: 'List', hint: 'List (Ctrl+Shift+L)' },
-  { tool: 'quote', label: 'Quote', hint: 'Quote (Ctrl+Shift+Q)' },
-  { tool: 'link', label: 'Link', hint: 'Link (Ctrl+K)' },
-  { tool: 'image', label: 'Image', hint: 'Image (Ctrl+Shift+I)' },
-  { tool: 'table', label: 'Table', hint: 'Table (Ctrl+Shift+T)' },
+  {
+    tool: 'heading',
+    label: 'H',
+    hint: 'Heading (Ctrl+Shift+H)',
+    name: 'Heading',
+    key: 'H',
+    shift: true,
+  },
+  {
+    tool: 'bold',
+    label: 'B',
+    hint: 'Bold (Ctrl+B)',
+    name: 'Bold',
+    key: 'B',
+    shift: false,
+  },
+  {
+    tool: 'italic',
+    label: 'I',
+    hint: 'Italic (Ctrl+I)',
+    name: 'Italic',
+    key: 'I',
+    shift: false,
+  },
+  {
+    tool: 'code',
+    label: '</>',
+    hint: 'Code (Ctrl+E)',
+    name: 'Code',
+    key: 'E',
+    shift: false,
+  },
+  {
+    tool: 'list',
+    label: 'List',
+    hint: 'List (Ctrl+Shift+L)',
+    name: 'List',
+    key: 'L',
+    shift: true,
+  },
+  {
+    tool: 'quote',
+    label: 'Quote',
+    hint: 'Quote (Ctrl+Shift+Q)',
+    name: 'Quote',
+    key: 'Q',
+    shift: true,
+  },
+  {
+    tool: 'link',
+    label: 'Link',
+    hint: 'Link (Ctrl+K)',
+    name: 'Link',
+    key: 'K',
+    shift: false,
+  },
+  {
+    tool: 'image',
+    label: 'Image',
+    hint: 'Image (Ctrl+Shift+I)',
+    name: 'Image',
+    key: 'I',
+    shift: true,
+  },
+  {
+    tool: 'table',
+    label: 'Table',
+    hint: 'Table (Ctrl+Shift+T)',
+    name: 'Table',
+    key: 'T',
+    shift: true,
+  },
 ];
 
 /** F9, UC-008: notes with places to find (TC-008-01, TC-008-11). */
@@ -626,13 +1012,31 @@ export function fakeNoteText(note: string): string {
   if (note in SEARCH_TEXTS) {
     return SEARCH_TEXTS[note];
   }
+  if (note in LINKS_TEXTS) {
+    return LINKS_TEXTS[note];
+  }
+  if (note in COMFORT_TEXTS) {
+    return COMFORT_TEXTS[note];
+  }
+  if (note in READING_TEXTS) {
+    return READING_TEXTS[note];
+  }
+  if (note in ATTRIBUTE_TEXTS) {
+    return ATTRIBUTE_TEXTS[note];
+  }
+  if (note in TEMPLATE_TEXTS) {
+    return TEMPLATE_TEXTS[note];
+  }
+  if (note in SPELL_TEXTS) {
+    return SPELL_TEXTS[note];
+  }
   if (note === TOUR_NOTE) {
     return TOUR_TEXT;
   }
   if (note === LINK_TOUR_NOTE) {
     return LINK_TOUR_TEXT;
   }
-  const title = (note.split('/').at(-1) ?? note).replace(/-/g, ' ');
+  const title = mockTitle(note);
   return `# ${title}\n\nThis note lives in the mock backend.\nType here to try the source view.\n`;
 }
 
@@ -656,6 +1060,216 @@ export function mockLinkAt(text: string, at: number): string | null {
     }
   }
   return null;
+}
+
+/** A link of a note as the mock finds it: its place, text and where it is. */
+type MockLink = { at: number; end: number; line: number; place: string; text: string };
+
+/**
+ * FR-078, FR-079: a rough stand-in for `found_links` over Markdown:
+ * `[text](place)` (not pictures) and `<address>`, not in fenced code or a
+ * code span. `at` and `end` are in UTF-16 units.
+ */
+export function mockFoundLinks(text: string): MockLink[] {
+  const found: MockLink[] = [];
+  let fenced = false;
+  let start = 0;
+  text.split('\n').forEach((line, index) => {
+    if (line.startsWith('```')) {
+      fenced = !fenced;
+    } else if (!fenced) {
+      for (const match of line.matchAll(
+        /!?\[([^\]]*)\]\(([^)\s]*)\)|<((?:https?:\/\/|mailto:)[^>\s]+)>/g,
+      )) {
+        const at = match.index ?? 0;
+        const ticks = (line.slice(0, at).match(/`/g) ?? []).length;
+        if (match[0].startsWith('!') || ticks % 2 === 1) {
+          continue;
+        }
+        const place = match[2] ?? match[3];
+        found.push({
+          at: start + at,
+          end: start + at + match[0].length,
+          line: index + 1,
+          place,
+          text: match[3] === undefined ? match[1] : match[3],
+        });
+      }
+    }
+    start += line.length + 1;
+  });
+  return found;
+}
+
+/** The anchors of the ATX headings of `text`, with their labels and levels. */
+export function mockHeadings(text: string): HeadingView[] {
+  const headings: HeadingView[] = [];
+  let fenced = false;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('```')) {
+      fenced = !fenced;
+      continue;
+    }
+    const heading = fenced ? null : /^(#{1,6})\s+(.*?)\s*$/.exec(line);
+    if (heading) {
+      headings.push({
+        label: heading[2],
+        anchor: mockAnchor(heading[2]),
+        level: heading[1].length,
+      });
+    }
+  }
+  return headings;
+}
+
+/** Where a link leads, roughly as `resolve_link_with`. */
+type MockTarget =
+  | { kind: 'web'; address: string }
+  | { kind: 'heading'; anchor: string }
+  | { kind: 'note'; id: string; anchor: string | null; exists: boolean }
+  | { kind: 'file'; path: string }
+  | { kind: 'outside' };
+
+function mockTarget(note: string, place: string, notes: ReadonlySet<string>): MockTarget {
+  if ((place.includes('://') && !place.startsWith('file://')) || place.startsWith('mailto:')) {
+    return { kind: 'web', address: place };
+  }
+  const hash = place.indexOf('#');
+  const path = hash < 0 ? place : place.slice(0, hash);
+  const anchor = hash < 0 ? null : place.slice(hash + 1);
+  if (path === '') {
+    return { kind: 'heading', anchor: anchor ?? '' };
+  }
+  const parts = note.includes('/') ? note.slice(0, note.lastIndexOf('/')).split('/') : [];
+  for (const part of decodeURIComponent(path).split('/')) {
+    if (part === '..') {
+      if (parts.pop() === undefined) {
+        return { kind: 'outside' };
+      }
+    } else if (part !== '.' && part !== '') {
+      parts.push(part);
+    }
+  }
+  const relative = parts.join('/');
+  const extension = /\.([^./]+)$/.exec(relative)?.[1];
+  const isNote = extension === 'md' || extension === 'adoc';
+  const id = isNote ? relative.replace(/\.[^./]+$/, '') : relative;
+  if (notes.has(id)) {
+    return { kind: 'note', id, anchor, exists: true };
+  }
+  if (isNote || extension === undefined) {
+    return { kind: 'note', id, anchor, exists: false };
+  }
+  return { kind: 'file', path: relative };
+}
+
+/** The check of a link's markup, FNV-1a over its bytes, as `LinkPlace::check_of`. */
+export function mockLinkCheck(link: string): number {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(link)) {
+    hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+/** The bytes of `text` before UTF-16 unit `at` (the backend counts bytes). */
+function bytesBefore(text: string, at: number): number {
+  return new TextEncoder().encode(text.slice(0, at)).length;
+}
+
+/**
+ * FR-078, FR-079, UC-004 BR-015: a rough stand-in for the backend's lists
+ * of `note` (its text of revision `rev`): the other notes of `order` (the
+ * overview's) linking to it, and its own links with the broken ones
+ * marked; `files` are the other files of the workspace, `all` its notes.
+ */
+export function mockLinks(
+  note: string,
+  rev: number,
+  order: readonly string[],
+  textOf: (note: string) => string,
+  files: readonly string[],
+  all: readonly string[] = order,
+): LinksView {
+  const notes = new Set(all);
+  const backlinks: BacklinkNoteView[] = [];
+  for (const other of order) {
+    if (other === note) {
+      continue;
+    }
+    const text = textOf(other);
+    if (!text.includes('](')) {
+      continue;
+    }
+    const lines = text.split('\n');
+    const links = mockFoundLinks(text)
+      .filter((link) => {
+        const target = mockTarget(other, link.place, notes);
+        return target.kind === 'note' && target.id === note;
+      })
+      .map((link) => {
+        const lineStart = text.lastIndexOf('\n', link.at - 1) + 1;
+        const line = lines[link.line - 1] ?? '';
+        return {
+          line: link.line,
+          before: line.slice(0, link.at - lineStart).trimStart(),
+          link: text.slice(link.at, link.end),
+          after: line.slice(link.end - lineStart).trimEnd(),
+          place: {
+            from: bytesBefore(text, link.at),
+            to: bytesBefore(text, link.end),
+            check: mockLinkCheck(text.slice(link.at, link.end)),
+          },
+        };
+      });
+    if (links.length > 0) {
+      backlinks.push({
+        note: other,
+        title: mockTitle(other),
+        folder: other.includes('/') ? other.slice(0, other.lastIndexOf('/')) : null,
+        links,
+      });
+    }
+  }
+  const own = textOf(note);
+  const anchors = (id: string) =>
+    new Set(mockHeadings(id === note ? own : textOf(id)).map((h) => h.anchor));
+  const outgoing: OutgoingLinkView[] = mockFoundLinks(own).map((link) => {
+    const target = mockTarget(note, link.place, notes);
+    const base = { text: link.text || link.place, line: link.line, offset: link.at };
+    switch (target.kind) {
+      case 'web':
+        return { ...base, target: target.address, kind: 'web', broken: false };
+      case 'heading':
+        return {
+          ...base,
+          target: `#${target.anchor}`,
+          kind: 'note',
+          broken: !anchors(note).has(target.anchor),
+        };
+      case 'note':
+        return {
+          ...base,
+          target: target.exists
+            ? `${target.id}${target.anchor === null ? '' : `#${target.anchor}`}`
+            : link.place,
+          kind: 'note',
+          broken:
+            !target.exists || (target.anchor !== null && !anchors(target.id).has(target.anchor)),
+        };
+      case 'file':
+        return { ...base, target: target.path, kind: 'file', broken: !files.includes(target.path) };
+      case 'outside':
+        return { ...base, target: link.place, kind: 'file', broken: false };
+    }
+  });
+  return {
+    note,
+    rev,
+    backlinks,
+    backlinkCount: backlinks.reduce((sum, source) => sum + source.links.length, 0),
+    outgoing,
+  };
 }
 
 /** GitHub's anchor of a heading (`heading_anchor`). */
@@ -733,6 +1347,109 @@ export function mockIndexes(note: string, rev: number, text: string): IndexesVie
  * Handlers answering like a window started without a workspace (M-02),
  * with their own settings and status that the commands change.
  */
+/** UC-022: a place as the mock finds it. */
+type MockPlace = {
+  at: number;
+  line: number;
+  before: string;
+  old: string;
+  new: string;
+  after: string;
+};
+
+/** FR-075: every search switch off. */
+const NO_SWITCHES: SearchSwitches = { matchCase: false, wholeWord: false, regex: false };
+
+/**
+ * FR-075, UC-022 BR-002: a search text as a JavaScript expression, roughly
+ * as `Query::new`: one text (`oneText`) or one word, a regular expression
+ * with the switch, whole words by letters and digits; what is wrong as the
+ * Rust side says it, roughly.
+ */
+export function mockPattern(
+  text: string,
+  switches: SearchSwitches,
+): { regex: RegExp; groups: number } | { problem: string } {
+  const escaped = switches.regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const bounded = switches.wholeWord
+    ? `(?<![\\p{L}\\p{N}])(?:${escaped})(?![\\p{L}\\p{N}])`
+    : escaped;
+  try {
+    const regex = new RegExp(bounded, `gmu${switches.matchCase ? '' : 'i'}`);
+    const groups = (new RegExp(`${escaped}|`, 'u').exec('')?.length ?? 1) - 1;
+    return { regex, groups };
+  } catch (error) {
+    const why = error instanceof Error ? error.message.replace(/^.*: /, '') : String(error);
+    return { problem: `Not a valid regular expression: ${why.toLowerCase()}.` };
+  }
+}
+
+/** UC-022 BR-003: the replacement as JavaScript writes it; what is wrong, roughly. */
+export function mockReplacement(
+  typed: string,
+  switches: SearchSwitches,
+  groups: number,
+): { with: string } | { problem: string } {
+  if (!switches.regex) {
+    return { with: typed.replaceAll('$', '$$$$') };
+  }
+  for (const match of typed.matchAll(/\$(\$|\d)/g)) {
+    const n = Number(match[1]);
+    if (match[1] !== '$' && n > groups) {
+      return { problem: `The replacement names $${n}, but the expression has no group ${n}.` };
+    }
+  }
+  return { with: typed.replace(/\$0/g, '$$&') };
+}
+
+/**
+ * FR-075, UC-008 BR-004: a note found with a search switch, roughly as
+ * `found_lines`: the lines holding a place, the first five shown with the
+ * places marked.
+ */
+function mockFoundByPattern(
+  note: string,
+  title: string,
+  folder: string | null,
+  text: string,
+  regex: RegExp,
+): FoundNoteView | null {
+  const lines: FoundLineView[] = [];
+  let places = 0;
+  let start = 0;
+  for (const line of text.split('\n')) {
+    const hits = [...line.matchAll(regex)].filter((m) => m[0] !== '');
+    if (hits.length > 0) {
+      places += 1;
+      if (lines.length < 5) {
+        const parts: FoundLineView['parts'] = [];
+        let last = 0;
+        for (const hit of hits) {
+          if (hit.index > last) parts.push({ text: line.slice(last, hit.index), hit: false });
+          parts.push({ text: hit[0], hit: true });
+          last = hit.index + hit[0].length;
+        }
+        if (last < line.length) parts.push({ text: line.slice(last), hit: false });
+        const from = bytes(text.slice(0, start + hits[0].index));
+        lines.push({ parts, place: { from, to: from + bytes(hits[0][0]) } });
+      }
+    }
+    start += line.length + 1;
+  }
+  if (places === 0) {
+    return null;
+  }
+  return {
+    note,
+    title,
+    folder,
+    places: places === 1 ? '1 place' : `${places} places`,
+    lines,
+    more: Math.max(0, places - lines.length),
+    place: lines[0]?.place ?? null,
+  };
+}
+
 /** F9, UC-008 BR-002: the words of a search text, roughly as `Query::parse`. */
 export function mockQuery(text: string): string[] {
   const words: string[] = [];
@@ -743,6 +1460,35 @@ export function mockQuery(text: string): string[] {
     }
   }
   return words;
+}
+
+/**
+ * UC-008 BR-012, roughly: the tags of `text` in lower case: those of a line
+ * `tags:` or `:tags:` and the `#tag` of the text; the real rules (code,
+ * links, front matter) are tested in Rust.
+ */
+export function mockTags(text: string): string[] {
+  const tags = new Set<string>();
+  for (const line of text.matchAll(/^:?tags:[ \t]*(.*)$/gm)) {
+    for (const item of line[1].replace(/^\[|\]$/g, '').split(',')) {
+      const tag = item.trim().replace(/^["'#]+|["']+$/g, '');
+      if (/^[\p{L}\p{N}_\-/]+$/u.test(tag) && /[^\d/]/.test(tag)) {
+        tags.add(tag.toLowerCase());
+      }
+    }
+  }
+  for (const match of text.matchAll(/(?:^|[^\p{L}\p{N}&#])#([\p{L}\p{N}_\-/]+)/gmu)) {
+    const tag = match[1].replace(/\/+$/, '');
+    if (/[^\d/]/.test(tag)) {
+      tags.add(tag.toLowerCase());
+    }
+  }
+  return [...tags];
+}
+
+/** UC-008 BR-012: whether a note with `tags` carries `wanted` or a tag below it. */
+function carries(tags: readonly string[], wanted: string): boolean {
+  return tags.some((tag) => tag === wanted || tag.startsWith(`${wanted}/`));
 }
 
 /** The UTF-8 length of `text`. */
@@ -821,6 +1567,125 @@ function mockFoundNote(
     more: Math.max(places - lines.length, 0),
     place: lines[0]?.place ?? null,
   };
+}
+
+/** UC-026 A1: as the backend says it (`session/snapshots.rs`, `NO_SNAPSHOT`). */
+export const MOCK_NO_SNAPSHOT = 'This note has no snapshot yet. Underline takes one:';
+
+/** UC-026 A1, BR-001: as the backend says it (`SNAPSHOTS_TAKEN`). */
+export const MOCK_SNAPSHOTS_TAKEN = [
+  'before you change the note, at most once every 10 minutes',
+  'before another program changes it while it is open',
+  'before an agent changes it',
+  'before a replace in the workspace changes it',
+  'before git changes it: a pull, a switch of branch, a resolved conflict',
+  'before a snapshot of it is restored',
+] as const;
+
+/** UC-026 BR-002: as the backend says it (`SNAPSHOTS_KEPT`). */
+export const MOCK_SNAPSHOTS_KEPT = 'Kept on this computer for 30 days';
+
+/** UC-026 BR-001: why a snapshot was taken (entity SNAPSHOT.cause). */
+export type MockCause =
+  'Editing' | 'OutsideChange' | 'AgentChange' | 'ReplaceInWorkspace' | 'Git' | 'Restore';
+
+/**
+ * A cause by its key (`OutsideChange`), its name in the specification
+ * (`Outside change`) or its label (`Before an outside change`); an unknown
+ * one is refused.
+ */
+export function mockCause(cause: string): MockCause {
+  const plain = (text: string) => text.toLowerCase().replace(/[^a-z]/g, '');
+  const keys = Object.keys(MOCK_CAUSE_LABELS) as MockCause[];
+  const found = keys.find(
+    (key) =>
+      plain(key) === plain(cause) ||
+      plain(MOCK_CAUSE_LABELS[key]) === plain(cause) ||
+      (key === 'ReplaceInWorkspace' && plain(cause) === 'replaceinworkspace'),
+  );
+  if (found === undefined) {
+    throw new Error(`No snapshot cause ${cause}; one of ${keys.join(', ')}`);
+  }
+  return found;
+}
+
+/** UC-026 step 2: the causes as the list names them (`SnapshotCause::label`). */
+export const MOCK_CAUSE_LABELS: Record<MockCause, string> = {
+  Editing: 'Before editing',
+  OutsideChange: 'Before an outside change',
+  AgentChange: "Before an agent's change",
+  ReplaceInWorkspace: 'Before a replace in the workspace',
+  Git: 'Before a git change',
+  Restore: 'Before a restore',
+};
+
+/** The lines of `old` and `new` and which of them are the same, by the longest common lines. */
+function mockLineOps(
+  old: string,
+  now: string,
+): { kind: DiffLineKind; text: string; a: number | null; b: number | null }[] {
+  const a = old.split('\n');
+  const b = now.split('\n');
+  if (a.at(-1) === '') a.pop();
+  if (b.at(-1) === '') b.pop();
+  const common: number[][] = Array.from({ length: a.length + 1 }, () =>
+    new Array<number>(b.length + 1).fill(0),
+  );
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      common[i][j] =
+        a[i] === b[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
+    }
+  }
+  const ops: { kind: DiffLineKind; text: string; a: number | null; b: number | null }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      ops.push({ kind: 'same', text: a[i], a: ++i, b: ++j });
+    } else if (j < b.length && (i >= a.length || common[i][j + 1] >= common[i + 1][j])) {
+      ops.push({ kind: 'added', text: b[j], a: null, b: ++j });
+    } else {
+      ops.push({ kind: 'removed', text: a[i], a: ++i, b: null });
+    }
+  }
+  return ops;
+}
+
+/** UC-026 step 2: how many lines differ, a changed line once (`lines_differing`). */
+export function mockLinesDiffering(old: string, now: string): number {
+  let removed = 0;
+  let added = 0;
+  let total = 0;
+  for (const op of mockLineOps(old, now)) {
+    if (op.kind === 'removed') {
+      removed += 1;
+    } else if (op.kind === 'added') {
+      added += 1;
+    } else {
+      total += Math.max(removed, added);
+      removed = 0;
+      added = 0;
+    }
+  }
+  return total + Math.max(removed, added);
+}
+
+/** UC-026 step 4: the differences as one part, with every line. */
+function mockHunks(old: string, now: string): HunkView[] {
+  const number = (n: number | null) => (n === null ? '    ' : String(n).padStart(4));
+  const sign: Record<DiffLineKind, string> = { same: ' ', removed: '-', added: '+' };
+  return [
+    {
+      lines: mockLineOps(old, now).map((op) => ({
+        kind: op.kind,
+        numbers: `${number(op.a)} ${number(op.b)} ${sign[op.kind]} `,
+        parts: [{ text: op.text, strong: false }],
+        only: null,
+        offset: null,
+      })),
+    },
+  ];
 }
 
 export function mockHandlers(start: MockStart = {}): MockHandlers {
@@ -941,7 +1806,10 @@ function workspaceHandlers(
   | 'ws_check_new'
   | 'ws_create'
   | 'tab_open'
+  | 'tab_open_side'
   | 'tab_activate'
+  | 'pane_focus'
+  | 'split_end'
   | 'tab_close'
   | 'tab_store'
   | 'tab_set_view'
@@ -966,6 +1834,8 @@ function workspaceHandlers(
   | 'note_new_start'
   | 'note_plan'
   | 'note_create'
+  | 'note_daily_open'
+  | 'note_daily_step'
   | 'note_rename_start'
   | 'note_plan_rename'
   | 'note_rename'
@@ -978,6 +1848,23 @@ function workspaceHandlers(
   | 'search_set'
   | 'search_page'
   | 'search_open'
+  | 'links_open'
+  | 'links_headings'
+  | 'links_follow'
+  | 'replace_set'
+  | 'replace_page'
+  | 'replace_leave_out'
+  | 'replace_confirm'
+  | 'replace_undo'
+  | 'replace_close'
+  | 'snapshots_list'
+  | 'snapshot_diff'
+  | 'snapshot_whole'
+  | 'snapshot_restore'
+  | 'snapshot_undo_restore'
+  | 'snapshots_close'
+  | 'spell_suggest'
+  | 'spell_add_word'
   | 'export_start'
   | 'export_choose'
   | 'export_run'
@@ -1017,18 +1904,95 @@ function workspaceHandlers(
   const files: Record<string, string[]> = Object.fromEntries(
     Object.entries(FAKE_FILES).map(([root, notes]) => [root, [...notes]]),
   );
+  /** Package 6b: the formats of the notes created here, which may be AsciiDoc. */
+  const formats = new Map<string, FormatName>();
+  const formatOf = (note: string): FormatName => formats.get(note) ?? mockFormat(note);
+  /** Package 6b: the local clock, `2026-11-11T08:15`; `null` for the browser's. */
+  let mockNow: string | null = start.now ?? null;
   let recent = [...(start.recent ?? start.recentWorkspaces ?? [])];
   let root: string | null = null;
+  /**
+   * The tabs of the active pane and its active tab (UC-004 BR-018); the
+   * other pane of the split view is `other` while it is shown.
+   */
   let tabs: FakeTab[] = [];
   let active: string | null = null;
+  /** FR-096: the active pane, and the other pane of the split view. */
+  let pane: PaneName = 'left';
+  let other: { tabs: FakeTab[]; active: string | null } | null = null;
   let clock = 0;
   /** What each workspace remembers: its tabs and when notes were opened. */
-  const remembered: Record<string, { tabs: FakeTab[]; active: string | null }> = {};
+  const remembered: Record<
+    string,
+    {
+      tabs: FakeTab[];
+      active: string | null;
+      pane?: PaneName;
+      other?: { tabs: FakeTab[]; active: string | null } | null;
+    }
+  > = {};
+  /** Whether `note` has a tab, in either pane. */
+  const isOpen = (note: string) =>
+    tabs.some((tab) => tab.note === note) || !!other?.tabs.some((tab) => tab.note === note);
+  /** UC-004 BR-018: the pane `to` becomes the active pane. */
+  const focusPane = (to: PaneName) => {
+    if (other === null || to === pane) {
+      return;
+    }
+    const was = { tabs, active };
+    ({ tabs, active } = other);
+    other = was;
+    pane = to;
+  };
+  /** UC-004 A20: the split view ends; the right tabs join the left ones. */
+  const endSplit = () => {
+    if (other === null) {
+      return;
+    }
+    const keep = active;
+    focusPane('left');
+    for (const tab of other?.tabs ?? []) {
+      if (!tabs.some((t) => t.note === tab.note)) {
+        tabs.push(tab);
+      }
+    }
+    other = null;
+    pane = 'left';
+    active = keep !== null && tabs.some((t) => t.note === keep) ? keep : (tabs[0]?.note ?? null);
+  };
+  /** A pane left without tabs ends the split view (A20). */
+  const settlePanes = () => {
+    if (other === null) {
+      return;
+    }
+    if (tabs.length === 0) {
+      ({ tabs, active } = other);
+      other = null;
+      pane = 'left';
+    } else if (other.tabs.length === 0) {
+      other = null;
+      pane = 'left';
+    }
+  };
+  /** The tab of `note` goes from the other pane too (the note is gone). */
+  const forgetOther = (note: string) => {
+    if (other) {
+      const at = other.tabs.findIndex((tab) => tab.note === note);
+      if (at >= 0) {
+        other.tabs.splice(at, 1);
+        if (other.active === note) {
+          other.active = other.tabs[Math.min(at, other.tabs.length - 1)]?.note ?? null;
+        }
+      }
+    }
+    settlePanes();
+  };
   const lastOpened: Record<string, Record<string, number>> = {};
   let started = false;
 
   const normal = (path: string) => (path.length > 1 ? path.replace(/\/+$/, '') : path);
-  const title = (note: string) => (note.split('/').at(-1) ?? note).replace(/-/g, ' ');
+  /** UC-003 BR-001; OQ-272: a page name that is exactly a date keeps its dashes. */
+  const title = mockTitle;
   const folder = (note: string) =>
     note.includes('/') ? note.slice(0, note.lastIndexOf('/')) : null;
   const outerOf = (path: string) =>
@@ -1036,29 +2000,38 @@ function workspaceHandlers(
       .filter((known) => known !== '/home/user/Letters')
       .find((known) => path.startsWith(`${known}/`));
 
+  /** UC-002 BR-008: recently opened first, then by title and folder. */
+  const byOverview =
+    (opened: Record<string, number>) =>
+    (a: string, b: string): number =>
+      (opened[b] ?? -1) - (opened[a] ?? -1) ||
+      title(a).toLowerCase().localeCompare(title(b).toLowerCase()) ||
+      (folder(a) ?? '').localeCompare(folder(b) ?? '');
+
   const overview = (): OverviewItem[] => {
     if (root === null) {
       return [];
     }
     const opened = lastOpened[root] ?? {};
     const notes = files[root] ?? [];
-    const count = (t: string) => notes.filter((n) => title(n).toLowerCase() === t).length;
-    return [...notes]
-      .sort(
-        (a, b) =>
-          (opened[b] ?? -1) - (opened[a] ?? -1) ||
-          title(a).toLowerCase().localeCompare(title(b).toLowerCase()) ||
-          (folder(a) ?? '').localeCompare(folder(b) ?? ''),
-      )
-      .map((note) => ({
-        note,
-        format: 'Markdown' as const,
-        label:
-          count(title(note).toLowerCase()) > 1
-            ? `${title(note)}  (${folder(note) ?? 'top folder'})`
-            : title(note),
-        mark: gitMark(note),
-      }));
+    // Counted once, so a workspace of 10,000 notes (LARGE) lists quickly.
+    const counts = new Map<string, number>();
+    for (const n of notes) {
+      const t = title(n).toLowerCase();
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    const count = (t: string) => counts.get(t) ?? 0;
+    return [...notes].sort(byOverview(opened)).map((note) => ({
+      note,
+      format: formatOf(note),
+      label:
+        count(title(note).toLowerCase()) > 1
+          ? `${title(note)}  (${folder(note) ?? 'top folder'})`
+          : title(note),
+      title: title(note),
+      folder: folder(note),
+      mark: gitMark(note),
+    }));
   };
   /** The texts of the open notes, and their save state. */
   const texts = new Map<string, string>();
@@ -1130,6 +2103,63 @@ function workspaceHandlers(
     return { kind: 'insert', insertion: { kind: 'file', place, image } };
   };
   const textOf = (note: string): string => texts.get(note) ?? fakeNoteText(note);
+  /** UC-026: the fake snapshots of each note, newest first. */
+  type MockSnapshot = { key: string; taken: number; cause: MockCause; text: string };
+  const snapshotsOf = new Map<string, MockSnapshot[]>();
+  let snapshotSerial = 0;
+  /** UC-026 A3: the undo of the last restore, while its report shows. */
+  let restoreUndo: { status: string; note: string; key: string } | null = null;
+  /** UC-026 A4: the note whose snapshots are shown. */
+  let snapshotsShown: string | null = null;
+  /** UC-026 BR-001: a snapshot of `text`, unless the newest holds it. */
+  const takeSnapshot = (
+    note: string,
+    text: string,
+    cause: MockCause,
+    taken = Date.now(),
+  ): MockSnapshot => {
+    const kept = snapshotsOf.get(note) ?? [];
+    if (kept[0]?.text === text) {
+      return kept[0];
+    }
+    snapshotSerial += 1;
+    const made = { key: `${taken}-${snapshotSerial}.snap`, taken, cause, text };
+    snapshotsOf.set(
+      note,
+      [made, ...kept].sort((a, b) => b.taken - a.taken),
+    );
+    if (snapshotsShown === note) {
+      void emit('snapshots-changed', note);
+    }
+    return made;
+  };
+  const snapshotTime = (taken: number): string => {
+    const at = new Date(taken);
+    const two = (n: number) => String(n).padStart(2, '0');
+    return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+  };
+  const snapshotOf = (note: string, key: string): MockSnapshot => {
+    const found = snapshotsOf.get(note)?.find((snapshot) => snapshot.key === key);
+    if (!found) {
+      throw {
+        kind: 'invalid',
+        message: `${title(note)} could not be restored: the snapshot is gone`,
+      };
+    }
+    return found;
+  };
+  const noteNow = (note: string): string => mirrors.get(note)?.text() ?? textOf(note);
+  /**
+   * UC-026 A4: the note shown with its snapshots changed, as the backend
+   * sees it on its own (its text or its file): the window asks again.
+   */
+  const noteTouched = (note: string) => {
+    if (snapshotsShown === note) {
+      void emit('snapshots-changed', note);
+    }
+  };
+  /** UC-026 BR-003: the snapshots of deleted notes, by the deletion's key. */
+  const snapshotsDeleted = new Map<string, MockSnapshot[]>();
   /** F8, UC-007: the deleted notes of each workspace, most recently deleted first. */
   const deletedNotes: Record<string, MockDeleted[]> = Object.fromEntries(
     Object.entries(FAKE_DELETED).map(([dir, notes]) => [dir, notes.map((d) => ({ ...d }))]),
@@ -1177,7 +2207,116 @@ function workspaceHandlers(
     return existing === undefined ? { id } : { problem: '', existing };
   };
   /** The note text the backend's format module writes for a new note. */
-  const newNoteText = (noteTitle: string) => `# ${noteTitle.trim().split(/\s+/).join(' ')}\n`;
+  const newNoteText = (noteTitle: string, format: FormatName = 'Markdown') =>
+    `${format === 'AsciiDoc' ? '=' : '#'} ${noteTitle.trim().split(/\s+/).join(' ')}\n`;
+  /** UC-025 BR-001: the date and time of the mock's clock, `2026-11-11` and `08:15`. */
+  const localClock = (): { date: string; time: string } => {
+    if (mockNow !== null) {
+      const [date, time = '00:00'] = mockNow.split('T');
+      return { date, time: time.slice(0, 5) };
+    }
+    const now = new Date();
+    const two = (n: number) => String(n).padStart(2, '0');
+    return {
+      date: `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}`,
+      time: `${two(now.getHours())}:${two(now.getMinutes())}`,
+    };
+  };
+  /**
+   * A folder the workspace settings give `key`, as levels joined by `/`, or
+   * why it cannot take a note (UC-003 BR-006, roughly); `fallback` when not given.
+   */
+  const settingFolder = (
+    key: SettingName,
+    fallback: string,
+  ): { folder: string } | { problem: string } => {
+    const value = (model.workspaceValue(key) ?? '').trim() || fallback;
+    if (value.startsWith('/') || value.startsWith('\\')) {
+      return { problem: 'the folder lies outside the workspace' };
+    }
+    const levels = value.split('/').map((level) => level.trim());
+    const kept = levels.filter((level) => level !== '' && level !== '.');
+    if (kept.includes('..')) {
+      return { problem: 'the folder lies outside the workspace' };
+    }
+    const hidden = kept.find((level) => level.startsWith('.'));
+    return hidden === undefined
+      ? { folder: kept.join('/') }
+      : { problem: `the folder \`${hidden}\` is hidden` };
+  };
+  /** UC-003 BR-008: the templates of the open workspace, by their place. */
+  const templateNotes = (): string[] => {
+    const place = settingFolder('template_folder', 'templates');
+    if (root === null || !('folder' in place) || place.folder === '') {
+      return [];
+    }
+    return (files[root] ?? []).filter((note) => note.startsWith(`${place.folder}/`)).sort();
+  };
+  model.templatesOf = () => templateNotes().map((note) => `${note}.${extension(formatOf(note))}`);
+  /** UC-003 BR-008, a rough stand-in for `fill_template`: the text and the cursor's place. */
+  const fillTemplate = (
+    text: string,
+    noteTitle: string,
+    date: string,
+    time: string,
+  ): { text: string; cursor: number | null } => {
+    let cursor: number | null = null;
+    let out = '';
+    // OQ-275: a line of only {{cursor}} after an empty line replaces it.
+    const lines: string[] = [];
+    for (const line of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+      const before = lines.at(-1);
+      if (line.replace(/\r?\n$/, '') === '{{cursor}}' && before?.replace(/\r?\n$/, '') === '') {
+        lines.pop();
+      }
+      lines.push(line);
+    }
+    let rest = lines.join('');
+    const values: Record<string, string> = {
+      '{{title}}': noteTitle.trim().split(/\s+/).join(' '),
+      '{{date}}': date,
+      '{{time}}': time,
+      '{{cursor}}': '',
+    };
+    while (rest !== '') {
+      const placeholder = Object.keys(values).find((key) => rest.startsWith(key));
+      if (placeholder === undefined) {
+        out += rest[0];
+        rest = rest.slice(1);
+        continue;
+      }
+      if (placeholder === '{{cursor}}') {
+        cursor ??= out.length;
+      }
+      out += values[placeholder];
+      rest = rest.slice(placeholder.length);
+    }
+    return { text: out, cursor };
+  };
+  /** A new note `id` holding `text` in `format`, opened in a tab; its mirror's revision. */
+  const addNote = async (
+    id: string,
+    text: string,
+    format: FormatName,
+    side = false,
+  ): Promise<number> => {
+    if (root !== null) {
+      files[root] = [...(files[root] ?? []), id];
+    }
+    formats.set(id, format);
+    texts.set(id, text);
+    await loadEditorCore();
+    const mirror = new MirrorCore(text);
+    mirrors.set(id, mirror);
+    if (side) {
+      // UC-004 A18: offered by a link followed to the side.
+      openToSide(id);
+    } else {
+      openTab(id);
+    }
+    await sendAll();
+    return mirror.rev;
+  };
   /** UC-006 BR-003, roughly: the links to `from` in `text`, as written from `note`. */
   const linkTo = (note: string, target: string) => `](${relativeTo(note, `${target}.md`)}`;
   const countLinks = (text: string, needle: string) => text.split(needle).length - 1;
@@ -1190,6 +2329,12 @@ function workspaceHandlers(
     tabs = tabs.map((tab) => (tab.note === from ? { ...tab, note: to } : tab));
     if (active === from) {
       active = to;
+    }
+    if (other) {
+      other.tabs = other.tabs.map((tab) => (tab.note === from ? { ...tab, note: to } : tab));
+      if (other.active === from) {
+        other.active = to;
+      }
     }
     const opened = lastOpened[root] ?? {};
     if (from in opened) {
@@ -1238,6 +2383,12 @@ function workspaceHandlers(
     }
     files[root] = [...(files[root] ?? []), planned.id];
     texts.set(planned.id, deleted.text);
+    // UC-026 BR-003: its snapshots come back with it.
+    const kept = snapshotsDeleted.get(deleted.key);
+    if (kept) {
+      snapshotsOf.set(planned.id, kept);
+      snapshotsDeleted.delete(deleted.key);
+    }
     deletedNotes[root] = (deletedNotes[root] ?? []).filter((d) => d !== deleted);
     restoring = null;
     undo = null;
@@ -1250,9 +2401,64 @@ function workspaceHandlers(
   };
   /** ADR-025: the backend's mirror of each note a window's core holds. */
   const mirrors = new Map<string, MirrorCore>();
+  /**
+   * FR-099, ADR-030: the spell check of the mock: English (US) only; its
+   * dictionary knows the words of the mock's notes but the misspelled ones
+   * of the spell workspace.
+   */
+  const speller = new MockSpeller(Object.values(SPELL_TEXTS));
+  /** The languages whose missing dictionary was said. */
+  const spellSaid = new Set<string>();
+  /** The checks waiting for the text to rest (`SPELL_DEBOUNCE`), by note. */
+  const spellTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** UC-005 BR-023: the marks of `note` for its mirror's revision (`spell-marks`). */
+  const sendSpell = async (note: string) => {
+    const mirror = mirrors.get(note);
+    if (!mirror || disposed) {
+      return;
+    }
+    const language = model.spellLanguage();
+    if (language !== 'off' && language !== MOCK_SPELL_LANGUAGE && !spellSaid.has(language)) {
+      spellSaid.add(language);
+      const name = spellLanguageName(language);
+      const detail = `No dictionary for ${name}. Choose another language in the settings.`;
+      await setStatus(detail);
+      await emit('spell-state', { problem: `Spell check: ${name}, no dictionary`, detail });
+    }
+    const marks =
+      language === MOCK_SPELL_LANGUAGE
+        ? speller.marks(mirror.text(), mockFormat(note) === 'AsciiDoc')
+        : [];
+    await emit('spell-marks', { note, rev: mirror.rev, marks });
+  };
+  /** ADR-030: a note is checked once its text rested 250 ms. */
+  const spellLater = (note: string) => {
+    clearTimeout(spellTimers.get(note));
+    spellTimers.set(
+      note,
+      setTimeout(() => {
+        spellTimers.delete(note);
+        void sendSpell(note);
+      }, 250),
+    );
+  };
+  /** Every note a core holds is checked again (another language, a word added). */
+  const spellAll = () => {
+    for (const note of mirrors.keys()) {
+      void sendSpell(note);
+    }
+  };
+  model.onChange = (key) => {
+    if (key === 'spell_check_language') {
+      spellSaid.clear();
+      void emit('spell-state', { problem: null, detail: null });
+      setTimeout(spellAll, 0);
+    }
+  };
   /** The mirror's text is the note's now. */
   const followMirror = (note: string, mirror: MirrorCore) => {
     texts.set(note, mirror.text());
+    noteTouched(note);
   };
   /**
    * ADR-025: the backend's colours and figures of the facade's blocks
@@ -1275,7 +2481,7 @@ function workspaceHandlers(
     const looks = model.effective();
     const sent = mirror.enrichment(
       note,
-      true,
+      mockFormat(note) === 'Markdown',
       looks.theme,
       looks.palette.dark,
       images,
@@ -1288,6 +2494,7 @@ function workspaceHandlers(
         unreadable: null,
         caption: null,
       },
+      MOCK_FORMULA,
     );
     try {
       await emit('ed-enrich', { ...sent, clear: true });
@@ -1644,6 +2851,7 @@ function workspaceHandlers(
           active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
         }
       }
+      forgetOther(gone);
       for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
         map.delete(gone);
       }
@@ -1811,6 +3019,7 @@ function workspaceHandlers(
         active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
       }
     }
+    forgetOther(note);
     for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
       map.delete(note);
     }
@@ -2031,7 +3240,7 @@ function workspaceHandlers(
         mockConflictPlaces(mirrors.get(c.note)?.text() ?? textOf(c.note)).length > 0,
     );
     if (state.conflicts.length !== before) {
-      for (const tab of tabs) {
+      for (const tab of [...tabs, ...(other?.tabs ?? [])]) {
         store(tab.note);
       }
       await afterResolving(state);
@@ -2040,26 +3249,41 @@ function workspaceHandlers(
   const label = (note: string) =>
     title(note) +
     (saveErrors.has(note) ? ' ⚠' : unstored.has(note) && !quiet.has(note) ? ' •' : '');
-  const tabsView = (): TabsView => ({
-    tabs: tabs.map((tab) => ({
+  const tabViews = (list: FakeTab[]) =>
+    list.map((tab) => ({
       note: tab.note,
       title: title(tab.note),
       label: label(tab.note),
       path: `${root}/${tab.note}.md`,
       view: tab.view,
       saveError: saveErrors.get(tab.note) ?? null,
-    })),
-    active,
-    todoList: { open: todos.list(root).open, active: todos.list(root).active },
-  });
+    }));
+  const tabsView = (): TabsView => {
+    const left = pane === 'left' || other === null ? { tabs, active } : other;
+    const right = other === null ? null : pane === 'right' ? { tabs, active } : other;
+    return {
+      tabs: tabViews(left.tabs),
+      active,
+      todoList: { open: todos.list(root).open, active: todos.list(root).active },
+      split:
+        right === null
+          ? null
+          : {
+              right: tabViews(right.tabs),
+              leftActive: left.active,
+              rightActive: right.active,
+              pane,
+            },
+    };
+  };
   const properties = (): TabPropertiesView | null =>
     active === null
       ? null
       : {
           note: active,
           properties: {
-            place: `${active}.md`,
-            format: 'Markdown',
+            place: `${active}.${formatOf(active) === 'AsciiDoc' ? 'adoc' : 'md'}`,
+            format: formatOf(active),
             size: `${new TextEncoder().encode(textOf(active)).length} bytes`,
             lastChange: '2026-11-09 10:00',
           },
@@ -2136,9 +3360,47 @@ function workspaceHandlers(
     } catch {
       // The mock was taken down meanwhile (a test ended).
     }
+    linksSoon();
+  };
+  /**
+   * FR-078, FR-079: the backlinks and outgoing links of the active note,
+   * a moment after the change, as the backend's thread finds them; the
+   * open notes count with their text.
+   */
+  let linksTimer: ReturnType<typeof setTimeout> | null = null;
+  const linksSoon = () => {
+    if (linksTimer !== null) {
+      return;
+    }
+    linksTimer = setTimeout(() => {
+      linksTimer = null;
+      void sendLinks();
+    }, 50);
+  };
+  const sendLinks = async () => {
+    if (active === null || disposed || root === null) {
+      return;
+    }
+    const note = active;
+    const text = (id: string) => mirrors.get(id)?.text() ?? textOf(id);
+    // Only the notes that may hold a link, in the overview's order: the
+    // 10,000 notes of LARGE hold none, and sorting them all would hold up
+    // the window's keys (NFR-018 is measured there).
+    const notes = files[root] ?? [];
+    const order = [
+      note,
+      ...notes.filter((other) => other !== note && text(other).includes('](')),
+    ].sort(byOverview(lastOpened[root] ?? {}));
+    const others = root === LINKS ? LINKS_FILES : [];
+    try {
+      await emit('links', mockLinks(note, mirrors.get(note)?.rev ?? 1, order, text, others, notes));
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
   };
   /** F9: the search of the overlay, as the mock runs it. */
   let searchText = '';
+  let searchSwitches: SearchSwitches = NO_SWITCHES;
   let searchSerial = 0;
   let searchFound: FoundNoteView[] = [];
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2148,14 +3410,60 @@ function workspaceHandlers(
     if (disposed || root === null || searchText === '') {
       return;
     }
-    const words = mockQuery(searchText);
-    if (words.length === 0) {
+    const switched = searchSwitches.matchCase || searchSwitches.wholeWord || searchSwitches.regex;
+    if (searchSwitches.regex) {
+      // UC-008 A9: a search again keeps saying what is wrong (no race with
+      // `search_set`).
+      const pattern = mockPattern(searchText, searchSwitches);
+      if ('problem' in pattern) {
+        try {
+          await emit('search', {
+            text: searchText,
+            switches: searchSwitches,
+            problem: pattern.problem,
+            result: null,
+          });
+        } catch {
+          // The mock was taken down meanwhile (a test ended).
+        }
+        return;
+      }
+    }
+    const typed = mockQuery(searchText);
+    if (typed.length === 0) {
       return;
     }
+    // UC-008 BR-012: words `#tag` search for a tag (not with the switch
+    // regular expression); the places marked are the tag's words.
+    const isTag = (word: string) =>
+      !searchSwitches.regex && /^#[\p{L}\p{N}_\-/]+$/u.test(word) && /[^\d/#]/.test(word);
+    const tagWords = typed.filter(isTag).map((word) => word.slice(1));
+    const words = tagWords.length > 0 ? [...typed.filter((w) => !isTag(w)), ...tagWords] : typed;
     const byName: FoundNoteView[] = [];
     const byText: FoundNoteView[] = [];
     for (const { note } of overview()) {
       const text = mirrors.get(note)?.text() ?? textOf(note);
+      if (tagWords.length > 0) {
+        const tags = mockTags(text);
+        const rest = typed.filter((w) => !isTag(w));
+        const low = text.toLowerCase();
+        if (tagWords.every((tag) => carries(tags, tag)) && rest.every((w) => low.includes(w))) {
+          byText.push(mockFoundNote(note, title(note), folder(note), text, words));
+        }
+        continue;
+      }
+      if (switched) {
+        // FR-075, roughly: one pattern, places in the text only.
+        const pattern = mockPattern(searchSwitches.regex ? searchText : words[0], searchSwitches);
+        if ('problem' in pattern) {
+          continue;
+        }
+        const found = mockFoundByPattern(note, title(note), folder(note), text, pattern.regex);
+        if (found !== null) {
+          byText.push(found);
+        }
+        continue;
+      }
       const name = [title(note).toLowerCase(), (folder(note) ?? '').toLowerCase()];
       const low = text.toLowerCase();
       if (!words.every((w) => name.some((n) => n.includes(w)) || low.includes(w))) {
@@ -2169,9 +3477,12 @@ function workspaceHandlers(
     try {
       await emit('search', {
         text: searchText,
+        switches: searchSwitches,
+        problem: null,
         result: {
           serial: searchSerial,
           text: searchText,
+          switches: searchSwitches,
           total: searchFound.length,
           notes: searchFound.slice(0, SEARCH_PAGE),
           unreadable: null,
@@ -2181,8 +3492,227 @@ function workspaceHandlers(
       // The mock was taken down meanwhile (a test ended).
     }
   };
+  /** UC-022: the replace of the workspace, as the mock runs it. */
+  const replacing = {
+    open: false,
+    text: '',
+    replacement: '',
+    switches: NO_SWITCHES,
+    asked: 0,
+    serial: 0,
+    problem: null as string | null,
+    notes: [] as ReplaceNoteView[],
+    /** Every place of each note, also those not shown (A7). */
+    all: new Map<string, MockPlace[]>(),
+    /** The texts the places were found in, by note. */
+    seen: new Map<string, string>(),
+    leftNotes: new Set<string>(),
+    /** `note`, the line and the column of a place left out. */
+    leftPlaces: new Set<string>(),
+    undo: null as {
+      status: string;
+      notes: { note: string; before: string; after: string }[];
+    } | null,
+    timer: null as ReturnType<typeof setTimeout> | null,
+  };
+  const REPLACE_PAGE = 1000;
+  const REPLACE_SHOWN = 10_000;
+  /** A place left out is known by its line and where in the line it starts (A4). */
+  const placeKey = (note: string, text: string, at: number) => {
+    const start = text.lastIndexOf('\n', at - 1) + 1;
+    const end = text.indexOf('\n', at);
+    return `${note}\u0000${text.slice(start, end < 0 ? text.length : end)}\u0000${at - start}`;
+  };
+  /** UC-022 step 2: every place of `text`, roughly as `note_places`. */
+  const mockPlaces = (text: string, regex: RegExp, replacement: string): MockPlace[] =>
+    [...text.matchAll(regex)]
+      .filter((m) => m[0] !== '' && (!m[0].includes('\n') || replacing.switches.regex))
+      .map((m) => {
+        const at = m.index;
+        const start = text.lastIndexOf('\n', at - 1) + 1;
+        const end = text.indexOf('\n', at + m[0].length);
+        const lineEnd = end < 0 ? text.length : end;
+        const one = new RegExp(regex.source, regex.flags.replace('g', ''));
+        return {
+          at,
+          line: text.slice(0, at).split('\n').length,
+          before: text.slice(Math.max(start, at - 40), at),
+          old: m[0],
+          new: m[0].replace(one, replacement),
+          after: text.slice(at + m[0].length, Math.min(lineEnd, at + m[0].length + 80)),
+        };
+      });
+  /** "1 place", "2 places", "10,000 places", as the backend counts. */
+  const placesOf = (n: number, thing = 'place') =>
+    n === 1 ? `1 ${thing}` : `${n.toLocaleString('en-US')} ${thing}s`;
+  /** Step 3: what is chosen now, roughly as `chosen_view`. */
+  const chosenView = (): ChosenView => {
+    let places = 0;
+    let notes = 0;
+    let total = 0;
+    for (const found of replacing.notes) {
+      const all = replacing.all.get(found.note) ?? [];
+      total += all.length;
+      if (replacing.leftNotes.has(found.note)) {
+        continue;
+      }
+      const text = replacing.seen.get(found.note) ?? '';
+      const left = all.filter((p) =>
+        replacing.leftPlaces.has(placeKey(found.note, text, p.at)),
+      ).length;
+      if (all.length - left > 0) {
+        places += all.length - left;
+        notes += 1;
+      }
+    }
+    return {
+      places,
+      notes,
+      summary: `${places.toLocaleString('en-US')} of ${placesOf(total)} chosen`,
+      action:
+        places === 0 ? 'Replace' : `Replace ${placesOf(places)} in ${placesOf(notes, 'note')}`,
+    };
+  };
+  /** UC-022 step 2, A1, A2, A4, A7: the places of every note, told as `replace`. */
+  const runReplace = async () => {
+    if (disposed || root === null || !replacing.open) {
+      return;
+    }
+    replacing.notes = [];
+    replacing.all.clear();
+    replacing.seen.clear();
+    replacing.problem = null;
+    let found = 0;
+    let shown = 0;
+    if (replacing.text !== '') {
+      const pattern = mockPattern(replacing.text, replacing.switches);
+      const writes =
+        'problem' in pattern
+          ? pattern
+          : mockReplacement(replacing.replacement, replacing.switches, pattern.groups);
+      if ('problem' in writes) {
+        replacing.problem = writes.problem;
+      } else if (!('problem' in pattern)) {
+        for (const { note } of overview()) {
+          const text = mirrors.get(note)?.text() ?? textOf(note);
+          const places = mockPlaces(text, pattern.regex, writes.with);
+          if (places.length === 0) {
+            continue;
+          }
+          replacing.seen.set(note, text);
+          replacing.all.set(note, places);
+          found += places.length;
+          // A7: no more than 10,000 places are shown.
+          const room = Math.max(0, REPLACE_SHOWN - shown);
+          shown += Math.min(room, places.length);
+          replacing.notes.push({
+            note,
+            title: title(note),
+            folder: folder(note),
+            count: placesOf(places.length),
+            leftOut: replacing.leftNotes.has(note),
+            places: places.slice(0, room).map((place) => ({
+              ...place,
+              leftOut: replacing.leftPlaces.has(placeKey(note, text, place.at)),
+            })),
+          });
+        }
+      }
+    }
+    replacing.serial += 1;
+    const notes = replacing.notes.length;
+    try {
+      await emit('replace', {
+        asked: replacing.asked,
+        problem: replacing.problem,
+        result:
+          replacing.text === '' || replacing.problem !== null
+            ? null
+            : {
+                serial: replacing.serial,
+                asked: replacing.asked,
+                places: found,
+                notes,
+                summary: `${placesOf(found)} in ${placesOf(notes, 'note')}`,
+                more:
+                  found > shown
+                    ? `The first ${REPLACE_SHOWN.toLocaleString('en-US')} places are shown; ${(found - shown).toLocaleString('en-US')} more are not shown and are replaced too.`
+                    : null,
+                list: replacePage(0),
+                listed: notes,
+                unreadable: null,
+                chosen: chosenView(),
+              },
+      });
+    } catch {
+      // The mock was taken down meanwhile (a test ended).
+    }
+  };
+  /** A page of the notes from the `from`th on, about 1,000 places, as the backend pages. */
+  const replacePage = (from: number): ReplaceNoteView[] => {
+    const page: ReplaceNoteView[] = [];
+    let places = 0;
+    for (const found of replacing.notes.slice(from)) {
+      if (places >= REPLACE_PAGE) {
+        break;
+      }
+      places += Math.max(found.places.length, 1);
+      page.push(found);
+    }
+    return page;
+  };
+  /** UC-022 A4: a text or the overview changed: the places are found again soon. */
+  const replaceAgain = () => {
+    if (!replacing.open || replacing.timer !== null) {
+      return;
+    }
+    replacing.timer = setTimeout(() => {
+      replacing.timer = null;
+      void runReplace();
+    }, 30);
+  };
+  /**
+   * UC-022 step 5, BR-005: `note` gets `text`; open, through its mirror as
+   * one undo step, else in the fake files. Why not, when it cannot be stored.
+   */
+  const replaceWorkspaceNote = async (
+    note: string,
+    from: string,
+    to: string,
+  ): Promise<string | null> => {
+    if (failing.has(note)) {
+      return MOCK_SAVE_ERROR;
+    }
+    const mirror = mirrors.get(note);
+    if (!mirror) {
+      texts.set(note, to);
+      noteTouched(note);
+      return null;
+    }
+    const a = Array.from(from);
+    const b = Array.from(to);
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) start++;
+    let same = 0;
+    while (
+      same < a.length - start &&
+      same < b.length - start &&
+      a[a.length - 1 - same] === b[b.length - 1 - same]
+    ) {
+      same++;
+    }
+    const insert = b.slice(start, b.length - same).join('');
+    const rev = mirror.backendEdit(start, a.length - same - start, insert, true);
+    if (rev !== undefined) {
+      followMirror(note, mirror);
+      await emit('ed-changed', { note, rev });
+    }
+    return null;
+  };
+
   /** UC-008 A3: a text or the overview changed: the search runs again soon. */
   const searchAgain = () => {
+    replaceAgain();
     if (searchText === '' || searchTimer !== null) {
       return;
     }
@@ -2297,7 +3827,7 @@ function workspaceHandlers(
     );
   };
   /** UC-004 A2 to A4: a rough stand-in for `follow_link` over the fake notes. */
-  const followLink = async (note: string, raw: string): Promise<LinkAnswer> => {
+  const followLink = async (note: string, raw: string, side = false): Promise<LinkAnswer> => {
     const link = raw.trim();
     if ((link.includes('://') && !link.startsWith('file://')) || link.startsWith('mailto:')) {
       if (webAllowed) {
@@ -2337,7 +3867,11 @@ function workspaceHandlers(
     const isNote = extension === 'md' || extension === 'adoc';
     const id = isNote ? relative.replace(/\.[^./]+$/, '') : relative;
     if (root && files[root]?.includes(id)) {
-      openTab(id);
+      if (side) {
+        openToSide(id);
+      } else {
+        openTab(id);
+      }
       await sendAll();
       return heading === undefined ? { kind: 'done' } : jumpToHeading(id, heading);
     }
@@ -2357,7 +3891,12 @@ function workspaceHandlers(
   };
   const remember = () => {
     if (root) {
-      remembered[root] = { tabs: [...tabs], active };
+      remembered[root] = {
+        tabs: [...tabs],
+        active,
+        pane,
+        other: other && { tabs: [...other.tabs], active: other.active },
+      };
     }
   };
   const viewed = (note: string) => {
@@ -2390,6 +3929,7 @@ function workspaceHandlers(
     if (active === note) {
       active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
     }
+    forgetOther(note);
   };
   /**
    * UC-004 A6, M-06.6: at the limit, the tab used longest ago that can be
@@ -2397,37 +3937,81 @@ function workspaceHandlers(
    * not open. Roughly the backend's order: by when a note was opened last.
    */
   const makeRoomFor = (note: string): boolean => {
-    if (tabs.length < MAX_TABS || tabs.some((tab) => tab.note === note)) {
+    // UC-004 BR-008: both panes count.
+    const count = tabs.length + (other?.tabs.length ?? 0);
+    if (count < MAX_TABS || tabs.some((tab) => tab.note === note)) {
       return true;
     }
     const opened = (root && lastOpened[root]) || {};
-    // Review F16: never the active tab.
-    const order = [...tabs]
-      .filter((tab) => tab.note !== active)
-      .sort((a, b) => (opened[a.note] ?? 0) - (opened[b.note] ?? 0));
-    const closing = order.find((tab) => store(tab.note) === null);
+    // Review F16: never the active tab of a pane.
+    const order = [
+      ...tabs.filter((tab) => tab.note !== active).map((tab) => ({ tab, here: true })),
+      ...(other?.tabs ?? [])
+        .filter((tab) => tab.note !== other?.active)
+        .map((tab) => ({ tab, here: false })),
+    ].sort((a, b) => (opened[a.tab.note] ?? 0) - (opened[b.tab.note] ?? 0));
+    const both = (n: string) =>
+      tabs.some((t) => t.note === n) && !!other?.tabs.some((t) => t.note === n);
+    const closing = order.find(({ tab }) => both(tab.note) || store(tab.note) === null);
     if (!closing) {
       void setStatus(
         `${title(note)} was not opened: ${MAX_TABS} tabs are open, and none can close without losing changes`,
       );
       return false;
     }
-    dropTab(closing.note, true);
-    void setStatus(`Closed the tab ${title(closing.note)}, used longest ago`);
+    const gone = closing.tab.note;
+    if (both(gone)) {
+      // Its other tab keeps the note open.
+      const list = closing.here ? tabs : other!.tabs;
+      list.splice(
+        list.findIndex((t) => t.note === gone),
+        1,
+      );
+    } else if (closing.here) {
+      dropTab(gone, true);
+    } else {
+      forgetOther(gone);
+      clearTimeout(saveTimers.get(gone));
+      mirrors.delete(gone);
+    }
+    void setStatus(`Closed the tab ${title(gone)}, used longest ago`);
     return true;
   };
-  const openTab = (note: string): boolean => {
+  const openTab = (note: string, view: EditingViewName = start.view ?? 'facade'): boolean => {
     if (!makeRoomFor(note)) {
       return false;
     }
     if (!tabs.some((tab) => tab.note === note)) {
       const at = active === null ? tabs.length : tabs.findIndex((t) => t.note === active) + 1;
-      tabs.splice(at, 0, { note, view: start.view ?? 'facade' });
+      tabs.splice(at, 0, { note, view });
     }
     active = note;
     viewed(note);
     remember();
     return true;
+  };
+  /**
+   * UC-004 A18, A19: opens `note` to the side, in the other pane, which the
+   * split view brings when it is not shown; the note of the active tab
+   * shows its other editing view there.
+   */
+  const openToSide = (note: string): boolean => {
+    if (tabs.length === 0 && (other?.tabs.length ?? 0) === 0) {
+      // A18, A20: with no tab there is no side; the note opens in the one pane.
+      other = null;
+      pane = 'left';
+      return openTab(note);
+    }
+    const shown = active === note ? tabs.find((tab) => tab.note === note)?.view : undefined;
+    if (other === null) {
+      other = { tabs: [], active: null };
+    }
+    focusPane(pane === 'left' ? 'right' : 'left');
+    const view: EditingViewName =
+      shown === 'facade' ? 'source' : shown === 'source' ? 'facade' : (start.view ?? 'facade');
+    const opened = openTab(note, view);
+    settlePanes();
+    return opened;
   };
   /** F10: the settings of the workspace opened last, still to be sent. */
   let settingsSaid: string | null | undefined;
@@ -2447,6 +4031,10 @@ function workspaceHandlers(
     const back = remembered[dir];
     tabs = back ? [...back.tabs] : [];
     active = back?.active ?? null;
+    pane = back?.pane ?? 'left';
+    other = back?.other ? { tabs: [...back.other.tabs], active: back.other.active } : null;
+    // BR-018: the left pane is the active one when the workspace opens again.
+    focusPane('left');
     if (!back) {
       const first = ['Home', 'README'].find((n) => files[dir]?.includes(n));
       if (first) {
@@ -2572,7 +4160,7 @@ function workspaceHandlers(
     }
     const now = Date.now();
     const shown = agents.marks(
-      tabs.map((tab) => tab.note),
+      [...tabs, ...(other?.tabs ?? [])].map((tab) => tab.note),
       model.effective().agentAccess,
       now,
     );
@@ -2595,6 +4183,36 @@ function workspaceHandlers(
   const reportAgentChange = async (name: string, verb: 'created' | 'changed', note: string) => {
     const text = agents.reportChange(name, verb, note, status());
     await setStatus(text, null, false, agents.opens(text));
+  };
+  /** UC-026 steps 5–6: `note` gets the snapshot `key`'s text; the status. */
+  const restoreSnapshot = async (note: string, key: string, undoing: boolean): Promise<string> => {
+    const snapshot = snapshotOf(note, key);
+    const now = noteNow(note);
+    if (now === snapshot.text) {
+      restoreUndo = null;
+      const text = `${title(note)} already holds the snapshot of ${snapshotTime(snapshot.taken)}`;
+      await setStatus(text);
+      return text;
+    }
+    const before = takeSnapshot(note, now, 'Restore');
+    const failed = await replaceWorkspaceNote(note, now, snapshot.text);
+    if (failed !== null) {
+      restoreUndo = null;
+      const text = `${title(note)} could not be stored: ${failed}`;
+      await setStatus(text);
+      return text;
+    }
+    if (undoing) {
+      restoreUndo = null;
+      const text = `Took back the restore of ${title(note)}`;
+      await setStatus(text);
+      return text;
+    }
+    const text = `Restored ${title(note)} to the snapshot of ${snapshotTime(snapshot.taken)}`;
+    restoreUndo = { status: text, note, key: before.key };
+    await setStatus(text, 'undoRestore');
+    searchAgain();
+    return text;
   };
   const handlers: ReturnType<typeof workspaceHandlers> = {
     ws_start: async () => {
@@ -2627,11 +4245,22 @@ function workspaceHandlers(
       await setStatus(`Workspace created in ${dir}`);
       return { stage: 'done' };
     },
-    search_set: async ({ text }) => {
+    search_set: async ({ text, switches }) => {
       searchText = text.trim();
-      if (searchText === '') {
+      searchSwitches = switches ?? NO_SWITCHES;
+      const problem =
+        searchSwitches.regex && searchText !== ''
+          ? (() => {
+              const pattern = mockPattern(searchText, searchSwitches);
+              return 'problem' in pattern ? pattern.problem : null;
+            })()
+          : null;
+      if (problem !== null) {
         searchFound = [];
-        await emit('search', { text: '', result: null });
+        await emit('search', { text: searchText, switches: searchSwitches, problem, result: null });
+      } else if (searchText === '') {
+        searchFound = [];
+        await emit('search', { text: '', switches: searchSwitches, problem: null, result: null });
       } else {
         // As the searcher's thread: the answer comes a moment later.
         setTimeout(() => void runSearch(), 20);
@@ -2640,6 +4269,192 @@ function workspaceHandlers(
     },
     search_page: ({ serial, from }) =>
       serial === searchSerial ? searchFound.slice(from, from + SEARCH_PAGE) : null,
+    replace_set: async ({ text, replacement, switches }) => {
+      if (
+        text !== replacing.text ||
+        JSON.stringify(switches) !== JSON.stringify(replacing.switches)
+      ) {
+        replacing.leftNotes.clear();
+        replacing.leftPlaces.clear();
+      }
+      Object.assign(replacing, { open: true, text, replacement, switches });
+      replacing.asked += 1;
+      // As the searcher's thread: the answer comes a moment later.
+      setTimeout(() => void runReplace(), 20);
+      return replacing.asked;
+    },
+    replace_page: ({ serial, from }) => (serial === replacing.serial ? replacePage(from) : null),
+    replace_leave_out: ({ serial, note, at, out }) => {
+      const text = replacing.seen.get(note);
+      if (serial !== replacing.serial || text === undefined) {
+        return null;
+      }
+      const set = at === null ? replacing.leftNotes : replacing.leftPlaces;
+      const key = at === null ? note : placeKey(note, text, at);
+      if (out) {
+        set.add(key);
+      } else {
+        set.delete(key);
+      }
+      return chosenView();
+    },
+    replace_confirm: async ({ serial, note }) => {
+      if (serial !== replacing.serial) {
+        const text =
+          'The places changed while you looked at them; look at them again before you replace';
+        await setStatus(text);
+        return text;
+      }
+      const done: { note: string; before: string; after: string }[] = [];
+      const failed: string[] = [];
+      const changedMeanwhile: string[] = [];
+      let places = 0;
+      for (const found of replacing.notes) {
+        if ((note !== null && found.note !== note) || replacing.leftNotes.has(found.note)) {
+          continue;
+        }
+        const before = replacing.seen.get(found.note) ?? '';
+        // BR-004, as the backend: only a note that still holds its text.
+        const now = mirrors.get(found.note)?.text() ?? textOf(found.note);
+        if (now !== before) {
+          changedMeanwhile.push(found.title);
+          continue;
+        }
+        const chosen = (replacing.all.get(found.note) ?? []).filter(
+          (place) => !replacing.leftPlaces.has(placeKey(found.note, before, place.at)),
+        );
+        if (chosen.length === 0) {
+          continue;
+        }
+        let after = before;
+        for (const place of [...chosen].reverse()) {
+          after = after.slice(0, place.at) + place.new + after.slice(place.at + place.old.length);
+        }
+        // UC-022 BR-005, UC-026 BR-001: the note before the replacement.
+        takeSnapshot(found.note, before, 'ReplaceInWorkspace');
+        const why = await replaceWorkspaceNote(found.note, before, after);
+        if (why !== null) {
+          failed.push(`${found.title} could not be changed: ${why}`);
+          continue;
+        }
+        places += chosen.length;
+        done.push({ note: found.note, before, after });
+      }
+      let text =
+        done.length === 0 && failed.length === 0 && changedMeanwhile.length === 0
+          ? 'Nothing was replaced: every place is left out'
+          : done.length === 0
+            ? 'Nothing was replaced'
+            : `Replaced ${placesOf(places)} in ${placesOf(done.length, 'note')}`;
+      if (changedMeanwhile.length > 0) {
+        text += `; ${changedMeanwhile.join(', ')} ${changedMeanwhile.length === 1 ? 'was changed meanwhile and is left as it is' : 'were changed meanwhile and are left as they are'}`;
+      }
+      text = [text, ...failed].join('; ');
+      replacing.undo = done.length > 0 ? { status: text, notes: done } : null;
+      await setStatus(text, done.length > 0 ? 'undoReplace' : null);
+      await sendAll();
+      void runReplace();
+      return text;
+    },
+    replace_undo: async () => {
+      const undone = replacing.undo;
+      if (undone === null || undone.status !== status()) {
+        return status();
+      }
+      replacing.undo = null;
+      const changedSince: string[] = [];
+      let back = 0;
+      for (const each of undone.notes) {
+        const now = mirrors.get(each.note)?.text() ?? textOf(each.note);
+        if (now !== each.after) {
+          changedSince.push(title(each.note));
+          continue;
+        }
+        takeSnapshot(each.note, each.after, 'Restore');
+        await replaceWorkspaceNote(each.note, each.after, each.before);
+        back += 1;
+      }
+      let text = `Took back the replacement in ${placesOf(back, 'note')}`;
+      if (changedSince.length > 0) {
+        text += `; ${changedSince.join(', ')} ${changedSince.length === 1 ? 'was changed since and is left as it is' : 'were changed since and are left as they are'}`;
+      }
+      await setStatus(text);
+      await sendAll();
+      return text;
+    },
+    replace_close: () => {
+      replacing.open = false;
+      replacing.notes = [];
+      return null;
+    },
+    snapshots_list: ({ note }) => {
+      if (!root || !files[root]?.includes(note)) {
+        throw { kind: 'invalid', message: `The note ${title(note)} is gone` };
+      }
+      snapshotsShown = note;
+      const now = noteNow(note);
+      const items = (snapshotsOf.get(note) ?? []).map((snapshot) => ({
+        key: snapshot.key,
+        taken: snapshotTime(snapshot.taken),
+        cause: MOCK_CAUSE_LABELS[snapshot.cause],
+        differs: mockLinesDiffering(snapshot.text, now),
+        problem: null,
+      }));
+      return {
+        note,
+        title: title(note),
+        items,
+        none:
+          items.length === 0 ? { lead: MOCK_NO_SNAPSHOT, when: [...MOCK_SNAPSHOTS_TAKEN] } : null,
+        kept: MOCK_SNAPSHOTS_KEPT,
+        problem: null,
+      };
+    },
+    snapshot_diff: ({ note, key }) => {
+      const found = snapshotsOf.get(note)?.find((snapshot) => snapshot.key === key);
+      if (!found) {
+        return { note, key, body: { kind: 'problem', text: 'The snapshot is gone' } };
+      }
+      const now = noteNow(note);
+      if (found.text === now) {
+        return { note, key, body: { kind: 'same' } };
+      }
+      return { note, key, body: { kind: 'hunks', hunks: mockHunks(found.text, now) } };
+    },
+    snapshot_whole: ({ note, key }) => {
+      const found = snapshotsOf.get(note)?.find((snapshot) => snapshot.key === key);
+      if (!found) {
+        return { note, key, blocks: [], problem: 'The snapshot is gone' };
+      }
+      return { note, key, blocks: fakeBlocks(found.text), problem: null };
+    },
+    snapshot_restore: async ({ note, key }) => restoreSnapshot(note, key, false),
+    snapshot_undo_restore: async () => {
+      const undo = restoreUndo;
+      if (undo === null || undo.status !== status()) {
+        return status();
+      }
+      restoreUndo = null;
+      return restoreSnapshot(undo.note, undo.key, true);
+    },
+    snapshots_close: () => {
+      snapshotsShown = null;
+      return null;
+    },
+    // UC-005 A28: the corrections come a moment later, as from the backend.
+    spell_suggest: async ({ word }) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return model.spellLanguage() === MOCK_SPELL_LANGUAGE ? speller.suggest(word) : [];
+    },
+    spell_add_word: async ({ word }) => {
+      const refused = speller.add(word);
+      if (refused !== null) {
+        throw { kind: 'invalid', message: refused };
+      }
+      await setStatus(`Added "${word.trim()}" to the dictionary`);
+      spellAll();
+      return null;
+    },
     search_open: async ({ note, place }) => {
       if (!root || !files[root]?.includes(note)) {
         await setStatus(`${title(note)} cannot be read: note \`${note}\` not found`);
@@ -2664,6 +4479,38 @@ function workspaceHandlers(
         head: webAtByte(text, place.to),
       };
     },
+    links_open: async ({ note, place }) => {
+      if (!root || !files[root]?.includes(note)) {
+        await setStatus(`${title(note)} cannot be read: note \`${note}\` not found`);
+        return null;
+      }
+      openTab(note);
+      await sendAll();
+      await loadEditorCore();
+      let mirror = mirrors.get(note);
+      if (!mirror) {
+        mirror = new MirrorCore(textOf(note));
+        mirrors.set(note, mirror);
+      }
+      const at = webAtByte(mirror.text(), place.from);
+      return { note, rev: mirror.rev, anchor: at, head: at };
+    },
+    links_follow: async ({ note, at, rev }) => {
+      const mirror = mirrors.get(note);
+      if (!mirror || !isOpen(note)) {
+        throw notOpen(note);
+      }
+      // As the backend: the link that starts there, in that revision.
+      const link =
+        mirror.rev === rev
+          ? (mockFoundLinks(mirror.text()).find((found) => found.at === at)?.place ?? null)
+          : null;
+      return link === null ? { kind: 'done' } : followLink(note, link);
+    },
+    links_headings: ({ note }) =>
+      root && files[root]?.includes(note)
+        ? mockHeadings(mirrors.get(note)?.text() ?? textOf(note))
+        : [],
     tab_open: async ({ note }) => {
       if (root && files[root]?.includes(note)) {
         openTab(note);
@@ -2673,7 +4520,21 @@ function workspaceHandlers(
       }
       return null;
     },
-    tab_activate: async ({ note }) => {
+    tab_open_side: async ({ note }) => {
+      if (root && files[root]?.includes(note)) {
+        openToSide(note);
+        await sendAll();
+      } else {
+        await setStatus(`${title(note)} cannot be read: note \`${note}\` not found`);
+      }
+      return null;
+    },
+    tab_activate: async ({ note, pane: side }) => {
+      if (side && other !== null && side !== pane) {
+        focusPane(side);
+      } else if (!side && !tabs.some((tab) => tab.note === note) && other) {
+        focusPane(pane === 'left' ? 'right' : 'left');
+      }
       if (tabs.some((tab) => tab.note === note)) {
         active = note;
         viewed(note);
@@ -2682,17 +4543,53 @@ function workspaceHandlers(
       }
       return null;
     },
-    tab_close: async ({ note, force }) => {
+    pane_focus: async ({ pane: side }) => {
+      if (other !== null && side !== pane) {
+        focusPane(side);
+        remember();
+        await sendAll();
+      }
+      return null;
+    },
+    split_end: async () => {
+      endSplit();
+      remember();
+      await sendAll();
+      return null;
+    },
+    tab_close: async ({ note, force, pane: side }) => {
+      const back = pane;
+      if (side && side !== pane) {
+        focusPane(side);
+      } else if (!side && !tabs.some((tab) => tab.note === note) && other) {
+        focusPane(pane === 'left' ? 'right' : 'left');
+      }
       const at = tabs.findIndex((tab) => tab.note === note);
       if (at < 0) {
+        focusPane(back);
+        return null;
+      }
+      if (other?.tabs.some((tab) => tab.note === note)) {
+        // UC-005 BR-016: the note stays open in the other pane.
+        tabs.splice(at, 1);
+        if (active === note) {
+          active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
+        }
+        settlePanes();
+        focusPane(back);
+        remember();
+        await sendAll();
         return null;
       }
       const failure = store(note);
       if (failure && !force) {
+        focusPane(back);
         await sendAll();
         return { tab: note, what: `the tab ${title(note)}`, error: failure, switching: false };
       }
       dropTab(note, failure === null);
+      settlePanes();
+      focusPane(back);
       remember();
       await sendAll();
       return null;
@@ -2708,8 +4605,12 @@ function workspaceHandlers(
       await sendAll();
       return null;
     },
-    tab_set_view: async ({ note, view }) => {
-      tabs = tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab));
+    tab_set_view: async ({ note, view, pane: side }) => {
+      if (side && side !== pane && other) {
+        other.tabs = other.tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab));
+      } else {
+        tabs = tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab));
+      }
       remember();
       await emit('tabs', tabsView());
       return null;
@@ -2810,7 +4711,7 @@ function workspaceHandlers(
       return null;
     },
     ed_mirror: async ({ note }) => {
-      if (!tabs.some((tab) => tab.note === note)) {
+      if (!isOpen(note)) {
         throw notOpen(note);
       }
       await loadEditorCore();
@@ -2821,24 +4722,31 @@ function workspaceHandlers(
       }
       // The colours and figures follow, as the backend's tick sends them.
       setTimeout(() => void sendEnrich(note), 20);
+      // FR-099: and the marks of the spell check.
+      setTimeout(() => void sendSpell(note), 30);
       setTimeout(() => void sendIndexes(), 20);
       return {
         note,
         rev: mirror.rev,
         text: mirror.text(),
-        format: 'Markdown',
+        format: formatOf(note),
         anchor: 0,
         head: 0,
       };
     },
     ed_sync: async ({ note, batch }) => {
       const mirror = mirrors.get(note);
-      if (!mirror || !tabs.some((tab) => tab.note === note)) {
+      if (!mirror || !isOpen(note)) {
         throw notOpen(note);
       }
       const before = mirror.text();
       const { answer, reverted } = mirror.receive(batch);
       if (mirror.text() !== before) {
+        // UC-026 BR-001: a snapshot of the text before, every 10 minutes.
+        const newest = snapshotsOf.get(note)?.[0];
+        if (newest === undefined || Date.now() - newest.taken > 10 * 60 * 1000) {
+          takeSnapshot(note, before, 'Editing');
+        }
         searchAgain();
         gitAgain();
         if (quiet.delete(note)) {
@@ -2849,6 +4757,7 @@ function workspaceHandlers(
         await changed(note);
         setTimeout(() => void sendEnrich(note), 0);
         setTimeout(() => void sendIndexes(), 0);
+        spellLater(note);
       }
       if (reverted !== null) {
         // UC-004 A9, as the backend says it (`session/sync.rs`).
@@ -2875,22 +4784,35 @@ function workspaceHandlers(
       }
       return null;
     },
-    ed_follow_link: async ({ note, at, rev }) => {
+    ed_follow_link: async ({ note, at, rev, side }) => {
       const mirror = mirrors.get(note);
-      if (!mirror || !tabs.some((tab) => tab.note === note)) {
+      if (!mirror || !isOpen(note)) {
         throw notOpen(note);
       }
       // As the backend: a place of another revision follows nothing.
       const link = mirror.rev === rev ? mockLinkAt(mirror.text(), at) : null;
-      return link === null ? { kind: 'done' } : followLink(note, link);
+      return link === null ? { kind: 'done' } : followLink(note, link, side ?? false);
     },
-    note_new_start: () =>
-      root === null
-        ? null
-        : {
-            folder: (active && folder(active)) ?? '',
-            format: model.defaultFormat('Markdown') as FormatName,
-          },
+    note_new_start: () => {
+      if (root === null) {
+        return null;
+      }
+      const place = settingFolder('template_folder', 'templates');
+      return {
+        folder: (active && folder(active)) ?? '',
+        format: model.defaultFormat('Markdown') as FormatName,
+        templates: templateNotes().map((note) => {
+          const below = 'folder' in place ? note.slice(place.folder.length + 1) : note;
+          const at = below.lastIndexOf('/');
+          return {
+            note,
+            label: at < 0 ? title(note) : `${title(note)} (${below.slice(0, at)})`,
+            format: formatOf(note),
+          };
+        }),
+        templateFolder: 'folder' in place ? place.folder : 'templates',
+      };
+    },
     note_plan: ({ request }) => {
       const planned = planNote(request.title, request.folder);
       return 'id' in planned ? `${planned.id}.${extension(request.format)}` : null;
@@ -2911,16 +4833,115 @@ function workspaceHandlers(
         return { kind: 'done' };
       }
       const id = planned.id;
-      const text = newNoteText(request.title);
-      files[root] = [...(files[root] ?? []), id];
-      texts.set(id, text);
-      await loadEditorCore();
-      const mirror = new MirrorCore(text);
-      mirrors.set(id, mirror);
-      openTab(id);
+      // UC-003 A7, A8: from the template chosen, if it is one still.
+      const chosen = request.template ?? null;
+      const template = chosen !== null && templateNotes().includes(chosen) ? chosen : null;
+      const { date, time } = localClock();
+      const format = template === null ? request.format : formatOf(template);
+      const filled =
+        template === null
+          ? { text: newNoteText(request.title, format), cursor: null }
+          : fillTemplate(textOf(template), request.title, date, time);
+      const rev = await addNote(id, filled.text, format, request.side ?? false);
+      await setStatus(
+        chosen !== null && template === null
+          ? `Created the note ${title(id)} with only its title: the template ${chosen}.md could not be read (it is no template of the workspace now)`
+          : `Created the note ${title(id)}`,
+      );
+      return {
+        kind: 'created',
+        note: id,
+        rev,
+        offset: filled.cursor ?? filled.text.length,
+      };
+    },
+    // UC-025 steps 1 to 4, A1, A3 to A5, roughly as `open_daily_note`.
+    note_daily_open: async (): Promise<DailyNoteAnswer> => {
+      if (root === null) {
+        return { kind: 'done' };
+      }
+      const { date, time } = localClock();
+      const place = settingFolder('daily_note_folder', 'daily');
+      if (!('folder' in place)) {
+        await setStatus(
+          `The daily note cannot be created in the daily note folder: ${place.problem}`,
+          'workspaceSettings',
+        );
+        return { kind: 'done' };
+      }
+      const id = place.folder === '' ? date : `${place.folder}/${date}`;
+      const existing = (files[root] ?? []).find((note) => note.toLowerCase() === id.toLowerCase());
+      if (existing !== undefined) {
+        const wasOpen = isOpen(existing);
+        openTab(existing);
+        await sendAll();
+        await setStatus('');
+        if (wasOpen) {
+          return { kind: 'shown', note: existing };
+        }
+        const mirror = mirrors.get(existing);
+        const text = mirror?.text() ?? textOf(existing);
+        return { kind: 'opened', note: existing, rev: mirror?.rev ?? 1, offset: text.length };
+      }
+      if (place.folder.split('/').includes('locked')) {
+        await setStatus(
+          `The daily note could not be created: cannot create the folder: ${MOCK_SAVE_ERROR}`,
+        );
+        return { kind: 'done' };
+      }
+      // BR-003: the template the settings name, else the one titled Daily.
+      const named = model.workspaceValue('daily_note_template')?.trim() || null;
+      const templates = templateNotes();
+      const template =
+        named === null
+          ? (templates.find((note) => note.split('/').at(-1)?.toLowerCase() === 'daily') ?? null)
+          : ((files[root] ?? []).find(
+              (note) =>
+                note === named.replace(/\.(md|adoc)$/, '') &&
+                (!/\.(md|adoc)$/.test(named) || named.endsWith(`.${extension(formatOf(note))}`)),
+            ) ?? null);
+      const format: FormatName =
+        template === null ? (model.defaultFormat('Markdown') as FormatName) : formatOf(template);
+      const filled =
+        template === null
+          ? { text: newNoteText(date, format), cursor: null }
+          : fillTemplate(textOf(template), date, date, time);
+      const rev = await addNote(id, filled.text, format);
+      await setStatus(
+        named !== null && template === null
+          ? `Created the daily note ${date} with only its title: the daily note template ${named} was not found`
+          : `Created the daily note ${date}`,
+      );
+      return { kind: 'opened', note: id, rev, offset: filled.cursor ?? filled.text.length };
+    },
+    // UC-025 A2: the nearest earlier or later daily note of the folder.
+    note_daily_step: async ({ later }): Promise<DailyNoteAnswer> => {
+      const place = settingFolder('daily_note_folder', 'daily');
+      const dateOf = (note: string): string | null => {
+        const at = note.lastIndexOf('/');
+        const inFolder = 'folder' in place && (at < 0 ? '' : note.slice(0, at)) === place.folder;
+        const page = note.slice(at + 1);
+        return inFolder && /^\d{4}-\d{2}-\d{2}$/.test(page) ? page : null;
+      };
+      const current = active === null ? null : dateOf(active);
+      if (root === null || current === null) {
+        return { kind: 'notDaily' };
+      }
+      const days = (files[root] ?? [])
+        .map((note) => ({ note, date: dateOf(note) }))
+        .filter((day): day is { note: string; date: string } => day.date !== null)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      const next = later
+        ? days.find((day) => day.date > current)
+        : days.filter((day) => day.date < current).at(-1);
+      if (next === undefined) {
+        await setStatus(`There is no ${later ? 'later' : 'earlier'} daily note`);
+        return { kind: 'done' };
+      }
+      openTab(next.note);
       await sendAll();
-      await setStatus(`Created the note ${title(id)}`);
-      return { kind: 'created', note: id, rev: mirror.rev, offset: text.length };
+      await setStatus('');
+      return { kind: 'shown', note: next.note };
     },
     note_rename_start: ({ note }) =>
       conflictRefused(note, 'renaming')
@@ -2959,6 +4980,15 @@ function workspaceHandlers(
         return { kind: 'done' };
       }
       renameEverywhere(note, to);
+      // UC-026 BR-003: the snapshots follow the note.
+      const followed = snapshotsOf.get(note);
+      if (followed) {
+        snapshotsOf.set(
+          to,
+          [...followed, ...(snapshotsOf.get(to) ?? [])].sort((a, b) => b.taken - a.taken),
+        );
+        snapshotsOf.delete(note);
+      }
       let links = 0;
       let notes = 0;
       for (const other of files[root] ?? []) {
@@ -3034,7 +5064,7 @@ function workspaceHandlers(
         };
       }
       const text = mirrors.get(note)?.text() ?? textOf(note);
-      const reopen = tabs.some((tab) => tab.note === note);
+      const reopen = isOpen(note);
       files[root] = (files[root] ?? []).filter((n) => n !== note);
       const at = tabs.findIndex((tab) => tab.note === note);
       if (at >= 0) {
@@ -3044,7 +5074,10 @@ function workspaceHandlers(
           active = tabs[Math.min(at, tabs.length - 1)]?.note ?? null;
         }
       }
-      for (const map of [texts, mirrors, saveErrors] as Map<string, unknown>[]) {
+      // UC-026 BR-003: the snapshots go with the note (kept with it below).
+      const keptSnapshots = snapshotsOf.get(note);
+      forgetOther(note);
+      for (const map of [texts, mirrors, saveErrors, snapshotsOf] as Map<string, unknown>[]) {
         map.delete(note);
       }
       unstored.delete(note);
@@ -3061,6 +5094,10 @@ function workspaceHandlers(
           at: Date.now(),
         };
         deletedNotes[root] = [deleted, ...(deletedNotes[root] ?? [])];
+        // UC-026 BR-003: the snapshots are kept with the deleted note.
+        if (keptSnapshots) {
+          snapshotsDeleted.set(deleted.key, keptSnapshots);
+        }
         undo = { status: report, deleted, reopen };
       }
       await sendAll();
@@ -3580,6 +5617,8 @@ function workspaceHandlers(
         : todos.candidates(root, files[root] ?? [], number, query),
     todo_month: ({ day, step }) => mockCalendar(day, step),
     todo_list_show: async ({ filter }) => {
+      // OQ-279: the tab "Todos" is the left pane's, which becomes active.
+      focusPane('left');
       const list = todos.list(root);
       list.open = true;
       list.active = true;
@@ -3648,6 +5687,17 @@ function workspaceHandlers(
     },
   };
   handlers.__hooks = {
+    addSnapshot: (note, text, cause = 'Editing', taken = Date.now()) =>
+      takeSnapshot(note, text, mockCause(cause), taken).key,
+    agentWrite: async (on) => {
+      model.quick('agent_access', on ? 'Read and write' : 'Read only');
+      await sendSettings();
+    },
+    snapshots: (note) =>
+      (snapshotsOf.get(note) ?? []).map((snapshot) => ({
+        cause: snapshot.cause,
+        text: snapshot.text,
+      })),
     closeWindow: async () => {
       await emit('ed-flush', { note: null, closing: true });
     },
@@ -3677,9 +5727,14 @@ function workspaceHandlers(
         // A note not open: its file holds the new text.
         if (root !== null && files[root]?.includes(note)) {
           texts.set(note, text);
+          noteTouched(note);
+          // FR-078: the backlinks follow (NFR-019).
+          linksSoon();
         }
         return null;
       }
+      // UC-026 BR-001: the text the tab showed.
+      takeSnapshot(note, mirror.text(), 'OutsideChange');
       const rev = mirror.reload(text);
       followMirror(note, mirror);
       await emit('ed-changed', { note, rev });
@@ -3715,6 +5770,8 @@ function workspaceHandlers(
       }
       const line = text.slice(0, at).split('\n').length;
       const lines = Math.max(1, newText.split('\n').length - (newText.endsWith('\n') ? 1 : 0));
+      // UC-026 BR-001: the note before the agent's change.
+      takeSnapshot(note, text, 'AgentChange');
       if (mirror) {
         // ADR-025: as the backend's change of an open note, an undo step of its own.
         const rev = mirror.backendEdit(
@@ -3736,6 +5793,7 @@ function workspaceHandlers(
         await sendAgentMarks();
       } else {
         texts.set(note, text.slice(0, at) + newText + text.slice(at + oldText.length));
+        noteTouched(note);
         await reportAgentChange(name, 'changed', note);
       }
       const place = lines > 1 ? `lines ${line} to ${line + lines - 1}` : `line ${line}`;
@@ -3826,6 +5884,9 @@ function workspaceHandlers(
       await sendGit();
     },
     gitLog: () => [...(gitOf()?.messages ?? [])],
+    setNow: (now) => {
+      mockNow = now;
+    },
     syncOutcome: (outcome) => {
       syncNext = outcome;
     },
@@ -3876,6 +5937,10 @@ function workspaceHandlers(
         clearTimeout(timer);
       }
       todoTimers.clear();
+      if (linksTimer !== null) {
+        clearTimeout(linksTimer);
+        linksTimer = null;
+      }
       disposed = true;
     },
   };
@@ -3956,6 +6021,8 @@ export type MockHooks = {
   gitMerging(on: boolean): Promise<void>;
   /** F12: the messages of the fake commits of the open workspace, newest first. */
   gitLog(): string[];
+  /** Package 6b: the mock's local clock, `2026-11-11T08:15`; `null` for the browser's. */
+  setNow(now: string | null): void;
   /** F13, UC-014: how the fake syncs end from now on (`synced` at first). */
   syncOutcome(outcome: MockSyncOutcome): void;
   /** F13: how many fake syncs started. */
@@ -3987,6 +6054,15 @@ export type MockHooks = {
   windowClosed(): boolean;
   /** F16, M-06.6, M-21.4: the saves of these notes fail from now on (empty: none). */
   failSaves(notes: string[]): void;
+  /**
+   * UC-026: `note` gets a snapshot of `text` taken at `taken` (milliseconds,
+   * now by default) for `cause` ("Editing" by default); its key.
+   */
+  addSnapshot(note: string, text: string, cause?: MockCause | string, taken?: number): string;
+  /** UC-017, UC-019: agents may write the notes of the workspace (`true`) or only read them. */
+  agentWrite(on: boolean): Promise<void>;
+  /** UC-026: the snapshots of `note`, newest first: cause and text. */
+  snapshots(note: string): { cause: MockCause; text: string }[];
   /** The test ended: no timer of the mock outlives it. */
   dispose(): void;
 };

@@ -84,10 +84,129 @@ impl WasmTab {
         self.0.rename(note);
     }
 
+    /// FR-097: the view `id` of the window shows the note from now on.
+    #[wasm_bindgen(js_name = viewOpen)]
+    pub fn view_open(&mut self, id: u32) {
+        self.0.view_open(id);
+    }
+
+    /// FR-097: the view `id` is gone.
+    #[wasm_bindgen(js_name = viewClose)]
+    pub fn view_close(&mut self, id: u32) {
+        self.0.view_close(id);
+    }
+
+    /// UC-005 BR-016: the calls from now on are those of the view `id`;
+    /// `input` when the user acts in it.
+    #[wasm_bindgen(js_name = useView)]
+    pub fn use_view(&mut self, id: u32, input: bool) {
+        self.0.use_view(id, input);
+    }
+
+    /// FR-097: `EditorPatch | null` that brings the source view of the view
+    /// calling now from revision `base` to the text as it is, as JSON.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = sourceSince)]
+    pub fn source_since(&mut self, base: u32) -> Result<String, JsError> {
+        Ok(self.0.source_since(base)?)
+    }
+
     /// The facade (`true`) or the source view is shown.
     #[wasm_bindgen(js_name = setView)]
     pub fn set_view(&mut self, facade: bool) {
         self.0.set_view(facade);
+    }
+
+    /// UC-010 BR-001, UC-005 BR-019: close pairs is on or off.
+    #[wasm_bindgen(js_name = setClosePairs)]
+    pub fn set_close_pairs(&mut self, on: bool) {
+        self.0.set_close_pairs(on);
+    }
+
+    /// UC-004 A16 step 1: how many lines the note has.
+    #[wasm_bindgen(js_name = lineCount)]
+    #[must_use]
+    pub fn line_count(&self) -> u32 {
+        self.0.line_count()
+    }
+
+    /// UC-004 BR-020 (FR-090): `TextStatisticsView` JSON of the note and,
+    /// while text is selected, of the selection.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = textStatistics)]
+    pub fn text_statistics(&mut self) -> Result<String, JsError> {
+        Ok(self.0.text_statistics()?)
+    }
+
+    /// UC-024 step 2, FR-091: `NoteHeadView` JSON, the note attributes and
+    /// the tags of the note.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = noteHead)]
+    pub fn note_head(&mut self) -> Result<String, JsError> {
+        Ok(self.0.note_head()?)
+    }
+
+    /// UC-024 step 4: `AttributeEdited<EditorPatch>` JSON of `change`
+    /// (`AttributeChangeView`) in the source view.
+    ///
+    /// # Errors
+    ///
+    /// `change` is not an `AttributeChangeView`.
+    pub fn attribute(&mut self, change: &str) -> Result<String, JsError> {
+        Ok(self.0.attribute(change)?)
+    }
+
+    /// UC-024 step 4: `AttributeEdited<FacadePatch>` JSON of `change`
+    /// (`AttributeChangeView`) at the facade's selection `at`.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    #[wasm_bindgen(js_name = facadeAttribute)]
+    pub fn facade_attribute(&mut self, at: &str, change: &str) -> Result<String, JsError> {
+        Ok(self.0.facade_attribute(at, change)?)
+    }
+
+    /// UC-004 BR-017: `string | null` JSON, what the status bar says when
+    /// `target` (`LineTargetView`) lies beyond the note.
+    ///
+    /// # Errors
+    ///
+    /// `target` is not a `LineTargetView`.
+    #[wasm_bindgen(js_name = lineNote)]
+    pub fn line_note(&self, target: &str) -> Result<String, JsError> {
+        Ok(self.0.line_note(target)?)
+    }
+
+    /// UC-004 A16, BR-017: `EditorPatch` of the source view's cursor gone
+    /// to `target` (`LineTargetView`).
+    ///
+    /// # Errors
+    ///
+    /// `target` is not a `LineTargetView`.
+    #[wasm_bindgen(js_name = goToLine)]
+    pub fn go_to_line(&mut self, target: &str) -> Result<String, JsError> {
+        Ok(self.0.go_to_line(target)?)
+    }
+
+    /// UC-004 A16, BR-017: `FacadePatch` of the facade's cursor gone to the
+    /// line of `target` (`LineTargetView`) from the selection `at`.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    #[wasm_bindgen(js_name = facadeGoToLine)]
+    pub fn facade_go_to_line(&mut self, at: &str, target: &str) -> Result<String, JsError> {
+        Ok(self.0.facade_go_to_line(at, target)?)
     }
 
     /// The theme named `theme`, dark or not.
@@ -109,6 +228,50 @@ impl WasmTab {
     /// The answer could not be written.
     pub fn state(&mut self) -> Result<String, JsError> {
         Ok(self.0.state()?)
+    }
+
+    /// FR-080: `LinkContextView | null`, the place of a link typed at the
+    /// source view's cursor; `manual` for Ctrl+Space.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    #[wasm_bindgen(js_name = linkContext)]
+    pub fn link_context(&mut self, manual: bool) -> Result<String, JsError> {
+        Ok(self.0.link_context(manual)?)
+    }
+
+    /// FR-080: `EditorPatch | null` of writing the link `choice`
+    /// (`LinkChoice`) in the source view.
+    ///
+    /// # Errors
+    ///
+    /// `choice` is not a `LinkChoice`.
+    #[wasm_bindgen(js_name = completeLink)]
+    pub fn complete_link(&mut self, choice: &str) -> Result<String, JsError> {
+        Ok(self.0.complete_link(choice)?)
+    }
+
+    /// FR-080: `LinkContextView | null` at the facade's selection `at`
+    /// (`FacadeAt`); `manual` for Ctrl+Space.
+    ///
+    /// # Errors
+    ///
+    /// `at` is not a `FacadeAt`.
+    #[wasm_bindgen(js_name = facadeLinkContext)]
+    pub fn facade_link_context(&mut self, at: &str, manual: bool) -> Result<String, JsError> {
+        Ok(self.0.facade_link_context(at, manual)?)
+    }
+
+    /// FR-080: `FacadePatch | null` of writing the link `choice`
+    /// (`LinkChoice`) at the facade's selection `at` (`FacadeAt`).
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    #[wasm_bindgen(js_name = facadeCompleteLink)]
+    pub fn facade_complete_link(&mut self, at: &str, choice: &str) -> Result<String, JsError> {
+        Ok(self.0.facade_complete_link(at, choice)?)
     }
 
     /// `EditorPatch` of `input` (`EditorInput`), as JSON.
@@ -136,25 +299,51 @@ impl WasmTab {
         Ok(self.0.apply(base, changes, anchor, head, new_step)?)
     }
 
-    /// UC-008 BR-008, M-13.2: marks the words of `text` (JSON
-    /// `string | null`) from now on.
+    /// UC-008 BR-008, BR-011, M-13.2: marks the places of `spec` (JSON
+    /// `FindSpec | null`) from now on.
     ///
     /// # Errors
     ///
-    /// `text` is not a string or `null`.
+    /// `spec` is not a `FindSpec` or `null`.
     #[wasm_bindgen(js_name = setSearch)]
-    pub fn set_search(&mut self, text: &str) -> Result<(), JsError> {
-        Ok(self.0.set_search(text)?)
+    pub fn set_search(&mut self, spec: &str) -> Result<(), JsError> {
+        Ok(self.0.set_search(spec)?)
     }
 
     /// UC-008 A6, M-13.4: `FindAnswer | null` of the step `step` (JSON
-    /// `FindStep`) of the find field holding `text` (a JSON string).
+    /// `FindStep`) of the find field holding `spec` (JSON `FindSpec`).
     ///
     /// # Errors
     ///
     /// An argument is not what it should be.
-    pub fn find(&mut self, text: &str, step: &str) -> Result<String, JsError> {
-        Ok(self.0.find(text, step)?)
+    pub fn find(&mut self, spec: &str, step: &str) -> Result<String, JsError> {
+        Ok(self.0.find(spec, step)?)
+    }
+
+    /// UC-005 A20, A21: `Replaced<EditorPatch>` of replacing the selected
+    /// occurrence of `spec` (JSON `FindSpec`), or all, with `replacement`.
+    ///
+    /// # Errors
+    ///
+    /// `spec` is not a `FindSpec`.
+    pub fn replace(&mut self, spec: &str, replacement: &str, all: bool) -> Result<String, JsError> {
+        Ok(self.0.replace(spec, replacement, all)?)
+    }
+
+    /// UC-005 A20, A21, BR-017: `Replaced<FacadePatch>` of replacing in the
+    /// text the facade shows.
+    ///
+    /// # Errors
+    ///
+    /// `spec` is not a `FindSpec`.
+    #[wasm_bindgen(js_name = facadeReplace)]
+    pub fn facade_replace(
+        &mut self,
+        spec: &str,
+        replacement: &str,
+        all: bool,
+    ) -> Result<String, JsError> {
+        Ok(self.0.facade_replace(spec, replacement, all)?)
     }
 
     /// M-13.4: the selected text (markup), for the find field.
@@ -164,14 +353,15 @@ impl WasmTab {
         self.0.selected_text()
     }
 
-    /// M-13.4: `FindStatus` of the find field, as JSON.
+    /// M-13.4, UC-005 A22: `FindStatus` of the find field, as JSON, with
+    /// what is wrong with the replacement (JSON `string | null`).
     ///
     /// # Errors
     ///
-    /// The answer could not be written.
+    /// `replacement` is not a string or `null`.
     #[wasm_bindgen(js_name = findStatus)]
-    pub fn find_status(&mut self) -> Result<String, JsError> {
-        Ok(self.0.find_status()?)
+    pub fn find_status(&mut self, replacement: &str) -> Result<String, JsError> {
+        Ok(self.0.find_status(replacement)?)
     }
 
     /// The place for the status line, as a JSON string.
@@ -438,6 +628,17 @@ impl WasmTab {
     }
 }
 
+/// FR-086, UC-004 A16, A17: `LineTargetAnswer` JSON for what the user
+/// typed in "Go to line".
+///
+/// # Errors
+///
+/// The answer could not be written.
+#[wasm_bindgen(js_name = lineTarget)]
+pub fn line_target(text: &str) -> Result<String, JsError> {
+    Ok(calls::line_target(text)?)
+}
+
 /// ADR-025: the backend's mirror of one note, for the mock backend of the
 /// dev server; see [`Mirror`].
 #[wasm_bindgen]
@@ -488,11 +689,15 @@ impl WasmMirror {
     }
 
     /// `EnrichView` JSON for the mock: the figures of the images from
-    /// `images` (JSON object by target), every diagram with `diagram`.
+    /// `images` (JSON object by target), every diagram with `diagram`, every
+    /// formula with the placeholder `formula` (FR-098).
     ///
     /// # Errors
     ///
     /// An argument is not the JSON it should be.
+    // A wasm-bindgen export takes plain arguments; this one serves only the
+    // mock backend.
+    #[allow(clippy::too_many_arguments)]
     pub fn enrichment(
         &self,
         note: &str,
@@ -501,10 +706,11 @@ impl WasmMirror {
         dark: bool,
         images: &str,
         diagram: &str,
+        formula: &str,
     ) -> Result<String, JsError> {
         Ok(self
             .0
-            .enrichment(note, markdown, (theme, dark), images, diagram)?)
+            .enrichment(note, markdown, (theme, dark), images, diagram, formula)?)
     }
 
     /// A change from outside; the new revision.
@@ -519,5 +725,120 @@ impl WasmMirror {
     /// The answer could not be written.
     pub fn resync(&mut self, text: &str) -> Result<String, JsError> {
         Ok(self.0.resync(text)?)
+    }
+}
+
+/// FR-076, FR-077 (UC-004 BR-014, UC-023 BR-002): the notes of go to note
+/// or the commands of the command palette, ranked against what the user
+/// typed with the rule of `underline_markup::suggest`, so the window ranks
+/// without a call to the backend and both overlays follow one rule.
+#[wasm_bindgen]
+#[derive(Debug, Default)]
+pub struct WasmSuggestions(underline_markup::suggest::Suggestions);
+
+#[wasm_bindgen]
+impl WasmSuggestions {
+    /// The suggestions, each as its name and its context at the same
+    /// index (a note's title and folder, a command's name and menu), in the
+    /// order they are listed with an empty field; a missing context is
+    /// `""`, and contexts beyond the last name are not read.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new(names: Vec<String>, contexts: Vec<String>) -> WasmSuggestions {
+        WasmSuggestions(underline_markup::suggest::Suggestions::new(
+            names
+                .iter()
+                .enumerate()
+                .map(|(at, name)| (name.as_str(), contexts.get(at).map_or("", String::as_str))),
+        ))
+    }
+
+    /// How many suggestions there are.
+    #[must_use]
+    pub fn len(&self) -> u32 {
+        u32::try_from(self.0.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Whether there is none.
+    #[wasm_bindgen(js_name = isEmpty)]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The indices of the suggestions that match `typed`, best first; the
+    /// indices in `last` follow all others (commands not available now);
+    /// an index in `last` that names no suggestion is left aside.
+    #[must_use]
+    pub fn rank(&self, typed: &str, last: Vec<u32>) -> Vec<u32> {
+        let last: std::collections::HashSet<usize> = last
+            .into_iter()
+            .filter_map(|at| usize::try_from(at).ok())
+            .collect();
+        self.0
+            .rank(typed, |at| last.contains(&at))
+            .into_iter()
+            .map(|at| u32::try_from(at).unwrap_or(u32::MAX))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::WasmSuggestions;
+
+    /// TC-004-26, TC-023-05: the window's ranking is the rule's.
+    #[test]
+    fn tc_004_26_the_wasm_ranks_as_the_rule() {
+        let notes = WasmSuggestions::new(
+            vec!["Release Plan".into(), "Plan".into(), "Plane Tickets".into()],
+            vec![String::new(), String::new(), "travel".into()],
+        );
+        assert_eq!(notes.len(), 3);
+        assert!(!notes.is_empty());
+        assert_eq!(notes.rank("plan", Vec::new()), [1, 2, 0]);
+        assert_eq!(notes.rank("plan", vec![1]), [2, 0, 1]);
+        assert_eq!(notes.rank("travel", Vec::new()), [2]);
+    }
+
+    /// Review: whatever the window gives, the ranking answers without a
+    /// panic (a panic would trap the WASM, `hostile.rs`).
+    #[test]
+    fn hostile_arguments_rank_without_a_panic() {
+        // More contexts than names: the extra ones are not read.
+        let more = WasmSuggestions::new(vec!["Plan".into()], vec!["a".into(), "b".into()]);
+        assert_eq!(more.len(), 1);
+        assert_eq!(more.rank("b", Vec::new()), Vec::<u32>::new());
+        // Fewer contexts, empty names, duplicates.
+        let odd = WasmSuggestions::new(
+            vec![String::new(), "Plan".into(), "Plan".into(), "\"".into()],
+            vec!["x".into()],
+        );
+        assert_eq!(odd.rank("", Vec::new()), [0, 1, 2, 3]);
+        assert_eq!(odd.rank("plan", vec![1]), [2, 1]);
+        assert_eq!(odd.rank("x", Vec::new()), [0]);
+        // Indices out of range, also the largest, are left aside.
+        assert_eq!(odd.rank("plan", vec![u32::MAX, 99, 2, 2]), [1, 2]);
+        // Quotes, open or alone, and characters whose lower case is longer.
+        for typed in [
+            "\"", "\"\"", "\"plan", "plan\"", "İ", "ß", "Σ", "\u{301}", "  ", "\u{0}",
+        ] {
+            let _ = odd.rank(typed, vec![0]);
+        }
+        let unicode = WasmSuggestions::new(
+            vec!["İstanbul".into(), "ΟΔΟΣ".into(), "e\u{301}te\u{301}".into()],
+            Vec::new(),
+        );
+        assert_eq!(unicode.rank("i\u{307}st", Vec::new()), [0]);
+        assert_eq!(unicode.rank("οδοσ", Vec::new()), [1]);
+        assert_eq!(unicode.rank("\u{301}t", Vec::new()), [2]);
+    }
+
+    #[test]
+    fn tc_023_04_missing_contexts_are_empty() {
+        let commands = WasmSuggestions::new(vec!["New note…".into()], Vec::new());
+        assert_eq!(commands.rank("new", vec![7]), [0]);
+        assert!(commands.rank("xyzzy", Vec::new()).is_empty());
+        assert!(WasmSuggestions::default().is_empty());
     }
 }

@@ -3,8 +3,10 @@
 //! rules of the source view ([`SourceEditor`]), the Vim and Nano keys behind
 //! the [`Target`] trait ([`Keys`]), the functions of the formatting toolbar
 //! ([`Tool`]), the offsets a webview counts in ([`utf16`]), and the editing
-//! rules of the facade with its blocks ([`facade`], ADR-025), and the hash
-//! the webview and the backend compare their texts by ([`sync`]).
+//! rules of the facade with its blocks ([`facade`], ADR-025), the hash
+//! the webview and the backend compare their texts by ([`sync`]), and the
+//! editing comfort of both views: close pairs, moving lines, indenting list
+//! items, going to a line ([`comfort`], FR-081 to FR-086).
 //!
 //! It was moved out of the former egui editor widget, so that the same
 //! logic could run in the webview (`docs/migration/plan.md`, sections 1.2,
@@ -14,6 +16,7 @@
 
 #![warn(missing_docs)]
 
+pub mod comfort;
 pub mod document;
 pub mod facade;
 pub mod input;
@@ -23,8 +26,9 @@ pub mod sync;
 pub mod toolbar;
 pub mod utf16;
 
+pub use comfort::{EditAction, TextEdit};
 pub use document::{Document, Edit};
 pub use input::{Key, KeyInput, Modifiers};
 pub use keys::{EditorCommand, InputMode, InputStatus, KeyMap, Keys, KeysMode, Target};
-pub use source::{Applied, CursorPlace, Outcome, SourceEditor, SourceKeys};
+pub use source::{Applied, Caret, CursorPlace, Outcome, SourceEditor, SourceKeys};
 pub use toolbar::Tool;

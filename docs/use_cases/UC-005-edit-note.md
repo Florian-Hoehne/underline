@@ -9,7 +9,7 @@
 **Trigger:** The user types, formats, pastes, or drops something into the note of the active tab.  
 **Status:** Reviewed  
 
-**Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-032, FR-033, FR-034, FR-044, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012](../requirements.md)
+**Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-032, FR-033, FR-034, FR-044, FR-073, FR-075, FR-080, FR-081, FR-082, FR-083, FR-084, FR-085, FR-097, FR-098, FR-099, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012, NFR-014, NFR-015, NFR-018](../requirements.md)
 
 ## Preconditions
 
@@ -18,7 +18,7 @@
 ## Main Success Scenario
 
 1. The user changes the note in the active tab: in the source view they edit its markup, in the facade they edit its rendered content.
-2. The system shows every typed character at once, in either editing view.
+2. The system shows every typed character at once, in either editing view; in the source view it highlights the current line and the bracket that matches the one at the cursor (BR-022), and in both views it marks the words the spell check does not know (BR-023).
 3. In the facade the system stores each change in the markup of the note format, changing only the edited block, and shows the format indicator with the note format of the note.
 4. At most 2 seconds after the last change the system stores the note on the local disk, never half written, and reports in the status bar that the note was saved.
 5. The user goes on editing; use case continues at step 1 until the user leaves the note.
@@ -184,6 +184,84 @@
 2. When the user chooses to copy, use case continues at A9 step 1; when the user chooses to link, the system inserts a link to the file at its place on this computer, which is not part of the workspace and is not pushed with git; use case continues at step 2.
 3. When the user cancels, the system changes nothing; use case continues at step 1.
 
+### A20: Replace in the note
+
+**Trigger:** The user opens the find field for replacing with Ctrl+H (Cmd+Alt+F on macOS), or opens the replace field in the find field of the note (UC-008 A6) (step 1)  
+**Flow:**
+
+1. The system shows the find field with a replace field below it, the search text holding the selected text if there is one, and the search switches (UC-008 BR-011).
+2. The user types the search text and the replacement; the system marks every occurrence in the note (BR-017), selects the first one after the cursor, and shows how many there are.
+3. The user replaces the selected occurrence; the system replaces it and selects the next one.
+4. Use case continues at step 2.
+
+### A21: Replace all in the note
+
+**Trigger:** The user chooses to replace all occurrences in the find field (step 1)  
+**Flow:**
+
+1. The system replaces every occurrence in the note at once, as one change that one undo takes back, and says how many it replaced.
+2. Use case continues at step 2.
+
+### A22: Nothing to replace
+
+**Trigger:** While replacing, the note holds no occurrence of the search text, or the search switch regular expression is on and the search text or the replacement is not valid (step 1)  
+**Flow:**
+
+1. The find field says that there is no occurrence, or what is wrong with the search text or the replacement, and nothing can be replaced.
+2. The user changes the search text or the replacement as in A20 step 2.
+3. Use case continues at step 1.
+
+### A23: Complete a link
+
+**Trigger:** The user types the place of a link: in the source view after `](` in a Markdown note or after `xref:` or `<<` in an AsciiDoc note, in the facade after `[[`, or anywhere in the place of a link with Ctrl+Space (step 1)  
+**Flow:**
+
+1. While the user types, the system lists the notes of the workspace that match what was typed after the start of the place, as go to note matches them (UC-004 BR-014), each with its title and folder; after a `#`, it lists the headings of that note, or of the active note when no note was typed.
+2. The user chooses a note or a heading with the arrow keys and Enter or Tab, or with a click.
+3. The system writes the link as a local link in the markup of the note format, as the formatting toolbar writes a link to a note (BR-018), and places the cursor after it.
+4. Use case continues at step 2.
+
+### A24: Link completion dismissed
+
+**Trigger:** The user presses Escape during link completion, or types on although no note matches (step 1)  
+**Flow:**
+
+1. The system closes the list and keeps what the user typed as typed, also `[[` in the facade.
+2. Use case continues at step 2.
+
+### A25: Close a pair
+
+**Trigger:** The user types an opening bracket, a quote, or inline markup that comes in pairs while close pairs is on (UC-010) (step 1)  
+**Flow:**
+
+1. The system writes the closing counterpart after the cursor, or, when text is selected, encloses the selection in the pair, by the rules of BR-019.
+2. Use case continues at step 2.
+
+### A26: Move or duplicate a line
+
+**Trigger:** The user moves the line at the cursor up or down with Alt+Up or Alt+Down (Option on macOS), or duplicates it with Ctrl+Shift+D (Cmd+Shift+D on macOS) (step 1)  
+**Flow:**
+
+1. The system moves the line, or every line of the selection, past the line above or below, or puts a copy of it below it with the cursor in the copy, by the rules of BR-020.
+2. Use case continues at step 2.
+
+### A27: Indent or outdent a list item
+
+**Trigger:** The user presses Tab or Shift+Tab while the cursor or the selection is in a list item (step 1)  
+**Flow:**
+
+1. The system indents the list items by one level below the item before them, or outdents them by one level, each with its own items below it, by the rules of BR-021.
+2. Use case continues at step 2.
+
+### A28: Correct a word the spell check marks
+
+**Trigger:** The user opens the context menu on a word the spell check marks, with the mouse or with Shift+F10 (step 2)  
+**Flow:**
+
+1. The system offers up to five corrections from the dictionary of the language of the spell check, and "Add to dictionary".
+2. When the user chooses a correction, the system replaces the word with it as one change; when the user adds the word to the dictionary, the system adds it to the user dictionary and removes its mark in every note.
+3. Use case continues at step 2.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -213,7 +291,7 @@ Every function of this use case works the same in the source view and the facade
 
 ### BR-004: Undo
 
-Each tab has its own history of changes, which it keeps across switches of the editing view until the tab is closed; it does not survive a restart. An undone or redone change is stored like any other change. When the note is changed outside (UC-004 A7), its history starts anew, so undo never takes back a change made by another program, git, or an agent.
+Each tab has its own history of changes (two tabs of the same note share one, BR-016), which it keeps across switches of the editing view until the tab is closed; it does not survive a restart. An undone or redone change is stored like any other change. When the note is changed outside (UC-004 A7), its history starts anew, so undo never takes back a change made by another program, git, or an agent.
 
 ### BR-005: Formatting toolbar
 
@@ -238,6 +316,10 @@ error (UC-004 A11).
 
 A table is shown formatted in the same way: while the cursor is in it, its markup is shown in a frame below the table
 and edited there, and the table follows each change.
+
+A formula (UC-004 BR-019) is shown typeset. While the cursor is in it, its source is shown and edited in a frame
+below a block formula or in place of an inline one, and the typeset formula follows each change; a formula with an
+error is shown as its source with the error (UC-004 A21).
 
 ### BR-009: Vim keys
 
@@ -271,3 +353,36 @@ Pasting into the facade keeps the formatting the note format can hold and stores
 ### BR-015: Normal input mode
 
 The normal input mode follows the usual keys of the platform: `Ctrl` (`Cmd` on macOS) with `Z` to undo, `Shift+Z` or `Y` to redo, `X`, `C`, `V` to cut, copy, and paste, and `A` to select everything. Formatting functions of the toolbar have keys of their own, shown next to them (NFR-011).
+
+### BR-016: The same note on both sides
+
+When a note is open in both panes of the split view (UC-004 BR-018), both tabs show the same note: a change made in one appears in the other at once, and they share one history of changes, so undo in either takes back the last change of the note (BR-004). Each tab keeps its own editing view, cursor, reading position, and folded sections.
+
+### BR-017: Replace in the note
+
+The find field of the note matches as the find field of UC-008 A6, with the search switches of UC-008 BR-011; while it is open for replacing, the search text is matched as one text, spaces included, as in the replace of the workspace (UC-022 BR-002), and the replacement follows UC-022 BR-003. In the source view, the markup is searched and replaced; in the facade, the text the facade shows, so a link address or markup is replaced only in the source view. Replacing one occurrence is one change; replacing all is one change too (A21). Ctrl+H (Cmd+Alt+F on macOS) opens the replace field where the input mode gives that key no meaning of its own (UC-008 BR-009); the Vim input mode has its own `:s`. In the field, Enter replaces the selected occurrence, Ctrl+Alt+Enter (Cmd+Alt+Enter on macOS) replaces all, Alt+C, Alt+W, and Alt+R switch the search switches, and Escape closes it (NFR-011).
+
+### BR-018: Link completion
+
+Link completion suggests the notes of the workspace and, after a `#`, the headings of a note (FR-080). The suggestions appear within 200 milliseconds of a key in a workspace of 10,000 notes (NFR-018). The chosen note is written as a local link (UC-004 BR-005), relative to the note that holds it, in the markup of the note format and in the same form the formatting toolbar writes a link to a note (A2); a heading is written as GitHub and GitLab name the place of a heading. A link typed in the source view keeps the text the user typed between the brackets; when there is none, the title of the note, or the heading, becomes the text. In the facade, `[[` only starts the completion: it is replaced by the link and is never stored, so the note holds a normal link of its note format (C-003, C-004).
+
+### BR-019: Close pairs
+
+While close pairs is on (UC-010 BR-001), typing `(`, `[`, `{`, `"`, or `` ` `` writes the closing counterpart after the cursor when the cursor is at the end of the line, before a space, or before a closing bracket (FR-081). In the source view, typing `**` or `~~` within a line writes the same pair after the cursor; a single `*` or `_`, and in an AsciiDoc note `*`, `_`, and `#`, enclose a selection but are otherwise typed as they are, because they also start a list or stand alone. With text selected, typing an opening bracket, a quote, or markup of a pair encloses the selection in the pair and keeps it selected. Typing a closing character right before the same character written by close pairs moves over it, and Backspace right after an opening character removes the closing one written with it. Inline markup is not closed in code. Close pairs works in the normal input mode, in the insert mode of the Vim keys, and in the Nano input mode.
+
+### BR-020: Moving and duplicating lines
+
+In the source view, a line is a line of the markup; in the facade, a line is a block, as for the Vim keys (BR-009): a paragraph, a heading, a list item with the items below it, a table, a code block, a diagram, or a formula is moved or duplicated as a whole (FR-082). A selection moves or duplicates every line or block it touches. At the first or the last line, moving further does nothing. A move or a copy is one change for undo. The Vim input mode keeps its own keys for this (BR-009).
+
+### BR-021: Indenting list items
+
+Tab indents the list items at the cursor or in the selection by one level, making them items of the item before them, and Shift+Tab outdents them by one level, each with the items below it (FR-083). An item that has no item before it on its level is not indented further, and an item on the top level is not outdented. The indent is written as the note format writes the level of a list: in Markdown by indenting the item to the text of the item above, in AsciiDoc by one more or one less `*` or `.`. Outside a list item, Tab and Shift+Tab keep the meaning they had. In the Vim input mode, Tab and Shift+Tab work so in the insert mode; its normal mode keeps `>>` and `<<`.
+
+### BR-022: Current line and matching bracket
+
+In the source view, the current line is highlighted in a color of the active theme while nothing is selected (FR-084). When the cursor is right before or after a bracket `(`, `)`, `[`, `]`, `{`, or `}`, that bracket and its counterpart are highlighted; a bracket without a counterpart is marked as such (FR-085). Both only show and change nothing in the note.
+
+### BR-023: Spell check
+
+The spell check marks, in both editing views, each word of the text the facade shows that the dictionary of the language of the spell check does not know and that is not in the user dictionary (FR-099), with a wavy line in a color of the active theme. It does not check code, link addresses, web addresses, diagrams, formulas, names of note attributes, tags, words holding digits, and words written only in capital letters. The language is chosen in the settings, for the user and for a workspace, or the spell check is off (UC-010 BR-001, FR-100). The dictionaries come with Underline: the spell check needs no network connection (NFR-014), and no word leaves the computer (NFR-015). A mark appears at most 1 second after a word was typed, and typing stays within the latency of NFR-002. A word added to the user dictionary is not marked in any workspace or language. Marks change nothing in the note.
+

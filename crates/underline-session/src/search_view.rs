@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::editor_view::SearchSwitches;
+
 /// UC-008 step 2, A1: the search of the overlay. Sent as the event
 /// `search` when its text or its result changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -13,6 +15,11 @@ pub struct SearchView {
     /// The text searched for, without the spaces around it; empty when
     /// nothing is searched.
     pub text: String,
+    /// FR-075, BR-011: the search switches it is searched with.
+    pub switches: SearchSwitches,
+    /// UC-008 A9: what is wrong with the text (an expression that is not
+    /// valid); no notes are found then.
+    pub problem: Option<String>,
     /// The newest result that fits a text searched for; `None` until the
     /// first came ("Searching…"). While a new text is searched, the result
     /// of the text before stays (egui).
@@ -29,6 +36,8 @@ pub struct SearchResultView {
     pub serial: u32,
     /// What it was searched for.
     pub text: String,
+    /// The switches it was searched with.
+    pub switches: SearchSwitches,
     /// How many notes were found.
     pub total: u32,
     /// The first [`SearchResultView::PAGE`] found notes, title and folder

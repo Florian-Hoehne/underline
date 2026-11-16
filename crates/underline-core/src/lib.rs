@@ -21,14 +21,17 @@ mod lookup;
 mod new_note;
 mod note;
 mod open;
+mod panes;
 mod properties;
 mod rename;
 mod saver;
 mod search;
 mod settings;
+mod snapshots;
 mod state;
 mod sync;
 mod tabs;
+mod templates;
 mod todos;
 mod watcher;
 mod workspace;
@@ -66,7 +69,9 @@ pub use embed::{
 };
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
-pub use links::{asciidoc_anchor, heading_anchor, resolve_link, LinkTarget};
+pub use links::{
+    asciidoc_anchor, heading_anchor, percent_decode, resolve_link, resolve_link_with, LinkTarget,
+};
 pub use lookup::{
     find_note, list_for_agent, read_for_agent, search_for_agent, AgentFound, AgentSearch,
     ListedNote, LookupError, NoteText, AGENT_FOUND_LINES, AGENT_FOUND_NOTES, CLOSEST_NOTES,
@@ -77,17 +82,27 @@ pub use new_note::{
 };
 pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
+pub use panes::{Pane, PaneOpened, PaneSide, PaneTab, Panes};
 pub use properties::{format_local_time, format_size, NoteProperties};
 pub use rename::{NoteMove, Rename};
-pub use saver::{NoteSaver, NoteWriter, OwnWrites, SaveJob, SaveResult};
+pub use saver::{NoteSaver, NoteWriter, OwnWrites, SaveJob, SaveResult, SnapshotOutcome};
 pub use search::{
-    found_lines, lower, search_notes, FoundLine, FoundNote, Query, SearchRequest, SearchResult,
-    Searcher, Texts, LINE_CONTEXT, SHOWN_PLACES,
+    find_places, found_lines, lower, note_places, replace_places, search_notes, search_notes_with,
+    tags_of, FoundLine, FoundNote, NotePlace, NotePlaces, NoteTags, PlaceKey, PlacesRequest,
+    PlacesResult, Query, QueryError, Reading as SearchReading, Replacement, SearchRequest,
+    SearchResult, Searcher, ShownPlace, Switches, Texts, LINE_CONTEXT, SHOWN_PLACES,
+    SHOWN_REPLACE_PLACES,
 };
 pub use settings::{
-    set_key, store_setting, user_settings_dir, user_settings_path, AgentAccess, Effective,
-    InputMode, LineSide, SettingKey, Settings, SettingsError, Theme, WorkspaceSettings,
-    LEGACY_MCP_KEY, SETTINGS_FILE_NAME,
+    set_key, store_setting, system_spell_language, user_settings_dir, user_settings_path,
+    zoom_step, AgentAccess, Effective, InputMode, LineSide, SettingKey, Settings, SettingsError,
+    SpellCheckLanguage, Theme, WorkspaceSettings, EDITOR_ZOOM, EDITOR_ZOOM_DEFAULT,
+    EDITOR_ZOOM_STEP, LEGACY_MCP_KEY, SETTINGS_FILE_NAME,
+};
+pub use snapshots::{
+    lines_differing, snapshot_time_text, Snapshot, SnapshotCause, SnapshotError, SnapshotJob,
+    SnapshotStore, DELETED_SNAPSHOTS_FOLDER, EDITING_SNAPSHOT_AFTER_MS, KEEP_SNAPSHOTS_MS,
+    SNAPSHOTS_FOLDER,
 };
 pub use state::{
     now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,
@@ -95,6 +110,11 @@ pub use state::{
 };
 pub use sync::{Distance, SyncMode, SyncOutcome, SyncRequest, Syncer, AUTO_PREFIX};
 pub use tabs::{Opened, TabList, MAX_TABS};
+pub use templates::{
+    daily_date, date_text, fill_template, folder_setting_problem, local_now, template_folder,
+    time_text, CreatedNote, DailyNote, DailyRequest, DailyTemplate, Filled, NotDaily, Template,
+    TemplateChoice, TemplateUse, DAILY_NOTE_FOLDER, DAILY_TEMPLATE_TITLE, TEMPLATE_FOLDER,
+};
 pub use todos::{
     create_todo, delete_todo, links_summary, load_todos, overdue_count, overdue_days, relink_todos,
     restore_todo, save_todo, todo_list, todo_number_of, todo_relative_path, todos_fingerprint,

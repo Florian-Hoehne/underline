@@ -92,6 +92,41 @@ impl Tool {
         }
     }
 
+    /// Its name, as the hint and the command palette say it (UC-023
+    /// BR-001), such as "Bold".
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Heading => "Heading",
+            Tool::Bold => "Bold",
+            Tool::Italic => "Italic",
+            Tool::Code => "Code",
+            Tool::List => "List",
+            Tool::Quote => "Quote",
+            Tool::Link => "Link",
+            Tool::Image => "Image",
+            Tool::Table => "Table",
+        }
+    }
+
+    /// Its key with the command key (`Ctrl`, `Cmd` on macOS): the letter
+    /// in capitals and whether Shift is held, as [`Tool::for_key`] takes it
+    /// and the hint says it (UC-023 BR-003).
+    #[must_use]
+    pub fn key(self) -> (char, bool) {
+        match self {
+            Tool::Heading => ('H', true),
+            Tool::Bold => ('B', false),
+            Tool::Italic => ('I', false),
+            Tool::Code => ('E', false),
+            Tool::List => ('L', true),
+            Tool::Quote => ('Q', true),
+            Tool::Link => ('K', false),
+            Tool::Image => ('I', true),
+            Tool::Table => ('T', true),
+        }
+    }
+
     /// The function a key press calls, if any (`Ctrl` is `Cmd` on macOS).
     #[must_use]
     pub fn for_key(key: Key, modifiers: Modifiers) -> Option<Tool> {
@@ -116,6 +151,37 @@ impl Tool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UC-023 BR-001, BR-003: the name and the key the command palette
+    /// shows are those of the hint, and the key calls the function.
+    #[test]
+    fn uc023_name_and_key_are_those_of_the_hint() {
+        for tool in Tool::ALL {
+            let (letter, shift) = tool.key();
+            let shift_text = if shift { "Shift+" } else { "" };
+            assert_eq!(
+                tool.hint(),
+                format!("{} (Ctrl+{shift_text}{letter})", tool.name())
+            );
+            let key = match letter {
+                'B' => Key::B,
+                'E' => Key::E,
+                'H' => Key::H,
+                'I' => Key::I,
+                'K' => Key::K,
+                'L' => Key::L,
+                'Q' => Key::Q,
+                'T' => Key::T,
+                other => panic!("no key {other}"),
+            };
+            let modifiers = Modifiers {
+                command: true,
+                shift,
+                ..Modifiers::default()
+            };
+            assert_eq!(Tool::for_key(key, modifiers), Some(tool));
+        }
+    }
 
     /// FR-023, NFR-011: the toolbar keys need the command key (`Ctrl`, or
     /// `Cmd` on macOS), with Shift where the hint says so.

@@ -193,6 +193,10 @@ describe('M-14.2 Rename note (UC-006)', () => {
       'Rename… F2',
       'Delete…',
       'Export… Ctrl+Shift+E',
+      // UC-026 step 1.
+      'Snapshots…',
+      // FR-096, UC-004 A18: the active note to the side.
+      'Open to the side Ctrl+\\',
     ]);
     await waitFor(() => expect(items[0]).toHaveFocus());
     await fireEvent.keyDown(items[0], { key: 'ArrowDown' });
@@ -219,7 +223,7 @@ describe('M-14.3 Delete note (UC-007), M-05.4, M-05.5', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((item) => item.textContent?.replace(/\s+/g, ' ').trim()),
-    ).toEqual(['Rename…', 'Delete… Delete', 'Export ▸']);
+    ).toEqual(['Rename…', 'Delete… Delete', 'Export ▸', 'Snapshots…', 'Open to the side Ctrl+\\']);
     await fireEvent.click(within(menu).getByRole('menuitem', { name: 'Delete…' }));
 
     const found = await dialog('Delete note');

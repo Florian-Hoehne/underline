@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use underline_editor_core::facade::ShownBlock;
 
-use crate::editor_view::{EditorCommandName, KeyName, KeysStatusView, SpanStyle, ToolName};
+use crate::editor_view::{
+    EditActionName, EditorCommandName, KeyName, KeysStatusView, SpanStyle, ToolName,
+};
 
 /// A run of text in one style (M-09.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -40,6 +42,37 @@ pub struct RunView {
     /// The web offset right after the run, relative to the start of the
     /// block.
     pub end: u32,
+    /// FR-098, UC-004 BR-019: the text is the markup of an inline formula,
+    /// shown typeset while the cursor is not in it (UC-005 BR-008).
+    pub formula: Option<FormulaView>,
+}
+
+/// FR-098, UC-004 BR-019, A21, ADR-029: a formula as the facade shows it:
+/// its picture, typeset in the backend and served by `ul-asset`, sized in
+/// em so it grows with the editor zoom; until the picture comes, its
+/// source; with an error, its source and the reason.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaView {
+    /// The formula's source, its alternative text.
+    pub source: String,
+    /// Set as a display formula (`$$…$$`, a block formula).
+    pub display: bool,
+    /// The picture, as a path of the app's own protocol (ADR-023), such as
+    /// `formula/0f…a1.svg?v=3`; `None` while it is typeset or with an
+    /// error.
+    pub picture: Option<String>,
+    /// The picture's width, in thousandths of an em.
+    pub width: u32,
+    /// The picture's height, above and below the baseline, in thousandths
+    /// of an em.
+    pub height: u32,
+    /// How far the picture reaches below the baseline, in thousandths of an
+    /// em (`vertical-align: -depth`).
+    pub depth: u32,
+    /// UC-004 A21: why the formula cannot be typeset.
+    pub error: Option<String>,
 }
 
 /// How the text of a table column is aligned (M-09.5).
@@ -69,6 +102,9 @@ pub struct TableView {
     /// "Table n. {title}" above the table, for an AsciiDoc table with a
     /// title.
     pub caption: Option<String>,
+    /// UC-024 BR-001, OQ-268: the front matter of a Markdown note, its
+    /// markup shown only once the user goes into it.
+    pub front_matter: bool,
 }
 
 /// What a block is (M-09.1).
@@ -120,6 +156,13 @@ pub enum BlockKindView {
         target: String,
         /// Its alternative text.
         alt: String,
+    },
+    /// FR-098: a block formula, centred; its runs are its markup, shown
+    /// below it while the cursor is in it, while it is typeset, and with
+    /// an error (UC-005 BR-008, UC-004 A21).
+    Formula {
+        /// The typeset formula.
+        formula: FormulaView,
     },
 }
 
@@ -295,6 +338,12 @@ pub enum FacadeInput {
         /// The function.
         tool: ToolName,
     },
+    /// FR-082, FR-083: an action of the editing comfort, from the command
+    /// palette.
+    Edit {
+        /// The action.
+        action: EditActionName,
+    },
 }
 
 /// ADR-024: the answer to an input of the facade: the blocks that changed,
@@ -409,6 +458,7 @@ impl ShownBlock for BlockView {
     }
 
     fn captioned(&self) -> bool {
+        // A formula has no caption (FR-098).
         match &self.kind {
             BlockKindView::Table { table } => table.caption.is_some(),
             _ => self.figure.as_ref().is_some_and(|f| f.caption.is_some()),

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-replace-leave-out"
+description = "Enables the replace_leave_out command without any pre-configured scope."
+commands.allow = ["replace_leave_out"]
+
+[[permission]]
+identifier = "deny-replace-leave-out"
+description = "Denies the replace_leave_out command without any pre-configured scope."
+commands.deny = ["replace_leave_out"]

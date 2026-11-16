@@ -314,10 +314,11 @@ impl FacadeEdit<'_> {
         gap_at(self.rope(), self.editor.cursor(), self.blocks)
     }
 
-    /// The blocks follow the edit `change` of the text.
-    fn follow(&mut self, change: Change) {
+    /// The blocks follow the edit `change` of the text `before`.
+    fn follow(&mut self, change: Change, before: &Rope) {
         let spliced = reparse(
             self.blocks,
+            before,
             self.editor.document().rope(),
             self.format,
             change,
@@ -333,15 +334,19 @@ impl FacadeEdit<'_> {
         let rope = self.rope();
         let start = rope.char_to_byte(from);
         let old_end = rope.char_to_byte(to);
+        let before = rope.clone();
         let outcome = self.editor.replace(from..to, text);
         let edited = outcome.edited();
         self.take(outcome);
         if edited {
-            self.follow(Change {
-                start,
-                old_end,
-                new_end: start + text.len(),
-            });
+            self.follow(
+                Change {
+                    start,
+                    old_end,
+                    new_end: start + text.len(),
+                },
+                &before,
+            );
         }
     }
 
@@ -354,7 +359,7 @@ impl FacadeEdit<'_> {
         self.take(outcome);
         if edited {
             if let Some(change) = changed_bytes(&before, self.rope()) {
-                self.follow(change);
+                self.follow(change, &before);
             }
         }
     }
@@ -389,12 +394,21 @@ impl FacadeEdit<'_> {
         let markdown = self.markdown();
         let position = self.cursor_position();
         let (raw, fast) = match position {
+            // FR-098, UC-005 BR-008: in a formula its source is edited as it
+            // is written, and the formula parsed again.
+            Some((index, _)) if in_formula(&self.blocks[index], byte) => (text.to_owned(), false),
             Some((index, at)) => match &self.blocks[index].kind {
                 BlockKind::Code { .. } if markdown => (text.to_owned(), !text.contains(['`', '~'])),
-                BlockKind::Markup | BlockKind::Image { .. } | BlockKind::Table(_) => {
-                    (text.to_owned(), false)
-                }
-                _ if markdown => (escape_markdown(text, at == 0), at > 0),
+                BlockKind::Markup
+                | BlockKind::Image { .. }
+                | BlockKind::Table(_)
+                | BlockKind::Formula { .. } => (text.to_owned(), false),
+                // FR-098 (OQ-283): a `$` is written as typed and may start or
+                // end a formula, so the block is parsed again.
+                _ if markdown => (
+                    escape_markdown(text, at == 0),
+                    at > 0 && !text.contains('$'),
+                ),
                 // AsciiDoc has no escape that always works; plain text away
                 // from markup joins its block, anything else parses again.
                 _ => {
@@ -407,8 +421,12 @@ impl FacadeEdit<'_> {
             },
             None => (text.to_owned(), false),
         };
-        // A typed character can change where a bare link ends.
-        let fast = fast && link_at(self.blocks, byte).is_none();
+        // A typed character can change where a bare link ends, and complete
+        // or form a formula with the markup around it (FR-098).
+        let fast = fast
+            && link_at(self.blocks, byte).is_none()
+            && !position.is_some_and(|(index, _)| self.may_hold_formula(index));
+        let before = self.rope().clone();
         let outcome = self.editor.replace(cursor..cursor, &raw);
         if !outcome.edited() {
             self.take(outcome);
@@ -425,11 +443,37 @@ impl FacadeEdit<'_> {
                 return;
             }
         }
-        self.follow(Change {
-            start: byte,
-            old_end: byte,
-            new_end: byte + raw.len(),
-        });
+        self.follow(
+            Change {
+                start: byte,
+                old_end: byte,
+                new_end: byte + raw.len(),
+            },
+            &before,
+        );
+    }
+
+    /// FR-098, UC-005 BR-008: whether the markup of block `index` holds what
+    /// a typed character may make a formula of, or complete one with: a `$`
+    /// in Markdown, a `:[` in AsciiDoc (`latexmath:[`, `stem:[`). Then the
+    /// block is parsed again rather than joined.
+    fn may_hold_formula(&self, index: usize) -> bool {
+        if matches!(self.blocks[index].kind, BlockKind::Code { .. }) {
+            return false;
+        }
+        let span = self.blocks[index].span.clone();
+        let rope = self.rope();
+        let span = span.start.min(rope.len_bytes())..span.end.min(rope.len_bytes());
+        let mut chars = rope.byte_slice(span).chars();
+        if self.markdown() {
+            return chars.any(|c| c == '$');
+        }
+        let mut previous = None;
+        chars.any(|c| {
+            let found = previous == Some(':') && c == '[';
+            previous = Some(c);
+            found
+        })
     }
 
     /// M-09.11: Enter: a new line in code and markup, a new list item with
@@ -444,7 +488,9 @@ impl FacadeEdit<'_> {
         let markdown = self.markdown();
         let block = &self.blocks[index];
         let insert = match &block.kind {
-            BlockKind::Code { .. } | BlockKind::Markup => "\n".to_owned(),
+            BlockKind::Code { .. } | BlockKind::Markup | BlockKind::Formula { .. } => {
+                "\n".to_owned()
+            }
             BlockKind::ListItem { .. } => {
                 let rope = self.rope();
                 let line = byte_text(rope, block.span.clone());
@@ -536,6 +582,15 @@ impl FacadeEdit<'_> {
         true
     }
 
+    /// UC-005 A28 step 2: puts `text` in place of the selection as one
+    /// change of its own, undone alone: neither the typing before it nor
+    /// after it joins it (a correction of the spell check).
+    pub fn insert_sealed(&mut self, text: &str) {
+        self.editor.seal();
+        self.insert_raw(text);
+        self.editor.seal();
+    }
+
     /// UC-005 A9 step 2: inserts `text` as it is at the cursor, replacing
     /// the selection, as egui's `SourceView::insert_text` does for a
     /// dropped file's place in a code block and the space between dropped
@@ -545,15 +600,19 @@ impl FacadeEdit<'_> {
         let rope = self.rope();
         let start = rope.char_to_byte(selection.start);
         let old_end = rope.char_to_byte(selection.end);
+        let before = rope.clone();
         let outcome = self.editor.type_text(text);
         let edited = outcome.edited();
         self.take(outcome);
         if edited {
-            self.follow(Change {
-                start,
-                old_end,
-                new_end: start + text.len(),
-            });
+            self.follow(
+                Change {
+                    start,
+                    old_end,
+                    new_end: start + text.len(),
+                },
+                &before,
+            );
         }
     }
 
@@ -622,13 +681,35 @@ impl FacadeEdit<'_> {
             old_end: edit.range.end,
             new_end: edit.range.start + edit.text.len(),
         };
+        let before = self.rope().clone();
         let outcome = self
             .editor
             .replace_bytes(edit.range, &edit.text, edit.selection);
         let edited = outcome.edited();
         self.take(outcome);
         if edited {
-            self.follow(change);
+            self.follow(change, &before);
+        }
+    }
+
+    /// UC-024 step 4, BR-006: replaces the bytes `range` by `text` as one
+    /// change, one undo step, the selection staying on the text it was on
+    /// (a change of a note attribute from the note properties).
+    pub fn replace_keeping_selection(&mut self, range: Range<usize>, text: &str) {
+        let selection = self.editor.selection_bytes();
+        let select = kept_after(selection.start, &range, text.len())
+            ..kept_after(selection.end, &range, text.len());
+        let change = Change {
+            start: range.start,
+            old_end: range.end,
+            new_end: range.start + text.len(),
+        };
+        let before = self.rope().clone();
+        let outcome = self.editor.replace_bytes(range, text, select);
+        let edited = outcome.edited();
+        self.take(outcome);
+        if edited {
+            self.follow(change, &before);
         }
     }
 
@@ -806,6 +887,22 @@ impl FacadeEdit<'_> {
             Key::ArrowLeft => self.left_of(index, at),
             Key::ArrowRight => self.right_of(index, at),
             Key::ArrowUp | Key::ArrowDown => self.vertical(index, at, key == Key::ArrowUp),
+            // M-09.13 (app-tester of package 7a, older than it): Ctrl+Home
+            // and Ctrl+End (Cmd on macOS) go to the start and the end of the
+            // note, its first and its last block shown.
+            Key::Home | Key::End if modifiers.command => {
+                let mut shown = (0..self.blocks.len()).filter(|&i| !self.hidden(i));
+                let block = if key == Key::End {
+                    shown.next_back()
+                } else {
+                    shown.next()
+                };
+                match block {
+                    Some(i) if key == Key::End => self.char_of(i, shown_chars(&self.blocks[i])),
+                    Some(i) => self.char_of(i, 0),
+                    None => return,
+                }
+            }
             Key::Home | Key::End => self.row_end(index, at, key == Key::End),
             // M-09.13: Tab, Page Up and Page Down do nothing.
             _ => return,
@@ -818,6 +915,8 @@ impl FacadeEdit<'_> {
         self.set_selection(target, anchor);
     }
 }
+
+mod comfort;
 
 /// M-11.2, M-11.3: the facade for the Vim and Nano keys: a line is a block
 /// (OQ-077), and moving goes by the characters and rows the facade shows.
@@ -981,6 +1080,32 @@ impl Target for FacadeTarget<'_, '_> {
 
     fn command(&mut self, command: EditorCommand) {
         self.edit.gathered.commands.push(command);
+    }
+}
+
+/// FR-098, UC-005 BR-008: whether the source byte `byte` lies inside the
+/// markup of an inline formula of `block`, after its first character and
+/// before its end, where the facade shows its markup.
+#[must_use]
+pub fn in_formula(block: &Block, byte: usize) -> bool {
+    block.runs.iter().any(|run| {
+        run.style.formula.is_some()
+            && run.offsets.first().is_some_and(|first| *first < byte)
+            && byte < run.end
+    })
+}
+
+/// Where byte `at` of a text is after the bytes `range` became `len` bytes:
+/// before the change it stays, after it it moves with the text, inside it
+/// it goes to the end of the new text.
+#[must_use]
+pub fn kept_after(at: usize, range: &Range<usize>, len: usize) -> usize {
+    if at <= range.start {
+        at
+    } else if at >= range.end {
+        at - range.end + range.start + len
+    } else {
+        range.start + len
     }
 }
 

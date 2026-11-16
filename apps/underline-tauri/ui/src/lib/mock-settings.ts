@@ -21,6 +21,7 @@ import type {
   SettingsView,
   SettingsWindowView,
 } from './bindings';
+import { MOCK_SPELL_LANGUAGE, SPELL_LANGUAGES } from './mock-spell';
 
 /** A settings file: the keys it sets, as written in it. */
 export type MockSettingsFile = Partial<Record<SettingName, string>>;
@@ -49,36 +50,115 @@ const ROWS: readonly { key: SettingName; label: string }[] = [
   { key: 'line_number_side', label: 'Line number side' },
   { key: 'show_minimap', label: 'Minimap' },
   { key: 'copy_on_select', label: 'Copy on select' },
+  { key: 'close_pairs', label: 'Close pairs' },
+  { key: 'spell_check_language', label: 'Spell check language' },
+  { key: 'editor_zoom', label: 'Editor zoom (percent)' },
+  { key: 'soft_wrap', label: 'Soft wrap' },
+  { key: 'focus_mode', label: 'Focus mode' },
   { key: 'git_sync_interval', label: 'Git sync every (minutes)' },
   { key: 'agent_access', label: 'Agent access' },
   { key: 'overview_width', label: 'Note overview width' },
   { key: 'tool_panel_width', label: 'Tool panel width' },
   { key: 'show_menu_bar', label: 'Menu bar' },
   { key: 'blink_found_in_minimap', label: 'Search hits in the minimap' },
+  { key: 'template_folder', label: 'Template folder' },
+  { key: 'daily_note_folder', label: 'Daily note folder' },
+  { key: 'daily_note_template', label: 'Daily note template' },
 ];
+
+/** UC-010 BR-001, BR-002: the settings only a workspace has. */
+type WorkspaceOnly =
+  'default_format' | 'template_folder' | 'daily_note_folder' | 'daily_note_template';
+
+const WORKSPACE_ONLY: ReadonlySet<SettingName> = new Set<SettingName>([
+  'default_format',
+  'template_folder',
+  'daily_note_folder',
+  'daily_note_template',
+]);
+
+/** TC-010-22: the folders typed as text, with their built-in defaults. */
+const FOLDER_DEFAULTS: Partial<Record<SettingName, string>> = {
+  template_folder: 'templates',
+  daily_note_folder: 'daily',
+};
+
+/** TC-010-22: what the settings of templates and daily notes do. */
+const HELP: Partial<Record<SettingName, string>> = {
+  template_folder:
+    'New notes can start from the notes in this folder. Empty: the folder templates.',
+  daily_note_folder: 'Daily notes are kept in this folder. Empty: the folder daily.',
+  daily_note_template: 'A new daily note starts from this template.',
+  spell_check_language:
+    'Right-click a marked word, or press Shift+F10 on it, for corrections. Default: your system language, if offered.',
+};
+
+const LABELS: Partial<Record<SettingName, string>> = {
+  template_folder: 'Template folder',
+  daily_note_folder: 'Daily note folder',
+};
+
+/**
+ * OQ-274 (b), roughly as `folder_setting_problem`: why `value` cannot be
+ * the folder `key`; `null` when it can.
+ */
+export function mockFolderProblem(key: SettingName, value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) {
+    return 'the folder lies outside the workspace';
+  }
+  const levels = trimmed
+    .split('/')
+    .map((level) => level.trim())
+    .filter((level) => level !== '' && level !== '.');
+  if (levels.includes('..')) {
+    return 'the folder lies outside the workspace';
+  }
+  const hidden = levels.find((level) => level.startsWith('.'));
+  if (hidden !== undefined) {
+    return `the folder \`${hidden}\` is hidden`;
+  }
+  if (levels.length === 0 && key === 'template_folder') {
+    return 'the top folder cannot hold the templates';
+  }
+  return null;
+}
+
+/** UC-025 BR-003: the daily note template without a value of its own. */
+const TITLED_DAILY = 'The template titled Daily';
 
 const CHECK_TEXTS: Partial<Record<SettingName, string>> = {
   show_line_numbers: 'Shown, in the source view',
   show_minimap: 'Shown',
   copy_on_select: 'On',
+  close_pairs: 'On',
+  soft_wrap: 'On',
+  focus_mode: 'On',
   show_menu_bar: 'Shown',
   blink_found_in_minimap: 'Blinking',
 };
 
 const RANGES: Partial<Record<SettingName, [number, number]>> = {
+  editor_zoom: [50, 300],
   git_sync_interval: [1, 60],
   overview_width: [100, 1000],
   tool_panel_width: [100, 1000],
 };
 
 /** The built-in defaults (UC-010 BR-001), as written in a file. */
-const DEFAULTS: Record<Exclude<SettingName, 'default_format'>, string> = {
+const DEFAULTS: Record<Exclude<SettingName, WorkspaceOnly>, string> = {
   theme: 'Light',
   input_mode: 'Normal',
   show_line_numbers: 'true',
   line_number_side: 'Left',
   show_minimap: 'true',
   copy_on_select: 'true',
+  close_pairs: 'true',
+  // OQ-206: the system's language; the mock's system speaks English (US).
+  spell_check_language: MOCK_SPELL_LANGUAGE,
+  editor_zoom: '100',
+  soft_wrap: 'true',
+  focus_mode: 'false',
   git_sync_interval: '5',
   agent_access: 'Off',
   overview_width: '200',
@@ -95,6 +175,10 @@ const VIEW_FIELDS: Partial<Record<keyof SettingsView, SettingName>> = {
   lineNumberSide: 'line_number_side',
   showMinimap: 'show_minimap',
   copyOnSelect: 'copy_on_select',
+  closePairs: 'close_pairs',
+  editorZoom: 'editor_zoom',
+  softWrap: 'soft_wrap',
+  focusMode: 'focus_mode',
   gitSyncInterval: 'git_sync_interval',
   agentAccess: 'agent_access',
   overviewWidth: 'overview_width',
@@ -102,6 +186,11 @@ const VIEW_FIELDS: Partial<Record<keyof SettingsView, SettingName>> = {
   showMenuBar: 'show_menu_bar',
   blinkFoundInMinimap: 'blink_found_in_minimap',
 };
+
+/** UC-010 BR-009: `percent` on the nearest step of 10, from 50 to 300 (`zoom_step`). */
+function zoomStep(percent: number): number {
+  return Math.min(300, Math.max(50, Math.round(percent / 10) * 10));
+}
 
 /** The user file that gives the settings `seed` (the mock's `MockStart.settings`). */
 export function userFileOf(seed: Partial<SettingsView>): MockSettingsFile {
@@ -128,6 +217,10 @@ export class MockSettings {
   readonly broken = new Set<MockSettingsPlace>();
   /** A7: the files cannot be written. */
   unwritable = false;
+  /** UC-025 BR-003: the templates of the open workspace, as `templates/Day.md`. */
+  templatesOf: () => readonly string[] = () => [];
+  /** FR-100: a setting changed (`key`), so the editor's marks follow. */
+  onChange: (key: SettingName) => void = () => {};
   /** Whether agents' access was refused last (said once, UC-017 A1). */
   #refused = false;
 
@@ -143,7 +236,7 @@ export class MockSettings {
   }
 
   /** The value in effect of `key` in `scope` ("For me" leaves the workspace out). */
-  #value(key: Exclude<SettingName, 'default_format'>, scope: Scope = 'workspace'): string {
+  #value(key: Exclude<SettingName, WorkspaceOnly>, scope: Scope = 'workspace'): string {
     const workspace = scope === 'workspace' ? this.#workspace : null;
     if (key === 'agent_access') {
       const user = this.user.agent_access ?? DEFAULTS.agent_access;
@@ -173,6 +266,11 @@ export class MockSettings {
       lineNumberSide: this.#value('line_number_side'),
       showMinimap: this.#value('show_minimap') === 'true',
       copyOnSelect: this.#value('copy_on_select') === 'true',
+      closePairs: this.#value('close_pairs') === 'true',
+      spellCheckLanguage: this.#value('spell_check_language'),
+      editorZoom: zoomStep(Number(this.#value('editor_zoom'))),
+      softWrap: this.#value('soft_wrap') === 'true',
+      focusMode: this.#value('focus_mode') === 'true',
       gitSyncInterval: Number(this.#value('git_sync_interval')),
       agentAccess: access,
       agentAccessLowered: ACCESS.indexOf(access) < ACCESS.indexOf(user),
@@ -183,6 +281,16 @@ export class MockSettings {
       blinkFoundInMinimap: this.#value('blink_found_in_minimap') === 'true',
       widthGeneration: this.widthGeneration,
     };
+  }
+
+  /** FR-100, UC-010 BR-001: the spell check language in effect, by its code. */
+  spellLanguage(): string {
+    return this.#value('spell_check_language');
+  }
+
+  /** UC-003 BR-008, UC-025 BR-002, BR-003: what the workspace's own file gives `key`. */
+  workspaceValue(key: SettingName): string | null {
+    return this.#workspace?.[key] ?? null;
   }
 
   /** UC-003, A8: the format new notes get: the workspace's own, else the notes'. */
@@ -223,6 +331,13 @@ export class MockSettings {
         return among(ACCESS);
       case 'default_format':
         return among(['markdown', 'asciidoc']);
+      case 'spell_check_language':
+        return among(SPELL_LANGUAGES.map(([code]) => code));
+      case 'template_folder':
+      case 'daily_note_folder':
+      case 'daily_note_template':
+        return null;
+      case 'editor_zoom':
       case 'git_sync_interval':
       case 'overview_width':
       case 'tool_panel_width': {
@@ -261,6 +376,7 @@ export class MockSettings {
       delete file[key];
     }
     this.revision += 1;
+    this.onChange(key);
     const said = this.#refusedNow();
     const place: MockSettingsPlace = scope === 'me' ? 'user' : 'workspace';
     if (this.broken.has(place)) {
@@ -288,7 +404,19 @@ export class MockSettings {
     if (scope === 'workspace' && this.#workspace === null) {
       return null;
     }
+    if (scope === 'me' && WORKSPACE_ONLY.has(key)) {
+      return null;
+    }
     let wanted = value === null ? null : value.trim();
+    if (wanted === '' && key in FOLDER_DEFAULTS) {
+      wanted = null;
+    }
+    if (wanted !== null && key in FOLDER_DEFAULTS) {
+      const problem = mockFolderProblem(key, wanted);
+      if (problem !== null) {
+        return `${LABELS[key]} not changed: ${problem}`;
+      }
+    }
     if (scope === 'workspace' && key === 'agent_access' && wanted !== null) {
       const user = this.user.agent_access ?? DEFAULTS.agent_access;
       if (ACCESS.indexOf(wanted) > ACCESS.indexOf(user)) {
@@ -298,8 +426,15 @@ export class MockSettings {
     const range = RANGES[key];
     if (wanted !== null && range && /^\d+$/.test(wanted.trim())) {
       wanted = String(Math.min(range[1], Math.max(range[0], Number(wanted.trim()))));
+      if (key === 'editor_zoom') {
+        wanted = String(zoomStep(Number(wanted)));
+      }
     }
-    if (key !== 'default_format' && wanted !== null && this.#value(key, scope) === wanted) {
+    if (
+      !WORKSPACE_ONLY.has(key) &&
+      wanted !== null &&
+      this.#value(key as Exclude<SettingName, WorkspaceOnly>, scope) === wanted
+    ) {
       return null;
     }
     const said = this.change(scope, key, wanted);
@@ -323,18 +458,24 @@ export class MockSettings {
     this.broken.delete(place);
     this.revision += 1;
     this.widthGeneration += 1;
+    this.onChange(key);
     return this.#refusedNow();
   }
 
   /** M-20.2 to M-20.4: what the settings window shows (`window_view`). */
-  windowView(derived: string | null): SettingsWindowView {
+  windowView(
+    derived: string | null,
+    templates: readonly string[] = this.templatesOf(),
+  ): SettingsWindowView {
     const workspace = this.#workspace;
     const rows = (scope: Scope): SettingRowView[] =>
-      ROWS.filter((row) => scope === 'workspace' || row.key !== 'default_format').map((row) => ({
+      ROWS.filter((row) => scope === 'workspace' || !WORKSPACE_ONLY.has(row.key)).map((row) => ({
         key: row.key,
         label: row.label,
-        control: this.#control(row.key, scope, derived),
+        control: this.#control(row.key, scope, derived, templates),
         note: this.#note(row.key, scope),
+        help: HELP[row.key] ?? null,
+        section: row.key === 'template_folder' ? 'Templates and daily note' : null,
       }));
     return {
       revision: this.revision,
@@ -345,7 +486,36 @@ export class MockSettings {
     };
   }
 
-  #control(key: SettingName, scope: Scope, derived: string | null): SettingControlView {
+  #control(
+    key: SettingName,
+    scope: Scope,
+    derived: string | null,
+    templates: readonly string[],
+  ): SettingControlView {
+    const folderDefault = FOLDER_DEFAULTS[key];
+    if (folderDefault !== undefined) {
+      return {
+        kind: 'text',
+        value: this.#workspace?.[key] ?? folderDefault,
+        default: folderDefault,
+      };
+    }
+    if (key === 'daily_note_template') {
+      const own = this.#workspace?.daily_note_template ?? null;
+      const choices: SettingChoiceView[] = [
+        { label: TITLED_DAILY, value: null, selected: own === null },
+        ...templates.map((file) => ({
+          label: file,
+          value: file,
+          selected: own === file || own === file.replace(/\.[^./]+$/, ''),
+        })),
+      ];
+      if (own !== null && !choices.some((choice) => choice.selected)) {
+        choices.push({ label: `${own} (not found)`, value: own, selected: true });
+      }
+      const shown = choices.find((choice) => choice.selected)?.label ?? TITLED_DAILY;
+      return { kind: 'choice', shown, choices };
+    }
     if (key === 'default_format') {
       const own = this.#workspace?.default_format;
       const ownName = own === 'asciidoc' ? 'AsciiDoc' : own === 'markdown' ? 'Markdown' : null;
@@ -359,14 +529,33 @@ export class MockSettings {
       choices.push({ label: 'Follow the notes', value: null, selected: ownName === null });
       return { kind: 'choice', shown, choices };
     }
-    const value = this.#value(key, scope);
+    const value = this.#value(key as Exclude<SettingName, WorkspaceOnly>, scope);
     const text = CHECK_TEXTS[key];
     if (text !== undefined) {
       return { kind: 'check', on: value === 'true', text };
     }
     const range = RANGES[key];
     if (range !== undefined) {
-      return { kind: 'number', value: Number(value), min: range[0], max: range[1] };
+      const zoom = key === 'editor_zoom';
+      return {
+        kind: 'number',
+        value: zoom ? zoomStep(Number(value)) : Number(value),
+        min: range[0],
+        max: range[1],
+        step: zoom ? 10 : 1,
+      };
+    }
+    if (key === 'spell_check_language') {
+      // FR-100: the languages by their names, sent back by their codes.
+      return {
+        kind: 'choice',
+        shown: SPELL_LANGUAGES.find(([code]) => code === value)?.[1] ?? value,
+        choices: SPELL_LANGUAGES.map(([code, name]) => ({
+          label: name,
+          value: code,
+          selected: code === value,
+        })),
+      };
     }
     let names: readonly string[];
     switch (key) {
@@ -399,9 +588,13 @@ export class MockSettings {
     const sets = workspace[key] !== undefined;
     if (scope === 'workspace') {
       if (!sets) {
-        return { kind: 'text', text: 'as for me' };
+        // UC-010 BR-001: a workspace's own setting has its built-in default.
+        return {
+          kind: 'text',
+          text: WORKSPACE_ONLY.has(key) && key !== 'default_format' ? 'default' : 'as for me',
+        };
       }
-      return key === 'default_format'
+      return WORKSPACE_ONLY.has(key)
         ? { kind: 'text', text: 'own' }
         : { kind: 'asForMe', label: 'As for me', hint: 'Use the setting from "For me" again' };
     }

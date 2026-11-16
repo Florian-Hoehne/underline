@@ -1,5 +1,6 @@
 //! ADR-023: the app's own protocol `ul-asset`, the only way pictures reach
-//! the window: image files of the workspace and the facade's diagrams.
+//! the window: image files of the workspace, the facade's diagrams, and its
+//! formulas (FR-098, ADR-029).
 //! `underline_session::Session::asset_plan` decides what is served; the
 //! session is held only for that. The plan is resolved (with its file-system
 //! checks) and the file read off the main thread, without the session.

@@ -1,7 +1,7 @@
 # Test Cases: Export Note
 
 **Use Case:** [UC-009 Export Note](../use_cases/UC-009-export-note.md)  
-**Requirements:** [FR-014, FR-015, FR-016, NFR-006, NFR-011, NFR-013, NFR-014, NFR-015](../requirements.md)
+**Requirements:** [FR-014, FR-015, FR-016, FR-098, NFR-006, NFR-011, NFR-013, NFR-014, NFR-015](../requirements.md)
 
 ## Coverage
 
@@ -24,6 +24,7 @@
 | TC-009-15 | Replacing an existing file                           | BR-007                    |
 | TC-009-16 | Keyboard alone                                       | BR-008, NFR-011           |
 | TC-009-17 | The same on every platform                           | NFR-013                   |
+| TC-009-18 | Formulas in the exports                              | FR-098, BR-001            |
 
 ## TC-009-01: Export Markdown to AsciiDoc
 
@@ -205,3 +206,14 @@
 | Step | Action                                            | Expected result                                                  |
 |------|---------------------------------------------------|------------------------------------------------------------------|
 | 1    | Export `Trip.md` to all three kinds on each system. | The exports are alike; each system shows its own file dialog. |
+
+## TC-009-18: Formulas in the exports
+
+**Flow:** BR-001, FR-098  
+**Preconditions:** `Math.md` holds the inline formula `$e^{i\pi}+1=0$`, a block `$$\int_0^1 x\,dx$$`, and a block with an error `$$\frac{1}{$$`. The network is off.
+
+| Step | Action                                    | Expected result                                                                         |
+|------|-------------------------------------------|-----------------------------------------------------------------------------------------|
+| 1    | Export `Math` to HTML and open the file.  | Both correct formulas are typeset; the one with the error is shown as its source.      |
+| 2    | Export `Math` to PDF.                     | The same.                                                                               |
+| 3    | Export `Math` to AsciiDoc.                | The formulas are written as `latexmath:[...]` and a `[latexmath]` block; the one with the error as its source. |

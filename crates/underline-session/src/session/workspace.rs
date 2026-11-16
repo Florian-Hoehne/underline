@@ -27,15 +27,15 @@ use underline_core::{
     check_directory, check_open_directory, check_readable_directory, create_workspace, now,
     outside_copy_path, user_settings_dir, CreateError, CreateProblem, DeletedNote,
     DirectoryProblem, EditingView, Git, GitRepositoryOption, NewWorkspace, NoteId, NoteSaver,
-    OpenProblem, OverviewEntry, Searcher, Surroundings, TabList, TabState, TodoListState,
-    Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, MAX_TABS,
+    OpenProblem, OverviewEntry, PaneSide, Panes, Searcher, SnapshotCause, Surroundings, TabList,
+    TodoListState, Workspace, WorkspaceEvent, WorkspaceWatcher, HOME_TITLE, MAX_TABS,
 };
 
 use super::tab::Tab;
 use super::Session;
 use crate::workspace_view::{
     CreateAnswer, EditingViewName, NewWorkspaceRequest, OpenAnswer, OpenOffer, OverviewItem,
-    StartOpened, TabView, TabsView, TodoTabView, WorkspaceSnapshot, WorkspaceView,
+    SplitView, StartOpened, TabView, TabsView, TodoTabView, WorkspaceSnapshot, WorkspaceView,
 };
 
 /// Review F15: a workspace that opens once the user gave up the todos of
@@ -63,7 +63,13 @@ const POLLING_STATUS: &str = "Changes from outside may show up later in the note
 /// The open workspace with its overview, tabs and watcher.
 pub(super) struct OpenWorkspace {
     pub(super) workspace: Workspace,
+    /// The open notes, one each, with their text and its autosave: what the
+    /// tabs show (ADR-025). Its active one is the note of the active pane's
+    /// active tab ([`OpenWorkspace::sync_active`]).
     pub(super) tabs: TabList<Tab>,
+    /// UC-004 BR-018, FR-096: which notes the panes show, in which editing
+    /// view, and the active pane.
+    pub(super) panes: Panes,
     /// Watches the workspace for changes from outside (ADR-011).
     watcher: WorkspaceWatcher,
     /// UC-002 step 7: the note overview, recently opened first.
@@ -81,11 +87,44 @@ pub(super) struct OpenWorkspace {
     /// Grows with every refresh of the overview, changed or not, so the
     /// search runs again (A3), as egui's `overview_generation`.
     pub(super) search_generation: u64,
+    /// FR-078, FR-079: the links of the notes, kept on a thread of their
+    /// own.
+    pub(super) links: super::note_links::LinkIndex,
 }
 
 impl OpenWorkspace {
     pub(super) fn root(&self) -> &Path {
         self.workspace.root()
+    }
+
+    /// UC-004 BR-018: makes the open notes' active one that of the active
+    /// pane's active tab, and marks each note whose facade a tab shows
+    /// (ADR-025: its colours and figures are made while one does). It closes
+    /// no note: closing is [`OpenWorkspace::close_note`]'s and the closing
+    /// of tabs'.
+    pub(super) fn sync_active(&mut self) {
+        if let Some(index) = self
+            .panes
+            .active_note()
+            .and_then(|note| self.tabs.find(note))
+        {
+            if self.tabs.active_index() != Some(index) {
+                self.tabs.activate(index);
+            }
+        }
+        for (note, tab) in self.tabs.iter_mut() {
+            super::facade::Facade::show(&mut tab.facade, self.panes.shows_facade(note));
+        }
+    }
+
+    /// Closes the note at `index` with every tab of it, in both panes (a
+    /// note deleted, or closed for good); the split view ends when a pane is
+    /// left without tabs (UC-004 A20).
+    pub(super) fn close_note(&mut self, index: usize) -> (NoteId, Tab) {
+        let (note, tab) = self.tabs.close(index);
+        self.panes.remove_note(&note);
+        self.sync_active();
+        (note, tab)
     }
 }
 
@@ -386,6 +425,8 @@ impl Session {
             .map(|entry| OverviewItem {
                 note: entry.id.as_str().to_owned(),
                 label: entry.label.clone(),
+                title: entry.id.title(),
+                folder: entry.id.folder().map(str::to_owned),
                 format: formats
                     .get(&entry.id)
                     .copied()
@@ -396,31 +437,62 @@ impl Session {
             .collect()
     }
 
-    /// M-06.1: the tab bar.
+    /// M-06.1: the tab bar; UC-004 BR-018: of each pane.
     pub(super) fn tabs_view(&self) -> TabsView {
         let Some(open) = &self.open else {
             return TabsView::default();
         };
         let todos = open.todo_list;
-        let active = open.tabs.active().map(|(note, _)| note.as_str().to_owned());
-        TabsView {
-            tabs: open
-                .tabs
-                .iter()
-                .map(|(note, tab)| TabView {
-                    note: note.as_str().to_owned(),
-                    title: tab.title.clone(),
-                    label: tab.label(),
-                    path: display(&tab.path),
-                    view: EditingViewName::from(tab.editing_view),
-                    save_error: tab.error.clone(),
+        debug_assert!(
+            open.panes
+                .tabs()
+                .all(|(_, shown)| open.tabs.find(&shown.note).is_some()),
+            "every tab of a pane shows an open note"
+        );
+        let views = |side: PaneSide| -> Vec<TabView> {
+            open.panes
+                .pane(side)
+                .map(|pane| {
+                    pane.tabs()
+                        .iter()
+                        .filter_map(|shown| {
+                            let tab = open.tabs.get(open.tabs.find(&shown.note)?);
+                            Some(TabView {
+                                note: shown.note.as_str().to_owned(),
+                                title: tab.title.clone(),
+                                label: tab.label(),
+                                path: display(&tab.path),
+                                view: EditingViewName::from(shown.view),
+                                save_error: tab.error.clone(),
+                            })
+                        })
+                        .collect()
                 })
-                .collect(),
-            active,
+                .unwrap_or_default()
+        };
+        let active_of = |side: PaneSide| {
+            open.panes
+                .pane(side)
+                .and_then(underline_core::Pane::active)
+                .map(|tab| tab.note.as_str().to_owned())
+        };
+        let split = open.panes.is_split().then(|| SplitView {
+            right: views(PaneSide::Right),
+            left_active: active_of(PaneSide::Left),
+            right_active: active_of(PaneSide::Right),
+            pane: open.panes.active_side().into(),
+        });
+        TabsView {
+            tabs: views(PaneSide::Left),
+            active: open
+                .panes
+                .active_note()
+                .map(|note| note.as_str().to_owned()),
             todo_list: TodoTabView {
                 open: todos.open,
                 active: todos.active,
             },
+            split,
         }
     }
 
@@ -619,6 +691,7 @@ impl Session {
         let wake = self.wake.clone();
         let searcher = Searcher::start(root.clone(), move || wake.wake());
         self.search_switched();
+        self.replace_switched();
         // UC-011: the changes, when the workspace is a git repository.
         self.track_changes(&root);
         // UC-014, UC-015: the syncs and the conflicts of a git workspace.
@@ -640,6 +713,7 @@ impl Session {
         self.open = Some(OpenWorkspace {
             workspace,
             tabs: TabList::default(),
+            panes: Panes::default(),
             watcher,
             overview: Vec::new(),
             overview_generation: 0,
@@ -648,40 +722,45 @@ impl Session {
             deleted_generation: 0,
             searcher,
             search_generation: 0,
+            links: super::note_links::LinkIndex::default(),
         });
-        // UC-004: the remembered tabs come back in their order; restoring
-        // them does not change the order of the note overview.
+        // UC-004: the remembered tabs come back in their order, each in its
+        // pane (BR-018); restoring them does not change the order of the
+        // note overview. The left pane is the active pane after a restart.
         let remembered = self.state.tabs(&root);
         for tab in &remembered {
-            self.open_tab(&tab.note, false, tab.editing_view);
+            if self.open_tab(
+                &tab.note,
+                false,
+                OpenIn::Restore(tab.pane, tab.editing_view),
+            ) {
+                if let (true, Some(open)) = (tab.active, &mut self.open) {
+                    open.panes.activate(tab.pane, &tab.note);
+                }
+            }
         }
-        let active = remembered.iter().find(|t| t.active).map(|t| &t.note);
-        let found = self
-            .open
-            .as_ref()
-            .and_then(|open| active.and_then(|note| open.tabs.find(note)));
-        match found {
-            Some(index) => {
-                if let Some(open) = &mut self.open {
-                    open.tabs.activate(index);
-                }
+        if let Some(open) = &mut self.open {
+            open.panes.restored();
+            open.sync_active();
+        }
+        if self.open.as_ref().is_some_and(|open| open.panes.is_empty()) {
+            let first = self
+                .open
+                .as_ref()
+                .and_then(|open| open.workspace.first_note());
+            if let Some(note) = first {
+                self.open_note(&note);
             }
-            None if self.open.as_ref().is_some_and(|open| open.tabs.is_empty()) => {
-                let first = self
-                    .open
-                    .as_ref()
-                    .and_then(|open| open.workspace.first_note());
-                if let Some(note) = first {
-                    self.open_note(&note);
-                }
-            }
-            None => {}
         }
         self.persist_tabs();
         self.refresh_overview();
         if let Some(open) = &self.open {
             open.workspace.purge_deleted(now());
+            // FR-092, NFR-003: the tags of the notes are read ahead.
+            open.searcher.warm(open.workspace.listing().notes.clone());
         }
+        // UC-026 BR-002: the snapshots older than 30 days go.
+        self.snapshots_opened();
         // M-05.6: the deleted notes at the end of the overview; the undo of
         // a deletion in the workspace left is not offered any more.
         self.undo_delete = None;
@@ -794,7 +873,7 @@ impl Session {
     /// whether a tab shows the note now; when it cannot be read (A10), the
     /// status says why.
     pub fn open_note(&mut self, note: &NoteId) -> bool {
-        let shown = self.open_tab(note, true, EditingView::Facade);
+        let shown = self.open_tab(note, true, OpenIn::ActivePane);
         if shown {
             self.persist_tabs();
             self.refresh_overview();
@@ -802,17 +881,37 @@ impl Session {
         shown
     }
 
-    /// Opens `id` in a tab; with `viewed`, records it as the most recently
-    /// opened note. Returns whether a tab shows the note now.
-    fn open_tab(&mut self, id: &NoteId, viewed: bool, editing_view: EditingView) -> bool {
-        let at_the_limit = self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.tabs.len() >= MAX_TABS && open.tabs.find(id).is_none());
+    /// UC-004 A18, A19, BR-018, FR-096, FR-097: opens `note` to the side:
+    /// the split view is shown when it is not, and the note opens in a tab
+    /// of the other pane, or its tab there becomes active; that pane becomes
+    /// the active pane. The note of the active tab opens in the other
+    /// editing view. Returns whether a tab shows the note now.
+    pub fn open_note_to_side(&mut self, note: &NoteId) -> bool {
+        let shown = self.open_tab(note, true, OpenIn::OtherPane);
+        if shown {
+            self.persist_tabs();
+            self.refresh_overview();
+        }
+        shown
+    }
+
+    /// Opens `id` in a tab of the pane `how` says; with `viewed`, records
+    /// it as the most recently opened note. Returns whether a tab shows the
+    /// note now.
+    fn open_tab(&mut self, id: &NoteId, viewed: bool, how: OpenIn) -> bool {
+        let at_the_limit = self.open.as_ref().is_some_and(|open| {
+            let side = match how {
+                OpenIn::ActivePane => open.panes.active_side(),
+                OpenIn::OtherPane => open.panes.active_side().other(),
+                OpenIn::Restore(side, _) => side,
+            };
+            open.panes.len() >= MAX_TABS && !open.panes.has(side, id)
+        });
         if at_the_limit {
             // UC-005 BR-001: no background save lands after the one below.
             self.settle_saves();
         }
+        let clock = self.snapshot_clock();
         let Some(open) = &mut self.open else {
             return false;
         };
@@ -822,9 +921,7 @@ impl Session {
             open.todo_list.active = false;
             self.state.set_todo_list(&root, open.todo_list);
         }
-        if let Some(index) = open.tabs.find(id) {
-            open.tabs.activate(index);
-        } else {
+        if open.tabs.find(id).is_none() {
             let (note, path) = match (open.workspace.read(id), open.workspace.note_path(id)) {
                 (Ok(note), Ok(path)) => (note, path),
                 (Err(err), _) | (_, Err(err)) => {
@@ -846,8 +943,8 @@ impl Session {
             // the next one in the order of use closes instead; when no tab
             // can close without losing changes, the note does not open.
             let mut closed = None;
-            if open.tabs.len() >= MAX_TABS {
-                let Some(note) = close_longest_unused(&mut open.tabs, &self.saver) else {
+            if open.panes.len() >= MAX_TABS {
+                let Some(note) = close_longest_unused(open, &self.saver) else {
                     self.status = format!(
                         "{} was not opened: {MAX_TABS} tabs are open, and none can close \
                          without losing changes",
@@ -859,15 +956,62 @@ impl Session {
                 closed = Some(note);
             }
             let title = note.title();
+            // UC-026 BR-001: the tab takes its snapshots.
+            let snapshots = super::snapshots::TabSnapshots {
+                store: underline_core::SnapshotStore::new(&root),
+                clock,
+            };
             open.tabs.open(id.clone(), || {
-                let mut tab = Tab::new(path, title, format, editing_view, note.body);
+                let mut tab = Tab::new(path, title, format, note.body);
+                tab.snapshots = Some(snapshots);
                 tab.read_properties(&root);
                 tab
             });
             if let Some(closed) = closed {
                 self.status = format!("Closed the tab {}, used longest ago", closed.title());
             }
+        } else if open.panes.len() >= MAX_TABS
+            && !matches!(how, OpenIn::Restore(..))
+            && !open.panes.has(
+                match how {
+                    OpenIn::OtherPane => open.panes.active_side().other(),
+                    _ => open.panes.active_side(),
+                },
+                id,
+            )
+        {
+            // A second tab of an open note at the limit: the tab used
+            // longest ago closes, as for any new tab (UC-004 BR-008).
+            match close_longest_unused(open, &self.saver) {
+                Some(closed) if &closed != id => {
+                    self.status = format!("Closed the tab {}, used longest ago", closed.title());
+                }
+                Some(_) => {}
+                None => {
+                    self.status = format!(
+                        "{} was not opened: {MAX_TABS} tabs are open, and none can close \
+                         without losing changes",
+                        id.title()
+                    );
+                    self.views_dirty = true;
+                    return false;
+                }
+            }
+            if open.tabs.find(id).is_none() {
+                // The tab closed was this note's only one.
+                return self.open_tab(id, viewed, how);
+            }
         }
+        match how {
+            OpenIn::ActivePane => {
+                open.panes.open(id, EditingView::Facade);
+            }
+            OpenIn::OtherPane => {
+                open.panes.open_side(id, EditingView::Facade);
+            }
+            OpenIn::Restore(side, view) => open.panes.push(side, id.clone(), view),
+        }
+        open.sync_active();
         if viewed {
             self.state.note_viewed(&root, id, now());
         }
@@ -875,11 +1019,35 @@ impl Session {
     }
 
     /// M-06.2, UC-004 A5: makes the tab of `note` the active one, records
-    /// it as the most recently opened note and moves it up in the overview.
+    /// it as the most recently opened note and moves it up in the overview;
+    /// of the active pane, else of the pane that has it (BR-018).
     pub fn activate_tab(&mut self, note: &NoteId) {
+        let side = self.pane_of(note);
+        self.activate_tab_in(side, note);
+    }
+
+    /// The active pane when it has a tab of `note`, else the other one.
+    pub(super) fn pane_of(&self, note: &NoteId) -> PaneSide {
+        let Some(open) = &self.open else {
+            return PaneSide::Left;
+        };
+        let active = open.panes.active_side();
+        if open.panes.has(active, note) {
+            active
+        } else {
+            active.other()
+        }
+    }
+
+    /// M-06.2, UC-004 A5, BR-018: the tab of `note` in the pane `side`
+    /// becomes its active tab, and the pane the active pane.
+    pub fn activate_tab_in(&mut self, side: PaneSide, note: &NoteId) {
         let Some(open) = &mut self.open else {
             return;
         };
+        if !open.panes.activate(side, note) {
+            return;
+        }
         let Some(index) = open.tabs.find(note) else {
             return;
         };
@@ -888,7 +1056,7 @@ impl Session {
             open.todo_list.active = false;
             self.state.set_todo_list(&root, open.todo_list);
         }
-        open.tabs.activate(index);
+        open.sync_active();
         // M-16.2: the properties of the note shown are read again.
         open.tabs.get_mut(index).read_properties(&root);
         self.state.note_viewed(&root, note, now());
@@ -896,23 +1064,47 @@ impl Session {
         self.refresh_overview();
     }
 
-    /// M-22.2, UC-004 step 6: remembers the open tabs and the active one.
+    /// UC-004 BR-018: the user works in the pane `side` now; the tool panel
+    /// shows its active note. Nothing happens without that pane.
+    pub fn focus_pane(&mut self, side: PaneSide) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        if !open.panes.focus(side) {
+            return;
+        }
+        open.sync_active();
+        let root = open.workspace.root().to_owned();
+        let note = open.panes.active_note().cloned();
+        if let Some(index) = note.as_ref().and_then(|note| open.tabs.find(note)) {
+            // M-16.2: the properties of the note shown are read again.
+            open.tabs.get_mut(index).read_properties(&root);
+        }
+        self.views_dirty = true;
+        self.persist_tabs();
+    }
+
+    /// UC-004 A20: ends the split view: the right pane's tabs join the left
+    /// pane after its own, a note on both sides keeping its left tab. The
+    /// active note stays active.
+    pub fn end_split(&mut self) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        if !open.panes.unsplit() {
+            return;
+        }
+        open.sync_active();
+        self.persist_tabs();
+    }
+
+    /// M-22.2, UC-004 step 6: remembers the open tabs and the active one,
+    /// of each pane (BR-018).
     pub(super) fn persist_tabs(&mut self) {
         let Some(open) = &self.open else {
             return;
         };
-        let active = open.tabs.active_index();
-        let tabs = open
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(i, (note, tab))| TabState {
-                note: note.clone(),
-                position: u32::try_from(i + 1).unwrap_or(u32::MAX),
-                editing_view: tab.editing_view,
-                active: Some(i) == active,
-            })
-            .collect();
+        let tabs = open.panes.states();
         let root = open.workspace.root().to_owned();
         self.state.set_tabs(&root, tabs);
         // The tab bar changed; the watcher's poller follows the open notes.
@@ -1015,14 +1207,20 @@ impl Session {
     /// or both versions are kept when the tab holds a change not stored
     /// yet (A9). Returns whether the note overview needs a rescan.
     pub(super) fn outside_change(&mut self, path: &Path) -> bool {
-        self.take_file_version(path, true)
+        self.take_file_version(path, true, SnapshotCause::OutsideChange)
     }
 
     /// [`Session::outside_change`]; without `report`, a tab that shows the
     /// file again says nothing in the status, as after switching branches
     /// (UC-013 step 5), where egui reloads the tabs without a word. Keeping
-    /// both versions (A9) is always said.
-    pub(super) fn take_file_version(&mut self, path: &Path, report: bool) -> bool {
+    /// both versions (A9) is always said. UC-026 BR-001: the text the tab
+    /// showed is kept as a snapshot for `cause` before it shows the file's.
+    pub(super) fn take_file_version(
+        &mut self,
+        path: &Path,
+        report: bool,
+        cause: SnapshotCause,
+    ) -> bool {
         let Some(open) = &mut self.open else {
             return false;
         };
@@ -1062,6 +1260,13 @@ impl Session {
             };
             return true;
         }
+        if let Some(job) = tab
+            .snapshots
+            .as_ref()
+            .and_then(|snapshots| snapshots.job(path, tab.mirror.text(), cause))
+        {
+            self.saver.snapshot(job);
+        }
         tab.reload(content);
         self.changed.push(note.clone());
         if report {
@@ -1071,20 +1276,45 @@ impl Session {
     }
 }
 
-/// UC-004 A6, M-06.6: closes the tab used longest ago whose changes can be
-/// stored, storing them first, and returns its note; `None` when no tab can
-/// close without losing changes (D-07, fixed). A tab that cannot be stored
-/// stays open, marked by the failure. The active tab never closes: it is
-/// the one the user works in, and the window may hold edits of it not yet
-/// sent (`tab_open` does not flush, A-190).
-fn close_longest_unused(tabs: &mut TabList<Tab>, saver: &NoteSaver) -> Option<NoteId> {
-    let active = tabs.active_index();
-    let index = tabs
-        .longest_unused_first()
-        .into_iter()
-        .filter(|&index| Some(index) != active)
-        .find(|&index| tabs.get_mut(index).flush(saver).is_ok())?;
-    Some(tabs.close(index).0)
+/// UC-004 A6, M-06.6, BR-008: closes the tab used longest ago, of either
+/// pane, whose changes can be stored, storing them first, and returns its
+/// note; `None` when no tab can close without losing changes (D-07, fixed).
+/// A tab that cannot be stored stays open, marked by the failure. The
+/// active tab of each pane never closes: it is the one the user works in,
+/// and the window may hold edits of it not yet sent (`tab_open` does not
+/// flush, A-190). A note open on both sides keeps its text while its other
+/// tab stays.
+fn close_longest_unused(open: &mut OpenWorkspace, saver: &NoteSaver) -> Option<NoteId> {
+    for (side, note) in open.panes.longest_unused_first() {
+        let last = !open.panes.has(side.other(), &note);
+        let index = open.tabs.find(&note);
+        if last {
+            let Some(index) = index else {
+                continue;
+            };
+            if open.tabs.get_mut(index).flush(saver).is_err() {
+                continue;
+            }
+        }
+        open.panes.close(side, &note);
+        if let (true, Some(index)) = (last, index) {
+            open.tabs.close(index);
+        }
+        open.sync_active();
+        return Some(note);
+    }
+    None
+}
+
+/// Where [`Session::open_tab`] opens a note.
+#[derive(Debug, Clone, Copy)]
+enum OpenIn {
+    /// UC-004 step 2, BR-018: in the active pane.
+    ActivePane,
+    /// UC-004 A18: to the side, in the other pane.
+    OtherPane,
+    /// UC-004 step 6: a remembered tab, in its pane with its editing view.
+    Restore(PaneSide, EditingView),
 }
 
 #[cfg(test)]

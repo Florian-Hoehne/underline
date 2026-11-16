@@ -156,6 +156,11 @@ describe('M-20.3 to M-20.5 the settings and their changes', () => {
       'Line number side',
       'Minimap',
       'Copy on select',
+      'Close pairs',
+      'Spell check language',
+      'Editor zoom (percent)',
+      'Soft wrap',
+      'Focus mode',
       'Git sync every (minutes)',
       'Agent access',
       'Note overview width',
@@ -164,6 +169,8 @@ describe('M-20.3 to M-20.5 the settings and their changes', () => {
       'Search hits in the minimap',
     ]);
     expect(shown('Input mode')).toBe('Normal');
+    // TC-010-22 step 1: close pairs is on at first.
+    expect(inSettings().getByRole('checkbox', { name: 'Close pairs On' })).toBeChecked();
     expect(
       inSettings().getByRole('checkbox', { name: 'Line numbers Shown, in the source view' }),
     ).toBeChecked();
@@ -416,6 +423,28 @@ describe('review F10', () => {
     await waitFor(() =>
       expect(mockHooks().settingsFile('user')).toEqual({ git_sync_interval: '12' }),
     );
+  });
+
+  it('TC-010-18, UC-010 BR-009: the editor zoom steps by 10 within 50 and 300', async () => {
+    const shell = await app(NOTES);
+    await openSettings();
+    const zoom = inSettings().getByLabelText<HTMLInputElement>('Editor zoom (percent)');
+    expect(zoom).toHaveValue(100);
+    expect(zoom).toHaveAttribute('step', '10');
+    // TC-010-19, TC-010-20: soft wrap on and the focus mode off at first.
+    expect(inSettings().getByRole('checkbox', { name: 'Soft wrap On' })).toBeChecked();
+    expect(inSettings().getByRole('checkbox', { name: 'Focus mode On' })).not.toBeChecked();
+
+    await fireEvent.keyDown(zoom, { key: 'ArrowUp' });
+    expect(zoom).toHaveValue(110);
+    await waitFor(() => expect(mockHooks().settingsFile('user')).toEqual({ editor_zoom: '110' }));
+    expect(shell.editorZoom).toBe(110);
+
+    await fireEvent.change(zoom, { target: { value: '124' } });
+    await waitFor(() => expect(mockHooks().settingsFile('user')).toEqual({ editor_zoom: '120' }));
+    await waitFor(() => expect(zoom).toHaveValue(120));
+    await fireEvent.change(zoom, { target: { value: '5000' } });
+    await waitFor(() => expect(zoom).toHaveValue(300));
   });
 
   it('ux 4: quick steps write once, the last value, and no answer undoes a step', async () => {

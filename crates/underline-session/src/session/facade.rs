@@ -19,9 +19,11 @@ use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use underline_core::{EditingView, NoteId};
+use underline_core::{EditingView, NoteId, PaneSide};
 use underline_editor_core::facade::splices;
-use underline_editor_view::views::{colors_key, diagram_key, diagram_language};
+use underline_editor_view::views::{
+    colors_key, diagram_key, diagram_language, formula_key, refresh_formulas,
+};
 use underline_editor_view::{FacadeModel, Versioned, CODE_COLORS_KEPT};
 use underline_facade::blocks::BlockKind;
 use underline_facade::highlight::HighlightSet;
@@ -29,10 +31,11 @@ use underline_facade::highlight::HighlightSet;
 use self::build::{diagram_figure, Built, Context, Job, Looks};
 pub(super) use self::build::{CodeColorCache, ImageCache};
 use super::diagrams::SvgDiagrams;
+use super::formulas::SvgFormulas;
 use super::tab::Tab;
 use super::Session;
 use crate::assets::{percent_decode, request_path, Asset, AssetError, AssetPlan};
-use crate::facade_view::{BlockView, CodeColors, FigureView};
+use crate::facade_view::{BlockKindView, BlockView, CodeColors, FigureView, FormulaView};
 use crate::sync_view::EnrichView;
 use crate::workspace_view::EditingViewName;
 use crate::{Event, UiError, UiErrorKind};
@@ -53,6 +56,8 @@ pub(super) struct Facade {
     /// The look and the diagrams' generation the views were made with.
     looks: Option<Looks>,
     diagrams_seen: u64,
+    /// FR-098: the formulas' generation the views were made with.
+    formulas_seen: u64,
     /// M-09.7: the last picture of each diagram block, shown while its
     /// changed source renders (`last_pictures` of the egui facade).
     last_pictures: HashMap<usize, String>,
@@ -83,6 +88,7 @@ struct Sent {
     colors: HashMap<String, Option<CodeColors>>,
     diagrams: HashMap<String, FigureView>,
     images: HashMap<String, FigureView>,
+    formulas: HashMap<String, FormulaView>,
 }
 
 /// What making the views needs of the session.
@@ -91,9 +97,28 @@ struct Tools {
     colors: Option<Arc<HighlightSet>>,
     dark: bool,
     diagrams: Option<Arc<SvgDiagrams>>,
+    /// FR-098: the formulas, drawn in the theme's text colour.
+    formulas: Option<Arc<SvgFormulas>>,
+    color: underline_facade::themes::Rgb,
 }
 
 impl Facade {
+    /// ADR-025: whether a tab shows the facade of the note (`facade` its
+    /// part of the note's tab); the tick keeps it current only then, and
+    /// keeps it while the source view shows.
+    pub(super) fn show(facade: &mut Option<Self>, shown: bool) {
+        match facade {
+            Some(facade) => facade.shown = shown,
+            None if shown => {
+                *facade = Some(Self {
+                    shown: true,
+                    ..Self::default()
+                });
+            }
+            None => {}
+        }
+    }
+
     /// Whether the views of `model` must be made anew for revision `rev` in
     /// `looks`.
     fn stale(&self, model: &FacadeModel, rev: u64, looks: Looks) -> bool {
@@ -109,6 +134,7 @@ impl Facade {
             seq: self.next_seq,
             rev,
             generation: tools.diagrams.as_deref().map_or(0, SvgDiagrams::generation),
+            formulas_generation: tools.formulas.as_deref().map_or(0, SvgFormulas::generation),
             rope: tab.edit.editor.document().rope().clone(),
             format: tab.edit.format,
             blocks: (model.parsed == Some(rev)).then(|| Arc::clone(&model.blocks)),
@@ -131,6 +157,7 @@ impl Facade {
         model.parsed = Some(built.rev);
         self.looks = Some(built.looks);
         self.diagrams_seen = built.generation;
+        self.formulas_seen = built.formulas_generation;
         self.last_pictures = built.last_pictures;
         if let Some(refs) = built.refs {
             model.refs = refs;
@@ -142,13 +169,13 @@ impl Facade {
     /// since the window was told, worked into the views; the other views
     /// stay.
     fn figures(&mut self, model: &mut FacadeModel, tools: &Tools) -> Vec<Versioned> {
+        let mut changes = self.formulas(model, tools);
         let generation = tools.diagrams.as_deref().map_or(0, SvgDiagrams::generation);
         if generation == self.diagrams_seen {
-            return Vec::new();
+            return model.versioned(changes);
         }
         self.diagrams_seen = generation;
         let count = model.blocks.len();
-        let mut changes = Vec::new();
         for index in 0..count.min(model.views.len()) {
             let Some(language) = diagram_language(&model.blocks[index].kind) else {
                 continue;
@@ -176,6 +203,48 @@ impl Facade {
         model.versioned(changes)
     }
 
+    /// FR-098: the formulas of `model` typeset since the views were made
+    /// worked into the views; the changes for the window.
+    fn formulas(&mut self, model: &mut FacadeModel, tools: &Tools) -> Vec<Splice> {
+        let generation = tools.formulas.as_deref().map_or(0, SvgFormulas::generation);
+        if generation == self.formulas_seen {
+            return Vec::new();
+        }
+        self.formulas_seen = generation;
+        let mut changes = Vec::new();
+        let count = model.blocks.len().min(model.views.len());
+        for index in 0..count {
+            let block = &model.blocks[index];
+            let has = matches!(block.kind, BlockKind::Formula { .. })
+                || block.runs.iter().any(|run| run.style.formula.is_some())
+                || matches!(&block.kind, BlockKind::Table(table)
+                    if table.rows.iter().flatten().flatten().any(|run| run.style.formula.is_some()));
+            if !has {
+                continue;
+            }
+            let view = &mut model.views[index];
+            let changed = refresh_formulas(block, view, index, &mut |_, source, display| {
+                build::formula_view(
+                    tools.formulas.as_deref(),
+                    tools.looks.0,
+                    tools.color,
+                    source,
+                    display,
+                )
+            });
+            if changed {
+                changes.push(Splice {
+                    from: index,
+                    removed: 1,
+                    blocks: vec![view.clone()],
+                    shift: 0,
+                    line_shift: 0,
+                });
+            }
+        }
+        changes
+    }
+
     /// ADR-025, `docs/migration/variante-b.md` section 2.3: what the backend
     /// made of the blocks of `model` (the colours of code, the figures of
     /// diagrams and images, by their content) that the window was not sent
@@ -193,7 +262,10 @@ impl Facade {
         // The window keeps what was sent since the last `clear`: past the
         // bound both start anew with the colours and figures of the blocks
         // now (ADR-025, `CODE_COLORS_KEPT`).
-        let full = self.sent.colors.len() + self.sent.diagrams.len() + self.sent.images.len()
+        let full = self.sent.colors.len()
+            + self.sent.diagrams.len()
+            + self.sent.images.len()
+            + self.sent.formulas.len()
             >= CODE_COLORS_KEPT;
         let clear = new_looks || full;
         if clear {
@@ -206,7 +278,9 @@ impl Facade {
             clear,
             ..Enriched::default()
         };
+        let theme = looks.0.label();
         for (index, (block, view)) in model.blocks.iter().zip(&model.views).enumerate() {
+            self.sent_formulas(theme, view, &mut out.formulas);
             let code = || {
                 view.runs
                     .iter()
@@ -257,8 +331,43 @@ impl Facade {
         let any = out.clear
             || !out.colors.is_empty()
             || !out.diagrams.is_empty()
-            || !out.images.is_empty();
+            || !out.images.is_empty()
+            || !out.formulas.is_empty();
         any.then_some(out)
+    }
+
+    /// FR-098: the formulas of `view` typeset, or with their error, that
+    /// the window was not sent yet, by key, into `out`; one still being
+    /// typeset is sent once it is done.
+    fn sent_formulas(
+        &mut self,
+        theme: &str,
+        view: &BlockView,
+        out: &mut Vec<(String, FormulaView)>,
+    ) {
+        let block = match &view.kind {
+            BlockKindView::Formula { formula } => Some(formula),
+            _ => None,
+        };
+        let cells = match &view.kind {
+            BlockKindView::Table { table } => table.rows.iter().flatten().flatten().collect(),
+            _ => Vec::new(),
+        };
+        let inline = view
+            .runs
+            .iter()
+            .chain(cells)
+            .filter_map(|run| run.formula.as_ref());
+        for formula in block.into_iter().chain(inline) {
+            if formula.picture.is_none() && formula.error.is_none() {
+                continue;
+            }
+            let key = formula_key(theme, formula.display, &formula.source);
+            if self.sent.formulas.get(&key) != Some(formula) {
+                self.sent.formulas.insert(key.clone(), formula.clone());
+                out.push((key, formula.clone()));
+            }
+        }
     }
 
     /// ADR-025: the window's facade starts anew (a new core): everything is
@@ -280,6 +389,7 @@ struct Enriched {
     colors: Vec<(String, Option<CodeColors>)>,
     diagrams: Vec<(String, FigureView)>,
     images: Vec<(String, FigureView)>,
+    formulas: Vec<(String, FormulaView)>,
 }
 
 /// What making views needs of the session and the tab.
@@ -289,6 +399,8 @@ fn context(tab: &Tab, root: &std::path::Path, tools: &Tools, session: &Shared) -
         colors: tools.colors.clone(),
         dark: tools.dark,
         diagrams: tools.diagrams.clone(),
+        formulas: tools.formulas.clone(),
+        color: tools.color,
         code_colors: Arc::clone(&session.code_colors),
         images: Arc::clone(&session.images),
         root: root.to_owned(),
@@ -336,27 +448,62 @@ impl Session {
         self.diagrams.clone()
     }
 
+    /// FR-098, ADR-029: the formulas of the facade, on a queue of their
+    /// own, started with the first facade. Should they not start, every
+    /// formula says it cannot be typeset.
+    fn svg_formulas(&mut self) -> Option<Arc<SvgFormulas>> {
+        if self.formulas.is_none() {
+            match SvgFormulas::start(self.wake.clone()) {
+                Ok(formulas) => self.formulas = Some(Arc::new(formulas)),
+                Err(error) => self.status = format!("Formulas cannot be typeset: {error}"),
+            }
+        }
+        self.formulas.clone()
+    }
+
     /// What the facade is made with: the colours for code (once ready), the
-    /// theme's darkness for diagrams, and the diagrams.
+    /// theme's darkness for diagrams, the diagrams, and the formulas in the
+    /// theme's text colour.
     fn facade_tools(&mut self) -> Tools {
         let colors = self.colors();
         let theme = self.settings.effective().theme;
+        let palette = underline_facade::themes::palette(theme);
         Tools {
             looks: (theme, colors.is_some()),
             colors,
-            dark: underline_facade::themes::palette(theme).dark,
+            dark: palette.dark,
             diagrams: self.svg_diagrams(),
+            formulas: self.svg_formulas(),
+            color: palette.foreground,
         }
     }
 
     /// M-07.2, UC-004 BR-003: the tab of `note` shows `view` from now on; it
-    /// is remembered with the tabs (M-22.2).
+    /// is remembered with the tabs (M-22.2). The tab of the active pane,
+    /// else of the pane that has one (BR-018).
     ///
     /// # Errors
     ///
     /// The note has no open tab.
     pub fn set_editing_view(
         &mut self,
+        note: &NoteId,
+        view: EditingViewName,
+    ) -> Result<(), UiError> {
+        let side = self.pane_of(note);
+        self.set_editing_view_in(side, note, view)
+    }
+
+    /// M-07.2, UC-004 BR-003, UC-005 BR-016: the tab of `note` in the pane
+    /// `side` shows `view` from now on, remembered with the tabs; a tab of
+    /// the note in the other pane keeps its own view.
+    ///
+    /// # Errors
+    ///
+    /// The pane has no tab of the note.
+    pub fn set_editing_view_in(
+        &mut self,
+        side: PaneSide,
         note: &NoteId,
         view: EditingViewName,
     ) -> Result<(), UiError> {
@@ -367,24 +514,21 @@ impl Session {
             )
         };
         let open = self.open.as_mut().ok_or_else(not_open)?;
-        let index = open.tabs.find(note).ok_or_else(not_open)?;
-        let tab = open.tabs.get_mut(index);
+        if !open.panes.has(side, note) || open.tabs.find(note).is_none() {
+            return Err(not_open());
+        }
         let view = EditingView::from(view);
+        let changed = open.panes.set_view(side, note, view);
+        // ADR-025: the tick makes the blocks' colours and figures for the
+        // window's facade (`ed-enrich`) while a tab shows it; the blocks
+        // stay while only the source view shows, so switching back is quick.
+        open.sync_active();
         if view == EditingView::Facade {
-            // ADR-025: the tick makes the blocks' colours and figures for the
-            // window's facade (`ed-enrich`) while it is shown.
-            tab.facade.get_or_insert_with(Facade::default).shown = true;
             self.wake.wake();
         }
-        if tab.editing_view == view {
-            return Ok(());
+        if changed {
+            self.persist_tabs();
         }
-        tab.editing_view = view;
-        if let (EditingView::Source, Some(facade)) = (view, tab.facade.as_mut()) {
-            // Kept, but no longer kept current until it is shown again.
-            facade.shown = false;
-        }
-        self.persist_tabs();
         Ok(())
     }
 
@@ -397,31 +541,53 @@ impl Session {
     pub(super) fn facade_events(&mut self) -> Vec<Event> {
         self.take_built();
         let mut out = Vec::new();
-        let shows_facade = self
-            .open
-            .as_ref()
-            .and_then(|open| open.tabs.active())
-            .is_some_and(|(_, tab)| tab.facade.as_ref().is_some_and(Facade::shown));
-        if !shows_facade {
+        // UC-004 BR-018: the facade each pane shows now (its active tab
+        // shows it), the active pane's first; a facade tab not shown is not
+        // kept current.
+        let shown: Vec<NoteId> = self.open.as_ref().map_or_else(Vec::new, |open| {
+            open.panes
+                .shown_facades()
+                .into_iter()
+                .filter(|note| {
+                    open.tabs.find(note).is_some_and(|index| {
+                        open.tabs
+                            .get(index)
+                            .facade
+                            .as_ref()
+                            .is_some_and(Facade::shown)
+                    })
+                })
+                .collect()
+        });
+        if shown.is_empty() {
             return out;
         }
         let tools = self.facade_tools();
+        for note in shown {
+            self.facade_event(&note, &tools, &mut out);
+        }
+        out
+    }
+
+    /// [`Session::facade_events`] for the facade of `note`.
+    fn facade_event(&mut self, note: &NoteId, tools: &Tools, out: &mut Vec<Event>) {
         let wake = self.wake.clone();
         let Some(open) = self.open.as_mut() else {
-            return out;
+            return;
         };
         let root = open.root().to_owned();
-        let Some((note, tab)) = open.tabs.active_mut() else {
-            return out;
+        let Some(index) = open.tabs.find(note) else {
+            return;
         };
+        let tab = open.tabs.get_mut(index);
         let rev = tab.edit.editor.revision();
         let Some(mut facade) = tab.facade.take() else {
-            return out;
+            return;
         };
         if facade.building {
             // The running job brings the figures too.
         } else if facade.stale(&tab.edit.facade, rev, tools.looks) {
-            let job = facade.job(tab, &root, &tools, &self.facade);
+            let job = facade.job(tab, &root, tools, &self.facade);
             let send = self.facade.send.clone();
             let note = note.clone();
             facade.building = true;
@@ -438,9 +604,9 @@ impl Session {
             }
         } else if tab.edit.facade.parsed.is_some() {
             // The changes count the views' versions, which `enrich` follows.
-            facade.figures(&mut tab.edit.facade, &tools);
+            facade.figures(&mut tab.edit.facade, tools);
             if !facade.recolor.is_empty() {
-                let ctx = context(tab, &root, &tools, &self.facade);
+                let ctx = context(tab, &root, tools, &self.facade);
                 facade.recolored(&mut tab.edit.facade, &ctx);
             }
             if let Some(found) = facade.enrich(&tab.edit.facade, tools.looks, tools.dark) {
@@ -453,11 +619,11 @@ impl Session {
                     colors: found.colors,
                     diagrams: found.diagrams,
                     images: found.images,
+                    formulas: found.formulas,
                 })));
             }
         }
         tab.facade = Some(facade);
-        out
     }
 
     /// Takes in the results of the tick's jobs that are still for the text
@@ -497,6 +663,12 @@ impl Session {
             let name = rest.strip_suffix(".svg").ok_or(AssetError::Refused)?;
             let diagrams = self.diagrams.as_ref().ok_or(AssetError::NotFound)?;
             return Ok(AssetPlan::diagram(Arc::clone(diagrams), name));
+        }
+        // FR-098, ADR-029: a typeset formula.
+        if let Some(rest) = path.strip_prefix("formula/") {
+            let name = rest.strip_suffix(".svg").ok_or(AssetError::Refused)?;
+            let formulas = self.formulas.as_ref().ok_or(AssetError::NotFound)?;
+            return Ok(AssetPlan::formula(Arc::clone(formulas), name));
         }
         if let Some(rest) = path.strip_prefix("file/") {
             let root = self.workspace_root().ok_or(AssetError::Refused)?;

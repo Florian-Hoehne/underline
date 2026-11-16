@@ -81,6 +81,8 @@ enum Act {
     Format(Format),
     /// Inserts the text as it is.
     Raw(String),
+    /// UC-005 A28: inserts the text as it is, as one change undone alone.
+    Sealed(String),
 }
 
 /// UC-005 A2, A9 to A11: the format of a file put into the note: a picture,
@@ -112,6 +114,7 @@ fn act(insertion: Insertion, in_code: impl FnOnce() -> bool) -> Act {
             }
         }
         Insertion::Text { text } => Act::Raw(text),
+        Insertion::Correction { text } => Act::Sealed(text),
     }
 }
 
@@ -190,6 +193,12 @@ impl EditorTab {
                     .replace_bytes(edit.range, &edit.text, edit.selection)
             }
             Act::Raw(text) => self.editor.type_text(&text),
+            Act::Sealed(text) => {
+                self.editor.seal();
+                let outcome = self.editor.type_text(&text);
+                self.editor.seal();
+                outcome
+            }
         };
         let done = Done {
             outcome,
@@ -212,6 +221,7 @@ impl EditorTab {
             match act(insertion, || edit.cursor_in_code()) {
                 Act::Format(format) => edit.apply_format(&format),
                 Act::Raw(text) => edit.insert_raw(&text),
+                Act::Sealed(text) => edit.insert_sealed(&text),
             }
         });
         self.facade_finish(call, before, gathered)

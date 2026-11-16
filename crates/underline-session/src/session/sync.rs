@@ -143,6 +143,8 @@ impl Session {
         };
         if edited {
             let tab = self.sync_tab(note)?;
+            // ADR-030: the spell check rests from this edit on.
+            tab.spell.edited(Instant::now());
             if tab.changed(Instant::now()) {
                 self.views_dirty = true;
             }
@@ -285,6 +287,8 @@ impl Session {
         if let Some(facade) = tab.facade.as_mut() {
             facade.forget_sent();
         }
+        // ADR-030: nor the marks of the spell check.
+        tab.spell.forget_told();
         let (head, anchor) = tab.edit.editor.selection_web();
         Ok(MirrorView {
             note: note.as_str().to_owned(),

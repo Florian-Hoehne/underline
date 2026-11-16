@@ -69,12 +69,16 @@ mod event;
 mod export_view;
 mod facade_view;
 mod git_view;
+mod links_view;
 mod notes_view;
 mod palette;
 mod remote_view;
+mod replace_view;
 mod search_view;
 mod session;
 mod settings;
+mod snapshots_view;
+mod spell_view;
 mod start;
 mod sync_view;
 mod todos_view;
@@ -87,12 +91,15 @@ pub use agents_view::{
 };
 pub use clip::clipboard_view;
 pub use editor_view::{
-    ClipAction, ClipContentView, Clipped, CloseQuestion, CopyOnSelectView, DragName,
-    EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FindAnswer, FindStatus,
-    FindStep, FoundView, HighlightView, IndexEntryView, IndexesView, Insertion, KeyHintView,
-    KeyName, KeysStatusView, LinkAnswer, NotePropertiesView, SectionView, SectionsView,
-    SelectionCopy, SpanStyle, TabPropertiesView, TabViews, TextChange, ToolName, ToolView,
-    VimChange, VimModeName, VimState,
+    AttributeChangeView, AttributeEdited, AttributeFieldName, AttributeKindName,
+    AttributeValueView, ClipAction, ClipContentView, Clipped, CloseQuestion, CopyOnSelectView,
+    DragName, EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FindAnswer,
+    FindSpec, FindStatus, FindStep, FoundView, HeadProblemView, HighlightView, IndexEntryView,
+    IndexesView, Insertion, KeyHintView, KeyName, KeysStatusView, LineTargetAnswer, LinkAnswer,
+    LinkChoice, LinkContextView, NoteAttributeView, NoteHeadView, NotePropertiesView, Replaced,
+    SearchSwitches, SectionView, SectionsView, SelectionCopy, SelectionStatisticsView, SpanStyle,
+    TabPropertiesView, TabViews, TextChange, TextStatisticsView, ToolName, ToolView, VimChange,
+    VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
@@ -108,15 +115,23 @@ pub use git_view::{
     BranchView, ChangeKindName, ChangeView, ChangesView, CommitAnswer, DiffBody, DiffLineKind,
     DiffLineView, DiffPartView, DiffView, DiscardQuestion, HunkView,
 };
+pub use links_view::{
+    BacklinkNoteView, BacklinkView, HeadingView, LinkKindName, LinkPlace, LinksView,
+    OutgoingLinkView,
+};
 pub use notes_view::{
-    CreateNoteAnswer, DeleteAnswer, DeleteQuestion, DeletedNoteView, NewNoteRequest, NewNoteStart,
-    RenameAnswer, RenameStart, RestoreAnswer, StatusOffer,
+    CreateNoteAnswer, DailyNoteAnswer, DeleteAnswer, DeleteQuestion, DeletedNoteView,
+    NewNoteRequest, NewNoteStart, RenameAnswer, RenameStart, RestoreAnswer, StatusOffer,
+    TemplateView,
 };
 pub use palette::PaletteView;
 pub use remote_view::{
     BranchEntryView, BranchMenuView, BranchNameView, BranchTarget, ChoiceName, ConflictBarView,
     ConflictPlaceView, GitBarView, SideName, SwitchAnswer, SyncBarView, SyncModeName,
     TodoConflictRowView, TodoConflictView,
+};
+pub use replace_view::{
+    ChosenView, ReplaceNoteView, ReplacePlaceView, ReplaceResultView, ReplaceView,
 };
 pub use search_view::{
     FoundLineView, FoundNoteView, FoundPartView, FoundPlace, SearchOpened, SearchResultView,
@@ -130,15 +145,22 @@ pub use session::{calendar_view, TodoDone, TodoJob, TODOS_EVERY};
 pub use session::{AgentsDone, AgentsJob, SectionDone, SectionJob, FLUSH_AT_MOST, REQUESTS_EVERY};
 pub use session::{
     CommitJob, CommitOutcome, CreatePlan, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused,
-    EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed, IdentityJob,
-    KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, Session, Synced, NEEDS_MESSAGE,
-    NOTHING_CHOSEN,
+    EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed, HeadingsPlan,
+    IdentityJob, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, ReplaceDone, ReplaceJob,
+    Session, SnapshotShowJob, SnapshotsJob, Synced, NEEDS_MESSAGE, NOTHING_CHOSEN, NO_SNAPSHOT,
+    SNAPSHOTS_KEPT, SNAPSHOTS_TAKEN,
 };
+pub use session::{SuggestJob, SPELL_AT_THE_LATEST, SPELL_DEBOUNCE, USER_WORDS_POLL};
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingChoiceView, SettingControlView,
     SettingName, SettingNoteView, SettingRowView, SettingsAnswer, SettingsState, SettingsView,
     SettingsWindowView, USER_SETTINGS_POLL,
 };
+pub use snapshots_view::{
+    SnapshotDiffBody, SnapshotDiffView, SnapshotItemView, SnapshotWholeView, SnapshotsNoneView,
+    SnapshotsView,
+};
+pub use spell_view::{SpellMarksView, SpellStateView};
 pub use start::{Platform, StartInfo};
 pub use sync_view::{
     ChangedView, EnrichView, FlushView, MirrorView, RemoteApplied, RemoteChange, RemoteOp,
@@ -149,7 +171,10 @@ pub use todos_view::{
     TodoCandidatesView, TodoChange, TodoFilterName, TodoLinkView, TodoSortName, TodoTableView,
     TodoView, TodosView, UrgencyName,
 };
+/// ADR-030: the dictionaries the app gives the session.
+pub use underline_spell::{Dictionaries, DICTIONARY_DIR};
 pub use workspace_view::{
     CreateAnswer, EditingViewName, FormatName, NewWorkspaceRequest, OpenAnswer, OpenOffer,
-    OverviewItem, StartOpened, TabView, TabsView, TodoTabView, WorkspaceSnapshot, WorkspaceView,
+    OverviewItem, PaneName, SplitView, StartOpened, TabView, TabsView, TodoTabView,
+    WorkspaceSnapshot, WorkspaceView,
 };

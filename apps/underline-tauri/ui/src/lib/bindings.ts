@@ -75,15 +75,31 @@ export const commands = {
 	 *  activates its tab, and moves it to the top of the overview.
 	 */
 	tabOpen: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_open", { note })),
-	/**  M-06.2, UC-004 A5: activates the tab of `note`. */
-	tabActivate: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_activate", { note })),
+	/**
+	 *  UC-004 A18, A19, FR-096, FR-097: opens the note `note` to the side, in
+	 *  the other pane of the split view, which shows when it does not; the note
+	 *  of the active tab opens in the other editing view.
+	 */
+	tabOpenSide: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("tab_open_side", { note })),
+	/**
+	 *  M-06.2, UC-004 A5, BR-018: activates the tab of `note` in the pane
+	 *  `pane` (the active pane, or the one with a tab of it, when `None`).
+	 */
+	tabActivate: (note: string, pane: PaneName | null) => typedError<null, UiError>(__TAURI_INVOKE("tab_activate", { note, pane })),
+	/**
+	 *  UC-004 BR-018: the user works in the pane `pane` now; the tool panel
+	 *  shows its active note.
+	 */
+	paneFocus: (pane: PaneName) => typedError<null, UiError>(__TAURI_INVOKE("pane_focus", { pane })),
+	/**  UC-004 A20: ends the split view; the right pane's tabs join the left. */
+	splitEnd: () => typedError<null, UiError>(__TAURI_INVOKE("split_end")),
 	/**
 	 *  M-06.3, UC-004 A5: closes the tab of `note`, storing its changes first.
 	 *  When they cannot be stored, the tab stays and the answer is the question
 	 *  "Changes not stored" (UC-005 A14 step 3); with `force` ("Close anyway")
 	 *  the tab closes all the same.
 	 */
-	tabClose: (note: string, force: boolean) => typedError<CloseQuestion | null, UiError>(__TAURI_INVOKE("tab_close", { note, force })),
+	tabClose: (note: string, force: boolean, pane: PaneName | null) => typedError<CloseQuestion | null, UiError>(__TAURI_INVOKE("tab_close", { note, force, pane })),
 	/**
 	 *  M-10.9, UC-005 BR-009: stores the note of the tab at once; the status
 	 *  bar says "Stored {t}" or why it could not be stored.
@@ -93,7 +109,7 @@ export const commands = {
 	 *  M-07.2, UC-004 BR-003: the tab of `note` shows `view` from now on; the
 	 *  tabs are remembered with it (M-22.2).
 	 */
-	tabSetView: (note: string, view: EditingViewName) => typedError<null, UiError>(__TAURI_INVOKE("tab_set_view", { note, view })),
+	tabSetView: (note: string, view: EditingViewName, pane: PaneName | null) => typedError<null, UiError>(__TAURI_INVOKE("tab_set_view", { note, view, pane })),
 	/**
 	 *  M-08.1, M-08.2: the source view shows the lines `from..to` (from 0, the
 	 *  end not included); their colours come as the event `ed-highlight`.
@@ -203,7 +219,7 @@ export const commands = {
 	 *  the session is let go (plan section 8: the `open` crate, no plugin); a
 	 *  failure is said in the status bar.
 	 */
-	edFollowLink: (note: string, at: number, rev: number) => typedError<LinkAnswer, UiError>(__TAURI_INVOKE("ed_follow_link", { note, at, rev })),
+	edFollowLink: (note: string, at: number, rev: number, side: boolean) => typedError<LinkAnswer, UiError>(__TAURI_INVOKE("ed_follow_link", { note, at, rev, side })),
 	/**
 	 *  UC-004 A4: the answer to "Open web address": with `open`, the address
 	 *  asked about opens in the browser, and web addresses are not asked about
@@ -233,6 +249,18 @@ export const commands = {
 	 *  (a failure is in the status bar).
 	 */
 	noteCreate: (request: NewNoteRequest) => typedError<CreateNoteAnswer, UiError>(__TAURI_INVOKE("note_create", { request })),
+	/**
+	 *  UC-025 steps 1 to 4, A1, A3 to A5: opens the daily note of today,
+	 *  created first from the daily note template when it does not exist; the
+	 *  answer puts the cursor where the template marks it or at the end of the
+	 *  note. Creating a folder may run git, so it runs on the blocking pool.
+	 */
+	noteDailyOpen: () => typedError<DailyNoteAnswer, UiError>(__TAURI_INVOKE("note_daily_open")),
+	/**
+	 *  UC-025 A2: opens the daily note before (`later` false) or after the one
+	 *  in the active tab; the status bar says when there is none.
+	 */
+	noteDailyStep: (later: boolean) => typedError<DailyNoteAnswer, UiError>(__TAURI_INVOKE("note_daily_step", { later })),
 	/**
 	 *  M-14.2, UC-006 step 1: what "Rename note" starts with for `note`;
 	 *  `null` when it is refused (the status bar says why).
@@ -279,11 +307,12 @@ export const commands = {
 	 */
 	wsPurge: (key: string | null) => typedError<null, UiError>(__TAURI_INVOKE("ws_purge", { key })),
 	/**
-	 *  M-13.1, UC-008 steps 1–2, A2: the search overlay holds `text`; the
-	 *  search of the workspace starts again on its own thread, and its result
-	 *  comes as the event `search`. Only spaces end the search.
+	 *  M-13.1, UC-008 steps 1–2, A2, A7, A9: the search overlay holds `text`
+	 *  with the search switches `switches` (FR-075); the search of the
+	 *  workspace starts again on its own thread, and its result comes as the
+	 *  event `search`. Only spaces end the search.
 	 */
-	searchSet: (text: string) => typedError<null, UiError>(__TAURI_INVOKE("search_set", { text })),
+	searchSet: (text: string, switches: SearchSwitches) => typedError<null, UiError>(__TAURI_INVOKE("search_set", { text, switches })),
 	/**
 	 *  M-13.1, UC-008 step 2: more found notes of the result `serial`, from the
 	 *  `from`th on; `null` when a newer result replaced it.
@@ -297,6 +326,101 @@ export const commands = {
 	 *  status says why).
 	 */
 	searchOpen: (note: string, place: FoundPlace | null) => typedError<SearchOpened | null, UiError>(__TAURI_INVOKE("search_open", { note, place })),
+	/**
+	 *  UC-004 A14, FR-078: opens the note `note` that holds a backlink as the
+	 *  note overview does, with the cursor at the start of the link at `place`
+	 *  (bytes of the text the backlinks were found in), once the window's edits
+	 *  reached the backend (`flushed`, ADR-025). `null` when the note did not
+	 *  open (the status says why).
+	 */
+	linksOpen: (note: string, place: LinkPlace) => typedError<SearchOpened | null, UiError>(__TAURI_INVOKE("links_open", { note, place })),
+	/**
+	 *  UC-005 A23, BR-018 (FR-080): the headings of the note `note` that link
+	 *  completion offers after a `#`, with their anchors; of its tab when it is
+	 *  open, else of its file; none when it cannot be read.
+	 */
+	linksHeadings: (note: string) => typedError<HeadingView[], UiError>(__TAURI_INVOKE("links_headings", { note })),
+	/**
+	 *  UC-004 A14 step 2, FR-079: follows the outgoing link of the tab `note`
+	 *  that starts at `at` (web units of the backend's revision `rev`, as the
+	 *  tool panel listed it), once the window's edits reached the backend, as
+	 *  a Ctrl+click follows a link (`ed_follow_link`): the session finds the
+	 *  link in its own text, so the window never names what is opened.
+	 */
+	linksFollow: (note: string, at: number, rev: number) => typedError<LinkAnswer, UiError>(__TAURI_INVOKE("links_follow", { note, at, rev })),
+	/**
+	 *  UC-022 steps 1–2, A1, A2 (FR-074): the replace of the workspace holds
+	 *  `text`, `replacement` and the search switches `switches`; its places are
+	 *  found on the search thread and come as the event `replace`. The number
+	 *  of this request, which the places name.
+	 */
+	replaceSet: (text: string, replacement: string, switches: SearchSwitches) => typedError<number, UiError>(__TAURI_INVOKE("replace_set", { text, replacement, switches })),
+	/**
+	 *  UC-022 step 2: more notes of the places `serial`, from the `from`th on;
+	 *  `null` when newer places replaced them.
+	 */
+	replacePage: (serial: number, from: number) => typedError<ReplaceNoteView[] | null, UiError>(__TAURI_INVOKE("replace_page", { serial, from })),
+	/**
+	 *  UC-022 step 3: leaves the note `note` out (`out`) or takes it in again;
+	 *  with `at`, only its place starting there. What is chosen now, or `null`
+	 *  when the places `serial` are no longer the newest.
+	 */
+	replaceLeaveOut: (serial: number, note: string, at: number | null, out: boolean) => typedError<ChosenView | null, UiError>(__TAURI_INVOKE("replace_leave_out", { serial, note, at, out })),
+	/**
+	 *  UC-022 steps 4–6, A3, A5: replaces the chosen places of the places
+	 *  `serial`, in every note or only in `note`; the window's edits reached
+	 *  the backend first (`flushed`, ADR-025). The status, which says what was
+	 *  done; the closed notes are read and written without holding the
+	 *  session.
+	 */
+	replaceConfirm: (serial: number, note: string | null) => typedError<string, UiError>(__TAURI_INVOKE("replace_confirm", { serial, note })),
+	/**
+	 *  UC-022 A6: "Undo" of the status bar takes the last replacement back;
+	 *  the status, which says what was done.
+	 */
+	replaceUndo: () => typedError<string, UiError>(__TAURI_INVOKE("replace_undo")),
+	/**  UC-022 A8: the replace of the workspace closed. */
+	replaceClose: () => typedError<null, UiError>(__TAURI_INVOKE("replace_close")),
+	/**
+	 *  UC-026 steps 1–2, A1, A4: the snapshots of `note`, the newest first;
+	 *  the files are read without holding the session. The window is told
+	 *  with `snapshots-changed` when the note or its snapshots change, until
+	 *  `snapshots_close`.
+	 */
+	snapshotsList: (note: string) => typedError<SnapshotsView, UiError>(__TAURI_INVOKE("snapshots_list", { note })),
+	/**
+	 *  UC-026 step 4: the differences between the snapshot `key` of `note`
+	 *  and the note as it is now.
+	 */
+	snapshotDiff: (note: string, key: string) => typedError<SnapshotDiffView, UiError>(__TAURI_INVOKE("snapshot_diff", { note, key })),
+	/**  UC-026 A2: the whole snapshot `key` of `note` as the facade's blocks. */
+	snapshotWhole: (note: string, key: string) => typedError<SnapshotWholeView, UiError>(__TAURI_INVOKE("snapshot_whole", { note, key })),
+	/**
+	 *  UC-026 steps 5–7, A5: `note` gets the content of its snapshot `key`;
+	 *  the window's edits reached the backend first (`flushed`, ADR-025). The
+	 *  status, which says what was done and offers to undo.
+	 */
+	snapshotRestore: (note: string, key: string) => typedError<string, UiError>(__TAURI_INVOKE("snapshot_restore", { note, key })),
+	/**
+	 *  UC-026 A3: "Undo" of the status bar takes the last restore back; the
+	 *  status, which says what was done.
+	 */
+	snapshotUndoRestore: () => typedError<string, UiError>(__TAURI_INVOKE("snapshot_undo_restore")),
+	/**  UC-026 A6: the snapshots are no longer shown. */
+	snapshotsClose: () => typedError<null, UiError>(__TAURI_INVOKE("snapshots_close")),
+	/**
+	 *  UC-005 A28, ADR-030: up to five corrections for `word`, the likeliest
+	 *  first, from the dictionary of the spell check language. They are worked
+	 *  out off the session (a dictionary may take a while to suggest), so the
+	 *  menu shows "Add to dictionary" at once and the corrections when they
+	 *  come.
+	 */
+	spellSuggest: (word: string) => typedError<string[], UiError>(__TAURI_INVOKE("spell_suggest", { word })),
+	/**
+	 *  UC-005 A28 step 2: adds `word` to the user's dictionary; every open note
+	 *  is checked again, so it loses its mark everywhere.
+	 */
+	spellAddWord: (word: string) => typedError<null, UiError>(__TAURI_INVOKE("spell_add_word", { word })),
 	/**
 	 *  UC-009 step 1, BR-008, M-15.1: Ctrl+Shift+E or "Export…" of the tab
 	 *  menu: "Export {t} as:" with the kinds of export of the note. `null`
@@ -530,11 +654,16 @@ export const events = {
 	edHighlight: makeEvent<HighlightEvent, HighlightEvent>("ed-highlight"),
 	gitBar: makeEvent<GitBarEvent, GitBarEvent>("git-bar"),
 	indexes: makeEvent<IndexesEvent, IndexesEvent>("indexes"),
+	links: makeEvent<LinksEvent, LinksEvent>("links"),
 	overview: makeEvent<OverviewEvent, OverviewEvent>("overview"),
 	properties: makeEvent<PropertiesEvent, PropertiesEvent>("properties"),
+	replace: makeEvent<ReplaceEvent, ReplaceEvent>("replace"),
 	search: makeEvent<SearchEvent, SearchEvent>("search"),
 	settings: makeEvent<SettingsEvent, SettingsEvent>("settings"),
 	settingsWindow: makeEvent<SettingsWindowEvent, SettingsWindowEvent>("settings-window"),
+	snapshotsChanged: makeEvent<SnapshotsChangedEvent, SnapshotsChangedEvent>("snapshots-changed"),
+	spellMarks: makeEvent<SpellMarksEvent, SpellMarksEvent>("spell-marks"),
+	spellState: makeEvent<SpellStateEvent, SpellStateEvent>("spell-state"),
 	status: makeEvent<StatusEvent, StatusEvent>("status"),
 	tabs: makeEvent<TabsEvent, TabsEvent>("tabs"),
 	todoConflicts: makeEvent<TodoConflictsEvent, TodoConflictsEvent>("todo-conflicts"),
@@ -730,6 +859,120 @@ export type AgentsView = {
 	workspace: boolean,
 };
 
+/**  UC-024 step 3: what the user does to a note attribute. */
+export type AttributeChangeView = 
+/**  Adds an attribute after the last one. */
+{ kind: "add"; 
+/**  Its name, as typed. */
+name: string; 
+/**  Its value. */
+value: AttributeValueView } | 
+/**  Gives an attribute a new value. */
+{ kind: "set"; 
+/**  Its name. */
+name: string; 
+/**  The new value. */
+value: AttributeValueView } | 
+/**  Removes an attribute. */
+{ kind: "remove"; 
+/**  Its name. */
+name: string };
+
+/**
+ *  UC-024 step 4, A3, A4: what a change of a note attribute did: the patch
+ *  of the view, or why nothing was written.
+ */
+export type AttributeEdited<P> = {
+	/**  The change of the text, for the view; `None` when nothing was written. */
+	patch: P | null,
+	/**  Why nothing was written, as the note properties say it. */
+	problem: string | null,
+	/**  The field the refusal is about (A3: the name, A4: the value). */
+	about: AttributeFieldName | null,
+};
+
+/**  UC-024 A3, A4: the field a refused change is about. */
+export type AttributeFieldName = 
+/**  The name of a new attribute. */
+"name" | 
+/**  The value. */
+"value" | 
+/**  The note as a whole. */
+"note";
+
+/**  UC-024 BR-002: what the value of a note attribute holds. */
+export type AttributeKindName = 
+/**  Any text on one line. */
+"text" | 
+/**  Items, a field per item. */
+"list" | 
+/**  A whole or decimal number. */
+"number" | 
+/**  Year, month and day. */
+"date" | 
+/**  `true` or `false`, a switch. */
+"yesNo" | 
+/**
+ *  Fields of its own: shown as its markup, changed only in the source
+ *  view (A6).
+ */
+"nested";
+
+/**  UC-024 step 3: a value given for a note attribute. */
+export type AttributeValueView = 
+/**  A text on one line. */
+{ kind: "text"; 
+/**  The text. */
+text: string } | 
+/**  A list. */
+{ kind: "list"; 
+/**  Its items, in order. */
+items: string[] } | 
+/**  A number as typed. */
+{ kind: "number"; 
+/**  The number, such as `2.5`. */
+text: string } | 
+/**  A date as typed. */
+{ kind: "date"; 
+/**  The date, `2026-11-11`. */
+text: string } | 
+/**  Yes or no. */
+{ kind: "yesNo"; 
+/**  Whether it is yes. */
+yes: boolean };
+
+/**  FR-078: a note that links to the active note, with its links to it. */
+export type BacklinkNoteView = {
+	/**  The linking note, which A14 opens. */
+	note: string,
+	/**  Its title. */
+	title: string,
+	/**  Its folder, `None` for the top folder. */
+	folder: string | null,
+	/**  Its links to the active note, in the order of the note. */
+	links: BacklinkView[],
+};
+
+/**
+ *  FR-078, BR-015: one link to the active note: its line, shown with the
+ *  link marked.
+ */
+export type BacklinkView = {
+	/**  The line of the link, counted from 1. */
+	line: number,
+	/**  The text of the line before the link, shortened at its start. */
+	before: string,
+	/**  The markup of the link, which the line shows marked. */
+	link: string,
+	/**  The text of the line after the link, shortened at its end. */
+	after: string,
+	/**
+	 *  Where the link is in the text of its note, which A14 puts the cursor
+	 *  on (`links_open`).
+	 */
+	place: LinkPlace,
+};
+
 /**  What a block is (M-09.1). */
 export type BlockKindView = 
 /**  A heading of level 1 to 6. */
@@ -773,7 +1016,15 @@ table: TableView } |
 /**  Where the image is, as the markup says. */
 target: string; 
 /**  Its alternative text. */
-alt: string };
+alt: string } | 
+/**
+ *  FR-098: a block formula, centred; its runs are its markup, shown
+ *  below it while the cursor is in it, while it is typeset, and with
+ *  an error (UC-005 BR-008, UC-004 A21).
+ */
+{ type: "formula"; 
+/**  The typeset formula. */
+formula: FormulaView };
 
 /**  One block of the facade. */
 export type BlockView = {
@@ -1038,6 +1289,21 @@ export type ChoiceName =
 /**  "Both", Alt+B: here first, then remote. */
 "both";
 
+/**  UC-022 step 3, 4: how many places in how many notes are chosen. */
+export type ChosenView = {
+	/**  How many places are chosen. */
+	places: number,
+	/**  In how many notes. */
+	notes: number,
+	/**  "{k} of {n} places chosen". */
+	summary: string,
+	/**
+	 *  What the button says: "Replace {k} places in {m} notes", or
+	 *  "Replace" when nothing is chosen.
+	 */
+	action: string,
+};
+
 /**  The clipboard keys of the source view (M-08.6, ADR-014). */
 export type ClipAction = 
 /**  The selected markup goes to the clipboard as plain text. */
@@ -1246,6 +1512,38 @@ problem: string;
 /**  A2, A3: the note that exists, for "Open the existing note". */
 existing: string | null };
 
+/**  UC-025 steps 1 and 4, A1, A2: the answer to asking for a daily note. */
+export type DailyNoteAnswer = 
+/**  No note opened; the status bar says why (A2, A4, A5). */
+{ kind: "done" } | 
+/**
+ *  A2, OQ-271: the active note is no daily note, so there is none
+ *  before or after it; the window says so with the key of today's.
+ */
+{ kind: "notDaily" } | 
+/**
+ *  The daily note `note` is in the active tab, its cursor where it was:
+ *  its open tab became the active tab (A1), or the daily note of
+ *  another day opened (A2). The view takes the keyboard.
+ */
+{ kind: "shown"; 
+/**  The daily note. */
+note: string } | 
+/**
+ *  The daily note is open in the active tab; its cursor goes to
+ *  `offset`, which the view shows with the keyboard (step 4, A1).
+ */
+{ kind: "opened"; 
+/**  The daily note. */
+note: string; 
+/**  The revision of the backend's text `offset` is in. */
+rev: number; 
+/**
+ *  Where the template put the cursor, else the end of the text, in
+ *  web units.
+ */
+offset: number };
+
 /**  The answer to "Delete" (UC-007 steps 4–5, A3, A8). */
 export type DeleteAnswer = 
 /**
@@ -1407,6 +1705,22 @@ export type DragName =
 /**  They were dropped while no note is shown. */
 "noNote";
 
+/**
+ *  FR-082, FR-083, UC-005 A26, A27: an action of the editing comfort that
+ *  the command palette runs in the view shown.
+ */
+export type EditActionName = 
+/**  Move the line or block up (Alt+Up). */
+"moveLineUp" | 
+/**  Move the line or block down (Alt+Down). */
+"moveLineDown" | 
+/**  Duplicate the line or block (Ctrl+Shift+D). */
+"duplicateLine" | 
+/**  Indent the list items (Tab). */
+"indent" | 
+/**  Outdent the list items (Shift+Tab). */
+"outdent";
+
 /**  The editing view a tab shows its note in (UC-004 BR-003). */
 export type EditingViewName = 
 /**  The markup as it is stored. */
@@ -1453,7 +1767,14 @@ page: number } |
 /**  M-10.2: a button of the formatting toolbar. */
 { kind: "tool"; 
 /**  The function. */
-tool: ToolName };
+tool: ToolName } | 
+/**
+ *  FR-082, FR-083: an action of the editing comfort, from the command
+ *  palette; its keys come as [`EditorInput::Key`].
+ */
+{ kind: "edit"; 
+/**  The action. */
+action: EditActionName };
 
 /**
  *  The answer to an input (ADR-024): the changes of the text, one after the
@@ -1573,6 +1894,11 @@ export type EnrichView = {
 	diagrams: ([string, FigureView])[],
 	/**  The figures of images by target. */
 	images: ([string, FigureView])[],
+	/**
+	 *  FR-098: the formulas typeset, or with their error, by key
+	 *  (`formula_key`).
+	 */
+	formulas: ([string, FormulaView])[],
 };
 
 /**  The answer to running an export (UC-009 steps 4–5, A4, A5). */
@@ -1746,7 +2072,14 @@ meta: boolean } |
 /**  M-10.2: a button of the formatting toolbar. */
 { kind: "tool"; 
 /**  The function. */
-tool: ToolName };
+tool: ToolName } | 
+/**
+ *  FR-082, FR-083: an action of the editing comfort, from the command
+ *  palette.
+ */
+{ kind: "edit"; 
+/**  The action. */
+action: EditActionName };
 
 /**
  *  ADR-024: the answer to an input of the facade: the blocks that changed,
@@ -1865,6 +2198,23 @@ export type FindAnswer = {
 };
 
 /**
+ *  UC-008 BR-008, A6, A7, UC-005 BR-017: what a tab marks and finds: the
+ *  search text with its switches; while the find field is open for
+ *  replacing, the text is one text (OQ-192), and in the facade only the
+ *  text the facade shows counts (OQ-190).
+ */
+export type FindSpec = {
+	/**  The search text as typed. */
+	text: string,
+	/**  The search switches. */
+	switches: SearchSwitches,
+	/**  The text is one text, spaces included, not words in any order. */
+	oneText: boolean,
+	/**  Only the text the facade shows, not its markup and link addresses. */
+	shownOnly: boolean,
+};
+
+/**
  *  M-13.4: what the find field says: the hit selected, counted from 1, if
  *  the selection is one exactly, and how many there are.
  */
@@ -1873,6 +2223,12 @@ export type FindStatus = {
 	at: number | null,
 	/**  How many hits there are. */
 	count: number,
+	/**
+	 *  UC-008 A9, UC-005 A22: what is wrong with the search text (an
+	 *  expression that is not valid), or with the replacement; nothing is
+	 *  found or replaced then.
+	 */
+	problem: string | null,
 };
 
 /**  UC-008 A6, M-13.4: where a step of the find field moves the selection. */
@@ -1907,6 +2263,39 @@ export type FormatName =
 "Markdown" | 
 /**  AsciiDoc. */
 "AsciiDoc";
+
+/**
+ *  FR-098, UC-004 BR-019, A21, ADR-029: a formula as the facade shows it:
+ *  its picture, typeset in the backend and served by `ul-asset`, sized in
+ *  em so it grows with the editor zoom; until the picture comes, its
+ *  source; with an error, its source and the reason.
+ */
+export type FormulaView = {
+	/**  The formula's source, its alternative text. */
+	source: string,
+	/**  Set as a display formula (`$$…$$`, a block formula). */
+	display: boolean,
+	/**
+	 *  The picture, as a path of the app's own protocol (ADR-023), such as
+	 *  `formula/0f…a1.svg?v=3`; `None` while it is typeset or with an
+	 *  error.
+	 */
+	picture: string | null,
+	/**  The picture's width, in thousandths of an em. */
+	width: number,
+	/**
+	 *  The picture's height, above and below the baseline, in thousandths
+	 *  of an em.
+	 */
+	height: number,
+	/**
+	 *  How far the picture reaches below the baseline, in thousandths of an
+	 *  em (`vertical-align: -depth`).
+	 */
+	depth: number,
+	/**  UC-004 A21: why the formula cannot be typeset. */
+	error: string | null,
+};
 
 /**
  *  BR-004: a line found, as stored, shortened around the words, with the
@@ -2013,6 +2402,34 @@ export type GitBarView = {
 	conflicts: string | null,
 	/**  M-04.3: the state of the syncs, only for a workspace with a remote. */
 	sync: SyncBarView | null,
+};
+
+/**  UC-024 A5: why the front matter cannot be read. */
+export type HeadProblemView = {
+	/**  The line of the note, from 1. */
+	line: number,
+	/**  What is wrong, in a few words. */
+	reason: string,
+	/**  The text of the front matter. */
+	markup: string,
+	/**  Where the line in error starts, as a web offset of the text. */
+	offset: number,
+};
+
+/**
+ *  UC-005 A23, BR-018: a heading of a note that link completion offers
+ *  after a `#`.
+ */
+export type HeadingView = {
+	/**  The heading's text. */
+	label: string,
+	/**
+	 *  The place of the heading as GitHub and GitLab name it, which the
+	 *  link names after its `#`.
+	 */
+	anchor: string,
+	/**  Its level, 1 for the highest. */
+	level: number,
 };
 
 /**  M-08.2, ADR-024: the colours of the lines the source view shows. */
@@ -2126,6 +2543,13 @@ image: boolean } |
 /**  M-10.5: text as it is, such as the space between dropped items. */
 { kind: "text"; 
 /**  The text. */
+text: string } | 
+/**
+ *  UC-005 A28 step 2: a correction of the spell check in place of the
+ *  selected word, as it is and as one change undone alone.
+ */
+{ kind: "correction"; 
+/**  The corrected word. */
 text: string };
 
 /**  One command of the status line: its keys and what it does. */
@@ -2180,6 +2604,8 @@ export type KeyName =
 "B" | 
 /**  C, for Nano's Ctrl+C. */
 "C" | 
+/**  D, for Ctrl/Cmd+Shift+D (UC-005 A26: duplicate the line). */
+"D" | 
 /**  E, for Ctrl/Cmd+E (M-10.2) and Nano's Ctrl+E and Alt+E. */
 "E" | 
 /**  H, for Ctrl/Cmd+Shift+H (M-10.2). */
@@ -2236,6 +2662,25 @@ export type KeysStatusView = {
 };
 
 /**
+ *  UC-004 A16 step 2, A17: what the field of "Go to line" holds: the line
+ *  it names, or what is wrong with it.
+ */
+export type LineTargetAnswer = {
+	/**  The line and column; `None` when the text is no line number. */
+	target: LineTargetView | null,
+	/**  A17: why it is no line number, in the words the field shows. */
+	problem: string | null,
+};
+
+/**  FR-086, UC-004 A16: a line to go to, and a column in it, both from 1. */
+export type LineTargetView = {
+	/**  The line. */
+	line: number,
+	/**  The column; `None`: the start of the line. */
+	column: number | null,
+};
+
+/**
  *  UC-004 A2 to A4, M-07.3: what following a link asks of the window. The
  *  status bar says what else happened (a heading not found, a file that
  *  does not exist, a link leading outside the workspace).
@@ -2276,6 +2721,106 @@ format: FormatName;
 problem: string };
 
 /**
+ *  FR-080, UC-005 A23 steps 2 and 3: the note or the heading chosen in link
+ *  completion, which the tab writes as a link of the note format (BR-018).
+ */
+export type LinkChoice = {
+	/**
+	 *  The revision of the text the completion was asked in; in another,
+	 *  nothing is written.
+	 */
+	rev: number,
+	/**  The chosen note; `None` for a heading of the note itself. */
+	note: string | null,
+	/**  Its note format (`Markdown`, `AsciiDoc`). */
+	format: string | null,
+	/**  The anchor of the chosen heading. */
+	anchor: string | null,
+	/**
+	 *  The link's text when the user gave none: the note's title or the
+	 *  heading.
+	 */
+	label: string,
+};
+
+/**
+ *  FR-080, UC-005 A23 step 1: the place of a link the user is typing at
+ *  the cursor, for link completion: the window lists the notes that match
+ *  `typed` as go to note does (BR-014), or after a `#` the headings of a
+ *  note.
+ */
+export type LinkContextView = {
+	/**  The revision of the tab's text it was found in; the choice names it. */
+	rev: number,
+	/**  Where the link starts, in web units; the list shows below it. */
+	from: number,
+	/**
+	 *  What was typed of the place before the cursor, without a `#` and
+	 *  what follows it.
+	 */
+	typed: string,
+	/**  What was typed after a `#`: the headings are listed then. */
+	heading: string | null,
+	/**
+	 *  The note `typed` names as a place relative to the note, without
+	 *  its extension (`travel/Packing`); `None` when nothing is typed.
+	 */
+	named: string | null,
+};
+
+/**  What a link leads to (the entity NOTE_LINK, `kind`). */
+export type LinkKindName = 
+/**  A note of the workspace, or a heading of one. */
+"note" | 
+/**  Another file. */
+"file" | 
+/**  A web address. */
+"web";
+
+/**  A14: where a backlink is in the text of the note that holds it. */
+export type LinkPlace = {
+	/**  The first byte of the link. */
+	from: number,
+	/**  The byte after it. */
+	to: number,
+	/**
+	 *  A check of the link's markup (FNV-1a), so a link that moved since
+	 *  the list was made is not taken for another place.
+	 */
+	check: number,
+};
+
+/**
+ *  FR-078, FR-079 (UC-004 BR-015): the backlinks and the outgoing links of
+ *  the active tab's note.
+ */
+export type LinksEvent = LinksView;
+
+/**
+ *  UC-004 BR-015: "Backlinks (N)" and "Outgoing links (N)" of the active
+ *  note, sent as the event `links` when they changed. The notes open in a
+ *  tab count with their text, also with changes not stored yet.
+ */
+export type LinksView = {
+	/**  The active note. */
+	note: string,
+	/**
+	 *  The revision of the backend's text of the active note the outgoing
+	 *  links were found in; their `offset` is in that text.
+	 */
+	rev: number,
+	/**
+	 *  FR-078: the notes that link to the active note, in the order of the
+	 *  note overview, each with its links.
+	 */
+	backlinks: BacklinkNoteView[],
+	/**  How many backlinks there are in all, the number of the section. */
+	backlinkCount: number,
+	/**  FR-079: the links of the active note, in the order of the note. */
+	outgoing: OutgoingLinkView[],
+};
+
+/**
  *  ADR-025: the backend's text of an open note as the window's editor core
  *  starts from it (`ed_mirror`): the text with its line breaks as they are,
  *  its revision, and the cursor the tab opened with.
@@ -2303,6 +2848,17 @@ export type NewNoteRequest = {
 	folder: string,
 	/**  "Note format:". */
 	format: FormatName,
+	/**
+	 *  UC-003 A7: "Template:", the template's note; `None` for "No
+	 *  template".
+	 */
+	template?: string | null,
+	/**
+	 *  UC-004 A18 (FR-096): the note opens to the side, as the link that
+	 *  offered it was followed (Ctrl+Shift+click, "Follow link to the
+	 *  side").
+	 */
+	side?: boolean,
 };
 
 /**
@@ -2314,6 +2870,16 @@ export type NewNoteStart = {
 	folder: string,
 	/**  The default format of new notes (UC-001 BR-001). */
 	format: FormatName,
+	/**
+	 *  UC-003 A7, BR-008: the templates of the workspace the dialog offers
+	 *  besides "No template", by their place; none without templates.
+	 */
+	templates: TemplateView[],
+	/**
+	 *  UC-003 BR-008: the template folder, as the settings give it
+	 *  (`templates`), for saying where templates are kept.
+	 */
+	templateFolder: string,
 };
 
 /**  What the user chose in the Create dialog (UC-001 steps 1–4, A3). */
@@ -2326,6 +2892,37 @@ export type NewWorkspaceRequest = {
 	git: boolean,
 	/**  The address of the git remote; empty for none. Only used with `git`. */
 	remote: string,
+};
+
+/**  UC-024 step 2: a note attribute as the note properties show it. */
+export type NoteAttributeView = {
+	/**  Its name as the note writes it. */
+	name: string,
+	/**  What its value holds. */
+	kind: AttributeKindName,
+	/**  The value as shown; for a nested value its markup. */
+	value: string,
+	/**  The items of a list. */
+	items: string[],
+	/**  The line of the note it starts on, from 1. */
+	line: number,
+	/**  Where it starts, as a web offset of the text (A6: shown there). */
+	offset: number,
+};
+
+/**  UC-024 step 2, FR-091: the note attributes and the tags of a note. */
+export type NoteHeadView = {
+	/**  The attributes in the order of the note. */
+	attributes: NoteAttributeView[],
+	/**  A5: why the front matter cannot be read; then no attributes. */
+	problem: HeadProblemView | null,
+	/**
+	 *  UC-004 BR-016: the tags of the note, in lower case, each once: those
+	 *  of the attribute `tags` first, then those of the text.
+	 */
+	tags: string[],
+	/**  An AsciiDoc note, which holds only texts and lists (BR-002). */
+	asciidoc: boolean,
 };
 
 /**  M-16.2, UC-004 BR-010: the properties of a stored note. */
@@ -2374,6 +2971,31 @@ outer: string;
 /**  The chosen directory. */
 inner: string };
 
+/**  FR-079: one link of the active note. */
+export type OutgoingLinkView = {
+	/**
+	 *  The text of the link as the note shows it; its place when it has
+	 *  none.
+	 */
+	text: string,
+	/**
+	 *  Where it leads: a note of the workspace (with the heading it names),
+	 *  a file, or the web address.
+	 */
+	target: string,
+	/**  What it leads to. */
+	kind: LinkKindName,
+	/**
+	 *  BR-015: the note, file or heading it leads to does not exist (a
+	 *  broken link); a web address is never broken.
+	 */
+	broken: boolean,
+	/**  The line of the link, counted from 1. */
+	line: number,
+	/**  A14: where the link starts, in web units of `LinksView::rev`. */
+	offset: number,
+};
+
 /**  M-05.2: the note overview changed. */
 export type OverviewEvent = OverviewItem[];
 
@@ -2386,6 +3008,13 @@ export type OverviewItem = {
 	note: string,
 	/**  The title, with the folder when the title occurs more than once. */
 	label: string,
+	/**  The title alone, which go to note matches (UC-004 A12, BR-014). */
+	title: string,
+	/**
+	 *  The folder, `None` for the top folder, which go to note matches and
+	 *  shows (UC-004 A12 step 2).
+	 */
+	folder: string | null,
 	/**
 	 *  The note's format, which names the kinds of export of its menu
 	 *  (M-05.4, `StartInfo::export_kinds`).
@@ -2467,6 +3096,16 @@ export type PaletteView = {
 	 */
 	strong: string,
 };
+
+/**
+ *  UC-004 BR-018: a pane of the split view; without it, every tab is in
+ *  the left one.
+ */
+export type PaneName = 
+/**  The left pane, the only one without the split view. */
+"left" | 
+/**  The right pane of the split view. */
+"right";
 
 /**
  *  The operating system the app runs on.
@@ -2557,6 +3196,125 @@ export type RenameStart = {
 	home: boolean,
 };
 
+/**
+ *  UC-022 step 2: the problem or the places of the replace of the workspace
+ *  changed.
+ */
+export type ReplaceEvent = ReplaceView;
+
+/**  UC-022 step 2, 3: a note with its places. */
+export type ReplaceNoteView = {
+	/**  The note. */
+	note: string,
+	/**  Its title. */
+	title: string,
+	/**  Its folder; `None` in the top folder. */
+	folder: string | null,
+	/**  "1 place" or "{n} places". */
+	count: string,
+	/**  Step 3: the user left the whole note out. */
+	leftOut: boolean,
+	/**  Its places shown (A7: some may not be). */
+	places: ReplacePlaceView[],
+};
+
+/**  UC-022 step 2: a place with its line before and after. */
+export type ReplacePlaceView = {
+	/**
+	 *  Where the place starts, in bytes of the text searched: what the
+	 *  window names it by.
+	 */
+	at: number,
+	/**  The number of its line, from 1. */
+	line: number,
+	/**  The text before it in its line, shortened with "…" when long. */
+	before: string,
+	/**  The place found. */
+	old: string,
+	/**  What takes its place. */
+	new: string,
+	/**  The text after it in its line. */
+	after: string,
+	/**  Step 3: the user left it out. */
+	leftOut: boolean,
+};
+
+/**  UC-022 step 2, A7: the places found. */
+export type ReplaceResultView = {
+	/**
+	 *  The number of this result in the session; the window asks for more
+	 *  of its notes, leaves out and confirms by it.
+	 */
+	serial: number,
+	/**  The `replace_set` it answers. */
+	asked: number,
+	/**  How many places there are in all. */
+	places: number,
+	/**  In how many notes. */
+	notes: number,
+	/**  "{n} places in {m} notes". */
+	summary: string,
+	/**
+	 *  A7: "{n} more places are not shown; they are replaced too.", when
+	 *  more than [`underline_core::SHOWN_REPLACE_PLACES`] are found.
+	 */
+	more: string | null,
+	/**
+	 *  The first notes with their places shown, [`ReplaceResultView::PAGE`]
+	 *  places or a little more.
+	 */
+	list: ReplaceNoteView[],
+	/**
+	 *  How many notes the list holds in all; the window asks for the
+	 *  others (`replace_page`).
+	 */
+	listed: number,
+	/**  "{n} note(s) could not be searched.", when some could not. */
+	unreadable: string | null,
+	/**  Step 3: what is chosen to be replaced now. */
+	chosen: ChosenView,
+};
+
+/**
+ *  UC-022 step 2, A1, A2: the replace of the workspace. Sent as the event
+ *  `replace` when its problem or its result changed.
+ */
+export type ReplaceView = {
+	/**
+	 *  The number of the newest `replace_set`; a result of an older one is
+	 *  of another text.
+	 */
+	asked: number,
+	/**
+	 *  A2: what is wrong with the search text or the replacement; no
+	 *  places are found then.
+	 */
+	problem: string | null,
+	/**
+	 *  The newest places; `None` until the first came, or while nothing is
+	 *  searched. While a new text is searched, the places of the text
+	 *  before stay.
+	 */
+	result: ReplaceResultView | null,
+};
+
+/**
+ *  UC-005 A20, A21, FR-073: what replacing in the find field did: the
+ *  patch of the view, how many occurrences were replaced, and what the
+ *  find field says now.
+ */
+export type Replaced<P> = {
+	/**  The change of the text and the selection, for the view. */
+	patch: P,
+	/**
+	 *  How many occurrences were replaced (0: the selection moved to the
+	 *  next one, or nothing could be replaced).
+	 */
+	replaced: number,
+	/**  What the find field says now. */
+	status: FindStatus,
+};
+
 /**  The answer to restoring a deleted note (UC-007 A4–A6). */
 export type RestoreAnswer = 
 /**  Nothing was restored; the status says why, if anything happened. */
@@ -2622,6 +3380,11 @@ export type RunView = {
 	 *  block.
 	 */
 	end: number,
+	/**
+	 *  FR-098, UC-004 BR-019: the text is the markup of an inline formula,
+	 *  shown typeset while the cursor is not in it (UC-005 BR-008).
+	 */
+	formula: FormulaView | null,
 };
 
 /**
@@ -2664,6 +3427,8 @@ export type SearchResultView = {
 	serial: number,
 	/**  What it was searched for. */
 	text: string,
+	/**  The switches it was searched with. */
+	switches: SearchSwitches,
 	/**  How many notes were found. */
 	total: number,
 	/**
@@ -2676,6 +3441,19 @@ export type SearchResultView = {
 };
 
 /**
+ *  FR-075, UC-008 BR-011: the search switches of a field, each off at
+ *  first; Alt+C, Alt+W and Alt+R switch them.
+ */
+export type SearchSwitches = {
+	/**  Upper and lower case must match as typed. */
+	matchCase: boolean,
+	/**  Only where the text is not part of a longer word. */
+	wholeWord: boolean,
+	/**  The search text is one regular expression. */
+	regex: boolean,
+};
+
+/**
  *  UC-008 step 2, A1: the search of the overlay. Sent as the event
  *  `search` when its text or its result changed.
  */
@@ -2685,6 +3463,13 @@ export type SearchView = {
 	 *  nothing is searched.
 	 */
 	text: string,
+	/**  FR-075, BR-011: the search switches it is searched with. */
+	switches: SearchSwitches,
+	/**
+	 *  UC-008 A9: what is wrong with the text (an expression that is not
+	 *  valid); no notes are found then.
+	 */
+	problem: string | null,
 	/**
 	 *  The newest result that fits a text searched for; `None` until the
 	 *  first came ("Searching…"). While a new text is searched, the result
@@ -2735,6 +3520,14 @@ export type SelectionCopy = {
 	first: boolean,
 };
 
+/**  UC-004 BR-020: the words and characters of the selection. */
+export type SelectionStatisticsView = {
+	/**  The words selected. */
+	words: number,
+	/**  The characters selected, spaces counted. */
+	characters: number,
+};
+
 /**  One value of a choice. */
 export type SettingChoiceView = {
 	/**  The name shown, such as "GitHub Light". */
@@ -2774,10 +3567,24 @@ value: number;
 /**  The smallest value allowed. */
 min: number; 
 /**  The largest value allowed. */
-max: number };
+max: number; 
+/**
+ *  How far one step of the arrow keys goes (UC-010 BR-009: the
+ *  editor zoom in steps of 10).
+ */
+step: number } | 
+/**
+ *  UC-010 BR-001: a folder of the workspace, typed; an empty field
+ *  removes the workspace's value, so the built-in default applies.
+ */
+{ kind: "text"; 
+/**  The value in effect: the workspace's own, else the default. */
+value: string; 
+/**  The built-in default, such as `templates`. */
+default: string };
 
 /**  One setting of UC-010 BR-001, named as in the settings file. */
-export type SettingName = "default_format" | "theme" | "input_mode" | "show_line_numbers" | "line_number_side" | "show_minimap" | "copy_on_select" | "git_sync_interval" | "agent_access" | "overview_width" | "tool_panel_width" | "show_menu_bar" | "blink_found_in_minimap";
+export type SettingName = "default_format" | "theme" | "input_mode" | "show_line_numbers" | "line_number_side" | "show_minimap" | "copy_on_select" | "close_pairs" | "spell_check_language" | "editor_zoom" | "soft_wrap" | "focus_mode" | "git_sync_interval" | "agent_access" | "overview_width" | "tool_panel_width" | "show_menu_bar" | "blink_found_in_minimap" | "template_folder" | "daily_note_folder" | "daily_note_template";
 
 /**  The third column of a row (M-20.4). */
 export type SettingNoteView = 
@@ -2808,6 +3615,16 @@ export type SettingRowView = {
 	control: SettingControlView,
 	/**  The third column, if it says anything. */
 	note: SettingNoteView | null,
+	/**
+	 *  TC-010-22: what the setting does, shown under its control; `None`
+	 *  for the settings whose name says it.
+	 */
+	help: string | null,
+	/**
+	 *  TC-010-22: the heading of the group the row starts, such as
+	 *  "Templates and daily note"; `None` for a row inside a group.
+	 */
+	section: string | null,
 };
 
 /**
@@ -2848,6 +3665,25 @@ export type SettingsView = {
 	showMinimap: boolean,
 	/**  Copying the selection as it is made. */
 	copyOnSelect: boolean,
+	/**
+	 *  UC-005 BR-019: brackets, quotes and inline markup closed while
+	 *  typing.
+	 */
+	closePairs: boolean,
+	/**  FR-100: the spell check language by its code (`en-US`), or `off`. */
+	spellCheckLanguage: string,
+	/**
+	 *  UC-010 BR-009: the size of the text of the notes in percent, 50 to
+	 *  300 in steps of 10.
+	 */
+	editorZoom: number,
+	/**  UC-010 BR-011: long lines wrap at the edge of the editor. */
+	softWrap: boolean,
+	/**
+	 *  UC-010 BR-010: the note overview, the tool panel and the toolbars
+	 *  are hidden.
+	 */
+	focusMode: boolean,
 	/**  Minutes between two git syncs. */
 	gitSyncInterval: number,
 	/**
@@ -2897,7 +3733,8 @@ export type SettingsWindowView = {
 	shared: boolean,
 	/**
 	 *  The rows of "For me", in the order of `SettingKey::ALL`, without the
-	 *  default format (it exists only for a workspace).
+	 *  settings that exist only for a workspace (the default format, the
+	 *  template folder, the daily note folder and template).
 	 */
 	me: SettingRowView[],
 	/**  The rows of "This workspace"; empty without a workspace. */
@@ -2911,6 +3748,107 @@ export type SideName =
 /**  The version that came with the sync. */
 "remote";
 
+/**  UC-026 step 4: what the differences of a snapshot show. */
+export type SnapshotDiffBody = 
+/**  The snapshot holds what the note holds now. */
+{ kind: "same" } | 
+/**  The snapshot or the note cannot be read. */
+{ kind: "problem"; 
+/**  Why. */
+text: string } | 
+/**
+ *  The changed parts: lines of the snapshot taken away, lines of the
+ *  note added, as in the diff of the workspace (UC-011).
+ */
+{ kind: "hunks"; 
+/**  The parts, in order. */
+hunks: HunkView[] };
+
+/**
+ *  UC-026 step 4, A4: the differences between a snapshot and the note as
+ *  it is now.
+ */
+export type SnapshotDiffView = {
+	/**  The note. */
+	note: string,
+	/**  The snapshot. */
+	key: string,
+	/**  What it shows. */
+	body: SnapshotDiffBody,
+};
+
+/**  UC-026 step 2: one snapshot of the list. */
+export type SnapshotItemView = {
+	/**  The name that tells it from the note's others, sent back. */
+	key: string,
+	/**  The day and time it was taken, `2026-11-11 09:30:05`. */
+	taken: string,
+	/**
+	 *  Why it was taken: "Editing", "Outside change", "Agent change",
+	 *  "Replace in workspace", "Git" or "Restore" (BR-001).
+	 */
+	cause: string,
+	/**
+	 *  How many lines it differs from the note as it is now; `None` when it
+	 *  cannot be read, or was not compared (NFR-005: only the newest are, in
+	 *  a bounded time).
+	 */
+	differs: number | null,
+	/**
+	 *  Why it cannot be read, as "The snapshot is damaged: it holds no
+	 *  text"; it cannot be restored then.
+	 */
+	problem: string | null,
+};
+
+/**  UC-026 A2: the whole snapshot as the facade shows it, read only. */
+export type SnapshotWholeView = {
+	/**  The note. */
+	note: string,
+	/**  The snapshot. */
+	key: string,
+	/**  Its blocks; empty with a problem. */
+	blocks: BlockView[],
+	/**  Why it cannot be shown. */
+	problem: string | null,
+};
+
+/**
+ *  UC-026 A4: the note whose snapshots are shown, or its snapshots,
+ *  changed; the window asks for the list and the differences again.
+ */
+export type SnapshotsChangedEvent = string;
+
+/**  UC-026 A1: a note without snapshots. */
+export type SnapshotsNoneView = {
+	/**  "This note has no snapshot yet. Underline takes one:" */
+	lead: string,
+	/**  When snapshots are taken (BR-001), one line each. */
+	when: string[],
+};
+
+/**  UC-026 step 2, A1: the snapshots of a note, the newest first. */
+export type SnapshotsView = {
+	/**  The note. */
+	note: string,
+	/**  Its title, for the dialog's heading. */
+	title: string,
+	/**  The snapshots, the newest first. */
+	items: SnapshotItemView[],
+	/**
+	 *  A1: what the dialog says without a snapshot: none yet, and when
+	 *  they are taken (BR-001).
+	 */
+	none: SnapshotsNoneView | null,
+	/**
+	 *  BR-002: how long snapshots are kept, "Kept on this computer for 30
+	 *  days".
+	 */
+	kept: string,
+	/**  Why the list could not be read; the dialog shows it instead. */
+	problem: string | null,
+};
+
 /**  How one kind of highlighted text looks (ADR-010). */
 export type SpanStyle = {
 	/**  The colour, `#rrggbb`. */
@@ -2919,6 +3857,65 @@ export type SpanStyle = {
 	bold: boolean,
 	/**  Italic. */
 	italic: boolean,
+};
+
+/**
+ *  FR-099, UC-005 BR-023, ADR-030: the words of a note the spell check
+ *  marks, for a revision of its text.
+ */
+export type SpellMarksEvent = SpellMarksView;
+
+/**
+ *  UC-005 BR-023: the words of a note the spell check marks, for the
+ *  revision of the mirror they were found in. The window shows them once
+ *  its editor core is in step with that revision; until then the marks it
+ *  shows move along with its edits (ADR-030, as the colours of ADR-025).
+ */
+export type SpellMarksView = {
+	/**  The note. */
+	note: string,
+	/**  The revision of the text the marks are in. */
+	rev: number,
+	/**
+	 *  The marked words, `[from, to]` in web units of the markup, sorted;
+	 *  at most [`SpellMarksView::MAX`]. Empty when the spell check is off
+	 *  or has no dictionary.
+	 */
+	marks: ([number, number])[],
+};
+
+/**  FR-100, UC-005 BR-023: what the status bar shows of the spell check. */
+export type SpellStateEvent = SpellStateView;
+
+/**
+ *  FR-100, UC-005 BR-023: what the status bar shows of the spell check: a
+ *  problem that lasts, such as a language without a dictionary; `None`
+ *  while there is none.
+ */
+export type SpellStateView = {
+	/**
+	 *  The short text of the status bar, such as "Spell check: French
+	 *  (France), no dictionary".
+	 */
+	problem: string | null,
+	/**  The longer text for its hover and screen readers, saying what to do. */
+	detail: string | null,
+};
+
+/**
+ *  UC-004 BR-018, FR-096: the split view while it is shown: the right
+ *  pane's tabs, the active tab of each pane and the active pane. The left
+ *  pane's tabs are [`TabsView::tabs`].
+ */
+export type SplitView = {
+	/**  The tabs of the right pane, left to right. */
+	right: TabView[],
+	/**  The note of the left pane's active tab. */
+	leftActive: string | null,
+	/**  The note of the right pane's active tab. */
+	rightActive: string | null,
+	/**  The active pane: the one the user last worked in. */
+	pane: PaneName,
 };
 
 /**  What the window needs to know when it starts (M-01). */
@@ -2996,7 +3993,23 @@ export type StatusOffer =
  *  UC-021 step 8, M-04.6: "Undo" before the report "Marked todo {name}
  *  done/open" (`todo_undo`).
  */
-"undoTodoMark";
+"undoTodoMark" | 
+/**
+ *  UC-022 A6: "Undo" after the report of a replacement in the workspace
+ *  (`replace_undo`).
+ */
+"undoReplace" | 
+/**
+ *  UC-026 A3: "Undo" after the report of a restored snapshot
+ *  (`snapshot_undo_restore`).
+ */
+"undoRestore" | 
+/**
+ *  UC-025 A4: "Open settings" after the report that the
+ *  daily note folder is not allowed (`settings_open`, "This
+ *  workspace").
+ */
+"workspaceSettings";
 
 /**  The status message of the status bar (M-04.7). */
 export type StatusView = {
@@ -3180,6 +4193,11 @@ export type TableView = {
 	 *  title.
 	 */
 	caption: string | null,
+	/**
+	 *  UC-024 BR-001, OQ-268: the front matter of a Markdown note, its
+	 *  markup shown only once the user goes into it.
+	 */
+	frontMatter: boolean,
 };
 
 /**  M-06: the tab bar changed. */
@@ -3187,16 +4205,35 @@ export type TabsEvent = TabsView;
 
 /**  The tab bar (M-06): the note tabs left to right and the active one. */
 export type TabsView = {
-	/**  The note tabs, left to right. */
+	/**
+	 *  The note tabs, left to right; with the split view, those of the left
+	 *  pane.
+	 */
 	tabs: TabView[],
 	/**
-	 *  The note of the active note tab; `None` without tabs. The note
-	 *  overview marks it even while the tab "Todos" is the active one; the
-	 *  tab bar then marks the tab "Todos" instead.
+	 *  The note of the active note tab, of the active pane with the split
+	 *  view (UC-004 BR-018); `None` without tabs. The note overview marks it
+	 *  even while the tab "Todos" is the active one; the tab bar then marks
+	 *  the tab "Todos" instead.
 	 */
 	active: string | null,
 	/**  The tab "Todos"; its list comes with feature F15. */
 	todoList: TodoTabView,
+	/**  FR-096: the split view, while it is shown. */
+	split: SplitView | null,
+};
+
+/**  UC-003 BR-008: one template the dialog "New note" offers. */
+export type TemplateView = {
+	/**  The template's note, sent back in [`NewNoteRequest::template`]. */
+	note: string,
+	/**
+	 *  What the dialog shows: its title, with the folder below the template
+	 *  folder after it when it lies deeper ("Retro (work)").
+	 */
+	label: string,
+	/**  Its note format, which the new note gets (A7 step 1). */
+	format: FormatName,
 };
 
 /**
@@ -3211,6 +4248,25 @@ export type TextChange = {
 	to: number,
 	/**  The text put in its place. */
 	insert: string,
+};
+
+/**
+ *  UC-004 BR-020 (FR-090, M-16.2): the text statistics the note properties
+ *  show: words, characters and reading time of the note, and the words and
+ *  characters of the selection while text is selected.
+ */
+export type TextStatisticsView = {
+	/**  The words of the text the facade shows. */
+	words: number,
+	/**  Its characters, spaces counted. */
+	characters: number,
+	/**  The reading time in whole minutes, rounded up. */
+	readingMinutes: number,
+	/**
+	 *  The selection's words and characters; `None` while nothing is
+	 *  selected.
+	 */
+	selection: SelectionStatisticsView | null,
 };
 
 /**
@@ -3490,6 +4546,15 @@ export type ToolView = {
 	label: string,
 	/**  The hint shown on hover, with the key, such as "Bold (Ctrl+B)". */
 	hint: string,
+	/**  UC-023 BR-001: its name in the command palette, such as "Bold". */
+	name: string,
+	/**
+	 *  UC-023 BR-003: the letter of its key with the command key, such as
+	 *  "B".
+	 */
+	key: string,
+	/**  The key is held with Shift. */
+	shift: boolean,
 };
 
 /**

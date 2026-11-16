@@ -35,5 +35,5 @@ pub use cached::{CachedViews, CODE_COLORS_KEPT};
 pub use found::FOUND_EVERY_MS;
 pub use tab::{
     blocks_views, fold_key, gap_view, indicator, keys_status, link_at_web, EditorTab, FacadeCall,
-    FacadeClipped, FacadeModel, Handled, Versioned,
+    FacadeClipped, FacadeModel, Handled, Versioned, ViewSlots, ViewState,
 };

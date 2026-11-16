@@ -4,7 +4,12 @@
   agents and todo parts come with their features (M-04.1 to M-04.10).
 
   UC-007 A4 (M-14.3): after "Deleted {t}" the bar offers "Undo", as long as
-  that report shows.
+  that report shows; UC-022 A6 likewise after "Replaced {n} places in {m}
+  notes", and UC-026 A3 after "Restored {t} to the snapshot of {time}".
+
+  UC-025 A4: after the report that the daily note folder is not allowed,
+  the bar offers "Open settings", which opens "This workspace" of the
+  settings.
 
   UC-009 step 5, A2 (M-04.8): after "Exported {t} to {p}" the bar offers
   "Open" (the system's program) and, when blocks were only approximated,
@@ -81,6 +86,10 @@
     onSyncNow?: () => void;
     /** "Undo" of a deletion. */
     onUndo?: () => void;
+    /** UC-022 A6: "Undo" of a replacement in the workspace. */
+    onUndoReplace?: () => void;
+    /** UC-026 A3: "Undo" of a restored snapshot. */
+    onUndoRestore?: () => void;
     /** "Open" of the export `index`. */
     onOpenExport?: (index: number) => void;
     /** "Show" of the approximated blocks of the export `index`. */
@@ -97,10 +106,18 @@
     onOpenAgentNote?: (note: string) => void;
     /** M-04.5: "N todos overdue"; `null` while none is. */
     overdue?: string | null;
+    /** FR-100: a problem of the spell check that lasts, such as "Spell check: French (France), no dictionary". */
+    spellProblem?: string | null;
+    /** FR-100: what to do about it, for the hover and screen readers. */
+    spellDetail?: string | null;
+    /** FR-100: the chip opens the settings. */
+    onSpellSettings?: () => void;
     /** M-04.5: the overdue todos show the tab "Todos". */
     onOverdue?: () => void;
     /** M-04.6: "Undo" of a deleted or marked todo. */
     onUndoTodo?: () => void;
+    /** UC-025 A4: "Open settings" after a daily note folder not allowed. */
+    onWorkspaceSettings?: () => void;
   };
 
   let {
@@ -116,6 +133,8 @@
     onAbort,
     onSyncNow,
     onUndo,
+    onUndoReplace,
+    onUndoRestore,
     onOpenExport,
     onShowApproximated,
     agents = null,
@@ -125,7 +144,11 @@
     onOpenAgentNote,
     overdue = null,
     onOverdue,
+    spellProblem = null,
+    spellDetail = null,
+    onSpellSettings,
     onUndoTodo,
+    onWorkspaceSettings,
   }: Props = $props();
 
   /** M-04.6: the undo of a todo stands before the text, as in egui. */
@@ -199,15 +222,17 @@
   const shows = $derived(exports.some((e) => e.show));
   /** For screen readers, after the text (new, as "Undo available", A-83). */
   const offered = $derived(
-    offer !== null
-      ? '. Undo available'
-      : opens && shows
-        ? '. Open and Show available'
-        : opens
-          ? '. Open available'
-          : shows
-            ? '. Show available'
-            : '',
+    offer === 'workspaceSettings'
+      ? '. Open settings available'
+      : offer !== null
+        ? '. Undo available'
+        : opens && shows
+          ? '. Open and Show available'
+          : opens
+            ? '. Open available'
+            : shows
+              ? '. Show available'
+              : '',
   );
 
   const text = $derived([root ?? '', status].filter((part) => part !== '').join('  |  '));
@@ -279,6 +304,15 @@
       />
     {/if}
   {/if}
+  {#if spellProblem}
+    <button
+      type="button"
+      class="spell-problem"
+      title={spellDetail ?? undefined}
+      aria-label={spellDetail ? `${spellProblem}. ${spellDetail}` : spellProblem}
+      onclick={() => onSpellSettings?.()}>{spellProblem}</button
+    >
+  {/if}
   {#if overdue}
     <button type="button" class="overdue" title="Open the todo list" onclick={() => onOverdue?.()}
       >{overdue}</button
@@ -298,6 +332,17 @@
   </p>
   {#if offer === 'undoDelete'}
     <button type="button" class="ui-button undo" onclick={() => onUndo?.()}>Undo</button>
+  {:else if offer === 'undoReplace'}
+    <button type="button" class="ui-button undo" onclick={() => onUndoReplace?.()}>Undo</button>
+  {:else if offer === 'undoRestore'}
+    <button type="button" class="ui-button undo" onclick={() => onUndoRestore?.()}>Undo</button>
+  {:else if offer === 'workspaceSettings'}
+    <button
+      type="button"
+      class="ui-button open-settings"
+      title="Open the settings of this workspace"
+      onclick={() => onWorkspaceSettings?.()}>Open settings</button
+    >
   {/if}
   {#each exports as report, index (index)}
     {#if report.open}
@@ -375,6 +420,14 @@
     padding: 0 var(--space-2);
   }
 
+  /* UC-025 A4: leads to the settings, so it is no undo. */
+  .open-settings {
+    flex: none;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+    white-space: nowrap;
+  }
+
   /* M-04.1 to M-04.3: the git parts keep their width; the text wraps. */
   .git-part {
     flex: none;
@@ -428,6 +481,23 @@
     background: transparent;
     border: 1px solid var(--ui-overdue);
     border-radius: var(--radius);
+  }
+
+  /* FR-100: the spell check's lasting problem, as the overdue todos. */
+  .spell-problem {
+    flex: none;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+    font: inherit;
+    color: var(--ui-text);
+    cursor: pointer;
+    background: transparent;
+    border: 1px dashed var(--ui-border);
+    border-radius: var(--radius);
+  }
+
+  .spell-problem:hover {
+    background: color-mix(in srgb, var(--ui-text) 8%, transparent);
   }
 
   .overdue:hover {

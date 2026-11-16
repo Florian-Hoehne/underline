@@ -201,6 +201,13 @@ pub struct ToolView {
     pub label: String,
     /// The hint shown on hover, with the key, such as "Bold (Ctrl+B)".
     pub hint: String,
+    /// UC-023 BR-001: its name in the command palette, such as "Bold".
+    pub name: String,
+    /// UC-023 BR-003: the letter of its key with the command key, such as
+    /// "B".
+    pub key: String,
+    /// The key is held with Shift.
+    pub shift: bool,
 }
 
 impl ToolView {
@@ -213,6 +220,9 @@ impl ToolView {
                 tool: tool.into(),
                 label: tool.label().to_owned(),
                 hint: tool.hint().to_owned(),
+                name: tool.name().to_owned(),
+                key: tool.key().0.to_string(),
+                shift: tool.key().1,
             })
             .collect()
     }
@@ -419,6 +429,8 @@ pub enum KeyName {
     B,
     /// C, for Nano's Ctrl+C.
     C,
+    /// D, for Ctrl/Cmd+Shift+D (UC-005 A26: duplicate the line).
+    D,
     /// E, for Ctrl/Cmd+E (M-10.2) and Nano's Ctrl+E and Alt+E.
     E,
     /// H, for Ctrl/Cmd+Shift+H (M-10.2).
@@ -472,6 +484,7 @@ impl From<KeyName> for underline_editor_core::Key {
             KeyName::A => Self::A,
             KeyName::B => Self::B,
             KeyName::C => Self::C,
+            KeyName::D => Self::D,
             KeyName::E => Self::E,
             KeyName::H => Self::H,
             KeyName::I => Self::I,
@@ -523,6 +536,280 @@ pub enum EditorInput {
         /// The function.
         tool: ToolName,
     },
+    /// FR-082, FR-083: an action of the editing comfort, from the command
+    /// palette; its keys come as [`EditorInput::Key`].
+    Edit {
+        /// The action.
+        action: EditActionName,
+    },
+}
+
+/// FR-082, FR-083, UC-005 A26, A27: an action of the editing comfort that
+/// the command palette runs in the view shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum EditActionName {
+    /// Move the line or block up (Alt+Up).
+    MoveLineUp,
+    /// Move the line or block down (Alt+Down).
+    MoveLineDown,
+    /// Duplicate the line or block (Ctrl+Shift+D).
+    DuplicateLine,
+    /// Indent the list items (Tab).
+    Indent,
+    /// Outdent the list items (Shift+Tab).
+    Outdent,
+}
+
+impl From<EditActionName> for underline_editor_core::EditAction {
+    fn from(action: EditActionName) -> Self {
+        use underline_editor_core::EditAction;
+        match action {
+            EditActionName::MoveLineUp => EditAction::MoveLineUp,
+            EditActionName::MoveLineDown => EditAction::MoveLineDown,
+            EditActionName::DuplicateLine => EditAction::DuplicateLine,
+            EditActionName::Indent => EditAction::Indent,
+            EditActionName::Outdent => EditAction::Outdent,
+        }
+    }
+}
+
+/// FR-086, UC-004 A16: a line to go to, and a column in it, both from 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct LineTargetView {
+    /// The line.
+    pub line: u32,
+    /// The column; `None`: the start of the line.
+    pub column: Option<u32>,
+}
+
+/// UC-004 BR-020 (FR-090, M-16.2): the text statistics the note properties
+/// show: words, characters and reading time of the note, and the words and
+/// characters of the selection while text is selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct TextStatisticsView {
+    /// The words of the text the facade shows.
+    pub words: u32,
+    /// Its characters, spaces counted.
+    pub characters: u32,
+    /// The reading time in whole minutes, rounded up.
+    pub reading_minutes: u32,
+    /// The selection's words and characters; `None` while nothing is
+    /// selected.
+    pub selection: Option<SelectionStatisticsView>,
+}
+
+/// UC-004 BR-020: the words and characters of the selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionStatisticsView {
+    /// The words selected.
+    pub words: u32,
+    /// The characters selected, spaces counted.
+    pub characters: u32,
+}
+
+/// UC-024 BR-002: what the value of a note attribute holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum AttributeKindName {
+    /// Any text on one line.
+    Text,
+    /// Items, a field per item.
+    List,
+    /// A whole or decimal number.
+    Number,
+    /// Year, month and day.
+    Date,
+    /// `true` or `false`, a switch.
+    YesNo,
+    /// Fields of its own: shown as its markup, changed only in the source
+    /// view (A6).
+    Nested,
+}
+
+/// UC-024 step 2: a note attribute as the note properties show it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct NoteAttributeView {
+    /// Its name as the note writes it.
+    pub name: String,
+    /// What its value holds.
+    pub kind: AttributeKindName,
+    /// The value as shown; for a nested value its markup.
+    pub value: String,
+    /// The items of a list.
+    pub items: Vec<String>,
+    /// The line of the note it starts on, from 1.
+    pub line: u32,
+    /// Where it starts, as a web offset of the text (A6: shown there).
+    pub offset: u32,
+}
+
+/// UC-024 A5: why the front matter cannot be read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct HeadProblemView {
+    /// The line of the note, from 1.
+    pub line: u32,
+    /// What is wrong, in a few words.
+    pub reason: String,
+    /// The text of the front matter.
+    pub markup: String,
+    /// Where the line in error starts, as a web offset of the text.
+    pub offset: u32,
+}
+
+/// UC-024 step 2, FR-091: the note attributes and the tags of a note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct NoteHeadView {
+    /// The attributes in the order of the note.
+    pub attributes: Vec<NoteAttributeView>,
+    /// A5: why the front matter cannot be read; then no attributes.
+    pub problem: Option<HeadProblemView>,
+    /// UC-004 BR-016: the tags of the note, in lower case, each once: those
+    /// of the attribute `tags` first, then those of the text.
+    pub tags: Vec<String>,
+    /// An AsciiDoc note, which holds only texts and lists (BR-002).
+    pub asciidoc: bool,
+}
+
+/// UC-024 step 3: a value given for a note attribute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AttributeValueView {
+    /// A text on one line.
+    Text {
+        /// The text.
+        text: String,
+    },
+    /// A list.
+    List {
+        /// Its items, in order.
+        items: Vec<String>,
+    },
+    /// A number as typed.
+    Number {
+        /// The number, such as `2.5`.
+        text: String,
+    },
+    /// A date as typed.
+    Date {
+        /// The date, `2026-11-11`.
+        text: String,
+    },
+    /// Yes or no.
+    YesNo {
+        /// Whether it is yes.
+        yes: bool,
+    },
+}
+
+/// UC-024 step 3: what the user does to a note attribute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AttributeChangeView {
+    /// Adds an attribute after the last one.
+    Add {
+        /// Its name, as typed.
+        name: String,
+        /// Its value.
+        value: AttributeValueView,
+    },
+    /// Gives an attribute a new value.
+    Set {
+        /// Its name.
+        name: String,
+        /// The new value.
+        value: AttributeValueView,
+    },
+    /// Removes an attribute.
+    Remove {
+        /// Its name.
+        name: String,
+    },
+}
+
+/// UC-024 step 4, A3, A4: what a change of a note attribute did: the patch
+/// of the view, or why nothing was written.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct AttributeEdited<P> {
+    /// The change of the text, for the view; `None` when nothing was written.
+    pub patch: Option<P>,
+    /// Why nothing was written, as the note properties say it.
+    pub problem: Option<String>,
+    /// The field the refusal is about (A3: the name, A4: the value).
+    pub about: Option<AttributeFieldName>,
+}
+
+/// UC-024 A3, A4: the field a refused change is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum AttributeFieldName {
+    /// The name of a new attribute.
+    Name,
+    /// The value.
+    Value,
+    /// The note as a whole.
+    Note,
+}
+
+/// UC-004 A16 step 2, A17: what the field of "Go to line" holds: the line
+/// it names, or what is wrong with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct LineTargetAnswer {
+    /// The line and column; `None` when the text is no line number.
+    pub target: Option<LineTargetView>,
+    /// A17: why it is no line number, in the words the field shows.
+    pub problem: Option<String>,
+}
+
+impl LineTargetAnswer {
+    /// UC-004 A16, A17: the answer for `text` as the user typed it.
+    #[must_use]
+    pub fn of(text: &str) -> Self {
+        match underline_editor_core::comfort::goto::LineTarget::parse(text) {
+            Ok(target) => Self {
+                target: Some(LineTargetView {
+                    line: units(target.line),
+                    column: target.column.map(units),
+                }),
+                problem: None,
+            },
+            Err(error) => Self {
+                target: None,
+                problem: Some(error.to_string()),
+            },
+        }
+    }
+}
+
+impl From<LineTargetView> for underline_editor_core::comfort::goto::LineTarget {
+    fn from(view: LineTargetView) -> Self {
+        let wide = |n: u32| usize::try_from(n).unwrap_or(usize::MAX).max(1);
+        Self {
+            line: wide(view.line),
+            column: view.column.map(wide),
+        }
+    }
 }
 
 /// The clipboard keys of the source view (M-08.6, ADR-014).
@@ -676,6 +963,12 @@ pub enum Insertion {
         /// The text.
         text: String,
     },
+    /// UC-005 A28 step 2: a correction of the spell check in place of the
+    /// selected word, as it is and as one change undone alone.
+    Correction {
+        /// The corrected word.
+        text: String,
+    },
 }
 
 /// M-08.8, M-12.2, ADR-025: what the webview's editor tells its view after
@@ -705,7 +998,7 @@ pub enum FindStep {
 
 /// M-13.4: what the find field says: the hit selected, counted from 1, if
 /// the selection is one exactly, and how many there are.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct FindStatus {
@@ -713,6 +1006,78 @@ pub struct FindStatus {
     pub at: Option<u32>,
     /// How many hits there are.
     pub count: u32,
+    /// UC-008 A9, UC-005 A22: what is wrong with the search text (an
+    /// expression that is not valid), or with the replacement; nothing is
+    /// found or replaced then.
+    pub problem: Option<String>,
+}
+
+/// FR-075, UC-008 BR-011: the search switches of a field, each off at
+/// first; Alt+C, Alt+W and Alt+R switch them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSwitches {
+    /// Upper and lower case must match as typed.
+    pub match_case: bool,
+    /// Only where the text is not part of a longer word.
+    pub whole_word: bool,
+    /// The search text is one regular expression.
+    pub regex: bool,
+}
+
+impl From<underline_markup::search::Switches> for SearchSwitches {
+    fn from(switches: underline_markup::search::Switches) -> Self {
+        Self {
+            match_case: switches.match_case,
+            whole_word: switches.whole_word,
+            regex: switches.regex,
+        }
+    }
+}
+
+impl From<SearchSwitches> for underline_markup::search::Switches {
+    fn from(switches: SearchSwitches) -> Self {
+        Self {
+            match_case: switches.match_case,
+            whole_word: switches.whole_word,
+            regex: switches.regex,
+        }
+    }
+}
+
+/// UC-008 BR-008, A6, A7, UC-005 BR-017: what a tab marks and finds: the
+/// search text with its switches; while the find field is open for
+/// replacing, the text is one text (OQ-192), and in the facade only the
+/// text the facade shows counts (OQ-190).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FindSpec {
+    /// The search text as typed.
+    pub text: String,
+    /// The search switches.
+    pub switches: SearchSwitches,
+    /// The text is one text, spaces included, not words in any order.
+    pub one_text: bool,
+    /// Only the text the facade shows, not its markup and link addresses.
+    pub shown_only: bool,
+}
+
+/// UC-005 A20, A21, FR-073: what replacing in the find field did: the
+/// patch of the view, how many occurrences were replaced, and what the
+/// find field says now.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct Replaced<P> {
+    /// The change of the text and the selection, for the view.
+    pub patch: P,
+    /// How many occurrences were replaced (0: the selection moved to the
+    /// next one, or nothing could be replaced).
+    pub replaced: u32,
+    /// What the find field says now.
+    pub status: FindStatus,
 }
 
 /// UC-008 A6, M-13.4: the hit a step of the find field selected.
@@ -730,4 +1095,46 @@ pub struct FindAnswer {
     pub place: String,
     /// What the find field says now.
     pub status: FindStatus,
+}
+
+/// FR-080, UC-005 A23 step 1: the place of a link the user is typing at
+/// the cursor, for link completion: the window lists the notes that match
+/// `typed` as go to note does (BR-014), or after a `#` the headings of a
+/// note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct LinkContextView {
+    /// The revision of the tab's text it was found in; the choice names it.
+    pub rev: u32,
+    /// Where the link starts, in web units; the list shows below it.
+    pub from: u32,
+    /// What was typed of the place before the cursor, without a `#` and
+    /// what follows it.
+    pub typed: String,
+    /// What was typed after a `#`: the headings are listed then.
+    pub heading: Option<String>,
+    /// The note `typed` names as a place relative to the note, without
+    /// its extension (`travel/Packing`); `None` when nothing is typed.
+    pub named: Option<String>,
+}
+
+/// FR-080, UC-005 A23 steps 2 and 3: the note or the heading chosen in link
+/// completion, which the tab writes as a link of the note format (BR-018).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct LinkChoice {
+    /// The revision of the text the completion was asked in; in another,
+    /// nothing is written.
+    pub rev: u32,
+    /// The chosen note; `None` for a heading of the note itself.
+    pub note: Option<String>,
+    /// Its note format (`Markdown`, `AsciiDoc`).
+    pub format: Option<String>,
+    /// The anchor of the chosen heading.
+    pub anchor: Option<String>,
+    /// The link's text when the user gave none: the note's title or the
+    /// heading.
+    pub label: String,
 }

@@ -24,12 +24,12 @@ use serde::Serialize;
 use underline_editor_core::keys::InputMode as KeysInputMode;
 use underline_editor_core::sync::{Answer, Change, Client};
 use underline_editor_view::editor_view::{
-    ClipAction, ClipContentView, Clipped, EditorInput, FindStep, Insertion, TabViews, VimChange,
-    VimState,
+    AttributeChangeView, ClipAction, ClipContentView, Clipped, EditorInput, FindSpec, FindStep,
+    Insertion, LineTargetAnswer, LineTargetView, LinkChoice, TabViews, VimChange, VimState,
 };
 use underline_editor_view::facade_view::{FacadeAt, FacadeInput, RowsView};
 use underline_editor_view::sync_view::{EnrichView, RemoteApplied, SyncAnswer, SyncBatch};
-use underline_editor_view::{CachedViews, EditorTab, FacadeCall};
+use underline_editor_view::{CachedViews, EditorTab, FacadeCall, ViewSlots};
 use underline_markup::NoteFormat;
 
 /// Why a call of the webview could not be answered.
@@ -87,6 +87,16 @@ fn mode_of(name: &str) -> Result<KeysInputMode, CallError> {
     }
 }
 
+/// FR-086, UC-004 A16, A17: `LineTargetAnswer` for what the user typed in
+/// "Go to line": the line and column, or why it is no line number.
+///
+/// # Errors
+///
+/// The answer could not be written.
+pub fn line_target(text: &str) -> Result<String, CallError> {
+    json(&LineTargetAnswer::of(text))
+}
+
 /// One open tab in the webview (ADR-025): the editor's tab, the views of
 /// the facade made from what the backend sent, and what the window set.
 #[derive(Debug)]
@@ -101,6 +111,11 @@ pub struct Core {
     setting: KeysInputMode,
     /// The facade is shown, not the source view.
     facade: bool,
+    /// UC-005 BR-016, FR-097: the views of the note, each with its own
+    /// cursor, folds and blocks, sharing the text and its history.
+    slots: ViewSlots,
+    /// Which views show the facade, by their ids.
+    facades: std::collections::HashMap<u32, bool>,
 }
 
 impl Core {
@@ -119,7 +134,53 @@ impl Core {
             client: None,
             setting: KeysInputMode::Normal,
             facade: false,
+            slots: ViewSlots::default(),
+            facades: std::collections::HashMap::new(),
         })
+    }
+
+    /// FR-097: the view `id` of the window shows the note from now on; a
+    /// second view starts at the cursor of the first.
+    pub fn view_open(&mut self, id: u32) {
+        self.record();
+        self.slots.open(&self.tab, id);
+    }
+
+    /// FR-097: the view `id` is gone.
+    pub fn view_close(&mut self, id: u32) {
+        self.slots.close(id);
+        self.facades.remove(&id);
+    }
+
+    /// UC-005 BR-016: the calls from now on are those of the view `id`: its
+    /// cursor, folds, keys and blocks, moved over what the other view
+    /// changed. With `input`, the user acts in that view, so the next edit
+    /// starts an undo step of its own when the other view edited last.
+    pub fn use_view(&mut self, id: u32, input: bool) {
+        if self.slots.current() != Some(id) {
+            // The edits so far are logged for the view taken out.
+            self.record();
+        }
+        if let Some(current) = self.slots.current() {
+            self.facades.insert(current, self.facade);
+        }
+        if self.slots.select(&mut self.tab, id, input) {
+            self.facade = self.facades.get(&id).copied().unwrap_or(false);
+        }
+    }
+
+    /// FR-097: `EditorPatch | null`: the changes that bring the source view
+    /// of the view calling now from revision `base` to the text as it is,
+    /// with its selection; `null` when it takes the whole text again
+    /// (`state`).
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn source_since(&mut self, base: u32) -> Result<String, CallError> {
+        self.record();
+        self.source_keys();
+        json(&self.slots.source_since(&self.tab, base))
     }
 
     /// UC-006 step 7: the note is `note` now; what the tab reports names
@@ -138,9 +199,13 @@ impl Core {
         Ok(())
     }
 
-    /// M-07.2: the facade (`facade`) or the source view is shown.
+    /// M-07.2: the facade (`facade`) or the source view is shown, in the
+    /// view calling now.
     pub fn set_view(&mut self, facade: bool) {
         self.facade = facade;
+        if let Some(current) = self.slots.current() {
+            self.facades.insert(current, facade);
+        }
     }
 
     /// The theme named `theme`, dark or not; what was sent for another
@@ -157,7 +222,8 @@ impl Core {
         self.client = Some(Client::new(&self.tab.editor.text(), rev));
     }
 
-    /// The editor's edits since the last call go to the client.
+    /// The editor's edits since the last call go to the client, and are
+    /// kept for a view of the note that did not make them (FR-097).
     fn record(&mut self) {
         let edits = self.tab.editor.take_edits();
         if let Some(client) = &mut self.client {
@@ -169,6 +235,7 @@ impl Core {
                 }
             }
         }
+        self.slots.log(edits, self.tab.editor.revision());
     }
 
     fn client(&mut self) -> Result<&mut Client, CallError> {
@@ -213,8 +280,10 @@ impl Core {
             },
             Err(error) => desync(format!("{error:?}")),
         };
-        // The backend has what it sent.
-        self.tab.editor.take_edits();
+        // The backend has what it sent; a view that did not follow it yet
+        // takes it from the log (FR-097).
+        let edits = self.tab.editor.take_edits();
+        self.slots.log(edits, self.tab.editor.revision());
         json(&applied)
     }
 
@@ -277,6 +346,116 @@ impl Core {
     /// The sync was not started.
     pub fn idle(&mut self) -> Result<bool, CallError> {
         Ok(self.client()?.idle())
+    }
+
+    /// UC-010 BR-001, UC-005 BR-019: close pairs is on or off.
+    pub fn set_close_pairs(&mut self, on: bool) {
+        self.tab.set_close_pairs(on);
+    }
+
+    /// UC-004 A16 step 1: how many lines the note has.
+    #[must_use]
+    pub fn line_count(&self) -> u32 {
+        self.tab.line_count()
+    }
+
+    /// UC-004 BR-020 (FR-090): `TextStatisticsView` of the note and, while
+    /// text is selected, of the selection.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn text_statistics(&mut self) -> Result<String, CallError> {
+        json(&self.tab.text_statistics())
+    }
+
+    /// UC-024 step 2, FR-091: `NoteHeadView` of the note: its note
+    /// attributes and its tags.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn note_head(&mut self) -> Result<String, CallError> {
+        json(&self.tab.note_head())
+    }
+
+    /// UC-024 step 4: `AttributeEdited<EditorPatch>` of `change`
+    /// (`AttributeChangeView`) written in the source view.
+    ///
+    /// # Errors
+    ///
+    /// `change` is not an `AttributeChangeView`.
+    pub fn attribute(&mut self, change: &str) -> Result<String, CallError> {
+        let change: AttributeChangeView = parse(change, "The change")?;
+        self.source_keys();
+        json(&self.tab.source_attribute(change))
+    }
+
+    /// UC-024 step 4: `AttributeEdited<FacadePatch>` of `change`
+    /// (`AttributeChangeView`) written in the facade, its selection `at`
+    /// (`FacadeAt`).
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    pub fn facade_attribute(&mut self, at: &str, change: &str) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        let change: AttributeChangeView = parse(change, "The change")?;
+        self.facade_keys_mode();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: &self.note,
+            at,
+            mac: self.mac,
+            earlier,
+            views: &mut self.views,
+        };
+        json(&self.tab.facade_attribute(call, change))
+    }
+
+    /// UC-004 BR-017: `string | null`, what the status bar says when
+    /// `target` (`LineTargetView`) lies beyond the note.
+    ///
+    /// # Errors
+    ///
+    /// `target` is not a `LineTargetView`.
+    pub fn line_note(&self, target: &str) -> Result<String, CallError> {
+        let target: LineTargetView = parse(target, "The line")?;
+        json(&self.tab.line_note(target))
+    }
+
+    /// UC-004 A16 step 3, BR-017: `EditorPatch` of the source view's cursor
+    /// gone to `target` (`LineTargetView`).
+    ///
+    /// # Errors
+    ///
+    /// `target` is not a `LineTargetView`.
+    pub fn go_to_line(&mut self, target: &str) -> Result<String, CallError> {
+        let target: LineTargetView = parse(target, "The line")?;
+        self.source_keys();
+        json(&self.tab.source_go_to_line(target).patch)
+    }
+
+    /// UC-004 A16 step 3, BR-017: `FacadePatch` of the facade's cursor gone
+    /// to the block holding the line of `target` (`LineTargetView`), from
+    /// the selection `at` (`FacadeAt`).
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    pub fn facade_go_to_line(&mut self, at: &str, target: &str) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        let target: LineTargetView = parse(target, "The line")?;
+        self.facade_keys_mode();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: &self.note,
+            at,
+            mac: self.mac,
+            earlier,
+            views: &mut self.views,
+        };
+        json(&self.tab.facade_go_to_line(call, target).patch)
     }
 
     /// The window's clock, `performance.now()` in milliseconds
@@ -353,30 +532,70 @@ impl Core {
         json(&self.tab.select(rev, anchor, head))
     }
 
-    /// UC-008 BR-008, M-13.2: the words of `text` (`string | null`, JSON)
-    /// are marked in the tab from now on; `null` or no word marks none.
-    /// The Nano search keeps its own marks.
+    /// UC-008 BR-008, BR-011, M-13.2: the places `spec` (`FindSpec |
+    /// null`, JSON) finds are marked in the tab from now on; `null` or no
+    /// word marks none. The Nano search keeps its own marks.
     ///
     /// # Errors
     ///
-    /// `text` is not a string or `null`.
-    pub fn set_search(&mut self, text: &str) -> Result<(), CallError> {
-        let text: Option<String> = parse(text, "The search")?;
-        self.tab.set_search(text.as_deref());
+    /// `spec` is not a `FindSpec` or `null`.
+    pub fn set_search(&mut self, spec: &str) -> Result<(), CallError> {
+        let spec: Option<FindSpec> = parse(spec, "The search")?;
+        self.tab.set_find(spec.as_ref());
         Ok(())
     }
 
-    /// UC-008 A6, M-13.4: `FindAnswer | null` of a step (`FindStep`) of the
-    /// find field holding `text` (a JSON string): the hit it selected, or
-    /// `null` when nothing is found.
+    /// UC-008 A6, A7, M-13.4: `FindAnswer | null` of a step (`FindStep`)
+    /// of the find field holding `spec` (`FindSpec`): the hit it selected,
+    /// or `null` when nothing is found.
     ///
     /// # Errors
     ///
-    /// `text` is not a string or `step` no `FindStep`.
-    pub fn find(&mut self, text: &str, step: &str) -> Result<String, CallError> {
-        let text: String = parse(text, "The find text")?;
+    /// `spec` is not a `FindSpec` or `step` no `FindStep`.
+    pub fn find(&mut self, spec: &str, step: &str) -> Result<String, CallError> {
+        let spec: FindSpec = parse(spec, "The find text")?;
         let step: FindStep = parse(step, "The find step")?;
-        json(&self.tab.find(&text, step))
+        json(&self.tab.find_by(&spec, step))
+    }
+
+    /// UC-005 A20, A21, FR-073: `Replaced<EditorPatch>` of replacing in
+    /// the find field holding `spec` (`FindSpec`) with `replacement` (as
+    /// typed): the selected occurrence, or all of them.
+    ///
+    /// # Errors
+    ///
+    /// `spec` is not a `FindSpec`.
+    pub fn replace(
+        &mut self,
+        spec: &str,
+        replacement: &str,
+        all: bool,
+    ) -> Result<String, CallError> {
+        let spec: FindSpec = parse(spec, "The find text")?;
+        self.source_keys();
+        json(&self.tab.source_replace(&spec, replacement, all))
+    }
+
+    /// UC-005 A20, A21, BR-017: `Replaced<FacadePatch>` of replacing in the
+    /// find field while the facade shows the note: only in the text it
+    /// shows.
+    ///
+    /// # Errors
+    ///
+    /// `spec` is not a `FindSpec`.
+    pub fn facade_replace(
+        &mut self,
+        spec: &str,
+        replacement: &str,
+        all: bool,
+    ) -> Result<String, CallError> {
+        let spec: FindSpec = parse(spec, "The find text")?;
+        self.facade_keys_mode();
+        json(
+            &self
+                .tab
+                .facade_replace(&self.note, &mut self.views, &spec, replacement, all),
+        )
     }
 
     /// M-13.4: the selected text, as the find field takes it when it
@@ -386,14 +605,19 @@ impl Core {
         self.tab.editor.selected_text()
     }
 
-    /// M-13.4: `FindStatus` of the find field: the hit selected and how
-    /// many there are.
+    /// M-13.4, UC-005 A22: `FindStatus` of the find field: the hit selected
+    /// and how many there are, and what is wrong with the search text or,
+    /// while it replaces, with the replacement (`string | null`, JSON).
     ///
     /// # Errors
     ///
-    /// The answer could not be written.
-    pub fn find_status(&mut self) -> Result<String, CallError> {
-        json(&self.tab.find_status())
+    /// `replacement` is not a string or `null`.
+    pub fn find_status(&mut self, replacement: &str) -> Result<String, CallError> {
+        let replacement: Option<String> = parse(replacement, "The replacement")?;
+        match replacement {
+            Some(replacement) => json(&self.tab.replace_status(&replacement)),
+            None => json(&self.tab.find_status()),
+        }
     }
 
     /// `EditorPatch` after the fold arrow of the heading on `line`.
@@ -477,6 +701,75 @@ impl Core {
         let insertion: Insertion = parse(insertion, "The insertion")?;
         self.source_keys();
         json(&self.tab.source_insert(insertion).patch)
+    }
+
+    /// FR-080, UC-005 A23: `LinkContextView | null`, the place of a link
+    /// typed at the source view's cursor; with `manual` (Ctrl+Space) also
+    /// asked for in the place of a written link.
+    ///
+    /// # Errors
+    ///
+    /// The answer could not be written.
+    pub fn link_context(&mut self, manual: bool) -> Result<String, CallError> {
+        json(&self.tab.link_context(&self.note, false, manual))
+    }
+
+    /// FR-080, UC-005 A23 step 3: `EditorPatch | null` of writing the link
+    /// chosen (`LinkChoice`) in the source view; `null` when the text is no
+    /// longer the one the completion was asked in.
+    ///
+    /// # Errors
+    ///
+    /// `choice` is not a `LinkChoice`.
+    pub fn complete_link(&mut self, choice: &str) -> Result<String, CallError> {
+        let choice: LinkChoice = parse(choice, "The link chosen")?;
+        self.source_keys();
+        json(
+            &self
+                .tab
+                .source_complete(&self.note, &choice)
+                .map(|handled| handled.patch),
+        )
+    }
+
+    /// FR-080, UC-005 A23: `LinkContextView | null` at the facade's
+    /// selection `at` (`FacadeAt`); with `manual` (Ctrl+Space) also at the
+    /// cursor without `[[`.
+    ///
+    /// # Errors
+    ///
+    /// `at` is not a `FacadeAt`.
+    pub fn facade_link_context(&mut self, at: &str, manual: bool) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        self.facade_keys_mode();
+        json(&self.tab.facade_link_context(&self.note, at, manual))
+    }
+
+    /// FR-080, UC-005 A23 step 3, BR-018: `FacadePatch | null` of writing
+    /// the link chosen (`LinkChoice`) at the facade's selection `at`
+    /// (`FacadeAt`) in place of `[[` and what follows it.
+    ///
+    /// # Errors
+    ///
+    /// An argument is not the DTO it should be.
+    pub fn facade_complete_link(&mut self, at: &str, choice: &str) -> Result<String, CallError> {
+        let at: FacadeAt = parse(at, "The selection")?;
+        let choice: LinkChoice = parse(choice, "The link chosen")?;
+        self.facade_keys_mode();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: &self.note,
+            at,
+            mac: self.mac,
+            earlier,
+            views: &mut self.views,
+        };
+        json(
+            &self
+                .tab
+                .facade_complete(call, &choice)
+                .map(|handled| handled.patch),
+        )
     }
 
     /// `FacadeState`: the whole facade, its blocks made when they are not

@@ -9,7 +9,7 @@ import App from '../App.svelte';
 import { connectedShell } from '../test/shell';
 import { activeSourceView } from './editor/active';
 import { mockHandlers, mockHooks, mockQuery, webAtByte, type MockStart } from './mock-backend';
-import { choiceOf, entriesOf } from './search.svelte';
+import { choiceOf, entriesOf, NO_SWITCHES } from './search.svelte';
 import type { FoundNoteView } from './bindings';
 
 afterEach(() => {
@@ -65,7 +65,7 @@ describe('M-03.2 the magnifier and Ctrl+Shift+F', () => {
     await fireEvent.pointerDown(magnifier());
     await fireEvent.click(magnifier());
     expect(overlay()).toBeNull();
-    await waitFor(() => expect(set).toHaveBeenLastCalledWith({ text: '' }));
+    await waitFor(() => expect(set).toHaveBeenLastCalledWith({ text: '', switches: NO_SWITCHES }));
 
     await fireEvent.click(magnifier());
     expect(field()).toHaveValue('');
@@ -147,7 +147,9 @@ describe('M-13.1 the found notes (UC-008 step 2)', () => {
 
     expect(screen.queryByRole('listbox')).toBeNull();
     expect(shell.search.result).toBeNull();
-    await waitFor(() => expect(set).toHaveBeenLastCalledWith({ text: '   ' }));
+    await waitFor(() =>
+      expect(set).toHaveBeenLastCalledWith({ text: '   ', switches: NO_SWITCHES }),
+    );
   });
 });
 

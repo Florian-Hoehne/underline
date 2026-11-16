@@ -10,6 +10,7 @@ members = [
     "crates/underline-markup",
     "crates/underline-mcp",
     "crates/underline-session",
+    "crates/underline-spell",
     "crates/underline-wiki",
 ]
 
@@ -35,12 +36,22 @@ notify = "8"
 open = "5"
 notify-debouncer-full = "0.6"
 ropey = "1.6"
+# ADR-026: the regular expressions of the searches, in the backend and in the
+# WASM editor core alike.
+regex = { version = "1.13", default-features = false, features = ["std", "unicode-case", "unicode-perl"] }
+regex-syntax = { version = "0.8.11", default-features = false, features = ["std"] }
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 underline-editor-core = { path = "crates/underline-editor-core" }
 underline-editor-view = { path = "crates/underline-editor-view" }
 underline-facade = { path = "crates/underline-facade" }
 underline-markup = { path = "crates/underline-markup" }
 underline-session = { path = "crates/underline-session" }
+underline-spell = { path = "crates/underline-spell" }
+# ADR-030: the spell checker, a pure-Rust Nuspell reading Hunspell dictionaries.
+# Pinned exactly: it is young (alpha); golden tests per language guard a move.
+spellbook = "=0.4.2"
+# UC-004 BR-020: characters as a reader sees them, in the WASM editor core too.
+unicode-segmentation = "1.13"
 # Specta v2 is a release candidate: pinned exactly, as tauri-specta asks.
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
 # ADR-025: pinned exactly; the CLI in `.tools/` must be the same version

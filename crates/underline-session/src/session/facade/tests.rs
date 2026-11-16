@@ -397,6 +397,130 @@ fn m09_7_a_rendered_diagram_is_sent_and_served() {
     assert!(svg.contains("<svg"), "{svg}");
 }
 
+/// TC-004-38, FR-098, ADR-029, ADR-025: the formulas are typeset on their
+/// own queue; the tick sends them by key (`ed-enrich`), the protocol serves
+/// their SVG in the theme's text colour, and one with an error says why
+/// (UC-004 A21).
+#[test]
+fn tc004_38_formulas_are_typeset_sent_and_served() {
+    use underline_editor_view::views::formula_key;
+
+    let dir = temp_dir("formulas");
+    let (mut session, _root) = session_with(
+        &dir,
+        "# Math\n\nEnergy $E=mc^2$ and price 5$ or 6$.\n\n$$\\frac{1}{$$\n",
+    );
+    facade_of(&mut session);
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut sent = Vec::new();
+    let theme = loop {
+        for event in session.tick(Instant::now()) {
+            if let Event::Enrich(view) = event {
+                sent.extend(
+                    view.formulas
+                        .iter()
+                        .cloned()
+                        .map(|f| (view.theme.clone(), f)),
+                );
+            }
+        }
+        let typeset = sent.iter().any(|(_, (_, f))| f.picture.is_some());
+        let failed = sent.iter().any(|(_, (_, f))| f.error.is_some());
+        if typeset && failed {
+            break sent[0].0.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the formulas were not sent: {sent:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+
+    let (key, inline) = sent
+        .iter()
+        .map(|(_, f)| f)
+        .find(|(_, f)| f.picture.is_some())
+        .unwrap();
+    assert_eq!(*key, formula_key(&theme, false, "E=mc^2"));
+    assert!(!inline.display && inline.height > inline.depth && inline.width > 0);
+    let picture = inline.picture.clone().unwrap();
+    assert!(picture.starts_with("formula/"), "{picture}");
+    let Ok(Asset::Svg(svg)) = session.asset(&format!("/{picture}")) else {
+        panic!("the SVG is not served");
+    };
+    assert!(svg.starts_with("<svg") && svg.contains("<path"));
+    let (_, failed) = sent
+        .iter()
+        .map(|(_, f)| f)
+        .find(|(_, f)| f.error.is_some())
+        .unwrap();
+    assert!(failed.display && failed.source == "\\frac{1}{");
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("This formula cannot be typeset: ")),
+        "{failed:?}"
+    );
+    assert_eq!(
+        session.asset("/formula/0000000000000001.svg"),
+        Err(AssetError::NotFound)
+    );
+}
+
+/// The first typeset picture of `source` the tick sends, with its theme.
+fn sent_formula(session: &mut Session, source: &str) -> (String, crate::facade_view::FormulaView) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        for event in session.tick(Instant::now()) {
+            if let Event::Enrich(view) = event {
+                if let Some((_, formula)) = view
+                    .formulas
+                    .iter()
+                    .find(|(_, f)| f.source == source && f.picture.is_some())
+                {
+                    return (view.theme.clone(), formula.clone());
+                }
+            }
+        }
+        assert!(Instant::now() < deadline, "{source} was not sent");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// FR-098, ADR-029 (review): after another theme is chosen, the open
+/// note's formulas are typeset anew in its text colour and sent again.
+#[test]
+fn fr098_formulas_follow_the_theme() {
+    use crate::settings::SettingName;
+    use underline_core::Theme;
+
+    let dir = temp_dir("formula-theme");
+    let (mut session, _root) = session_with(&dir, "# Math\n\nEnergy $E=mc^2$.\n");
+    facade_of(&mut session);
+    let (first, before) = sent_formula(&mut session, "E=mc^2");
+
+    session.quick_setting(SettingName::Theme, "Solarized Dark".into());
+    let (theme, after) = loop {
+        let sent = sent_formula(&mut session, "E=mc^2");
+        if sent.0 != first {
+            break sent;
+        }
+    };
+
+    assert_eq!(theme, Theme::SolarizedDark.label());
+    assert_ne!(after.picture, before.picture);
+    let Ok(Asset::Svg(svg)) = session.asset(&format!("/{}", after.picture.unwrap())) else {
+        panic!("the SVG is not served");
+    };
+    let [r, g, b] = underline_facade::themes::palette(Theme::SolarizedDark).foreground;
+    assert!(
+        svg.contains(&format!("rgba({r},{g},{b},1)")),
+        "the theme's text colour"
+    );
+}
+
 /// ADR-024, ADR-025: the views follow a window's edit with the next jobs,
 /// as one change of the chain of versions that `ed-enrich` follows.
 #[test]
@@ -438,6 +562,7 @@ fn adr024_an_older_job_never_overwrites_a_newer_one() {
         seq,
         rev: seq,
         generation: 0,
+        formulas_generation: 0,
         rope: ropey::Rope::from_str(text),
         format: NoteFormat::Markdown,
         blocks: None,
@@ -447,6 +572,8 @@ fn adr024_an_older_job_never_overwrites_a_newer_one() {
             colors: None,
             dark: false,
             diagrams: None,
+            formulas: None,
+            color: [0, 0, 0],
             code_colors: std::sync::Arc::default(),
             images: std::sync::Arc::default(),
             root: PathBuf::from("/nowhere"),
@@ -625,6 +752,7 @@ fn backend_views(
         seq: 1,
         rev: 1,
         generation: 0,
+        formulas_generation: 0,
         rope: ropey::Rope::from_str(text),
         format,
         blocks: None,
@@ -636,6 +764,8 @@ fn backend_views(
             )),
             dark,
             diagrams: None,
+            formulas: None,
+            color: [0, 0, 0],
             code_colors: std::sync::Arc::default(),
             images: std::sync::Arc::default(),
             root: root.to_owned(),
@@ -678,12 +808,24 @@ fn cache_of(
             }
             _ => {}
         }
+        // FR-098: the formulas as the backend made them.
+        let block_formula = match &view.kind {
+            BlockKindView::Formula { formula } => Some(formula),
+            _ => None,
+        };
+        let inline = view.runs.iter().filter_map(|run| run.formula.as_ref());
+        for formula in block_formula.into_iter().chain(inline) {
+            cached.insert_formula(
+                underline_editor_view::views::formula_key(shown, formula.display, &formula.source),
+                formula.clone(),
+            );
+        }
     }
     cached
 }
 
-const EQUIVALENCE_MD: &str = "# Notes\n\nSome *text* with `code`, emoji 😀\r\nand CRLF.\n\n- one\n- [x] two\n\n> quoted\n\n```rust\nfn main() { let x = 1; }\n```\n\n```mermaid\ngraph TD\nA-->B\n```\n\n![The plan](img/plan.png)\n\n![Gone](img/gone.png)\n\n| a | b |\n|:--|--:|\n| 1 | 2 |\n";
-const EQUIVALENCE_ADOC: &str = "= Notes\n\nSome text.\n\nNOTE: An admonition.\n\n.The plan\nimage::img/plan.png[Plan]\n\n.Numbers\n|===\n| a | b\n| 1 | 2\n|===\n\n[source,python]\n----\nprint(\"hi\")\n----\n\n.Again\nimage::img/gone.png[Gone]\n";
+const EQUIVALENCE_MD: &str = "# Notes\n\nSome *text* with `code`, $x^2$, emoji 😀\r\nand CRLF.\n\n$$\\sqrt{2}$$\n\n- one\n- [x] two\n\n> quoted\n\n```rust\nfn main() { let x = 1; }\n```\n\n```mermaid\ngraph TD\nA-->B\n```\n\n![The plan](img/plan.png)\n\n![Gone](img/gone.png)\n\n| a | b |\n|:--|--:|\n| 1 | 2 |\n";
+const EQUIVALENCE_ADOC: &str = "= Notes\n\nSome text, latexmath:[y].\n\n[latexmath]\n++++\nz\n++++\n\nNOTE: An admonition.\n\n.The plan\nimage::img/plan.png[Plan]\n\n.Numbers\n|===\n| a | b\n| 1 | 2\n|===\n\n[source,python]\n----\nprint(\"hi\")\n----\n\n.Again\nimage::img/gone.png[Gone]\n";
 
 /// A workspace with one image for the equivalence tests.
 fn equivalence_root(name: &str) -> PathBuf {

@@ -184,6 +184,11 @@ impl Workspace {
         let mut dir = self.root.clone();
         for (depth, level) in levels.iter().enumerate() {
             dir.push(level);
+            // A4: a link to a folder may lead outside the workspace, and the
+            // note would be written there; no level of the place may be one.
+            if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err(NewNoteProblem::Outside);
+            }
             if dir.is_dir() && is_workspace_directory(&dir) {
                 return Err(NewNoteProblem::OwnWorkspace(levels[..=depth].join("/")));
             }
@@ -204,6 +209,14 @@ impl Workspace {
     /// UC-003 step 5: creates the note with `content`, creating missing
     /// folders, without ever replacing a file that is there. On failure the
     /// folders created for the note are removed again (A5).
+    ///
+    /// BR-003, A2: a note of the same name in the other note format (or
+    /// case) may appear between the check and the write, written by another
+    /// program or a git sync. After writing, the folder is looked at again;
+    /// when it holds such a note besides the new one, the new file is
+    /// removed and that note is reported as existing. A note that appears
+    /// after this second look is not noticed; the git sync joins it as any
+    /// conflict (UC-025 BR-006).
     pub fn create_note(&mut self, new: &NewNote, content: &str) -> Result<NoteId, NewNoteProblem> {
         let id = self.plan_note(new)?;
         let path = self.root.join(id.file_name(new.format));
@@ -232,9 +245,45 @@ impl Workspace {
             }
             return result.map(|()| id);
         }
+        let written = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let page = page_name(&new.title);
+        if let Some(other) = matching_notes(&folder, &page)
+            .into_iter()
+            .find(|(_, file)| *file != written)
+        {
+            let _ = fs::remove_file(&path);
+            let mut parts: Vec<&str> = id.folder().into_iter().collect();
+            parts.push(&other.0);
+            self.rescan();
+            return Err(NewNoteProblem::Exists(NoteId::from_relative(
+                &parts.join("/"),
+            )));
+        }
         self.rescan();
         Ok(id)
     }
+}
+
+/// The notes in `dir` whose name matches `page`, ignoring case and note
+/// format (UC-003 BR-003): their file names without and with extension.
+fn matching_notes(dir: &Path, page: &str) -> Vec<(String, String)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let wanted = page.to_lowercase();
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let (stem, extension) = name.rsplit_once('.')?;
+            (NoteFormat::from_extension(extension).is_some() && stem.to_lowercase() == wanted)
+                .then(|| (stem.to_owned(), name.clone()))
+        })
+        .collect()
 }
 
 /// The file name (without extension) of a note in `dir` whose name matches

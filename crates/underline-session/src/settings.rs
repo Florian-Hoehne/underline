@@ -18,8 +18,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use underline_core::{
-    store_setting, user_settings_path, AgentAccess, Effective, Git, SettingKey, Settings,
-    SettingsError, Theme, WorkspaceSettings, SETTINGS_FILE_NAME,
+    store_setting, system_spell_language, user_settings_path, AgentAccess, Effective, Git,
+    SettingKey, Settings, SettingsError, SpellCheckLanguage, Theme, WorkspaceSettings,
+    SETTINGS_FILE_NAME,
 };
 
 use crate::palette::PaletteView;
@@ -63,6 +64,9 @@ pub struct SettingsState {
     /// Grows whenever what a settings file says may have changed, so the
     /// settings window is told only then (M-20.2 to M-20.4).
     revision: u32,
+    /// OQ-206: the system's language, the spell check's default when it is
+    /// offered; `None` for a system whose language is not (and in tests).
+    system: Option<SpellCheckLanguage>,
 }
 
 impl SettingsState {
@@ -71,6 +75,22 @@ impl SettingsState {
     #[must_use]
     pub fn load(now: Instant) -> Self {
         Self::with_user_file(user_settings_path(), now)
+            .with_system_language(system_spell_language())
+    }
+
+    /// OQ-206: the system's language is `system`; the spell check language
+    /// neither settings file gives is it.
+    #[must_use]
+    pub fn with_system_language(mut self, system: Option<SpellCheckLanguage>) -> Self {
+        self.system = system;
+        self.recompute();
+        self
+    }
+
+    /// OQ-206: the spell check language of the system, if it is offered.
+    #[must_use]
+    pub fn system_language(&self) -> Option<SpellCheckLanguage> {
+        self.system
     }
 
     /// Like [`SettingsState::load`], with the user settings file at
@@ -88,6 +108,7 @@ impl SettingsState {
             messages: Vec::new(),
             width_generation: 0,
             revision: 0,
+            system: None,
         };
         state.read_user();
         state.recompute();
@@ -207,7 +228,7 @@ impl SettingsState {
     fn recompute(&mut self) {
         let workspace = self.workspace.as_ref().map(|(_, s, _)| s);
         let refused = self.effective.agent_access_refused;
-        self.effective = Effective::of(&self.user, workspace);
+        self.effective = Effective::of_with_system(&self.user, workspace, self.system);
         // UC-017 A1: said when the workspace starts asking for more.
         if self.effective.agent_access_refused && !refused {
             self.messages.push(agent_access_refused_message());
@@ -300,6 +321,16 @@ impl SettingsState {
         self.user.agent_access.unwrap_or_default()
     }
 
+    /// UC-003 BR-008, UC-025 BR-002, BR-003: the value the workspace
+    /// settings give `key`, as written; `None` without a workspace or a
+    /// value. The template and daily note settings are read only from here.
+    #[must_use]
+    pub fn workspace_text(&self, key: SettingKey) -> Option<String> {
+        self.workspace
+            .as_ref()
+            .and_then(|(_, settings, _)| settings.value_text(key))
+    }
+
     /// UC-017 A1: the level the workspace settings lower agent access to.
     #[must_use]
     pub fn workspace_agent_access(&self) -> Option<AgentAccess> {
@@ -338,12 +369,20 @@ pub enum SettingName {
     LineNumberSide,
     ShowMinimap,
     CopyOnSelect,
+    ClosePairs,
+    SpellCheckLanguage,
+    EditorZoom,
+    SoftWrap,
+    FocusMode,
     GitSyncInterval,
     AgentAccess,
     OverviewWidth,
     ToolPanelWidth,
     ShowMenuBar,
     BlinkFoundInMinimap,
+    TemplateFolder,
+    DailyNoteFolder,
+    DailyNoteTemplate,
 }
 
 impl From<SettingName> for SettingKey {
@@ -356,12 +395,20 @@ impl From<SettingName> for SettingKey {
             SettingName::LineNumberSide => SettingKey::LineNumberSide,
             SettingName::ShowMinimap => SettingKey::ShowMinimap,
             SettingName::CopyOnSelect => SettingKey::CopyOnSelect,
+            SettingName::ClosePairs => SettingKey::ClosePairs,
+            SettingName::SpellCheckLanguage => SettingKey::SpellCheckLanguage,
+            SettingName::EditorZoom => SettingKey::EditorZoom,
+            SettingName::SoftWrap => SettingKey::SoftWrap,
+            SettingName::FocusMode => SettingKey::FocusMode,
             SettingName::GitSyncInterval => SettingKey::GitSyncInterval,
             SettingName::AgentAccess => SettingKey::AgentAccess,
             SettingName::OverviewWidth => SettingKey::OverviewWidth,
             SettingName::ToolPanelWidth => SettingKey::ToolPanelWidth,
             SettingName::ShowMenuBar => SettingKey::ShowMenuBar,
             SettingName::BlinkFoundInMinimap => SettingKey::BlinkFoundInMinimap,
+            SettingName::TemplateFolder => SettingKey::TemplateFolder,
+            SettingName::DailyNoteFolder => SettingKey::DailyNoteFolder,
+            SettingName::DailyNoteTemplate => SettingKey::DailyNoteTemplate,
         }
     }
 }
@@ -387,6 +434,19 @@ pub struct SettingsView {
     pub show_minimap: bool,
     /// Copying the selection as it is made.
     pub copy_on_select: bool,
+    /// UC-005 BR-019: brackets, quotes and inline markup closed while
+    /// typing.
+    pub close_pairs: bool,
+    /// FR-100: the spell check language by its code (`en-US`), or `off`.
+    pub spell_check_language: String,
+    /// UC-010 BR-009: the size of the text of the notes in percent, 50 to
+    /// 300 in steps of 10.
+    pub editor_zoom: u32,
+    /// UC-010 BR-011: long lines wrap at the edge of the editor.
+    pub soft_wrap: bool,
+    /// UC-010 BR-010: the note overview, the tool panel and the toolbars
+    /// are hidden.
+    pub focus_mode: bool,
     /// Minutes between two git syncs.
     pub git_sync_interval: u32,
     /// What agents may do (UC-017 BR-002): "Off", "Read only",
@@ -422,6 +482,11 @@ impl SettingsView {
             line_number_side: effective.line_number_side.label().to_owned(),
             show_minimap: effective.show_minimap,
             copy_on_select: effective.copy_on_select,
+            close_pairs: effective.close_pairs,
+            spell_check_language: effective.spell_check_language.code().to_owned(),
+            editor_zoom: effective.editor_zoom,
+            soft_wrap: effective.soft_wrap,
+            focus_mode: effective.focus_mode,
             git_sync_interval: effective.git_sync_interval,
             agent_access: effective.agent_access.label().to_owned(),
             agent_access_lowered: effective.agent_access_lowered,
@@ -804,12 +869,20 @@ mod tests {
             SettingName::LineNumberSide,
             SettingName::ShowMinimap,
             SettingName::CopyOnSelect,
+            SettingName::ClosePairs,
+            SettingName::SpellCheckLanguage,
+            SettingName::EditorZoom,
+            SettingName::SoftWrap,
+            SettingName::FocusMode,
             SettingName::GitSyncInterval,
             SettingName::AgentAccess,
             SettingName::OverviewWidth,
             SettingName::ToolPanelWidth,
             SettingName::ShowMenuBar,
             SettingName::BlinkFoundInMinimap,
+            SettingName::TemplateFolder,
+            SettingName::DailyNoteFolder,
+            SettingName::DailyNoteTemplate,
         ];
         let keys: Vec<SettingKey> = names.iter().map(|&n| SettingKey::from(n)).collect();
 

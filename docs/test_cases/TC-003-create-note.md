@@ -1,7 +1,7 @@
 # Test Cases: Create Note
 
 **Use Case:** [UC-003 Create Note](../use_cases/UC-003-create-note.md)  
-**Requirements:** [FR-003, FR-004, FR-018, FR-021, FR-071, NFR-006, NFR-013, C-002](../requirements.md)
+**Requirements:** [FR-003, FR-004, FR-018, FR-021, FR-071, FR-094, NFR-006, NFR-013, C-002](../requirements.md)
 
 ## Coverage
 
@@ -23,6 +23,8 @@
 | TC-003-14 | A6 Cancel at each point                             | —                     |
 | TC-003-15 | Written at once and remembered after a crash        | BR-007, FR-071        |
 | TC-003-16 | A new note in a git repository                      | BR-007                |
+| TC-003-17 | A7 Create from a template                           | FR-094, BR-008        |
+| TC-003-18 | A8 Template cannot be read                          | BR-004                |
 
 ## TC-003-01: Create a Markdown note in the top folder
 
@@ -210,3 +212,25 @@
 |------|-----------------------------------------|-----------------------------------------------------------------------|
 | 1    | Create the note `New Page`.             | `New-Page.md` is created.                                             |
 | 2    | Look at the git state of `wiki`.        | `New-Page.md` is the only untracked file; no other file changed.      |
+
+## TC-003-17: Create a note from a template
+
+**Flow:** A7, BR-008  
+**Preconditions:** The Markdown workspace `notes` holds `templates/Meeting.md` with the lines `# {{title}}`, `Date: {{date}} {{time}}`, `{{cursor}}`, and `Owner: {{owner}}`, and `templates/Spec.adoc`. The date is 11 November 2026, 09:00.
+
+| Step | Action                                                       | Expected result                                                                                 |
+|------|--------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| 1    | Ask to create a new note.                                    | The dialog offers "No template" (preselected), "Meeting", and "Spec".                          |
+| 2    | Type `Standup`, choose "Meeting", and confirm.               | "Standup" opens in a tab with the cursor on the empty third line.                               |
+| 3    | Look at `Standup.md`.                                        | It holds `# Standup`, `Date: 2026-11-11 09:00`, an empty line, and `Owner: {{owner}}`.          |
+| 4    | Look at `templates/Meeting.md`.                              | It is unchanged.                                                                                |
+| 5    | Create the note `API` from "Spec".                           | The note format is set to AsciiDoc and cannot be changed; `API.adoc` is created.                |
+
+## TC-003-18: The template cannot be read
+
+**Flow:** A8  
+**Preconditions:** As TC-003-17.
+
+| Step | Action                                                                          | Expected result                                                            |
+|------|---------------------------------------------------------------------------------|----------------------------------------------------------------------------|
+| 1    | Open the dialog, choose "Meeting", delete `templates/Meeting.md` with another program, type `Retro`, and confirm. | `Retro.md` holds only `# Retro`; the status bar says the template could not be read. |

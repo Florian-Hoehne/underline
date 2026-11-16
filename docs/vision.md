@@ -42,12 +42,29 @@ repository, Underline shows and drives the usual git workflow. Nothing is locked
 - Workspaces: local directories of notes; when a workspace is created the user chooses its default note format
   (Markdown preselected); a note's own format follows its file extension.
 - Interface: note overview on the left (recent notes), notes in tabs in the middle, properties and tools on the right
-  (git diff, outline, code index, figure index), and a status bar at the bottom.
+  (git diff, outline, code index, figure index, backlinks, outgoing links, tags), and a status bar at the bottom; a
+  split view that shows two notes, or the source view and the facade of one note, side by side; a focus mode that
+  hides the side panels; zoom of the editor font.
+- Keyboard workflow: go to note by a part of its name, a command palette that finds and runs every command,
+  and go to line.
 - Editing: source editing and facade editing, a formatting toolbar, input modes normal, Vim, and Nano, folding of
   sections, line numbers that can be switched off and placed left or right, a minimap of the note, copy on select
   (can be switched off), and drag and drop of images, files, and links.
+- Editing comfort: closing brackets, quotes, and inline markup pairs as the user types, moving and duplicating lines,
+  indenting and outdenting list items with Tab and Shift+Tab, highlighting the current line and the matching
+  bracket, soft wrap that can be switched off, completion of links to notes and headings while typing, and an offline
+  spell check in a language of the user's choice.
+- Find and replace: replace in the active note (one or all) and across the workspace after a preview, with the
+  search switches match case, whole word, and regular expression for every search.
+- Linked notes: backlinks and outgoing links of the active note, written as normal Markdown and AsciiDoc links that
+  GitHub and GitLab show the same way (no wiki links of their own); tags and search by tag; front matter of
+  Markdown notes and document attributes of AsciiDoc notes shown and edited as note properties.
+- New notes from templates of the workspace, and a daily note per day.
+- Word and character count and reading time of a note in its properties.
+- Local version history: snapshots of a note on this computer, also without git, that can be compared and restored.
 - Rendering: syntax-highlighted code blocks, PlantUML and Mermaid diagrams in the colors of the active theme,
-  diagrams and images that can be enlarged, local links that open the linked note.
+  diagrams and images that can be enlarged, local links that open the linked note, and mathematics written as GitHub
+  reads it (inline and as a block).
 - Color themes: Light, Dark, GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Night Owl, Ubuntu, Nord,
   Dracula, and Gruvbox.
 - Saving and sync: autosave to the local disk; git pull and push with the workspace's remote at a regular interval.

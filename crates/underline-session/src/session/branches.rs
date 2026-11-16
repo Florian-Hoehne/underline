@@ -364,7 +364,7 @@ impl Session {
                 tab.deleted = true;
                 kept.push(id.title());
             } else {
-                open.tabs.close(index);
+                open.close_note(index);
                 closed.push(id.title());
             }
         }
@@ -376,7 +376,7 @@ impl Session {
             .collect();
         let said = self.status.clone();
         for path in paths {
-            self.take_file_version(&path, false);
+            self.take_file_version(&path, false, underline_core::SnapshotCause::Git);
         }
         let kept_copy = self.status != said;
         (closed, kept, kept_copy)

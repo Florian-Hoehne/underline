@@ -257,6 +257,19 @@ pub struct Keys {
 }
 
 impl Keys {
+    /// UC-005 BR-016 (package 7a review): the keys of another view of the
+    /// same note take over what the window shares between its views: the
+    /// Vim register and the last search of the Vim and Nano keys, and the
+    /// lines Nano cut, so a yank in one pane is put in the other. The state
+    /// of each view's keys (mode, count, waiting operator, prompt) stays its
+    /// own.
+    pub fn take_shared(&mut self, from: &mut Keys) {
+        self.vim.register = std::mem::take(&mut from.vim.register);
+        self.vim.search = from.vim.search.take();
+        self.nano.cut = std::mem::take(&mut from.nano.cut);
+        self.nano.search = from.nano.search.take();
+    }
+
     /// Handles `events` in the input mode; gives back the events the view
     /// handles as usual (typing in insert mode, for example), unchanged and
     /// in order, and whether the text changed. `input` tells what an event
@@ -1318,6 +1331,27 @@ impl Nano {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UC-005 BR-016 (package 7a): the register, the searches and Nano's
+    /// cut lines go to the keys of the other view; its own state stays.
+    #[test]
+    fn uc005_br016_the_register_and_the_searches_are_shared() {
+        let mut one = Keys::default();
+        one.vim.register = Register {
+            text: "yanked".into(),
+            lines: false,
+        };
+        one.vim.search = Some("word".into());
+        one.nano.cut = "cut\n".into();
+        one.vim.count = "3".into();
+        let mut two = Keys::default();
+        two.take_shared(&mut one);
+        assert_eq!(two.vim.register.text, "yanked");
+        assert_eq!(two.vim.search.as_deref(), Some("word"));
+        assert_eq!(two.nano.cut, "cut\n");
+        assert_eq!(two.vim.count, "");
+        assert_eq!(one.vim.count, "3");
+    }
 
     /// A note of plain lines in memory, as the source view treats it.
     #[derive(Default)]

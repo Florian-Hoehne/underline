@@ -9,7 +9,7 @@
 **Trigger:** The user asks to export a note.  
 **Status:** Reviewed  
 
-**Requirements:** [FR-014, FR-015, FR-016, NFR-006, NFR-011, NFR-013, NFR-014, NFR-015](../requirements.md)
+**Requirements:** [FR-014, FR-015, FR-016, FR-098, NFR-006, NFR-011, NFR-013, NFR-014, NFR-015](../requirements.md)
 
 ## Preconditions
 
@@ -93,7 +93,7 @@
 
 ### BR-001: What is exported
 
-The note is exported as its tab shows it, with changes not yet saved; a note that is not open is exported as it is stored. The export holds the whole note, folded sections included (UC-004 BR-012).
+The note is exported as its tab shows it, with changes not yet saved; a note that is not open is exported as it is stored. The export holds the whole note, folded sections included (UC-004 BR-012). Formulas (UC-004 BR-019) are exported typeset into HTML and PDF, without a network connection, and written in the notation of the other note format when exporting to it; a formula with an error is exported as its source.
 
 ### BR-002: Export to the other note format
 

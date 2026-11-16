@@ -1062,8 +1062,10 @@ impl Session {
 
     /// M-06.5, M-04.5 (UC-021 step 1, A2, BR-006): shows the tab "Todos",
     /// opening it if needed; the overdue todos of the status bar show it
-    /// with the filter "Open".
+    /// with the filter "Open". OQ-279: the tab is the left pane's, which
+    /// becomes the active pane.
     pub fn show_todo_list(&mut self, filter: Option<TodoFilterName>) {
+        self.focus_pane(underline_core::PaneSide::Left);
         self.change_todo_list(|list| {
             list.open = true;
             list.active = true;

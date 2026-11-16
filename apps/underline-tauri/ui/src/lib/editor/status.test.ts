@@ -22,9 +22,17 @@ describe('M-11.4 texts of the status line', () => {
   it('gives the switches their short names below 720 px', () => {
     expect(statusTexts(720, null)).toMatchObject({
       copy: 'Copy on select',
+      wrap: 'Soft wrap',
+      focus: 'Focus mode',
       minimap: 'Minimap',
       keysLabel: 'Keys:',
     });
-    expect(statusTexts(719, null)).toMatchObject({ copy: 'Copy', minimap: 'Map', keysLabel: '' });
+    expect(statusTexts(719, null)).toMatchObject({
+      copy: 'Copy',
+      wrap: 'Wrap',
+      focus: 'Focus',
+      minimap: 'Map',
+      keysLabel: '',
+    });
   });
 });

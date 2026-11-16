@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-links-headings"
+description = "Enables the links_headings command without any pre-configured scope."
+commands.allow = ["links_headings"]
+
+[[permission]]
+identifier = "deny-links-headings"
+description = "Denies the links_headings command without any pre-configured scope."
+commands.deny = ["links_headings"]

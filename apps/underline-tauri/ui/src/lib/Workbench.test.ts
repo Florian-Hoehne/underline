@@ -42,7 +42,7 @@ describe('M-05 note overview', () => {
 
     expect(labels()).toEqual([
       'Home  (top folder)',
-      '2026 11 09',
+      '2026-11-09',
       'Getting Started',
       'Home  (guide)',
       'Ideas',

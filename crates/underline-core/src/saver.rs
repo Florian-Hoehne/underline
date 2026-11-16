@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::atomic::write_atomic;
+use crate::snapshots::SnapshotJob;
 
 /// How long an own write is remembered (ADR-011).
 const OWN_WRITE_MEMORY: Duration = Duration::from_secs(60);
@@ -57,37 +58,87 @@ pub struct SaveResult {
     pub result: Result<(), String>,
 }
 
+/// What the saver's thread does, in the order it was asked.
+enum Work {
+    Save(SaveJob),
+    /// UC-026 BR-001: a snapshot, before the save of the note after it.
+    Snapshot(SnapshotJob),
+}
+
+/// What became of a snapshot the saver was asked to take (UC-026 BR-001).
+#[derive(Debug)]
+pub struct SnapshotOutcome {
+    /// The note's file, relative to the workspace (`Projects/Plan.md`).
+    pub note_file: String,
+    /// Whether a snapshot was taken: `Ok(false)` when none was due or the
+    /// newest holds the same content; the reason when it could not be.
+    pub result: Result<bool, String>,
+}
+
 /// Stores notes atomically on a worker thread.
 pub struct NoteSaver {
-    jobs: Sender<SaveJob>,
+    jobs: Sender<Work>,
     results: Receiver<SaveResult>,
+    snapshots_done: Receiver<SnapshotOutcome>,
     own: OwnWrites,
 }
 
 impl NoteSaver {
     pub fn new(own: OwnWrites) -> Self {
-        let (jobs, job_rx) = channel::<SaveJob>();
+        let (jobs, job_rx) = channel::<Work>();
         let (result_tx, results) = channel();
+        let (snapshot_tx, snapshots_done) = channel();
         let worker_own = own.clone();
         std::thread::Builder::new()
             .name("underline-saver".into())
             .spawn(move || {
-                for job in job_rx {
-                    let result = store(&worker_own, &job.path, &job.text);
-                    let _ = result_tx.send(SaveResult {
-                        path: job.path,
-                        started: job.started,
-                        result,
-                    });
+                for work in job_rx {
+                    match work {
+                        Work::Save(job) => {
+                            let result = store(&worker_own, &job.path, &job.text);
+                            let _ = result_tx.send(SaveResult {
+                                path: job.path,
+                                started: job.started,
+                                result,
+                            });
+                        }
+                        Work::Snapshot(job) => {
+                            let result = job
+                                .run()
+                                .map(|taken| taken.is_some())
+                                .map_err(|error| error.to_string());
+                            let _ = snapshot_tx.send(SnapshotOutcome {
+                                note_file: job.note_file,
+                                result,
+                            });
+                        }
+                    }
                 }
             })
             .expect("the saver thread starts");
-        Self { jobs, results, own }
+        Self {
+            jobs,
+            results,
+            snapshots_done,
+            own,
+        }
     }
 
     /// Stores a note in the background; the outcome comes from [`Self::poll`].
     pub fn save(&self, job: SaveJob) {
-        let _ = self.jobs.send(job);
+        let _ = self.jobs.send(Work::Save(job));
+    }
+
+    /// UC-026 BR-001, NFR-005: takes a snapshot in the background, before
+    /// any save asked for after it; what became of it comes from
+    /// [`Self::poll_snapshots`].
+    pub fn snapshot(&self, job: SnapshotJob) {
+        let _ = self.jobs.send(Work::Snapshot(job));
+    }
+
+    /// What became of the snapshots asked for since the last call.
+    pub fn poll_snapshots(&self) -> Vec<SnapshotOutcome> {
+        self.snapshots_done.try_iter().collect()
     }
 
     /// Stores a note now, for closing a tab or Underline (UC-005 BR-001).

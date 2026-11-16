@@ -78,6 +78,23 @@ impl Session {
     ///
     /// The note has no open tab.
     pub fn follow_link(&mut self, note: &NoteId, at: u32, rev: u32) -> Result<Followed, UiError> {
+        self.follow_link_to(note, at, rev, false)
+    }
+
+    /// [`Session::follow_link`]; with `side`, a note the link leads to
+    /// opens to the side (UC-004 A18, FR-096), as a Ctrl+Shift+click
+    /// (Cmd+Shift+click) asks.
+    ///
+    /// # Errors
+    ///
+    /// The note has no open tab.
+    pub fn follow_link_to(
+        &mut self,
+        note: &NoteId,
+        at: u32,
+        rev: u32,
+        side: bool,
+    ) -> Result<Followed, UiError> {
         let open = self.open.as_ref().ok_or_else(|| not_open(note))?;
         let tab = open
             .tabs
@@ -93,16 +110,69 @@ impl Session {
         let Some(link) = link_at_web(tab.mirror.rope(), tab.edit.format, at) else {
             return Ok(Followed::done());
         };
-        let target = resolve_link(open.root(), &tab.path, &link);
-        Ok(match target {
+        Ok(self.follow_written(note, &link, side))
+    }
+
+    /// UC-004 A14 step 2, FR-079: follows the outgoing link of the open tab
+    /// `note` that starts at web offset `at` of the backend's revision
+    /// `rev`, as the tool panel listed it, as a Ctrl+click follows a link
+    /// ([`Session::follow_link`]). The session finds the link in its own
+    /// text; another revision, or no link starting there, follows nothing.
+    ///
+    /// # Errors
+    ///
+    /// The note has no open tab.
+    pub fn follow_outgoing(
+        &mut self,
+        note: &NoteId,
+        at: u32,
+        rev: u32,
+    ) -> Result<Followed, UiError> {
+        let open = self.open.as_ref().ok_or_else(|| not_open(note))?;
+        let tab = open
+            .tabs
+            .get(open.tabs.find(note).ok_or_else(|| not_open(note))?);
+        if tab.mirror.rev() != rev {
+            eprintln!(
+                "FR-079: a link of {} was chosen in revision {rev}, the text is at {}; not followed",
+                tab.title,
+                tab.mirror.rev()
+            );
+            self.status = format!(
+                "{} changed since its links were listed; choose the link again",
+                tab.title
+            );
+            return Ok(Followed::done());
+        }
+        let Some(link) = super::note_links::outgoing_at(tab.mirror.rope(), tab.edit.format, at)
+        else {
+            return Ok(Followed::done());
+        };
+        Ok(self.follow_written(note, &link, false))
+    }
+
+    /// UC-004 A2 to A4: follows `link`, as written in the open tab `note`;
+    /// a note it leads to opens to the side with `side` (A18).
+    fn follow_written(&mut self, note: &NoteId, link: &str, side: bool) -> Followed {
+        let Some((root, path, format)) = self.open.as_ref().and_then(|open| {
+            let tab = open.tabs.get(open.tabs.find(note)?);
+            Some((
+                open.root().to_owned(),
+                tab.path.clone(),
+                open.workspace.default_format(),
+            ))
+        }) else {
+            return Followed::done();
+        };
+        match resolve_link(&root, &path, link) {
             LinkTarget::Heading(anchor) => Followed::answer(self.jump_to_heading(note, &anchor)),
-            LinkTarget::Note { id, heading } => self.follow_to_note(&id, heading.as_deref()),
+            LinkTarget::Note { id, heading } => self.follow_to_note(&id, heading.as_deref(), side),
             // A3: the missing note is offered for creation (UC-003).
             LinkTarget::MissingNote { folder, title } => Followed::answer(LinkAnswer::NewNote {
                 problem: format!("{title} does not exist yet. Create it?"),
                 folder,
                 title,
-                format: open.workspace.default_format().into(),
+                format: format.into(),
             }),
             LinkTarget::Web(address) => self.follow_to_web(address),
             LinkTarget::File(path) => self.follow_to_file(&path),
@@ -110,22 +180,21 @@ impl Session {
                 self.status = format!("{link} leads outside the workspace and is not followed");
                 Followed::done()
             }
-        })
+        }
     }
 
     /// UC-004 A2: opens the note `id`, at the heading `heading` if the link
     /// names one. A10: a note that cannot be read gets no tab; the status
     /// says why, and nothing jumps.
-    fn follow_to_note(&mut self, id: &NoteId, heading: Option<&str>) -> Followed {
+    fn follow_to_note(&mut self, id: &NoteId, heading: Option<&str>, side: bool) -> Followed {
+        let opened = if side {
+            self.open_note_to_side(id)
+        } else {
+            self.open_note(id)
+        };
         match heading {
-            Some(anchor) if self.open_note(id) => {
-                Followed::answer(self.jump_to_heading(id, anchor))
-            }
-            Some(_) => Followed::done(),
-            None => {
-                self.open_note(id);
-                Followed::done()
-            }
+            Some(anchor) if opened => Followed::answer(self.jump_to_heading(id, anchor)),
+            _ => Followed::done(),
         }
     }
 

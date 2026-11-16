@@ -26,13 +26,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use underline_core::{
-    FoundLine, FoundNote, NoteEntry, NoteFormat, NoteId, SearchRequest, SearchResult,
+    FoundLine, FoundNote, NoteEntry, NoteFormat, NoteId, Query, SearchReading, SearchRequest,
+    SearchResult, Switches,
 };
 use underline_editor_core::utf16::WebOffsets;
 
 use super::editing::not_open;
 use super::Session;
-use crate::editor_view::units;
+use crate::editor_view::{units, SearchSwitches};
 use crate::search_view::{
     FoundLineView, FoundNoteView, FoundPartView, FoundPlace, SearchOpened, SearchResultView,
     SearchView,
@@ -45,17 +46,22 @@ use crate::{Event, UiError};
 pub(super) struct Search {
     /// The text of the overlay, without the spaces around it.
     text: String,
+    /// FR-075, BR-011: the search switches of the overlay.
+    switches: SearchSwitches,
+    /// UC-008 A9: what is wrong with the text.
+    problem: Option<String>,
     /// The newest result that fit the text when it came, with its number.
     result: Option<(u32, Arc<SearchResult>)>,
     /// The number of the last result taken in; grows for the whole session.
     serial: u32,
-    /// The text and the state of the notes the searcher was asked for last.
-    asked: Option<(String, u64)>,
+    /// The text, the switches and the state of the notes the searcher was
+    /// asked for last.
+    asked: Option<(String, SearchSwitches, u64)>,
     /// The texts of the open tabs sent last, by the revision of each.
     texts: HashMap<NoteId, (u32, String)>,
-    /// The text and the result the window was told of last; at first no
-    /// text and no result, as the window starts.
-    told: (String, Option<u32>),
+    /// The text, the switches, the problem and the result the window was
+    /// told of last; at first no text and no result, as the window starts.
+    told: (String, SearchSwitches, Option<String>, Option<u32>),
 }
 
 /// "1 note", "2 notes", as egui's `count`.
@@ -124,11 +130,20 @@ fn note_view(found: &FoundNote) -> FoundNoteView {
 }
 
 impl Session {
-    /// UC-008 steps 1–2, A2: the overlay holds `text`; the search runs
-    /// again at once (a running one is given up, BR-005), or ends when it
-    /// holds no more than spaces.
-    pub fn search_set(&mut self, text: &str) {
+    /// UC-008 steps 1–2, A2, A7, A9: the overlay holds `text` with the
+    /// search switches `switches`; the search runs again at once (a running
+    /// one is given up, BR-005), or ends when it holds no more than spaces.
+    /// An expression that is not valid finds nothing and says why.
+    pub fn search_set(&mut self, text: &str, switches: SearchSwitches) {
         text.trim().clone_into(&mut self.search.text);
+        self.search.switches = switches;
+        self.search.problem = Query::new(
+            &self.search.text,
+            Switches::from(switches),
+            SearchReading::Words,
+        )
+        .err()
+        .map(|problem| problem.to_string());
         self.run_search();
     }
 
@@ -198,13 +213,14 @@ impl Session {
         // The staleness rule is by text, as in egui: an answer counts only
         // when it was searched for the text held now; any other is dropped
         // (a newer request for this text is on its way or follows below).
+        let switches = self.search.switches;
         if let Some(result) = open.searcher.poll() {
-            if result.text == text {
+            if result.text == text && result.switches == Switches::from(switches) {
                 self.search.serial = self.search.serial.wrapping_add(1);
                 self.search.result = Some((self.search.serial, Arc::new(result)));
             }
         }
-        if text.is_empty() {
+        if text.is_empty() || self.search.problem.is_some() {
             self.search.result = None;
             self.search.asked = None;
             self.search.texts.clear();
@@ -217,7 +233,7 @@ impl Session {
                 sum.wrapping_mul(31)
                     .wrapping_add(u64::from(tab.mirror.rev()))
             });
-        let stamp = (text.clone(), revisions);
+        let stamp = (text.clone(), switches, revisions);
         if self.search.asked.as_ref() == Some(&stamp) {
             return;
         }
@@ -259,6 +275,7 @@ impl Session {
             .collect();
         open.searcher.search(SearchRequest {
             text,
+            switches: switches.into(),
             notes,
             open: texts,
         });
@@ -279,6 +296,8 @@ impl Session {
         self.run_search();
         let told = (
             self.search.text.clone(),
+            self.search.switches,
+            self.search.problem.clone(),
             self.search.result.as_ref().map(|(serial, _)| *serial),
         );
         if self.search.told == told {
@@ -292,6 +311,8 @@ impl Session {
     pub(super) fn search_view(&self) -> SearchView {
         SearchView {
             text: self.search.text.clone(),
+            switches: self.search.switches,
+            problem: self.search.problem.clone(),
             result: self
                 .search
                 .result
@@ -299,6 +320,7 @@ impl Session {
                 .map(|(serial, result)| SearchResultView {
                     serial: *serial,
                     text: result.text.clone(),
+                    switches: result.switches.into(),
                     total: units(result.found.len()),
                     notes: result
                         .found

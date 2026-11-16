@@ -119,9 +119,57 @@ export function revealIndex(blocks: readonly BlockView[], offset: number): numbe
   return index < 0 ? blocks.length - 1 : index;
 }
 
-/** M-09.5 to M-09.8: whether the block is shown as a figure: a table, an image, a diagram. */
+/**
+ * M-09.5 to M-09.8, FR-098: whether the block is shown as a figure: a
+ * table, an image, a diagram, a block formula.
+ */
 export function isFigure(block: BlockView): boolean {
-  return block.kind.type === 'table' || block.figure !== null;
+  return block.kind.type === 'table' || block.kind.type === 'formula' || block.figure !== null;
+}
+
+/**
+ * FR-098, UC-005 BR-008: whether the cursor `cursor` (a web offset, or
+ * `null` outside the block) is in the inline formula `run` of `block`:
+ * after its first character and before its end. Then its markup is shown
+ * in its place, else its typeset picture.
+ */
+export function inFormula(block: BlockView, run: RunView, cursor: number | null): boolean {
+  if (cursor === null || run.formula === null || run.text.length === 0) {
+    return false;
+  }
+  return sourceAt(block, run, 0) < cursor && cursor < block.start + run.end;
+}
+
+/**
+ * FR-098, TC-005-42 step 3: where a click on the inline formula `run` of
+ * `block` puts the cursor: at the start of its source, inside its markup.
+ */
+export function formulaClick(block: BlockView, run: RunView): number {
+  // The source stands last in the markup (`$…$`, `latexmath:[…]`); a macro
+  // with an escaped `]` starts its source after its `[`.
+  const found = run.formula ? run.text.lastIndexOf(run.formula.source) : -1;
+  const at = found > 0 ? found : run.text.indexOf('[') + 1;
+  return sourceAt(block, run, at > 0 ? at : Math.min(1, run.text.length));
+}
+
+/**
+ * FR-098 (review): where a click on a typeset block formula puts the
+ * cursor: at the start of its source, after its opening `$$`, fence line or
+ * `++++` line.
+ */
+export function formulaBlockClick(block: BlockView): number {
+  const run = block.runs[0];
+  if (!run) {
+    return block.start;
+  }
+  const source = block.kind.type === 'formula' ? block.kind.formula.source : '';
+  const found = source ? run.text.lastIndexOf(source) : -1;
+  return sourceAt(block, run, found > 0 ? found : 0);
+}
+
+/** FR-098: a length in thousandths of an em as CSS. */
+export function em(milli: number): string {
+  return `${(milli / 1000).toFixed(3)}em`;
 }
 
 /** Whether the block is set in the code font on the code background. */
@@ -237,8 +285,14 @@ const FIGURE_GUESS = 200;
  * guess. Drawn blocks are measured; this only keeps the scroll bar near the
  * truth for the others.
  */
-export function estimateHeight(block: BlockView, width: number): number {
-  const size = fontSize(block);
+export function estimateHeight(
+  block: BlockView,
+  width: number,
+  zoom: number = 1,
+  softWrap: boolean = true,
+): number {
+  // UC-010 BR-009: the text grows with the editor zoom, figures do not.
+  const size = fontSize(block) * zoom;
   const line = size * LINE_HEIGHT;
   const gap = gapAfter(block);
   const type = block.kind.type;
@@ -247,17 +301,24 @@ export function estimateHeight(block: BlockView, width: number): number {
   }
   if (type === 'table') {
     const rows = block.kind.type === 'table' ? block.kind.table.rows.length : 1;
-    return rows * (BODY_SIZE * LINE_HEIGHT + 10) + gap;
+    return rows * (BODY_SIZE * zoom * LINE_HEIGHT + 10) + gap;
   }
   if (block.figure !== null) {
     return FIGURE_GUESS + (block.figure.caption ? line + 6 : 0) + gap;
   }
+  if (block.kind.type === 'formula') {
+    // FR-098: as high as the formula, in the text's size.
+    const height = block.kind.formula.picture ? block.kind.formula.height / 1000 : 2;
+    return height * BODY_SIZE * zoom + gap;
+  }
   const charWidth = size * (isCodeLike(block) ? 0.61 : 0.55);
   const columns = Math.max(8, Math.floor(Math.max(width, 80) / charWidth));
+  // UC-010 BR-011: without soft wrap, code and markup keep one row per line.
+  const wraps = softWrap || !isCodeLike(block);
   const text = block.prefix + blockText(block);
   let rows = 0;
   for (const part of text.split('\n')) {
-    rows += Math.max(1, Math.ceil(part.length / columns));
+    rows += wraps ? Math.max(1, Math.ceil(part.length / columns)) : 1;
   }
   return rows * line + (isCodeLike(block) ? 8 : 0) + gap;
 }
@@ -396,6 +457,116 @@ export function hitParts(
     }
   }
   return parts;
+}
+
+/**
+ * A part of a run's text, units `[from, to)` of the run: whether it is a
+ * hit (M-13.2), the selected hit (A6), and a word the spell check marks
+ * (FR-099, UC-005 BR-023).
+ */
+export type MarkPart = HitPart & { spell: boolean };
+
+/** The range of `ranges` (sorted, apart) holding `at`, moving `k` along. */
+function rangeAt(ranges: readonly HitRange[], at: number, k: { at: number }): HitRange | null {
+  while (k.at < ranges.length && ranges[k.at][1] <= at) {
+    k.at++;
+  }
+  return k.at < ranges.length && ranges[k.at][0] <= at ? ranges[k.at] : null;
+}
+
+/**
+ * M-13.2, FR-099: the units `[from, to)` of `run` in parts, as
+ * `hitParts`, each also telling whether the markup it shows lies in a word
+ * of `spell` (sorted, web units), which the facade underlines with a wave.
+ */
+export function markParts(
+  block: BlockView,
+  run: RunView,
+  from: number,
+  to: number,
+  hits: readonly HitRange[],
+  current: HitRange | null,
+  spell: readonly HitRange[],
+): MarkPart[] {
+  if (from >= to) {
+    return [{ from, to, hit: false, current: false, spell: false }];
+  }
+  const parts: MarkPart[] = [];
+  const h = { at: 0 };
+  const s = { at: 0 };
+  for (let unit = from; unit < to; unit++) {
+    const at = sourceAt(block, run, unit);
+    const inside = rangeAt(hits, at, h);
+    const hit = inside !== null;
+    const chosen =
+      inside !== null && current !== null && inside[0] === current[0] && inside[1] === current[1];
+    const marked = rangeAt(spell, at, s) !== null;
+    const last = parts.at(-1);
+    if (
+      last &&
+      last.hit === hit &&
+      last.current === chosen &&
+      last.spell === marked &&
+      last.to === unit
+    ) {
+      last.to = unit + 1;
+    } else {
+      parts.push({ from: unit, to: unit + 1, hit, current: chosen, spell: marked });
+    }
+  }
+  return parts;
+}
+
+/**
+ * UC-005 A28: the word the markup `from`..`to` of `blocks` shows, with the
+ * markup offset of each of its units and of its end (as `ShownWord` of
+ * `editor/spellWord.ts`); `null` when no block shows text there.
+ */
+export function shownWordIn(
+  blocks: readonly BlockView[],
+  from: number,
+  to: number,
+): { word: string; places: number[] } | null {
+  const block = blocks[blockAt(blocks, from)];
+  if (!block) {
+    return null;
+  }
+  let word = '';
+  const places: number[] = [];
+  for (const run of block.runs) {
+    for (let unit = 0; unit < runLength(run); unit++) {
+      const at = sourceAt(block, run, unit);
+      if (at >= from && at < to) {
+        word += run.text[unit];
+        places.push(at);
+      }
+    }
+  }
+  if (word === '') {
+    return null;
+  }
+  places.push(places[places.length - 1] + 1);
+  return { word, places };
+}
+
+/**
+ * FR-099, UC-005 BR-023: the word of `spell` (sorted, web units of the
+ * markup) holding the markup offset `at`, its end included; `null` when
+ * none does.
+ */
+export function spellAt(spell: readonly HitRange[], at: number): HitRange | null {
+  let low = 0;
+  let high = spell.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (spell[mid][1] < at) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  const found = spell[low];
+  return found && found[0] <= at && at <= found[1] ? found : null;
 }
 
 /**

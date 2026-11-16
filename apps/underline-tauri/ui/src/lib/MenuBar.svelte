@@ -11,19 +11,32 @@
 
   The Workspace menu holds a text field, so it is a small dialog rather than
   a menu.
+
+  UC-023 BR-001, BR-003: an entry's name, key and whether it can be chosen
+  come from the command of the registry (`commandList.ts`), and choosing it
+  runs that command, so the menu, the window's keys and the command
+  palette say and do the same.
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { DIALOG_OPENED } from './DialogWindow.svelte';
+  import { COMMAND } from './commandList';
+  import { ariaKeys, keyText, type Command } from './commands';
   import type { Shell } from './shell.svelte';
 
-  type Props = {
-    shell: Shell;
-    onOpenWorkspace?: () => void;
-    onNewWorkspace?: () => void;
-  };
+  type Props = { shell: Shell };
 
-  let { shell, onOpenWorkspace, onNewWorkspace }: Props = $props();
+  let { shell }: Props = $props();
+
+  const mac = $derived(shell.platform === 'macos');
+  /** The entries of the File menu, a line before the second. */
+  const fileEntries = $derived(
+    [COMMAND.newNote, COMMAND.openWorkspace, COMMAND.newWorkspace]
+      .map((id) => shell.commandById(id))
+      .filter((command): command is Command => command !== undefined),
+  );
+  const themeCommand = $derived(shell.commandById(COMMAND.theme));
+  const settingsCommand = $derived(shell.commandById(COMMAND.settings));
 
   type MenuId = 'file' | 'workspace' | 'theme' | 'settings';
   const MENUS: { id: MenuId; label: string; popup: 'menu' | 'dialog' }[] = [
@@ -41,9 +54,6 @@
   let bar = $state<HTMLElement | null>(null);
   let popup = $state<HTMLElement | null>(null);
   const titles = $state<Partial<Record<MenuId, HTMLButtonElement>>>({});
-
-  const workspaceOpen = $derived(shell.workspaceRoot !== null);
-  const theme = $derived(shell.settings?.theme ?? '');
 
   async function openMenu(id: MenuId, focus: 'first' | 'last' | 'none') {
     open = id;
@@ -241,6 +251,28 @@
   });
 </script>
 
+<!-- An entry of a menu: the command's name and key; one that cannot run now is disabled. -->
+{#snippet entry(command: Command)}
+  {@const disabled = command.unavailable() !== null}
+  <button
+    type="button"
+    role="menuitem"
+    tabindex="-1"
+    aria-disabled={disabled}
+    aria-keyshortcuts={ariaKeys(command.key, mac)}
+    onclick={() => {
+      if (!disabled) {
+        choose(() => command.run());
+      }
+    }}
+  >
+    {command.title}
+    {#if command.key}
+      <span class="shortcut" aria-hidden="true">{keyText(command.key, mac)}</span>
+    {/if}
+  </button>
+{/snippet}
+
 <div class="menu-bar" role="menubar" tabindex="-1" bind:this={bar} onfocusout={onFocusOut}>
   {#each MENUS as menu (menu.id)}
     <div class="menu" role="none">
@@ -273,36 +305,12 @@
             bind:this={popup}
             onkeydown={(event) => onMenuKey(event, 'file')}
           >
-            <button
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              aria-disabled={!workspaceOpen}
-              onclick={() => {
-                if (workspaceOpen) {
-                  choose(() => void shell.startNewNote());
-                }
-              }}
-            >
-              New note…
-            </button>
-            <div class="separator" role="separator"></div>
-            <button
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              onclick={() => choose(() => onOpenWorkspace?.())}
-            >
-              Open workspace…
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              onclick={() => choose(() => onNewWorkspace?.())}
-            >
-              New workspace…
-            </button>
+            {#each fileEntries as command, at (command.id)}
+              {#if at === 1}
+                <div class="separator" role="separator"></div>
+              {/if}
+              {@render entry(command)}
+            {/each}
           </div>
         {:else if menu.id === 'workspace'}
           <div
@@ -338,16 +346,16 @@
             bind:this={popup}
             onkeydown={(event) => onMenuKey(event, 'theme')}
           >
-            {#each shell.themes as name (name)}
+            {#each themeCommand?.choices?.() ?? [] as choice (choice.value)}
               <button
                 type="button"
                 role="menuitemradio"
                 tabindex="-1"
-                aria-checked={name === theme}
-                onclick={() => choose(() => void shell.chooseTheme(name))}
+                aria-checked={choice.current}
+                onclick={() => choose(() => themeCommand?.run(choice.value))}
               >
                 <span class="radio" aria-hidden="true"></span>
-                {name}
+                {choice.label}
               </button>
             {/each}
           </div>
@@ -361,16 +369,9 @@
             bind:this={popup}
             onkeydown={(event) => onMenuKey(event, 'settings')}
           >
-            <button
-              type="button"
-              role="menuitem"
-              tabindex="-1"
-              aria-keyshortcuts={shell.platform === 'macos' ? 'Meta+,' : 'Control+,'}
-              onclick={() => choose(() => void shell.toggleSettings())}
-            >
-              Settings…
-              <span class="shortcut" aria-hidden="true">{shell.command}+,</span>
-            </button>
+            {#if settingsCommand}
+              {@render entry(settingsCommand)}
+            {/if}
           </div>
         {/if}
       {/if}

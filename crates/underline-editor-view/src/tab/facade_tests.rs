@@ -836,6 +836,99 @@ fn adr024_facade_input_timing() {
     }
 }
 
+/// TC-005-42, FR-098, UC-005 BR-008: a block formula and an inline one are
+/// edited as their source; the window's blocks stay those of a full parse,
+/// and Backspace and the arrows walk through the markup.
+#[test]
+fn tc005_42_editing_a_formula_in_the_facade() {
+    let mut f = Facade::new("tc005-42", "$$a^2$$\n\nThe inline formula $b$ here.\n");
+    f.click_after("a^2");
+    f.type_text("+b^2");
+    assert!(f.text().starts_with("$$a^2+b^2$$\n"), "{:?}", f.text());
+    let crate::facade_view::BlockKindView::Formula { formula } = &f.window.blocks[0].kind else {
+        panic!("{:?}", f.window.blocks[0].kind);
+    };
+    assert_eq!(formula.source, "a^2+b^2", "the formula follows the change");
+    f.click_after("$b");
+    f.type_text("\\frac{");
+    assert!(f.text().contains("$b\\frac{$ here."), "{:?}", f.text());
+    f.key(KeyName::Backspace);
+    f.key(KeyName::ArrowLeft);
+    f.type_text("_x");
+    assert!(f.text().contains("$b\\fra_xc$ here."), "{:?}", f.text());
+    // Right past the closing `$` is outside the formula: escaped as text.
+    f.key(KeyName::ArrowRight);
+    f.key(KeyName::ArrowRight);
+    f.type_text("_");
+    assert!(f.text().contains("$b\\fra_xc$\\_ here."), "{:?}", f.text());
+}
+
+/// NFR-002, FR-098, ADR-029 measuring point: the editor core's time per key
+/// (`facade_input` with its views, natively; the window's WASM runs the
+/// same) typing next to a formula, inside an inline formula, inside a block
+/// formula, and a `$`, in a note of 300 sections with formulas. Run with
+/// `cargo test -p underline-editor-view --release formula_typing_timing --
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn nfr002_formula_typing_timing() {
+    let section = "## Section\n\nText with $E=mc^2$ and $$x^2$$ and a [link](x.md).\n\n$$\n\\sum_{i=1}^n i\n$$\n\n- an item $a_i$\n\n";
+    let note = format!("# Title\n\n{}", section.repeat(300));
+    let mut f = Facade::new("timing", &note);
+    let quantile = |v: &mut Vec<f64>, p: f64| {
+        v.sort_by(f64::total_cmp);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let at = ((v.len() as f64 * p).ceil() as usize).clamp(1, v.len()) - 1;
+        v[at]
+    };
+    let middle = note.len() / 2;
+    let around = |needle: &str| {
+        let byte = middle + note[middle..].find(needle).unwrap() + needle.len();
+        u32::try_from(note[..byte].encode_utf16().count()).unwrap()
+    };
+    // The same note without formulas, as before FR-098.
+    let plain = note.replace('$', "S");
+    for (name, text, at, typed) in [
+        ("without formulas", &plain, around("Text with "), "w"),
+        ("next to a formula", &note, around("Text with "), "w"),
+        ("in an inline formula", &note, around("$E=mc"), "c"),
+        ("in a block formula", &note, around("\\sum_{i=1}^n"), "i"),
+        ("a dollar", &note, around("and a "), "$"),
+    ] {
+        let mut f2 = Facade::new("timing", text);
+        std::mem::swap(&mut f, &mut f2);
+        f.click(at);
+        let mut times = Vec::new();
+        for _ in 0..200 {
+            let at = f.at();
+            let start = Instant::now();
+            let patch = f.call(
+                at,
+                FacadeInput::Text {
+                    text: typed.to_owned(),
+                },
+                None,
+            );
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+            f.window.rev = patch.rev;
+            f.window.anchor = patch.anchor;
+            f.window.head = patch.head;
+            for change in &patch.blocks {
+                f.window.version = change.version;
+            }
+        }
+        println!(
+            "NFR-002 {name}: median {:.3} ms, p99 {:.3} ms per key",
+            quantile(&mut times, 0.5),
+            quantile(&mut times, 0.99)
+        );
+    }
+}
+
 /// Q-46, M-11.3: Nano's Ctrl+K on the last block cuts it to the end of the
 /// text and leaves the cursor at the start of the block before; Ctrl+U
 /// pastes there. The egui facade does the same: its Nano keys are the
@@ -969,4 +1062,531 @@ fn uc005_a2_a9_m10_3_m10_5_insertions_in_the_facade() {
         image: true,
     });
     assert_eq!(g.text(), "Text\n\n![](photo.png)\n");
+}
+
+impl Facade {
+    /// The window's cursor at the end of the text.
+    fn cursor_at_end(&mut self) {
+        let end = u32::try_from(self.text().encode_utf16().count()).unwrap();
+        self.window.anchor = end;
+        self.window.head = end;
+    }
+
+    /// FR-080: the place of a link typed at the window's selection.
+    fn link_context(&mut self, manual: bool) -> Option<crate::editor_view::LinkContextView> {
+        let at = self.at();
+        self.tab.facade_link_context("Home", at, manual)
+    }
+
+    /// FR-080: the window chose `choice`; the patch is taken in.
+    fn complete(&mut self, choice: &crate::editor_view::LinkChoice) -> Option<FacadePatch> {
+        let at = self.at();
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: "Home",
+            at,
+            mac: false,
+            earlier,
+            views: &mut self.views,
+        };
+        let patch = self.tab.facade_complete(call, choice)?.patch;
+        Some(self.take(patch))
+    }
+}
+
+fn link_choice(rev: u32, note: &str, format: &str, label: &str) -> crate::editor_view::LinkChoice {
+    crate::editor_view::LinkChoice {
+        rev,
+        note: Some(note.to_owned()),
+        format: Some(format.to_owned()),
+        anchor: None,
+        label: label.to_owned(),
+    }
+}
+
+/// TC-005-33 step 4, BR-018: `[[plan` in the facade, Enter: a link to
+/// "Plan" with the text "Plan" replaces it; `[[` is not in the note, and the
+/// window's blocks follow.
+#[test]
+fn tc_005_33_step_4_facade_brackets_become_a_normal_link() {
+    let mut facade = Facade::new("complete", "# Intro\n\nGo ");
+    facade.cursor_at_end();
+    facade.type_text("[[plan");
+    assert!(
+        facade.text().ends_with("Go \\[\\[plan"),
+        "{}",
+        facade.text()
+    );
+
+    let context = facade.link_context(false).unwrap();
+    assert_eq!(context.typed, "plan");
+    assert_eq!(context.named.as_deref(), Some("plan"));
+
+    let choice = link_choice(context.rev, "Plan", "Markdown", "Plan");
+    let patch = facade.complete(&choice).unwrap();
+
+    assert_eq!(facade.text(), "# Intro\n\nGo [Plan](Plan.md)");
+    assert!(!facade.text().contains("[["));
+    assert_eq!(patch.head as usize, "# Intro\n\nGo [Plan](Plan.md)".len());
+    assert!(facade.link_context(false).is_none());
+}
+
+/// TC-005-33 step 4 in an AsciiDoc note: the toolbar's `link:` form.
+#[test]
+fn tc_005_33_step_4_facade_asciidoc_link() {
+    let mut facade = Facade::adoc("complete-adoc", "== Intro\n\nGo ");
+    facade.cursor_at_end();
+    facade.type_text("[[pla");
+    let context = facade.link_context(false).unwrap();
+    assert_eq!(context.typed, "pla");
+
+    facade
+        .complete(&link_choice(context.rev, "travel/Plan", "AsciiDoc", "Plan"))
+        .unwrap();
+
+    assert_eq!(facade.text(), "== Intro\n\nGo link:travel/Plan.adoc[Plan]");
+}
+
+/// TC-005-34 step 1, UC-005 A24: without a choice `[[` stays as typed;
+/// Ctrl+Space completes at the cursor without it.
+#[test]
+fn tc_005_34_step_1_facade_brackets_stay_without_a_choice() {
+    let mut facade = Facade::new("dismiss", "Text");
+    facade.key_with(KeyName::End, true, false);
+    facade.type_text(" [[");
+    assert!(facade.link_context(false).is_some());
+    assert_eq!(facade.text(), "Text \\[\\[");
+
+    let mut facade = Facade::new("manual", "Text");
+    facade.key_with(KeyName::End, true, false);
+    assert!(facade.link_context(false).is_none());
+    let context = facade.link_context(true).unwrap();
+    assert_eq!(context.typed, "");
+    facade
+        .complete(&link_choice(context.rev, "Plan", "Markdown", "Plan"))
+        .unwrap();
+    assert_eq!(facade.text(), "Text[Plan](Plan.md)");
+}
+
+impl Facade {
+    fn alt_key(&mut self, key: KeyName) -> FacadePatch {
+        self.input(FacadeInput::Key {
+            key,
+            ctrl: false,
+            alt: true,
+            shift: false,
+            meta: false,
+        })
+    }
+
+    fn go_to_line(&mut self, line: u32) -> FacadePatch {
+        let earlier = self.tab.bring_facade_up_to_date(&mut self.views);
+        let call = FacadeCall {
+            note: "Home",
+            at: self.at(),
+            mac: false,
+            earlier,
+            views: &mut self.views,
+        };
+        let patch = self
+            .tab
+            .facade_go_to_line(
+                call,
+                crate::editor_view::LineTargetView {
+                    line,
+                    column: Some(9),
+                },
+            )
+            .patch;
+        self.take(patch)
+    }
+}
+
+/// TC-005-36 steps 4 to 6, UC-005 A26, BR-020: in the facade a block moves
+/// as a whole, a list item with its items; a paragraph of two lines is
+/// copied whole; the first block does not move up. Each is one undo step.
+#[test]
+fn tc_005_36_blocks_move_and_are_copied_in_the_facade() {
+    let note = "one\ntwo\nthree\n\nfour\nfive\n\n- a\n  - a1\n- b\n";
+    let mut f = Facade::new("Lines", note);
+    f.click_after("- a");
+    f.alt_key(KeyName::ArrowDown);
+    assert_eq!(
+        f.text(),
+        "one\ntwo\nthree\n\nfour\nfive\n\n- b\n- a\n  - a1\n"
+    );
+    f.click_after("fou");
+    f.key_with(KeyName::D, true, true);
+    assert_eq!(
+        f.text(),
+        "one\ntwo\nthree\n\nfour\nfive\n\nfour\nfive\n\n- b\n- a\n  - a1\n"
+    );
+    f.click_after("on");
+    let still = f.alt_key(KeyName::ArrowUp);
+    assert!(still.blocks.is_empty());
+    assert_eq!(
+        f.text(),
+        "one\ntwo\nthree\n\nfour\nfive\n\nfour\nfive\n\n- b\n- a\n  - a1\n"
+    );
+    f.key_with(KeyName::Z, true, false);
+    f.key_with(KeyName::Z, true, false);
+    assert_eq!(f.text(), note);
+}
+
+/// BR-020: moving up past a list item takes the item with its items; the
+/// palette's action is the key's.
+#[test]
+fn br020_moving_up_past_an_item_with_its_items() {
+    let mut f = Facade::new("Lines", "- a\n  - a1\n- b\n\nAfter\n");
+    f.click_after("- b");
+    f.alt_key(KeyName::ArrowUp);
+    assert_eq!(f.text(), "- b\n- a\n  - a1\n\nAfter\n");
+    f.click_after("Aft");
+    f.input(FacadeInput::Edit {
+        action: crate::editor_view::EditActionName::MoveLineUp,
+    });
+    // OQ-255: a blank line keeps "After" from joining the item "b".
+    assert_eq!(f.text(), "- b\n\nAfter\n\n- a\n  - a1\n");
+}
+
+/// TC-005-37 steps 1 to 4, UC-005 A27, BR-021: Tab and Shift+Tab in the
+/// facade change the markup of the list as in the source view.
+#[test]
+fn tc_005_37_list_items_are_indented_in_the_facade() {
+    let mut f = Facade::new("List", "- a\n- b\n- c\n");
+    f.click_after("b");
+    f.key(KeyName::Tab);
+    assert_eq!(f.text(), "- a\n  - b\n- c\n");
+    let b = u32::try_from("- a\n  - ".len()).unwrap();
+    let c = u32::try_from("- a\n  - b\n- c".len()).unwrap();
+    let rev = f.window.rev;
+    f.tab.select(rev, b, c);
+    f.window.anchor = b;
+    f.window.head = c;
+    f.key(KeyName::Tab);
+    assert_eq!(f.text(), "- a\n  - b\n  - c\n");
+    f.key_with(KeyName::Tab, false, true);
+    f.key_with(KeyName::Tab, false, true);
+    assert_eq!(f.text(), "- a\n- b\n- c\n");
+    f.click_after("- a");
+    f.key(KeyName::Tab);
+    assert_eq!(f.text(), "- a\n- b\n- c\n", "nothing before a");
+    let mut adoc = Facade::adoc("List", "* a\n* b\n");
+    adoc.click_after("* b");
+    adoc.key(KeyName::Tab);
+    assert_eq!(adoc.text(), "* a\n** b\n");
+    let mut plain = Facade::new("Plain", "Text\n");
+    plain.click_after("Te");
+    plain.key(KeyName::Tab);
+    assert_eq!(plain.text(), "Text\n", "Tab does nothing outside a list");
+}
+
+/// UC-005 A25, BR-019: brackets and quotes close in the facade, written as
+/// the facade writes them; the closing one is typed over, and Backspace
+/// takes both; a selection within a block is enclosed.
+#[test]
+fn br019_close_pairs_in_the_facade() {
+    let mut f = Facade::new("Pairs", "Text\n");
+    f.click_after("Text");
+    f.type_text("[");
+    assert_eq!(f.text(), "Text\\[\\]\n", "escaped as the facade types");
+    f.type_text("x");
+    f.type_text("]");
+    f.type_text("(");
+    assert_eq!(f.text(), "Text\\[x\\]()\n");
+    f.key(KeyName::Backspace);
+    assert_eq!(f.text(), "Text\\[x\\]\n");
+    f.type_text("é");
+    assert_eq!(f.text(), "Text\\[x\\]é\n", "after the closing bracket");
+
+    let mut selected = Facade::new("Pairs", "a wörd b\n");
+    let rev = selected.window.rev;
+    selected.tab.select(rev, 2, 6);
+    selected.window.anchor = 2;
+    selected.window.head = 6;
+    let patch = selected.type_text("\"");
+    assert_eq!(selected.text(), "a \"wörd\" b\n");
+    assert_eq!((patch.anchor, patch.head), (3, 7));
+
+    let mut off = Facade::new("Pairs", "Text\n");
+    off.tab.set_close_pairs(false);
+    off.click_after("Text");
+    off.type_text("(");
+    assert_eq!(off.text(), "Text(\n");
+}
+
+/// TC-004-33 step 3, UC-004 BR-017: in the facade the cursor goes to the
+/// block that holds the line, at its column (here 9) as the facade shows
+/// it, at the end of a shorter line.
+#[test]
+fn tc_004_33_go_to_line_in_the_facade() {
+    let mut f = Facade::new("Long", "# Results\n\nfirst line\nsecond line\n\n- item\n");
+    let patch = f.go_to_line(4);
+    assert_eq!(patch.place, "Ln 4, Col 9", "the column, 9");
+    assert!(patch.scroll);
+    let item = f.go_to_line(6);
+    assert_eq!(item.place, "Ln 6, Col 7", "beyond the line: its end");
+    let past = f.go_to_line(99);
+    assert_eq!(past.place, "Ln 6, Col 7", "the end of the last block");
+}
+
+/// The chars of `text`, sorted: what a move of blocks must keep.
+fn chars_sorted(text: &str) -> Vec<char> {
+    let mut chars: Vec<char> = text.chars().collect();
+    chars.sort_unstable();
+    chars
+}
+
+/// BR-020, UC-005 A26 (test-monkey): an AsciiDoc list continuation (`+`) that
+/// stands right before the next list item gives the facade a block of no
+/// text; moving the item with Alt+Down, or the item after it with Alt+Up,
+/// panicked in `lines::swap` (the two ranges of lines overlapped) instead of
+/// moving the blocks.
+#[test]
+fn br020_asciidoc_continuation_before_an_item_does_not_panic_when_moving() {
+    let note = "* a\n+\n* b\n";
+    for (click, key) in [(0, KeyName::ArrowDown), (7, KeyName::ArrowUp)] {
+        let mut f = Facade::adoc("Lines", note);
+        f.click(click);
+        f.alt_key(key);
+        assert_eq!(chars_sorted(&f.text()), chars_sorted(note), "{key:?}");
+    }
+}
+
+/// BR-020 (test-monkey): the paragraph of a list item that follows a `+`
+/// belongs to it; Alt+Up on it must not tear the `+` line off its paragraph
+/// (`* a\n+\ncont` became `cont\n+\n* a`, the `+` now joins nothing).
+#[test]
+fn br020_asciidoc_continuation_paragraph_keeps_its_plus_line() {
+    let mut f = Facade::adoc("Lines", "* a\n+\ncont\n");
+    f.click(10);
+    f.alt_key(KeyName::ArrowUp);
+    assert!(
+        f.text().contains("+\ncont"),
+        "the plus line stays right before its paragraph: {:?}",
+        f.text()
+    );
+}
+
+/// BR-020, NFR-007 (test-monkey): a block that moves stays the block it
+/// was. `para` next to a list item without a blank line between them moved
+/// below `- a` becomes the lazy continuation of that item (`- a\npara`), and
+/// can no longer move back.
+#[test]
+fn br020_a_moved_paragraph_does_not_become_part_of_the_list_item() {
+    let mut f = Facade::new("Lines", "para\n- a\n");
+    f.click(0);
+    f.alt_key(KeyName::ArrowDown);
+    let (blocks, _) = parse_all(&f.text(), NoteFormat::Markdown);
+    assert!(
+        blocks
+            .iter()
+            .any(|block| format!("{:?}", block.kind).starts_with("Paragraph")),
+        "the paragraph is still a block of its own in {:?}",
+        f.text()
+    );
+}
+
+/// BR-019 (test-monkey): `(` typed on the empty line between two blocks
+/// writes `()` as one paragraph; the window must show the closing bracket
+/// too (it kept `(` while the text held `()`: the patch of the second write
+/// was lost).
+#[test]
+fn br019_a_pair_typed_between_blocks_keeps_the_window_in_step() {
+    let mut f = Facade::new("Pairs", "# H\n\npara\n");
+    f.click(4);
+    f.type_text("(");
+    assert_eq!(f.text(), "# H\n()\npara\n");
+}
+
+/// NFR-007, BR-020 (review): a copy in a CRLF note keeps its line breaks.
+#[test]
+fn br020_a_copy_in_a_crlf_note_keeps_its_line_breaks() {
+    let mut f = Facade::new("Crlf", "one\r\n\r\n- a\r\n- b\r\n");
+    f.click_after("on");
+    f.key_with(KeyName::D, true, true);
+    assert_eq!(f.text(), "one\r\n\r\none\r\n\r\n- a\r\n- b\r\n");
+    f.click_after("- a");
+    f.key_with(KeyName::D, true, true);
+    assert_eq!(f.text(), "one\r\n\r\none\r\n\r\n- a\r\n- a\r\n- b\r\n");
+    assert!(!f.text().replace("\r\n", "").contains('\n'));
+}
+
+/// BR-019 (review): `*`, `_` and `~` enclose a selection in the facade as
+/// markup, as in the source view, one step for undo; in code they replace
+/// it as typed text does.
+#[test]
+fn br019_markup_encloses_a_selection_in_the_facade() {
+    let mut f = Facade::new("Pairs", "a word b\n");
+    let rev = f.window.rev;
+    f.tab.select(rev, 2, 6);
+    f.window.anchor = 2;
+    f.window.head = 6;
+    let patch = f.type_text("*");
+    assert_eq!(f.text(), "a *word* b\n");
+    assert_eq!((patch.anchor, patch.head), (3, 7));
+    f.key_with(KeyName::Z, true, false);
+    assert_eq!(f.text(), "a word b\n");
+}
+
+/// BR-019 (review): Backspace right after a pair typed between two blocks
+/// takes both and keeps the window in step.
+#[test]
+fn br019_backspace_on_a_pair_between_blocks_keeps_the_window_in_step() {
+    let mut f = Facade::new("Pairs", "# H\n\npara\n");
+    f.click(4);
+    f.type_text("(");
+    f.key(KeyName::Backspace);
+    assert_eq!(f.text(), "# H\n\npara\n");
+}
+
+/// TC-024-01 steps 2 and 3, TC-024-12, OQ-216: a change of a note attribute
+/// in the facade shows in the front matter's table at once, keeps the
+/// cursor where it was, and is undone in one step.
+#[test]
+fn tc024_01_attribute_changed_in_the_facade() {
+    use crate::editor_view::{AttributeChangeView, AttributeValueView};
+    let plan = "---\nstatus: draft\ndue: 2026-12-01\n---\n# Plan\n\nText\n";
+    let mut f = Facade::new("plan", plan);
+    f.click_after("Text");
+    let head = f.window.head;
+    let at = f.at();
+    let earlier = f.tab.bring_facade_up_to_date(&mut f.views);
+    let call = FacadeCall {
+        note: "Home",
+        at,
+        mac: false,
+        earlier,
+        views: &mut f.views,
+    };
+    let edited = f.tab.facade_attribute(
+        call,
+        AttributeChangeView::Set {
+            name: "status".into(),
+            value: AttributeValueView::Text {
+                text: "final".into(),
+            },
+        },
+    );
+    assert_eq!(edited.problem, None);
+    f.take(edited.patch.unwrap());
+    assert_eq!(f.text(), plan.replace("draft", "final"));
+    assert_eq!(f.window.head, head, "the cursor stays after Text");
+    let table = format!("{:?}", f.window.blocks[0].kind);
+    assert!(table.contains("final"), "{table}");
+    f.key_with(KeyName::Z, true, false);
+    assert_eq!(f.text(), plan);
+}
+
+/// ADR-024 (found by the monkey of package 7a, exists at the commit before
+/// it): typing at the end of the first line of a paragraph of two lines
+/// leaves the window's blocks with other runs than a full parse gives
+/// (`"ab "`, the typed text with the line break, not `"talab"` and `" "`).
+#[test]
+fn adr024_typing_at_the_end_of_a_line_of_a_paragraph_gives_the_runs_of_a_full_parse() {
+    let mut f = Facade::new("Home", "tal\nmore\n");
+    f.tab.editor.set_selection(3, 3);
+    let (head, anchor) = f.tab.editor.selection_web();
+    f.window.anchor = u32::try_from(anchor).unwrap();
+    f.window.head = u32::try_from(head).unwrap();
+    // `take` checks the window's blocks against a full parse.
+    f.type_text("ab");
+    assert_eq!(f.text(), "talab\nmore\n");
+}
+
+/// UC-005 A28 step 2, TC-005-39 step 3: in the facade the correction takes
+/// the place of the marked word (the window selects its markup) as one
+/// change; Ctrl+Z brings the word back.
+#[test]
+fn tc005_39_a_correction_is_one_undo_step_in_the_facade() {
+    let mut f = Facade::new("spell", "The **ferri** leaves\n");
+    f.click_after("The **");
+    f.type_text("x");
+    f.key(KeyName::Backspace);
+    let text = f.text();
+    let from = u32::try_from(text.find("ferri").unwrap()).unwrap();
+    let rev = f.window.rev;
+    f.tab.select(rev, from, from + 5);
+    f.window.anchor = from;
+    f.window.head = from + 5;
+    f.insert(Insertion::Correction {
+        text: "ferry".into(),
+    });
+    assert_eq!(f.text(), "The **ferry** leaves\n");
+    f.key_with(KeyName::Z, true, false);
+    assert_eq!(f.text(), "The **ferri** leaves\n");
+}
+
+/// Test monkey 8b, UC-005 A28 step 2, TC-005-39: random single-line
+/// selections with markup in the facade: the markup text is the old one with
+/// the selection replaced by the correction, Ctrl+Z gives back the old text.
+#[test]
+fn tc005_39_chaos_a_correction_in_the_facade_replaces_the_selection_and_undoes() {
+    let pieces = [
+        "ferri",
+        " ",
+        "**",
+        "*",
+        "_",
+        "`x`",
+        "[a](http://b.example)",
+        "😀",
+        "e\u{301}",
+        "שלום",
+        "日本語",
+        "~~",
+        "\\*",
+        "lne",
+    ];
+    let corrections = ["ferry", "don't", "well-known", "x", "", "é", "Underline"];
+    for seed in 1..300u64 {
+        let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut body = String::new();
+        for _ in 0..(2 + next() % 10) {
+            body.push_str(pieces[(next() % pieces.len() as u64) as usize]);
+        }
+        body.push('\n');
+        let mut f = Facade::new("spell", &body);
+        let text = f.text();
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let body_len = units.len() - 1;
+        let a = (next() % (body_len as u64 + 1)) as usize;
+        let b = (next() % (body_len as u64 + 1)) as usize;
+        let (lo, hi) = (a.min(b), a.max(b));
+        if hi == lo || String::from_utf16(&units[lo..hi]).is_err() {
+            continue;
+        }
+        if String::from_utf16(&units[..lo]).is_err() || String::from_utf16(&units[hi..]).is_err() {
+            continue;
+        }
+        let correction = corrections[(next() % corrections.len() as u64) as usize];
+        let rev = f.window.rev;
+        let (from, to) = (u32::try_from(lo).unwrap(), u32::try_from(hi).unwrap());
+        f.tab.select(rev, from, to);
+        f.window.anchor = from;
+        f.window.head = to;
+        let expected = String::from_utf16(&units[..lo]).unwrap()
+            + correction
+            + &String::from_utf16(&units[hi..]).unwrap();
+        f.insert(Insertion::Correction {
+            text: correction.into(),
+        });
+        assert_eq!(
+            f.text(),
+            expected,
+            "seed {seed}: {text:?} {lo}..{hi} -> {correction:?}"
+        );
+        f.key_with(KeyName::Z, true, false);
+        assert_eq!(
+            f.text(),
+            text,
+            "seed {seed}: undo of {correction:?} in {text:?} {lo}..{hi}"
+        );
+    }
 }

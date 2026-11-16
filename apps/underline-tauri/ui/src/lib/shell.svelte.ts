@@ -16,6 +16,7 @@
 // every change goes to the backend, which answers with an event or with the
 // dialog's next stage.
 
+import { tick } from 'svelte';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   commands,
@@ -24,6 +25,8 @@ import {
   type AgentLevelName,
   type AgentMarkView,
   type AgentMarksView,
+  type SpellMarksView,
+  type SpellStateView,
   type AgentOpenView,
   type AgentsSectionView,
   type AgentsView,
@@ -48,6 +51,7 @@ import {
   type TodosView,
   type CommitAnswer,
   type CreateAnswer,
+  type DailyNoteAnswer,
   type DiffView,
   type DiscardQuestion,
   type DeletedNoteView,
@@ -60,8 +64,12 @@ import {
   type RestoreAnswer,
   type StatusOffer,
   type EditingViewName,
+  type PaneName,
   type FormatName,
   type IndexesView,
+  type LinkAnswer,
+  type LinkPlace,
+  type LinksView,
   type OpenAnswer,
   type OpenOffer,
   type OverviewItem,
@@ -73,12 +81,27 @@ import {
   type StartInfo,
   type TabPropertiesView,
   type TabsView,
+  type TemplateView,
   type UiError,
   type WorkspaceSnapshot,
   type WorkspaceView,
 } from './bindings';
-import { activeSourceView } from './editor/active';
+import { activeSourceView as activeSourceViewOf, shownSourceViews } from './editor/active';
+import { activeFacade } from './facade/active';
+import { tabId } from './tabs';
+import {
+  activePaneOf,
+  allTabs,
+  openElsewhere,
+  otherPane,
+  paneOf,
+  panesOf,
+  paneWith,
+  withView,
+} from './panes';
+import { setFocusedPane } from './paneFocus';
 import { focusNote, jumpTo } from './editor/jump';
+import { linkCompletion } from './editor/linkCompletion.svelte';
 import {
   coreHash,
   inStepRevision,
@@ -87,6 +110,7 @@ import {
   flushCores,
   flushed,
   keepCoresOf,
+  keepViewsOf,
   ringCore,
   setSyncReporter,
   EDITOR_FAILED,
@@ -100,8 +124,12 @@ import {
   renameCore,
 } from './editor/sync';
 import { applyPalette } from './theme';
-import { focusNoteEntry } from './focus';
+import { focusFallback, focusNoteEntry } from './focus';
 import { SearchState, type FoundChoice } from './search.svelte';
+import { SnapshotsState } from './snapshots.svelte';
+import { COMMAND, commandsOf, type NoteActions } from './commandList';
+import { keyText, type Command } from './commands';
+import { PaletteState } from './palette.svelte';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
 export type OpenDialog = {
@@ -145,6 +173,16 @@ export type NewNoteDialog = {
   /** A2: the note that exists, for "Open the existing note". */
   existing: string | null;
   file: string | null;
+  /** UC-003 BR-008: the templates offered besides "No template"; none without templates. */
+  templates: TemplateView[];
+  /** UC-003 A7: the template chosen, by its note; `null` for "No template". */
+  template: string | null;
+  /** "New note from template…": the keyboard starts on "Template:". */
+  focusTemplate: boolean;
+  /** UC-003 BR-008: the template folder, said when it holds no templates. */
+  templateFolder: string;
+  /** UC-004 A18: the note opens to the side (offered by a link followed to the side). */
+  side?: boolean;
 };
 
 /** M-14.2, UC-006: the dialog "Rename note". */
@@ -277,12 +315,23 @@ type PlanState = { timer: ReturnType<typeof setTimeout> | null; running: boolean
 
 /** What "New note" sends. */
 function newNoteRequest(dialog: NewNoteDialog): NewNoteRequest {
-  return { title: dialog.title, folder: dialog.folder, format: dialog.format };
+  return {
+    title: dialog.title,
+    folder: dialog.folder,
+    format: dialog.format,
+    template: dialog.template,
+    side: dialog.side ?? false,
+  };
 }
 
-/** Whether both hold the same title, folder and format. */
+/** Whether both hold the same title, folder, format and template. */
 function sameNewNote(a: NewNoteDialog, b: NewNoteDialog): boolean {
-  return a.title === b.title && a.folder === b.folder && a.format === b.format;
+  return (
+    a.title === b.title &&
+    a.folder === b.folder &&
+    a.format === b.format &&
+    a.template === b.template
+  );
 }
 
 /** M-05.1: the note overview is 100 to 1000 pixels wide. */
@@ -301,7 +350,28 @@ export function toolPanelWidthWithin(width: number): number {
   return Math.min(TOOL_PANEL_WIDTH.max, Math.max(TOOL_PANEL_WIDTH.min, Math.round(width)));
 }
 
-const NO_TABS: TabsView = { tabs: [], active: null, todoList: { open: false, active: false } };
+/** UC-010 BR-009: the editor zoom's range, step and normal size, in percent. */
+export const EDITOR_ZOOM = { min: 50, max: 300, step: 10, normal: 100 } as const;
+
+/** How the status of the editor zoom starts. */
+const EDITOR_ZOOM_STATUS = 'Editor zoom: ';
+
+/**
+ * UC-010 A11, OQ-263: what the status bar says of the editor zoom
+ * `percent`, with "(largest)" or "(smallest)" at a limit.
+ */
+export function editorZoomText(percent: number): string {
+  const limit =
+    percent >= EDITOR_ZOOM.max ? ' (largest)' : percent <= EDITOR_ZOOM.min ? ' (smallest)' : '';
+  return `${EDITOR_ZOOM_STATUS}${percent}%${limit}`;
+}
+
+const NO_TABS: TabsView = {
+  tabs: [],
+  active: null,
+  todoList: { open: false, active: false },
+  split: null,
+};
 
 /**
  * M-17.2: the agents before the backend said anything: no workspace, the
@@ -315,6 +385,9 @@ export type TodoCalendar = { field: 'due' | 'scheduled'; todo: number; month: Ca
 /** M-17.6: no agent cursor in a note. */
 const NO_MARKS: AgentMarkView[] = [];
 
+/** FR-099: how long the count of misspelled words rests before it is said. */
+const SPELL_COUNT_REST = 2000;
+
 export class Shell {
   /** What the window started with; `null` when `app_start` failed. */
   start = $state<StartInfo | null>(null);
@@ -322,6 +395,16 @@ export class Shell {
   settings = $state<SettingsView | null>(null);
   /** M-04.7: the status message. */
   status = $state('');
+  /**
+   * UC-010 A11: the editor zoom asked for whose settings have not come
+   * back yet, so a key pressed again steps on from it; `null`: none.
+   */
+  #zoomWanted = $state<number | null>(null);
+  /** UC-010 A12: the focus mode asked for, until the settings say so; `null`: none. */
+  #focusWanted = $state<boolean | null>(null);
+  /** How many requests of the zoom and of the focus mode are on their way. */
+  #zoomPending = 0;
+  #focusPending = 0;
   /** UC-007 A4: what the status bar offers with the status message ("Undo"). */
   statusOffer = $state<StatusOffer | null>(null);
   /** M-04.8: "Open" and "Show" for each export the status reports. */
@@ -382,6 +465,12 @@ export class Shell {
    */
   indexes = $state.raw<IndexesView | null>(null);
   /**
+   * FR-078, FR-079: the backlinks and outgoing links the backend found
+   * last, of the note then active; the tool panel shows them while that
+   * note is.
+   */
+  links = $state.raw<LinksView | null>(null);
+  /**
    * M-19.1, M-19.2 (UC-011, UC-012): the git changes of the workspace, as
    * the backend sent them last; `null` without git or before git answered.
    */
@@ -396,6 +485,11 @@ export class Shell {
    * and puts the keyboard into the message.
    */
   changesAsked = $state(0);
+  /**
+   * UC-024, palette "Add note attribute": counts the asks; the note
+   * properties put the keyboard into the name of a new attribute.
+   */
+  attributeAsked = $state(0);
   /** M-19.4, UC-012 A3: "Your name for commits", while open. */
   identity = $state.raw<IdentityDialog | null>(null);
   /** UX review F12: grows after each commit; the tool panel puts the keyboard on "Changes (N)". */
@@ -447,6 +541,21 @@ export class Shell {
   /** M-17.6: the agent cursors in the open notes. */
   agentMarks = $state.raw<AgentMarksView[]>([]);
   /**
+   * FR-099, UC-005 BR-023: the last marks of the spell check of each open
+   * note; a view of the note takes them when they are of its revision.
+   */
+  spellMarks = $state.raw<Readonly<Record<string, SpellMarksView>>>({});
+  /** FR-100: what the status bar shows of the spell check (a missing dictionary). */
+  spellState = $state.raw<SpellStateView>({ problem: null, detail: null });
+  /**
+   * FR-099, UC-005 A28: what screen readers are told politely of the spell
+   * check: "Corrected to ferry", "3 misspelled words" (the count of the
+   * active note, said only after it rested, so typing does not chatter).
+   */
+  spellAnnouncement = $state('');
+  #spellCount: { note: string; count: number } | null = null;
+  #spellCountTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
    * UX review F14: what screen readers are told politely of the agents:
    * "{agent} is editing {title}", "{agent} is reading {title}" when a
    * cursor appears, "{names} asked for access" (UC-017 A2).
@@ -485,6 +594,39 @@ export class Shell {
   readonly search = new SearchState((command, message) =>
     this.#fail(command, { kind: 'internal', message }),
   );
+  /** UC-026: the snapshots of a note, while they are shown. */
+  readonly snapshots = new SnapshotsState((command, error) => this.#fail(command, error));
+  /**
+   * FR-077, UC-023 BR-001: every command of the window, the registry the
+   * menu bar, the window's keys and the command palette share
+   * (`commandList.ts`).
+   */
+  commands: Command[] = $derived.by(() => commandsOf(this));
+  /**
+   * What the note area does for the commands of the note shown (the find
+   * field, the toolbar, the switch of the editing view); `null` while it
+   * shows no note.
+   */
+  noteActions = $state.raw<NoteActions | null>(null);
+  /**
+   * FR-076, FR-077: go to note and the command palette (UC-004 A12, A13,
+   * UC-023), not stored (M-22.4).
+   */
+  readonly palette = new PaletteState({
+    commands: () => this.commands,
+    overview: () => this.overview,
+    workspaceOpen: () => this.workspace !== null,
+    openNote: (note) => void this.goToNote(note),
+    openNoteToSide: (note) => void this.openToSide(note),
+    newNote: (title) => void this.startNewNote(title),
+    closeOthers: () => {
+      if (this.search.open) {
+        this.search.close(false);
+      }
+    },
+    lineInfo: () => this.noteActions?.lineInfo() ?? null,
+    goToLine: (target) => this.noteActions?.goToLine(target),
+  });
   /** M-03.7, M-20.1: the settings window is open (UC-010 step 1). */
   settingsOpen = $state(false);
   /**
@@ -548,18 +690,30 @@ export class Shell {
     // ADR-025: what the sync of the editor cores has to say.
     setSyncReporter({
       status: (note, text) => {
-        const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+        const title = this.#titleOf(note);
         this.status = `${title}: ${text}`;
       },
       closeQuestion: (question) => {
         this.closeQuestion = question;
       },
       dead: (note) => {
-        const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+        const title = this.#titleOf(note);
         this.status = `${title}: ${EDITOR_FAILED}`;
         if (!this.editorLost.includes(note)) {
           this.editorLost = [...this.editorLost, note];
         }
+      },
+    });
+    // FR-080: link completion lists the notes of the overview and reads
+    // the headings of one from the backend.
+    linkCompletion.attach({
+      overview: () => this.overview,
+      headings: async (note) => {
+        const result = await commands.linksHeadings(note);
+        if (result.status === 'error') {
+          throw new Error(result.error.message);
+        }
+        return result.data;
       },
     });
     this.#unlisten = await Promise.all([
@@ -597,6 +751,9 @@ export class Shell {
         if (event.payload?.root !== this.workspace?.root) {
           // The note dialogs were of the workspace left.
           this.notes = NO_NOTE_DIALOGS;
+          // FR-099: so were the spell check's marks (a note of the same
+          // name there is another text).
+          this.spellMarks = {};
           // So were "Discard changes" and "Your name for commits", the
           // branch menu and "Abort the sync".
           this.discarding = null;
@@ -615,10 +772,14 @@ export class Shell {
           this.todoChosen = null;
           this.todoCalendar = null;
           this.todoNewProblem = null;
+          // A note of the same name in another workspace is another text.
+          this.indexes = null;
+          this.links = null;
+          linkCompletion.close();
+          // UC-026: the snapshots shown were of a note of the workspace left.
+          void this.snapshots.close();
         }
         this.workspace = event.payload;
-        // A note of the same name in another workspace is another text.
-        this.indexes = null;
       }),
       events.overview.listen((event) => {
         this.#sentDuringStart?.add('overview');
@@ -626,9 +787,7 @@ export class Shell {
       }),
       events.tabs.listen((event) => {
         this.#sentDuringStart?.add('tabs');
-        this.tabs = event.payload;
-        // ADR-025: a note the backend closed keeps no editor core.
-        keepCoresOf(event.payload.tabs.map((tab) => tab.note));
+        this.#takeTabs(event.payload);
       }),
       events.properties.listen((event) => {
         this.properties = event.payload;
@@ -636,12 +795,24 @@ export class Shell {
       events.indexes.listen((event) => {
         this.indexes = event.payload;
       }),
+      // FR-078, FR-079: the backlinks and outgoing links of the active note.
+      events.links.listen((event) => {
+        this.links = event.payload;
+      }),
       events.closeQuestion.listen((event) => {
         this.closeQuestion = event.payload;
       }),
       // M-13.1, UC-008 step 2: the found notes of the search.
       events.search.listen((event) => {
         this.search.take(event.payload);
+      }),
+      // UC-022 step 2: the places of the replace of the workspace.
+      events.replace.listen((event) => {
+        this.search.replace.take(event.payload);
+      }),
+      // UC-026 A4: the note whose snapshots are shown changed.
+      events.snapshotsChanged.listen((event) => {
+        void this.snapshots.changed(event.payload);
       }),
       // M-19, UC-011, UC-012: the git changes and the diff.
       events.changes.listen((event) => {
@@ -667,8 +838,20 @@ export class Shell {
       // The editor's events are listened to here, once for the window, and
       // handed to the source view shown now: listening per view left events
       // without a listener after a tab switch.
+      // FR-099, UC-005 BR-023: the spell check's marks, kept per note.
+      events.spellMarks.listen((event) => {
+        this.spellMarks = { ...this.spellMarks, [event.payload.note]: event.payload };
+        this.#countSpell(event.payload);
+      }),
+      // FR-100: a problem of the spell check that lasts.
+      events.spellState.listen((event) => {
+        this.spellState = event.payload;
+      }),
       events.edHighlight.listen((event) => {
-        activeSourceView()?.takeColors(event.payload);
+        // FR-096: every source view of the note takes them.
+        for (const view of shownSourceViews()) {
+          view.takeColors(event.payload);
+        }
       }),
       // ADR-025: the backend changed a text a window's core holds, or asks
       // for the window's edits (before an agent's change, before closing).
@@ -693,6 +876,9 @@ export class Shell {
         this.#takeSettings(result.data.settings);
         // M-01.1: a workspace to start with is opened next (startWorkspace).
         this.starting = (result.data.givenDir ?? result.data.lastWorkspace) !== null;
+        if (!this.starting) {
+          this.#hintFocusModeOnce();
+        }
       } else {
         this.#fail('app_start', result.error);
       }
@@ -723,6 +909,18 @@ export class Shell {
     } finally {
       this.#sentDuringStart = null;
       this.starting = false;
+      this.#hintFocusModeOnce();
+    }
+  }
+
+  /** The hint of the focus mode was shown after the start (UX review). */
+  #focusHinted = false;
+
+  /** UX review: started in the focus mode, the status bar says how to leave it, once. */
+  #hintFocusModeOnce(): void {
+    if (!this.#focusHinted && this.focusMode) {
+      this.#focusHinted = true;
+      this.status = this.focusModeHint();
     }
   }
 
@@ -854,6 +1052,21 @@ export class Shell {
     }
   }
 
+  /** UC-023 BR-001: the command of the registry with the id `id`. */
+  commandById(id: string): Command | undefined {
+    return this.commands.find((command) => command.id === id);
+  }
+
+  /**
+   * UC-004 A12 step 4: the note chosen in go to note opens as from the note
+   * overview, or its tab becomes the active one when it is open (A1); its
+   * view takes the keyboard.
+   */
+  async goToNote(note: string): Promise<void> {
+    await this.openNote(note);
+    focusNote(note);
+  }
+
   /**
    * M-04.9 (UC-019 BR-010): "Open" of the status bar opens a note an agent
    * created or changed.
@@ -865,6 +1078,47 @@ export class Shell {
   /** M-17.6: the agent cursors in `note`. */
   agentMarksOf(note: string): AgentMarkView[] {
     return this.agentMarks.find((marks) => marks.note === note)?.marks ?? NO_MARKS;
+  }
+
+  /** UC-005 A28: says `text` politely to screen readers. */
+  announceSpell(text: string): void {
+    this.spellAnnouncement = text;
+  }
+
+  /**
+   * FR-099: the count of the marked words of the active note is said once
+   * it rested for {@link SPELL_COUNT_REST} ms and only when it changed.
+   */
+  #countSpell(marks: SpellMarksView): void {
+    if (marks.note !== this.tabs.active) {
+      return;
+    }
+    if (this.#spellCountTimer !== null) {
+      clearTimeout(this.#spellCountTimer);
+    }
+    this.#spellCountTimer = setTimeout(() => {
+      this.#spellCountTimer = null;
+      const count = marks.marks.length;
+      const before = this.#spellCount;
+      this.#spellCount = { note: marks.note, count };
+      if (before?.note === marks.note && before.count === count) {
+        return;
+      }
+      if (before === null && count === 0) {
+        return;
+      }
+      this.spellAnnouncement =
+        count === 0
+          ? 'No misspelled words'
+          : count === 1
+            ? '1 misspelled word'
+            : `${count} misspelled words`;
+    }, SPELL_COUNT_REST);
+  }
+
+  /** FR-099: the last marks of the spell check in `note`; `null` before any came. */
+  spellMarksOf(note: string): SpellMarksView | null {
+    return Object.hasOwn(this.spellMarks, note) ? this.spellMarks[note] : null;
   }
 
   /**
@@ -916,16 +1170,19 @@ export class Shell {
     for (const { note, marks } of now) {
       for (const mark of marks) {
         if (!seen.has(key(note, mark))) {
-          const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+          const title = this.#titleOf(note);
           this.agentAnnouncement = `${mark.name} is ${mark.wrote ? 'editing' : 'reading'} ${title}`;
         }
       }
     }
   }
 
-  /** M-06.2: a click on a tab activates it. */
-  async activateTab(note: string): Promise<void> {
-    const result = await this.#serial(() => commands.tabActivate(note));
+  /** M-06.2: a click on a tab activates it; UC-004 BR-018: in its pane, which becomes the active one. */
+  async activateTab(note: string, pane: PaneName | null = null): Promise<void> {
+    if (pane !== null && this.split) {
+      setFocusedPane(pane);
+    }
+    const result = await this.#serial(() => commands.tabActivate(note, pane));
     if (result.status === 'error') {
       this.#fail('tab_activate', result.error);
     }
@@ -937,13 +1194,17 @@ export class Shell {
    * `force` ("Close anyway") it closes all the same. Resolves to whether
    * the tab closed.
    */
-  async closeTab(note: string, force = false): Promise<boolean> {
-    if (!force) {
+  async closeTab(note: string, force = false, pane: PaneName | null = null): Promise<boolean> {
+    const side = pane ?? paneWith(this.tabs, note);
+    // UC-005 BR-016: the note stays open while its tab in the other pane does.
+    const stays = openElsewhere(this.tabs, side, note);
+    this.#closingPane = side;
+    if (!force && !stays) {
       // ADR-025: the tab's edits reach the backend first; when they cannot,
       // "Changes not stored" asks, as when storing fails (UC-005 A14).
       const failure = await flushCores(note);
       if (failure !== null) {
-        const title = this.tabs.tabs.find((tab) => tab.note === note)?.title ?? note;
+        const title = this.#titleOf(note);
         this.closeQuestion = {
           tab: note,
           what: `the tab ${title}`,
@@ -953,31 +1214,32 @@ export class Shell {
         return false;
       }
     }
-    const result = await this.#serial(() => commands.tabClose(note, force));
+    const result = await this.#serial(() => commands.tabClose(note, force, side));
     if (result.status === 'error') {
       this.#fail('tab_close', result.error);
       return false;
     }
     this.closeQuestion = result.data;
-    if (result.data === null) {
+    if (result.data === null && !stays) {
       dropCore(note);
     }
     return result.data === null;
   }
+
+  /** The pane of the tab "Changes not stored" asks about (UC-005 A14 step 3). */
+  #closingPane: PaneName | null = null;
 
   /**
    * M-07.2: the switch "Facade"/"Source": the tab of `note` shows `view`
    * from now on, remembered with the tabs. The tab bar shows it at once;
    * the backend's `tabs` event confirms it.
    */
-  async setView(note: string, view: EditingViewName): Promise<void> {
-    this.tabs = {
-      ...this.tabs,
-      tabs: this.tabs.tabs.map((tab) => (tab.note === note ? { ...tab, view } : tab)),
-    };
+  async setView(note: string, view: EditingViewName, pane: PaneName | null = null): Promise<void> {
+    const side = pane ?? paneWith(this.tabs, note);
+    this.tabs = withView(this.tabs, side, note, view);
     // ADR-025: the other view starts from what the backend has.
     try {
-      const result = await this.#serial(() => flushed(() => commands.tabSetView(note, view)));
+      const result = await this.#serial(() => flushed(() => commands.tabSetView(note, view, side)));
       if (result.status === 'error') {
         this.#fail('tab_set_view', result.error);
       }
@@ -995,7 +1257,7 @@ export class Shell {
    * jumped to, possibly in a tab that opens; a web address may be asked
    * about first. What else happened, the status bar says.
    */
-  async followLink(note: string, at: number): Promise<void> {
+  async followLink(note: string, at: number, side = false): Promise<void> {
     const clicked = coreHash(note);
     if (clicked === null) {
       return;
@@ -1006,14 +1268,22 @@ export class Shell {
         if (rev === null || coreHash(note) !== clicked) {
           return { status: 'ok' as const, data: { kind: 'done' as const } };
         }
-        return commands.edFollowLink(note, at, rev);
+        return commands.edFollowLink(note, at, rev, side);
       }),
     );
     if (result.status === 'error') {
       this.#fail('ed_follow_link', result.error);
       return;
     }
-    const answer = result.data;
+    this.#takeLinkAnswer(result.data, side);
+  }
+
+  /**
+   * M-07.3, UC-004 A2 to A4: what following a link asks of the window; a
+   * missing note offered by a link followed to the side opens to the side
+   * once created (A18).
+   */
+  #takeLinkAnswer(answer: LinkAnswer, side = false): void {
     switch (answer.kind) {
       case 'jump':
         jumpTo(answer.note, answer.rev, answer.offset);
@@ -1031,11 +1301,50 @@ export class Shell {
           problem: answer.problem,
           existing: null,
           file: null,
+          templates: [],
+          template: null,
+          focusTemplate: false,
+          templateFolder: '',
+          side,
         });
+        void this.#offerTemplates();
         break;
       case 'done':
         break;
     }
+  }
+
+  /**
+   * UC-004 A14 step 1, FR-078: opens the note `note` that holds a backlink
+   * as the note overview does, once the window's edits reached the backend
+   * (ADR-025), with the cursor at the start of the link at `place`; its
+   * view takes the keyboard.
+   */
+  async openBacklink(note: string, place: LinkPlace): Promise<void> {
+    const result = await this.#serial(() => flushed(() => commands.linksOpen(note, place)));
+    if (result.status === 'error') {
+      this.#fail('links_open', result.error);
+      return;
+    }
+    if (result.data) {
+      jumpTo(result.data.note, result.data.rev, result.data.anchor, result.data.head);
+    }
+  }
+
+  /**
+   * UC-004 A14 step 2, FR-079: with the Ctrl key held (Cmd on macOS), an
+   * outgoing link of `note` at `offset` (web units of the backend's
+   * revision `rev` the links were found in) is followed as a click in the
+   * text follows it (A2 to A4); when the text changed since, nothing is
+   * followed and the list follows the change.
+   */
+  async followOutgoing(note: string, offset: number, rev: number): Promise<void> {
+    const result = await this.#serial(() => flushed(() => commands.linksFollow(note, offset, rev)));
+    if (result.status === 'error') {
+      this.#fail('links_follow', result.error);
+      return;
+    }
+    this.#takeLinkAnswer(result.data);
   }
 
   /**
@@ -1067,9 +1376,11 @@ export class Shell {
   /**
    * M-14.1, UC-003 step 2: "New note…" shows the dialog, with the folder of
    * the active note and the default format; one open already starts anew,
-   * as in egui.
+   * as in egui. UC-004 A13: go to note fills in the `title` typed.
+   * UC-003 A7: `fromTemplate` ("New note from template…") puts the keyboard
+   * on "Template:"; without templates the status says where they are kept.
    */
-  async startNewNote(): Promise<void> {
+  async startNewNote(title = '', fromTemplate = false): Promise<void> {
     const result = await commands.noteNewStart();
     if (result.status === 'error') {
       this.#fail('note_new_start', result.error);
@@ -1078,14 +1389,87 @@ export class Shell {
     if (result.data === null) {
       return;
     }
+    if (fromTemplate && result.data.templates.length === 0) {
+      this.status = `There are no templates: the notes in the folder ${result.data.templateFolder} are the templates of this workspace`;
+      return;
+    }
     this.#showNewNote({
-      title: '',
+      title,
       folder: result.data.folder,
       format: result.data.format,
       problem: null,
       existing: null,
       file: null,
+      templates: result.data.templates,
+      template: null,
+      focusTemplate: fromTemplate,
+      templateFolder: result.data.templateFolder,
     });
+  }
+
+  /**
+   * UC-003 A7 step 1: choosing a template sets the note format to the
+   * template's, which the dialog then does not let change; "No template"
+   * (`null`) lets it change again.
+   */
+  chooseTemplate(dialog: NewNoteDialog, template: string | null): void {
+    const chosen = dialog.templates.find((item) => item.note === template);
+    this.editNoteDialog('newNote', dialog, {
+      template: chosen?.note ?? null,
+      ...(chosen ? { format: chosen.format } : {}),
+    });
+  }
+
+  /**
+   * UC-025 steps 1 to 4, A1: the daily note of today opens, created first
+   * when it does not exist; the cursor goes where the backend says and the
+   * view takes the keyboard. Its open tab only becomes the active tab.
+   */
+  async openDailyNote(): Promise<void> {
+    const result = await this.#serial(() => commands.noteDailyOpen());
+    this.#takeDailyAnswer('note_daily_open', result);
+  }
+
+  /** UC-025 A2: the daily note before (`later` false) or after the one in the active tab. */
+  async stepDailyNote(later: boolean): Promise<void> {
+    const result = await this.#serial(() => commands.noteDailyStep(later));
+    this.#takeDailyAnswer('note_daily_step', result);
+  }
+
+  #takeDailyAnswer(
+    command: string,
+    result: { status: 'ok'; data: DailyNoteAnswer } | { status: 'error'; error: UiError },
+  ): void {
+    if (result.status === 'error') {
+      this.#fail(command, result.error);
+      return;
+    }
+    if (result.data.kind === 'opened') {
+      jumpTo(result.data.note, result.data.rev, result.data.offset);
+    } else if (result.data.kind === 'shown') {
+      focusNote(result.data.note);
+    } else if (result.data.kind === 'notDaily') {
+      // UX review, OQ-271: short, with the key of today's daily note.
+      const daily = this.commandById(COMMAND.dailyNote);
+      const key = keyText(daily?.key, this.platform === 'macos');
+      this.status = `This note is not a daily note. Press ${key} to open today's.`;
+    }
+  }
+
+  /** UC-003 BR-008: the templates of the workspace, into the open "New note". */
+  async #offerTemplates(): Promise<void> {
+    const result = await commands.noteNewStart();
+    const now = this.notes.newNote;
+    if (result.status === 'ok' && result.data !== null && now !== null) {
+      this.notes = {
+        ...this.notes,
+        newNote: {
+          ...now,
+          templates: result.data.templates,
+          templateFolder: result.data.templateFolder,
+        },
+      };
+    }
   }
 
   #showNewNote(dialog: NewNoteDialog): void {
@@ -1147,7 +1531,8 @@ export class Shell {
     }
     // A problem was about what the fields held; a change of them ends it
     // (UX review F8).
-    const typed = 'title' in change || 'folder' in change || 'format' in change;
+    const typed =
+      'title' in change || 'folder' in change || 'format' in change || 'template' in change;
     const cleared = typed
       ? { problem: null, ...(kind === 'newNote' ? { existing: null } : {}) }
       : {};
@@ -1520,6 +1905,61 @@ export class Shell {
     }
   }
 
+  /**
+   * UC-022 steps 4–6, A3: replaces the chosen places, in every note or
+   * only in `note`, once the window's edits reached the backend (ADR-025);
+   * the status bar reports it.
+   */
+  async confirmReplace(note: string | null = null): Promise<void> {
+    const replace = this.search.replace;
+    const result = replace.result;
+    // App-tester: a second click while it replaces does nothing.
+    if (result === null || replace.replacing || replace.searching) {
+      return;
+    }
+    replace.replacing = true;
+    try {
+      const answer = await this.#serial(() =>
+        flushed(() => commands.replaceConfirm(result.serial, note)),
+      );
+      if (answer.status === 'error') {
+        this.#fail('replace_confirm', answer.error);
+      } else {
+        // UX: the overlay tells what was done, as the status bar does.
+        replace.said = answer.data;
+      }
+    } finally {
+      replace.replacing = false;
+    }
+  }
+
+  /** UC-022 A6: "Undo" in the status bar after a replacement. */
+  async undoReplace(): Promise<void> {
+    const answer = await this.#serial(() => flushed(() => commands.replaceUndo()));
+    if (answer.status === 'error') {
+      this.#fail('replace_undo', answer.error);
+    } else {
+      this.search.replace.said = answer.data;
+    }
+  }
+
+  /**
+   * UC-026 steps 1–2: the snapshots of `note`, from its context menu or
+   * the command palette.
+   */
+  async showSnapshots(note: string): Promise<void> {
+    const title = this.overview.find((item) => item.note === note)?.title ?? this.#titleOf(note);
+    await this.snapshots.show(note, title);
+  }
+
+  /** UC-026 A3: "Undo" in the status bar after a restore. */
+  async undoRestore(): Promise<void> {
+    const answer = await this.#serial(() => flushed(() => commands.snapshotUndoRestore()));
+    if (answer.status === 'error') {
+      this.#fail('snapshot_undo_restore', answer.error);
+    }
+  }
+
   /** M-05.6, UC-007 A5: "Restore" of a deleted note. */
   async restoreDeleted(key: string): Promise<void> {
     const answer = await this.#askNote('restore', 'ws_restore', () => commands.wsRestore(key));
@@ -1653,11 +2093,46 @@ export class Shell {
     }
   }
 
+  /**
+   * UC-024 step 3, palette "Add note attribute": the keyboard goes into the
+   * name of a new attribute in the note properties; the focus mode, which
+   * hides the tool panel, ends first (as for the changes, OQ-262).
+   */
+  showAddAttribute(): void {
+    if (this.focusMode) {
+      void this.setFocusMode(false);
+      void tick().then(() => {
+        this.attributeAsked += 1;
+      });
+      return;
+    }
+    this.attributeAsked += 1;
+  }
+
+  /**
+   * UC-004 A15, UC-008 A8: searches the workspace for the notes that carry
+   * `tag`: the search overlay opens holding `#tag`.
+   */
+  searchTag(tag: string): void {
+    this.search.show();
+    this.search.setText(`#${tag}`);
+  }
+
   /** M-19.2, UC-011 BR-007: Ctrl+Shift+G opens the changes and puts the keyboard into the message. */
   showChanges(): void {
-    if (this.changes !== null) {
-      this.changesAsked += 1;
+    if (this.changes === null) {
+      return;
     }
+    if (this.focusMode) {
+      // OQ-262: the changes show in the tool panel, which the focus mode
+      // hides: it ends, and the panel asks once it is there.
+      void this.setFocusMode(false);
+      void tick().then(() => {
+        this.changesAsked += 1;
+      });
+      return;
+    }
+    this.changesAsked += 1;
   }
 
   /**
@@ -2084,7 +2559,7 @@ export class Shell {
     const question = this.closeQuestion;
     this.closeQuestion = null;
     if (question?.tab) {
-      await this.closeTab(question.tab, true);
+      await this.closeTab(question.tab, true, this.#closingPane);
     } else if (question?.switching) {
       // F15 review: the other workspace opens without the todos not stored.
       const result = await this.#serial(() => commands.wsSwitchAnyway());
@@ -2364,7 +2839,9 @@ export class Shell {
 
   /** M-06.5: the tab "Todos" is the active one; it shows in place of a note. */
   get todoListShown(): boolean {
-    return this.tabs.todoList.open && this.tabs.todoList.active;
+    // UC-004 BR-018: the tab "Todos" is the left pane's; with the right pane
+    // active, its note is the one shown.
+    return this.tabs.todoList.open && this.tabs.todoList.active && this.activePane === 'left';
   }
 
   /** Stops listening to the backend. */
@@ -2439,6 +2916,109 @@ export class Shell {
     return this.quickSetting('theme', name);
   }
 
+  /** UC-010 BR-009: the editor zoom in effect, in percent; one asked for counts at once. */
+  get editorZoom(): number {
+    return this.#zoomWanted ?? this.settings?.editorZoom ?? EDITOR_ZOOM.normal;
+  }
+
+  /**
+   * UC-010 A11, BR-009 (FR-087): Ctrl+Plus (`1`), Ctrl+Minus (`-1`) and
+   * Ctrl+0 (`0`): the text of the notes 10 percent larger, smaller, or its
+   * normal size; a step beyond 50 or 300 percent does nothing but say so.
+   * The status bar shows the new zoom; it is stored as a quick switch (A3).
+   */
+  async zoomEditor(by: -1 | 0 | 1): Promise<void> {
+    const now = this.editorZoom;
+    const next = by === 0 ? EDITOR_ZOOM.normal : now + by * EDITOR_ZOOM.step;
+    if (next < EDITOR_ZOOM.min || next > EDITOR_ZOOM.max) {
+      // OQ-263 (review): the step does nothing, and the status says why.
+      this.status = editorZoomText(now);
+      return;
+    }
+    this.status = editorZoomText(next);
+    if (next === now) {
+      return;
+    }
+    this.#zoomWanted = next;
+    this.#zoomPending += 1;
+    const result = await commands.settingsQuick('editor_zoom', String(next));
+    this.#zoomPending -= 1;
+    if (result.status === 'error') {
+      if (this.#zoomWanted === next) {
+        this.#zoomWanted = null;
+      }
+      this.#fail('settings_quick', result.error);
+    }
+  }
+
+  /** UC-010 BR-010: the focus mode is on; one asked for counts at once. */
+  get focusMode(): boolean {
+    return this.#focusWanted ?? this.settings?.focusMode ?? false;
+  }
+
+  /**
+   * UC-010 A12, BR-010 (FR-088): Ctrl+Alt+F (Cmd+Ctrl+F) and the palette
+   * switch the focus mode, stored as a quick switch (A3).
+   */
+  toggleFocusMode(): Promise<void> {
+    return this.setFocusMode(!this.focusMode);
+  }
+
+  /** UC-010 BR-006: what the status bar says on entering the focus mode (UX review). */
+  focusModeHint(): string {
+    const key = keyText(this.commandById('view.focusMode')?.key, this.platform === 'macos');
+    return `Focus mode on. Press ${key} to leave.`;
+  }
+
+  /**
+   * UC-010 A12: the focus mode on or off. Entering says how to leave; the
+   * keyboard, if it was in a part now hidden, goes into the note.
+   */
+  async setFocusMode(on: boolean): Promise<void> {
+    if (on === this.focusMode) {
+      return;
+    }
+    this.#focusWanted = on;
+    if (on) {
+      this.status = this.focusModeHint();
+    } else if (this.status === this.focusModeHint()) {
+      this.status = '';
+    }
+    void this.#keyboardAfterLayout();
+    this.#focusPending += 1;
+    const result = await commands.settingsQuick('focus_mode', String(on));
+    this.#focusPending -= 1;
+    if (result.status === 'error') {
+      if (this.#focusWanted === on) {
+        this.#focusWanted = null;
+      }
+      this.#fail('settings_quick', result.error);
+    }
+  }
+
+  /**
+   * After the window shows or hides its parts: the keyboard, if what had it
+   * is gone, goes into the note shown, else to the overview, never nowhere.
+   */
+  async #keyboardAfterLayout(): Promise<void> {
+    await tick();
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && active.isConnected) {
+      return;
+    }
+    const text = document.querySelector<HTMLElement>('.cm-content, .facade-text');
+    if (text) {
+      text.focus();
+    } else {
+      focusFallback();
+    }
+  }
+
+  /** UC-010 A3, BR-011 (FR-089): Alt+Z, the status line and the palette switch soft wrap. */
+  toggleSoftWrap(): Promise<void> {
+    return this.quickSetting('soft_wrap', String(!(this.settings?.softWrap ?? true)));
+  }
+
   /** M-03.1: the burger button shows or hides the menu bar. */
   toggleMenuBar(): Promise<void> {
     const shown = this.settings?.showMenuBar ?? false;
@@ -2458,7 +3038,25 @@ export class Shell {
     // in effect, as the egui app does.
     const reread =
       this.settings !== null && settings.widthGeneration !== this.settings.widthGeneration;
+    const zoomBefore = this.editorZoom;
     this.settings = settings;
+    // UC-010 A11, A12: what was asked for is in effect now; with no request
+    // on its way, the settings say what holds (a change elsewhere wins).
+    if (this.#zoomWanted === settings.editorZoom || this.#zoomPending === 0) {
+      this.#zoomWanted = null;
+    }
+    if (this.#focusWanted === settings.focusMode || this.#focusPending === 0) {
+      this.#focusWanted = null;
+    }
+    // UC-010 A11 (review): a zoom changed elsewhere (the settings window)
+    // updates the status that still names the old one.
+    if (
+      this.#zoomPending === 0 &&
+      this.editorZoom !== zoomBefore &&
+      this.status.startsWith(EDITOR_ZOOM_STATUS)
+    ) {
+      this.status = editorZoomText(this.editorZoom);
+    }
     if (reread && this.overviewWidth !== null) {
       this.overviewWidth = overviewWidthWithin(settings.overviewWidth);
     }
@@ -2490,7 +3088,144 @@ export class Shell {
       this.overview = snapshot.overview;
     }
     if (!newer?.has('tabs')) {
-      this.tabs = snapshot.tabs;
+      this.#takeTabs(snapshot.tabs);
+    }
+  }
+
+  /**
+   * The tab bar of the backend; UC-004 BR-018: of each pane, with the
+   * active pane, which what acts on the note shown follows (`paneFocus.ts`).
+   */
+  #takeTabs(tabs: TabsView): void {
+    const before = this.tabs.split?.pane ?? null;
+    this.tabs = tabs;
+    this.#announcePane(before);
+    setFocusedPane(activePaneOf(tabs));
+    // ADR-025: a note the backend closed keeps no editor core; FR-097: a
+    // tab closed keeps no view in its note's core.
+    keepCoresOf(allTabs(tabs).map((tab) => tab.note));
+    keepViewsOf(
+      panesOf(tabs).flatMap((each) => each.tabs.map((tab) => [each.pane, tab.note] as const)),
+    );
+  }
+
+  /**
+   * UC-004 BR-018, review: screen readers are told when the active pane
+   * changes: "Right pane, {title}".
+   */
+  #announcePane(before: PaneName | null): void {
+    const split = this.tabs.split;
+    if (!split || before === null || before === split.pane) {
+      return;
+    }
+    const note = paneOf(this.tabs, split.pane).active;
+    const name = split.pane === 'left' ? 'Left pane' : 'Right pane';
+    this.paneAnnouncement = note === null ? name : `${name}, ${this.#titleOf(note)}`;
+  }
+
+  /** What the window last told screen readers of the panes. */
+  paneAnnouncement = $state('');
+
+  /** The title of the open note `note`, in either pane. */
+  #titleOf(note: string): string {
+    return allTabs(this.tabs).find((tab) => tab.note === note)?.title ?? note;
+  }
+
+  /** UC-004 BR-018: the pane the user works in. */
+  get activePane(): PaneName {
+    return activePaneOf(this.tabs);
+  }
+
+  /** FR-096: whether the split view is shown. */
+  get split(): boolean {
+    return this.tabs.split !== null;
+  }
+
+  /**
+   * UC-004 BR-018: the user works in the pane `pane` now (a click or the
+   * keyboard in it, Ctrl+1, Ctrl+2); the tool panel follows its note.
+   */
+  async focusPane(pane: PaneName): Promise<void> {
+    if (!this.split || pane === this.activePane) {
+      return;
+    }
+    // What acts on the note shown follows at once, the backend's tab bar after.
+    setFocusedPane(pane);
+    const before = this.tabs.split?.pane ?? null;
+    this.tabs = { ...this.tabs, split: this.tabs.split ? { ...this.tabs.split, pane } : null };
+    this.#announcePane(before);
+    try {
+      const result = await this.#serial(() => commands.paneFocus(pane));
+      if (result.status === 'error') {
+        this.#fail('pane_focus', result.error);
+      }
+    } catch (error) {
+      // The IPC itself failed, as when the window is going (a test ended).
+      this.#fail('pane_focus', { kind: 'internal', message: String(error) });
+    }
+  }
+
+  /**
+   * UC-004 BR-018: Ctrl+1, Ctrl+2 (OQ-277): the pane `pane` becomes the active
+   * one, and its view takes the keyboard (its tab, while it shows no text).
+   */
+  async focusPaneView(pane: PaneName): Promise<void> {
+    const focus = this.focusPane(pane);
+    const facade = activeFacade();
+    const source = activeSourceViewOf();
+    if (facade) {
+      facade.focus();
+    } else if (source) {
+      source.focus();
+    } else {
+      const note = paneOf(this.tabs, pane).active;
+      if (note !== null) {
+        document.getElementById(tabId(note, pane))?.focus();
+      }
+    }
+    await focus;
+  }
+
+  /**
+   * UC-004 A18, A19 (FR-096, FR-097): opens `note` to the side, in the other
+   * pane, which takes the keyboard; the note of the active tab shows its
+   * other editing view there.
+   */
+  async openToSide(note: string): Promise<void> {
+    // The other pane of the one active now; the backend's tab bar may come first.
+    const target = otherPane(this.activePane);
+    const result = await this.#serial(() => flushed(() => commands.tabOpenSide(note)));
+    if (result.status === 'error') {
+      this.#fail('tab_open_side', result.error);
+      return;
+    }
+    setFocusedPane(target);
+    focusNote(note);
+  }
+
+  /**
+   * UC-004 A20: ends the split view; the right pane's tabs join the left
+   * one. The keyboard goes to the note left active (its tab, while its view
+   * shows not yet), and the status says so.
+   */
+  async endSplit(): Promise<void> {
+    if (!this.split) {
+      return;
+    }
+    const result = await this.#serial(() => commands.splitEnd());
+    if (result.status === 'error') {
+      this.#fail('split_end', result.error);
+      return;
+    }
+    setFocusedPane('left');
+    this.status = 'Split view ended.';
+    const note = this.tabs.active;
+    if (note !== null) {
+      focusNote(note);
+      await tick();
+      if (document.activeElement === null || document.activeElement === document.body) {
+        document.getElementById(tabId(note, 'left'))?.focus();
+      }
     }
   }
 

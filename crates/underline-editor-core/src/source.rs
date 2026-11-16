@@ -123,6 +123,83 @@ pub struct SourceEditor {
     may_have_cr: bool,
     /// The `\r\n` pairs of the revision they were found in.
     web: RefCell<Option<(u64, WebOffsets)>>,
+    /// UC-005 BR-019: the places of the closing chars close pairs wrote,
+    /// in order; they move with every edit and are forgotten when the
+    /// cursor is put elsewhere.
+    closers: Vec<usize>,
+}
+
+/// UC-005 BR-016, FR-097: what one view of a note keeps of its own while
+/// another view of the same note edits it: its cursor and selection, the
+/// lines its folds hide, and where close pairs wrote closing chars. The
+/// text and its history are the note's, shared.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Caret {
+    cursor: usize,
+    anchor: usize,
+    hidden: Vec<Range<usize>>,
+    closers: Vec<usize>,
+}
+
+impl Caret {
+    /// A caret with the cursor at `cursor` and the other end of the
+    /// selection at `anchor` (chars), nothing hidden.
+    #[must_use]
+    pub fn at(cursor: usize, anchor: usize) -> Self {
+        Self {
+            cursor,
+            anchor,
+            ..Self::default()
+        }
+    }
+
+    /// The cursor and the other end of the selection, as char indices.
+    #[must_use]
+    pub fn selection(&self) -> (usize, usize) {
+        (self.cursor, self.anchor)
+    }
+
+    /// The caret after `edits`, made by another view in this order, each in
+    /// chars of the text just before it: a place after an edit moves with
+    /// it, a place inside what it replaced goes to the end of what it put
+    /// there. The closers are forgotten when the text changed.
+    #[must_use]
+    pub fn after<'a>(mut self, edits: impl IntoIterator<Item = &'a Edit>) -> Self {
+        let mut any = false;
+        for edit in edits {
+            self.cursor = moved(self.cursor, edit);
+            self.anchor = moved(self.anchor, edit);
+            any = true;
+        }
+        if any {
+            self.closers.clear();
+        }
+        self
+    }
+
+    /// The caret with its cursor and selection moved by `place` (chars),
+    /// as when the edits that changed the text are not known one by one;
+    /// the closers are forgotten.
+    #[must_use]
+    pub fn mapped(mut self, place: impl Fn(usize) -> usize) -> Self {
+        self.cursor = place(self.cursor);
+        self.anchor = place(self.anchor);
+        self.closers.clear();
+        self
+    }
+}
+
+/// The place `at` after `edit` (chars).
+fn moved(at: usize, edit: &Edit) -> usize {
+    let removed = edit.removed.chars().count();
+    let inserted = edit.inserted.chars().count();
+    if at <= edit.at {
+        at
+    } else if at >= edit.at + removed {
+        at - removed + inserted
+    } else {
+        edit.at + inserted
+    }
 }
 
 impl SourceEditor {
@@ -204,6 +281,35 @@ impl SourceEditor {
         self.doc.revision()
     }
 
+    /// Whether the text may hold a `\r`; without one, web units are UTF-16
+    /// units.
+    #[must_use]
+    pub fn may_have_cr(&self) -> bool {
+        self.may_have_cr
+    }
+
+    /// UC-005 BR-016: takes out the caret of the view that edits now; the
+    /// editor keeps its text and history (see [`Caret`]).
+    pub fn take_caret(&mut self) -> Caret {
+        Caret {
+            cursor: self.cursor,
+            anchor: self.anchor,
+            hidden: std::mem::take(&mut self.hidden),
+            closers: std::mem::take(&mut self.closers),
+        }
+    }
+
+    /// UC-005 BR-016: puts in the caret of the view that edits from now on;
+    /// a place past the end of the text goes to its end.
+    pub fn put_caret(&mut self, caret: Caret) {
+        let len = self.doc.len_chars();
+        self.cursor = caret.cursor.min(len);
+        self.anchor = caret.anchor.min(len);
+        self.hidden = caret.hidden;
+        self.closers = caret.closers;
+        self.closers.retain(|&at| at <= len);
+    }
+
     /// The cursor, as a char index.
     #[must_use]
     pub fn cursor(&self) -> usize {
@@ -237,7 +343,12 @@ impl SourceEditor {
         let before = (self.cursor, self.anchor);
         self.cursor = cursor.min(len);
         self.anchor = anchor.min(len);
-        before != (self.cursor, self.anchor)
+        let moved = before != (self.cursor, self.anchor);
+        if moved {
+            // BR-019: the pairs written are only closed over while typing.
+            self.closers.clear();
+        }
+        moved
     }
 
     /// Like [`Self::set_selection`], with web offsets of the window.
@@ -291,6 +402,7 @@ impl SourceEditor {
         let column = self.cursor - self.doc.rope().line_to_char(line);
         self.doc = self.doc.replaced_by(text);
         self.may_have_cr = text.contains('\r');
+        self.closers.clear();
         self.cursor = self.at_line(line, column);
         self.anchor = self.cursor;
     }
@@ -397,6 +509,7 @@ impl SourceEditor {
         let lines_before = self.doc.len_lines();
         let line = self.doc.replace(start..end, text);
         self.may_have_cr |= text.contains('\r');
+        self.move_closers(start..end, text.chars().count());
         let applied = self.applied(start, &removed, text, line, lines_before, false);
         self.cursor = start + text.chars().count();
         self.anchor = self.cursor;
@@ -647,6 +760,10 @@ impl SourceEditor {
             return Outcome::default();
         };
         self.may_have_cr |= edit.inserted.contains('\r');
+        self.move_closers(
+            edit.at..edit.at + edit.removed.chars().count(),
+            edit.inserted.chars().count(),
+        );
         let rope = self.doc.rope();
         let line = rope.char_to_line(edit.at.min(rope.len_chars()));
         let applied = self.applied(
@@ -696,6 +813,8 @@ impl SourceEditor {
         }
     }
 }
+
+mod comfort;
 
 /// The source view for the Nano keys (M-11.3): a line is a line of markup,
 /// as in the egui widget (`SourceTarget`). It gathers what the keys did:

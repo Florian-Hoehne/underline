@@ -445,6 +445,44 @@ fn uc005_m09_10_typing_escapes_markdown_and_keeps_the_code_raw() {
     assert!(note.text().contains("fn a(*b) {}"));
 }
 
+/// TC-005-42, FR-098, UC-005 BR-008: in a formula its source is typed as
+/// it is written (no escapes), in an inline formula and in a block one,
+/// and the blocks follow as a full parse gives them.
+#[test]
+fn tc005_42_typing_in_a_formula_writes_its_source() {
+    let mut note = Note::markdown("$$a^2$$\n\nSee $b$ here.\n");
+    note.click_after("a^2");
+    note.input(|edit| edit.type_text("+b^2"));
+    assert!(note.text().starts_with("$$a^2+b^2$$\n"));
+    note.click_after("$b");
+    note.input(|edit| edit.type_text("_*"));
+    assert!(note.text().contains("See $b_*$ here."), "{}", note.text());
+    // After the formula, text is escaped as usual.
+    note.click_after("_*$");
+    note.input(|edit| edit.type_text("*"));
+    assert!(
+        note.text().contains("See $b_*$\\* here."),
+        "{}",
+        note.text()
+    );
+}
+
+/// FR-098 (OQ-283): a `$` typed in text is written as it is and may make a
+/// formula, which the blocks show as a full parse does.
+#[test]
+fn fr098_a_typed_dollar_may_make_a_formula() {
+    let mut note = Note::markdown("See x here.\n");
+    note.click_after("See ");
+    note.input(|edit| edit.type_text("$"));
+    note.click_after("$x");
+    note.input(|edit| edit.type_text("$"));
+    assert_eq!(note.text(), "See $x$ here.\n");
+    assert!(note.blocks[0]
+        .runs
+        .iter()
+        .any(|r| r.style.formula.is_some()));
+}
+
 #[test]
 fn uc005_m09_11_enter_in_a_list_starts_the_next_item() {
     let mut note = Note::markdown("1. one\n2. two\n");
@@ -569,4 +607,90 @@ fn uc005_a9_m10_5_the_cursor_in_a_code_block() {
         "after the last block"
     );
     assert!(!cursor_in_code(&rope, 0, &[]), "no blocks");
+}
+
+/// M-09.13 (app-tester of package 7a; older than it): Ctrl+End and
+/// Ctrl+Home go to the end and the start of the note, not of the block.
+#[test]
+fn m09_13_ctrl_end_and_ctrl_home_go_to_the_ends_of_the_note() {
+    let text = "# Trip\n\nBook the ferry.\nPack light.\n\n## Islands\n\nNo cars.\n";
+    let mut note = Note::markdown(text);
+    note.click_after("Book");
+    let ctrl = Modifiers {
+        ctrl: true,
+        command: true,
+        ..Modifiers::default()
+    };
+    note.input(|edit| edit.key(Key::End, ctrl));
+    assert_eq!(
+        note.editor.cursor(),
+        text.find("No cars.").unwrap() + "No cars.".len()
+    );
+    note.input(|edit| edit.key(Key::Home, ctrl));
+    assert_eq!(note.editor.cursor(), 2);
+}
+
+/// Selects the first `needle` of the note.
+fn select_text(note: &mut Note, needle: &str) {
+    let text = note.text();
+    let byte = text.find(needle).unwrap();
+    let from = text[..byte].chars().count();
+    note.editor
+        .set_selection(from, from + needle.chars().count());
+}
+
+/// TC-005-42, FR-098, UC-005 BR-008 (found by the test monkey): replacing
+/// the whole source of an inline formula by typing over the selection
+/// leaves `$$` for a moment, and the typed text makes a formula of it again;
+/// the blocks must be those of a full parse.
+#[test]
+fn tc005_42_typing_over_the_selected_source_of_an_inline_formula() {
+    let mut note = Note::markdown("See $x$ here.\n");
+    select_text(&mut note, "x");
+    note.input(|edit| edit.type_text("y"));
+    assert_eq!(note.text(), "See $y$ here.\n");
+    assert!(note.blocks[0]
+        .runs
+        .iter()
+        .any(|r| r.style.formula.is_some()));
+}
+
+/// TC-005-42, FR-098, UC-005 BR-008 (found by the test monkey): the same
+/// for a block formula `$$z$$`, which is a formula block again after it.
+#[test]
+fn tc005_42_typing_over_the_selected_source_of_a_block_formula() {
+    let mut note = Note::markdown("$$z$$\n\nText.\n");
+    select_text(&mut note, "z");
+    note.input(|edit| edit.type_text("1"));
+    assert!(matches!(
+        note.blocks[0].kind,
+        underline_markup::blocks::BlockKind::Formula { .. }
+    ));
+}
+
+/// FR-098 (OQ-283), UC-005 BR-008 (found by the test monkey): typing the
+/// source between the typed `$$` makes a formula.
+#[test]
+fn tc005_42_typing_between_two_typed_dollars_makes_a_formula() {
+    let mut note = Note::markdown("a $$ b\n");
+    note.click_after("a $");
+    note.input(|edit| edit.type_text("x"));
+    assert!(note.blocks[0]
+        .runs
+        .iter()
+        .any(|r| r.style.formula.is_some()));
+}
+
+/// FR-098, UC-005 BR-008, OQ-222 (found by the test monkey): in AsciiDoc,
+/// typing the letter that is missing in `latexmth:[a]` makes the macro
+/// whole, and the blocks must show the formula as a full parse does.
+#[test]
+fn tc005_42_typing_the_missing_letter_of_an_asciidoc_formula_macro() {
+    let mut note = Note::new("See latexmth:[a] here.\n", NoteFormat::AsciiDoc);
+    note.click_after("latexm");
+    note.input(|edit| edit.type_text("a"));
+    assert!(note.blocks[0]
+        .runs
+        .iter()
+        .any(|r| r.style.formula.is_some()));
 }

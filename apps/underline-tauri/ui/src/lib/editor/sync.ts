@@ -20,6 +20,7 @@ import {
   type CloseQuestion,
   type EditorPatch,
   type EnrichView,
+  type FindSpec,
   type FlushView,
   type FormatName,
   type MirrorView,
@@ -120,7 +121,67 @@ export type CoreListener = {
   reopened(): void;
   /** The facade's blocks took the backend's colours and figures (`ed-enrich`). */
   blocks?(changes: BlocksView[]): void;
+  /**
+   * FR-097, UC-005 BR-016: another view of the note changed its text; the
+   * view brings itself up to date (the source view from the changes since
+   * its revision, the facade by its blocks around them).
+   */
+  sibling?(): void;
 };
+
+/**
+ * FR-097, UC-005 BR-016: the id of each tab's view of its note in the core,
+ * by pane and note: a tab keeps its cursor, folds and blocks while it
+ * switches between the source view and the facade, and the tab of the same
+ * note in the other pane has its own.
+ */
+const paneViews = new Map<string, number>();
+let lastViewId = 0;
+
+function paneViewKey(pane: string, note: string): string {
+  return `${pane}\u0000${note}`;
+}
+
+/** FR-097: the id of the view of `note` in the tab of the pane `pane`. */
+export function viewIdOf(pane: string, note: string): number {
+  const key = paneViewKey(pane, note);
+  let id = paneViews.get(key);
+  if (id === undefined) {
+    lastViewId += 1;
+    id = lastViewId;
+    paneViews.set(key, id);
+  }
+  return id;
+}
+
+/**
+ * FR-097: only the tabs `open` (pane and note) keep their views in the
+ * cores; the view of a tab closed goes, with its cursor and folds.
+ */
+export function keepViewsOf(open: Iterable<readonly [string, string]>): void {
+  const keep = new Set([...open].map(([pane, note]) => paneViewKey(pane, note)));
+  for (const [key, id] of [...paneViews]) {
+    if (!keep.has(key)) {
+      paneViews.delete(key);
+      const note = key.slice(key.indexOf('\u0000') + 1);
+      cores.get(note)?.closeView(id);
+    }
+  }
+}
+
+/** UC-006 step 7: the views of `from` are those of `to` now. */
+function renameViews(from: string, to: string): void {
+  for (const [key, id] of [...paneViews]) {
+    const at = key.indexOf('\u0000');
+    if (key.slice(at + 1) === from) {
+      paneViews.delete(key);
+      paneViews.set(paneViewKey(key.slice(0, at), to), id);
+    }
+  }
+}
+
+/** The view a listener set through `TabCore.listener` stands for (one view only). */
+const ONLY_VIEW = 0;
 
 /** Runs `work` after the next frame was painted (the spike's method). */
 function afterFrame(work: () => void): void {
@@ -143,14 +204,32 @@ const LONGEST_WAIT = 5000;
 /** How long a flush tries before it gives up, in ms. */
 const FLUSH_AT_MOST = 3000;
 
-/** One note's core and its sync. */
+/**
+ * One note's core and its sync.
+ *
+ * FR-097, UC-005 BR-016: the note may be shown by two views at once (its
+ * source view in one pane of the split view, its facade in the other).
+ * They share the core, so one text and one history; each calls it as
+ * itself (`coreFor`), which gives it its own cursor, folds and blocks, and
+ * the others follow its edits after the frame (`CoreListener.sibling`).
+ * What reads the core for the window (the find field, the statistics)
+ * reads it as the view the user works in (`core`).
+ */
 export class TabCore {
   /** The note; a rename gives it the new one (UC-006 step 7). */
   note: string;
-  readonly core: EditorCore;
+  readonly #core: EditorCore;
   /** The note's format (M-09.14: pasted HTML becomes its markup). */
   readonly format: FormatName;
-  listener: CoreListener | null = null;
+  /** The listeners of the views, by their ids. */
+  readonly #listeners = new Map<number, CoreListener>();
+  /** The views of the note, by their ids (FR-097). */
+  readonly #views = new Set<number>();
+  /** The view the user works in: the one that took an input or the keyboard last. */
+  #userView: number | null = null;
+  /** The views that follow another one's edits after the frame. */
+  readonly #siblingsDue = new Set<number>();
+  #siblingsScheduled = false;
   #scheduled = false;
   #viewsScheduled = false;
   /** The views asked once more after a burst of inputs. */
@@ -165,13 +244,141 @@ export class TabCore {
 
   constructor(note: string, core: EditorCore, format: FormatName = 'Markdown') {
     this.note = note;
-    this.core = core;
+    this.#core = core;
     this.format = format;
+  }
+
+  /**
+   * The core, as the view the user works in sees it (its cursor and
+   * selection): for the find field, the statistics, the sync.
+   */
+  get core(): EditorCore {
+    if (this.#views.size > 1 && this.#userView !== null && !this.#core.dead) {
+      this.#core.useView(this.#userView, false);
+    }
+    return this.#core;
+  }
+
+  /**
+   * FR-097: the core as the view `view` sees it; with `input`, the user
+   * acts in that view (its edits start their own undo steps after the
+   * other view's, BR-016).
+   */
+  coreFor(view: number, input: boolean): EditorCore {
+    if (!this.#views.has(view)) {
+      this.openView(view);
+    }
+    if (input || this.#userView === null) {
+      this.#userView = view;
+    }
+    if (this.#views.size > 1) {
+      this.#core.useView(view, input);
+    }
+    return this.#core;
+  }
+
+  /** FR-097: the view `view` shows the note from now on. */
+  openView(view: number): void {
+    if (this.#views.has(view) || !this.alive) {
+      return;
+    }
+    this.#views.add(view);
+    this.#core.viewOpen(view);
+  }
+
+  /** FR-097: the view `view` is gone. */
+  closeView(view: number): void {
+    this.#listeners.delete(view);
+    this.#siblingsDue.delete(view);
+    if (!this.#views.delete(view)) {
+      return;
+    }
+    if (this.#userView === view) {
+      this.#userView = this.#views.values().next().value ?? null;
+    }
+    if (this.alive) {
+      this.#core.viewClose(view);
+      // The view left takes the state the core holds as its own again.
+      const left = this.#views.values().next().value;
+      if (left !== undefined) {
+        this.#core.useView(left, false);
+      }
+    }
+  }
+
+  /** FR-097: the keyboard went to the view `view`; the window reads the core as that view. */
+  focusView(view: number): void {
+    if (this.#views.has(view)) {
+      this.#userView = view;
+    }
+  }
+
+  /** How many views show the note. */
+  get viewCount(): number {
+    return this.#views.size;
+  }
+
+  /** The listener of the view `view` takes the core's changes from now on. */
+  attach(view: number, listener: CoreListener): void {
+    this.#listeners.set(view, listener);
+  }
+
+  /** The listener `listener` of the view `view` goes, if it is still the one. */
+  detach(view: number, listener: CoreListener): void {
+    if (this.#listeners.get(view) === listener) {
+      this.#listeners.delete(view);
+    }
+  }
+
+  /** The one view's listener (one view only; the tests). */
+  get listener(): CoreListener | null {
+    return this.#listeners.values().next().value ?? null;
+  }
+
+  set listener(listener: CoreListener | null) {
+    if (listener === null) {
+      this.#listeners.clear();
+    } else {
+      this.#listeners.set(ONLY_VIEW, listener);
+    }
+  }
+
+  /** The listener of the view the user works in, else any. */
+  #userListener(): CoreListener | null {
+    return (
+      (this.#userView === null ? undefined : this.#listeners.get(this.#userView)) ?? this.listener
+    );
+  }
+
+  /**
+   * FR-097: the views other than `view` follow its edits after the frame,
+   * all edits of a frame at once.
+   */
+  #followed(view: number | null): void {
+    for (const other of this.#listeners.keys()) {
+      if (other !== view && other !== ONLY_VIEW) {
+        this.#siblingsDue.add(other);
+      }
+    }
+    if (this.#siblingsDue.size === 0 || this.#siblingsScheduled) {
+      return;
+    }
+    this.#siblingsScheduled = true;
+    afterFrame(() => {
+      this.#siblingsScheduled = false;
+      const due = [...this.#siblingsDue];
+      this.#siblingsDue.clear();
+      for (const id of due) {
+        if (this.alive) {
+          this.#listeners.get(id)?.sibling?.();
+        }
+      }
+    });
   }
 
   /** Whether the core can still be used. */
   get alive(): boolean {
-    return !this.#closed && !this.core.dead;
+    return !this.#closed && !this.#core.dead;
   }
 
   /** Why the last send failed. */
@@ -179,10 +386,16 @@ export class TabCore {
     return this.#lastError;
   }
 
-  /** After an input: the edits go out after the frame, the views follow. */
-  afterInput(): void {
+  /**
+   * After an input: the edits go out after the frame, the views follow;
+   * FR-097: the other views of the note follow the input of `view`.
+   */
+  afterInput(view: number | null = null): void {
     this.schedule();
     this.scheduleViews();
+    if (this.#views.size > 1) {
+      this.#followed(view);
+    }
   }
 
   /** Sends after the frame, unless a send waits already. */
@@ -197,20 +410,21 @@ export class TabCore {
     });
   }
 
-  /** The words this core marks now (`undefined`: not set yet). */
-  #search: string | null | undefined = undefined;
+  /** What this core marks now, as JSON (`undefined`: not set yet). */
+  #search: string | undefined = undefined;
 
   /**
-   * UC-008 BR-008, M-13.2: the core marks the words of `text` (`null`:
-   * none); the hits follow with the views.
+   * UC-008 BR-008, BR-011, M-13.2: the core marks the places of `spec`
+   * (`null`: none); the hits follow with the views.
    */
-  setSearch(text: string | null): void {
-    if (!this.alive || this.#search === text) {
+  setSearch(spec: FindSpec | null): void {
+    const key = JSON.stringify(spec);
+    if (!this.alive || this.#search === key) {
       return;
     }
     try {
-      this.core.setSearch(text);
-      this.#search = text;
+      this.#core.setSearch(spec);
+      this.#search = key;
       this.scheduleViews();
     } catch (error) {
       this.#problem(error);
@@ -248,11 +462,27 @@ export class TabCore {
     }
     try {
       const start = performance.now();
-      const views = this.core.views(start);
-      probe?.('views', performance.now() - start);
-      if (views.sections || views.found) {
-        this.listener?.views(views);
+      if (this.#views.size > 1) {
+        // FR-097: each view is told its own sections and hits.
+        for (const [id, listener] of this.#listeners) {
+          if (id === ONLY_VIEW || !this.#views.has(id)) {
+            continue;
+          }
+          this.#core.useView(id, false);
+          const views = this.#core.views(start);
+          if (views.sections || views.found) {
+            listener.views(views);
+          }
+        }
+        // The window reads the core as the view the user works in again.
+        void this.core;
+      } else {
+        const views = this.#core.views(start);
+        if (views.sections || views.found) {
+          this.listener?.views(views);
+        }
       }
+      probe?.('views', performance.now() - start);
     } catch (error) {
       this.#problem(error);
     }
@@ -264,7 +494,22 @@ export class TabCore {
       return;
     }
     try {
-      const changes = this.core.enrich(sent);
+      if (this.#views.size > 1) {
+        // FR-097: each facade of the note takes them into its own blocks.
+        for (const [id, listener] of this.#listeners) {
+          if (id === ONLY_VIEW || !this.#views.has(id) || !listener.blocks) {
+            continue;
+          }
+          this.#core.useView(id, false);
+          const changes = this.#core.enrich(sent);
+          if (changes.length > 0) {
+            listener.blocks(changes);
+          }
+        }
+        void this.core;
+        return;
+      }
+      const changes = this.#core.enrich(sent);
       if (changes.length > 0) {
         this.listener?.blocks?.(changes);
       }
@@ -278,7 +523,7 @@ export class TabCore {
     if (!this.alive) {
       return;
     }
-    this.core.ring();
+    this.#core.ring();
     this.schedule();
   }
 
@@ -295,7 +540,7 @@ export class TabCore {
     }
     let batch: SyncBatch | null;
     try {
-      batch = this.core.takeOutbox();
+      batch = this.#core.takeOutbox();
     } catch (error) {
       this.#problem(error);
       return Promise.resolve(false);
@@ -334,8 +579,13 @@ export class TabCore {
           return false;
         }
       } else if (applied.patch) {
-        this.listener?.patch(applied.patch);
+        // The patch carries the selection of the view the user works in;
+        // the other views follow the backend's change (FR-097).
+        this.#userListener()?.patch(applied.patch);
         this.scheduleViews();
+        if (this.#views.size > 1) {
+          this.#followed(this.#userView);
+        }
       }
       probe?.('acknowledge', performance.now() - taken);
     } catch (error) {
@@ -343,8 +593,10 @@ export class TabCore {
       return false;
     }
     this.#succeeded();
-    this.listener?.synced();
-    if (this.alive && !this.core.idle()) {
+    for (const listener of [...this.#listeners.values()]) {
+      listener.synced();
+    }
+    if (this.alive && !this.#core.idle()) {
       this.schedule();
     }
     return true;
@@ -355,11 +607,11 @@ export class TabCore {
    * What is typed while it travels stays to be sent.
    */
   async #resync(): Promise<boolean> {
-    const text = this.core.text();
+    const text = this.#core.text();
     try {
       const answer = await ipc.resync(this.note, text);
       if (this.alive) {
-        this.core.reset(text, answer.rev);
+        this.#core.reset(text, answer.rev);
       }
       return true;
     } catch (error) {
@@ -376,7 +628,7 @@ export class TabCore {
       return;
     }
     try {
-      this.core.failed();
+      this.#core.failed();
     } catch (problem) {
       this.#problem(problem);
       return;
@@ -419,7 +671,7 @@ export class TabCore {
       return this.#closed;
     }
     try {
-      this.core.ring();
+      this.#core.ring();
     } catch (error) {
       this.#problem(error);
       return false;
@@ -428,13 +680,13 @@ export class TabCore {
     while (this.alive && performance.now() < end) {
       if (this.#sending) {
         await this.#sending;
-      } else if (this.core.idle()) {
+      } else if (this.#core.idle()) {
         return true;
       } else if (!(await this.send())) {
         await sleep(Math.min(200, Math.max(0, end - performance.now())));
       }
     }
-    return this.alive && this.core.idle();
+    return this.alive && this.#core.idle();
   }
 
   /** The tab closed: the core goes, and nothing more is said of it. */
@@ -448,8 +700,17 @@ export class TabCore {
       clearTimeout(this.#retry);
       this.#retry = null;
     }
-    this.listener = null;
-    this.core.free();
+    this.#listeners.clear();
+    this.#siblingsDue.clear();
+    this.#views.clear();
+    this.#core.free();
+  }
+
+  /** Q-40: every view of the note shows its text anew. */
+  reopened(): void {
+    for (const listener of [...this.#listeners.values()]) {
+      listener.reopened();
+    }
   }
 }
 
@@ -505,6 +766,8 @@ class Cores {
     core.select(core.state().rev, mirror.anchor, mirror.head);
     // M-13.2: the words searched now are marked in a note opened meanwhile.
     tab.setSearch(searchFor(note));
+    // UC-010 BR-001, UC-005 BR-019: close pairs as the settings say.
+    core.setClosePairs(closePairs);
     core.onDead = () => {
       // Q-40: opened anew from the backend's text; the edits not confirmed
       // are lost, and the status line says so. The note may have been
@@ -514,7 +777,7 @@ class Cores {
       );
       reporter?.dead(tab.note);
       this.#forget(tab.note, tab);
-      tab.listener?.reopened();
+      tab.reopened();
     };
     this.#ready.set(note, tab);
     this.#generations.set(tab, generation);
@@ -599,28 +862,54 @@ const renaming = new Map<string, { done: Promise<void>; end: () => void }>();
 const renamed = new Set<string>();
 
 /**
- * UC-008 BR-008, A6, M-13.2, M-13.4: what the cores mark: the words of the
- * search overlay in every note, the words of the find field instead in the
- * note it finds in (as egui's `run_search`); text with no word marks none.
+ * UC-008 BR-008, A6, A7, M-13.2, M-13.4: what the cores mark: the search
+ * overlay's text with its switches in every note (one text while it
+ * replaces, UC-022), the find field's instead in the note it finds in (as
+ * egui's `run_search`); a text with no word marks none.
  */
-type Searches = { overlay: string; find: { note: string; text: string } | null };
+export type Searches = {
+  overlay: FindSpec | null;
+  find: { note: string; spec: FindSpec } | null;
+};
 
-let searches: Searches = { overlay: '', find: null };
+let searches: Searches = { overlay: null, find: null };
 
-/** The text whose words the core of `note` marks; `null`: none. */
-export function searchFor(note: string): string | null {
-  const find = searches.find;
-  if (find && find.note === note && find.text.trim() !== '') {
-    return find.text;
-  }
-  return searches.overlay.trim() !== '' ? searches.overlay : null;
+/** Whether `spec` finds anything: one text when not empty, words when not only spaces. */
+function searching(spec: FindSpec | null): spec is FindSpec {
+  return spec !== null && (spec.oneText ? spec.text !== '' : spec.text.trim() !== '');
 }
 
-/** The words searched changed: every core marks what `searchFor` says. */
+/** What the core of `note` marks; `null`: nothing. */
+export function searchFor(note: string): FindSpec | null {
+  const find = searches.find;
+  if (find && find.note === note && searching(find.spec)) {
+    return find.spec;
+  }
+  return searching(searches.overlay) ? searches.overlay : null;
+}
+
+/** The searches changed: every core marks what `searchFor` says. */
 export function setSearches(next: Searches): void {
   searches = next;
   for (const tab of cores.all()) {
     tab.setSearch(searchFor(tab.note));
+  }
+}
+
+/** UC-010 BR-001, UC-005 BR-019: close pairs is on (the built-in default). */
+let closePairs = true;
+
+/** UC-010 BR-004: close pairs is switched; every open core follows at once. */
+export function setClosePairs(on: boolean): void {
+  closePairs = on;
+  for (const tab of cores.all()) {
+    if (tab.alive) {
+      try {
+        tab.core.setClosePairs(on);
+      } catch (error) {
+        console.error('Close pairs could not be switched', error);
+      }
+    }
   }
 }
 
@@ -695,6 +984,7 @@ export function dropCoresBefore(mark: number): void {
 
 /** Every core goes (the tests start anew). */
 export function dropAllCores(): void {
+  paneViews.clear();
   for (const held of renaming.values()) {
     held.end();
   }
@@ -730,6 +1020,7 @@ export function releaseCore(note: string): void {
  */
 export function renameCore(from: string, to: string): void {
   cores.rename(from, to);
+  renameViews(from, to);
   renamed.add(to);
 }
 

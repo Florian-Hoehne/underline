@@ -13,9 +13,10 @@ afterEach(() => {
 
 async function menuBar(start: MockStart = {}, handlers = mockHandlers(start)) {
   const shell = await connectedShell(start, handlers);
-  const onOpenWorkspace = vi.fn();
-  const onNewWorkspace = vi.fn();
-  render(MenuBar, { props: { shell, onOpenWorkspace, onNewWorkspace } });
+  // UC-023 BR-005: an entry runs the command of the registry.
+  const onOpenWorkspace = vi.spyOn(shell, 'startOpen').mockResolvedValue();
+  const onNewWorkspace = vi.spyOn(shell, 'startCreate').mockReturnValue();
+  render(MenuBar, { props: { shell } });
   return { shell, onOpenWorkspace, onNewWorkspace };
 }
 

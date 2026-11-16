@@ -1,7 +1,7 @@
 # Test Cases: Adjust Settings
 
 **Use Case:** [UC-010 Adjust Settings](../use_cases/UC-010-adjust-settings.md)  
-**Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-059, FR-069, FR-070, FR-071, NFR-009, NFR-010, NFR-011, NFR-013, NFR-015, NFR-016, C-006](../requirements.md)
+**Requirements:** [FR-022, FR-028, FR-029, FR-030, FR-032, FR-059, FR-069, FR-070, FR-071, FR-081, FR-087, FR-088, FR-089, FR-094, FR-095, FR-100, NFR-009, NFR-010, NFR-011, NFR-013, NFR-015, NFR-016, C-006](../requirements.md)
 
 ## Coverage
 
@@ -24,6 +24,11 @@
 | TC-010-15 | The MCP server only with the user's consent          | BR-008, FR-059, NFR-015, NFR-016 |
 | TC-010-16 | Keyboard alone                                       | BR-006, NFR-011                 |
 | TC-010-17 | Every theme in contrast, on every platform           | NFR-010, NFR-013, BR-004        |
+| TC-010-18 | A11 Zoom the editor font                             | FR-087, BR-009                  |
+| TC-010-19 | A12 Focus mode                                       | FR-088, BR-010                  |
+| TC-010-20 | Soft wrap                                            | FR-089, BR-011, A3              |
+| TC-010-21 | Spell check language for me and for a workspace      | FR-100, BR-001, A1              |
+| TC-010-22 | Close pairs, template folder, and daily note folder  | FR-081, FR-094, FR-095, BR-001  |
 
 ## TC-010-01: Choose a theme for me
 
@@ -213,3 +218,64 @@
 |------|-----------------------------------------|---------------------------------------------------------------------------------------------------------|
 | 1    | Choose each of the eleven themes in turn. | Body text has a contrast of at least 4.5:1 and the controls of at least 3:1 in every theme; code and diagram follow the theme. |
 | 2    | Repeat on the other two platforms.      | Every setting is offered and works the same.                                                            |
+
+## TC-010-18: Zoom the editor font
+
+**Flow:** A11, BR-009, FR-087  
+**Preconditions:** The editor zoom is 100 percent; "Plan" is open in the left pane and "Ideas" in the right pane of the split view; the workspace has no editor zoom of its own.
+
+| Step | Action                                         | Expected result                                                                  |
+|------|------------------------------------------------|----------------------------------------------------------------------------------|
+| 1    | Press Ctrl+Plus twice.                         | The text of both notes is larger; the status bar shows 120 percent; the note overview, the tool panel, images, and diagrams keep their size. |
+| 2    | Look at the user settings file.                | It holds the editor zoom 120 percent.                                            |
+| 3    | Press Ctrl+0.                                  | 100 percent.                                                                     |
+| 4    | Press Ctrl+Minus six times.                    | 50 percent; the sixth press does nothing.                                       |
+| 5    | Hold Ctrl and turn the mouse wheel up over a note. | The text grows by 10 percent per step.                                       |
+| 6    | Restart Underline.                             | The editor zoom is the last one set; no note was changed.                        |
+
+## TC-010-19: Focus mode
+
+**Flow:** A12, BR-010, FR-088  
+**Preconditions:** The note overview, the tool panel, and the toolbars are shown; the split view shows two notes.
+
+| Step | Action                                             | Expected result                                                               |
+|------|----------------------------------------------------|-------------------------------------------------------------------------------|
+| 1    | Press Ctrl+Alt+F.                                  | The note overview, the tool panel, and the toolbars are hidden; both panes, the tabs, and the status bar stay. |
+| 2    | Press Ctrl+Shift+F and Ctrl+Shift+P.               | The search of the workspace and the command palette open as usual.           |
+| 3    | Restart Underline.                                 | The focus mode is still on.                                                   |
+| 4    | Run the command for the focus mode from the command palette. | Everything is shown again.                                         |
+
+## TC-010-20: Soft wrap
+
+**Flow:** A3, BR-011, FR-089  
+**Preconditions:** `Wide.md` holds a line of 400 characters, a paragraph of 400 characters, a wide table, and a code block with a line of 300 characters; soft wrap is on.
+
+| Step | Action                                         | Expected result                                                                 |
+|------|------------------------------------------------|---------------------------------------------------------------------------------|
+| 1    | Look at the source view.                       | Every long line is wrapped; the line numbers count each note line once.         |
+| 2    | Press Alt+Z.                                   | Long lines run on; the editor scrolls sideways; the setting is stored.           |
+| 3    | Switch to the facade.                          | The paragraph still wraps; the table and the code block scroll sideways.        |
+| 4    | Compare `Wide.md` with its version before.     | It is unchanged.                                                                |
+
+## TC-010-21: Spell check language for me and for a workspace
+
+**Flow:** A1, BR-001, FR-100  
+**Preconditions:** The system language is German (Switzerland); the user settings file sets no spell check language; the workspaces `notes` and `english` exist.
+
+| Step | Action                                                         | Expected result                                                         |
+|------|----------------------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Open the settings.                                             | "For me" shows the spell check language German (Switzerland).          |
+| 2    | In "This workspace" of `english`, choose English (UK).         | Notes of `english` are checked in English (UK); the workspace settings file names it. |
+| 3    | Open `notes`.                                                  | Notes of `notes` are checked in German (Switzerland).                   |
+| 4    | In "For me", choose Off.                                       | `notes` shows no marks; `english` still uses English (UK).             |
+
+## TC-010-22: Close pairs, template folder, and daily note folder
+
+**Flow:** BR-001  
+**Preconditions:** The workspace `notes` has no settings of its own.
+
+| Step | Action                                                                      | Expected result                                                         |
+|------|-----------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Open the settings.                                                          | "For me" shows close pairs on; "This workspace" shows the template folder `templates`, the daily note folder `daily`, and the daily note template as "the template titled Daily". |
+| 2    | Look at "For me".                                                           | It offers no template folder, daily note folder, or daily note template. |
+| 3    | In "This workspace", set the template folder to `tpl` and the daily note folder to `journal`. | The workspace settings file names both; new notes offer the notes of `tpl` as templates (UC-003); the daily note is created in `journal` (UC-025). |

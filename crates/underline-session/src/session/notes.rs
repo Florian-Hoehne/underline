@@ -24,9 +24,11 @@
 use std::collections::HashMap;
 use std::time::{Duration, UNIX_EPOCH};
 
+use jiff::civil::DateTime;
 use underline_core::{
-    format_local_time, heading_title, now, DeleteProblem, DeletedNote, NewNote, NewNoteProblem,
-    NoteId, NoteMove, Rename, HOME_TITLE,
+    format_local_time, local_now, now, template_folder, DeleteProblem, DeletedNote, NewNote,
+    NewNoteProblem, NoteId, NoteMove, Rename, SettingKey, Template, TemplateUse, HOME_TITLE,
+    TEMPLATE_FOLDER,
 };
 use underline_editor_core::utf16::WebOffsets;
 use underline_facade::rename::{apply_edits, links_to_note, rename_note, Edit, OpenNotes, Renamed};
@@ -35,7 +37,7 @@ use super::Session;
 use crate::editor_view::units;
 use crate::notes_view::{
     CreateNoteAnswer, DeleteAnswer, DeleteQuestion, DeletedNoteView, NewNoteRequest, NewNoteStart,
-    RenameAnswer, RenameStart, RestoreAnswer,
+    RenameAnswer, RenameStart, RestoreAnswer, TemplateView,
 };
 
 /// UC-007 A4: the undo offered right after deleting, while the status shows
@@ -120,10 +122,47 @@ impl Session {
             .and_then(|(note, _)| note.folder())
             .unwrap_or_default()
             .to_owned();
+        let templates = self.templates();
+        let deeper = self.template_folder_prefix();
         Some(NewNoteStart {
             folder,
             format: open.workspace.default_format().into(),
+            templates: templates
+                .iter()
+                .map(|template| template_view(template, &deeper))
+                .collect(),
+            template_folder: self.template_folder_text(),
         })
+    }
+
+    /// UC-003 BR-008, OQ-217: the templates of the open workspace, in the
+    /// template folder its settings name; none without a workspace.
+    #[must_use]
+    pub fn templates(&self) -> Vec<Template> {
+        self.open.as_ref().map_or_else(Vec::new, |open| {
+            open.workspace.templates(
+                self.settings
+                    .workspace_text(SettingKey::TemplateFolder)
+                    .as_deref(),
+            )
+        })
+    }
+
+    /// The template folder as levels joined by `/` and a `/` after them,
+    /// for the label of a template that lies deeper.
+    fn template_folder_prefix(&self) -> String {
+        let setting = self.settings.workspace_text(SettingKey::TemplateFolder);
+        template_folder(setting.as_deref()).map_or_else(String::new, |folder| format!("{folder}/"))
+    }
+
+    /// UC-003 BR-008: the template folder as the settings write it, for
+    /// saying where templates are kept.
+    fn template_folder_text(&self) -> String {
+        self.settings
+            .workspace_text(SettingKey::TemplateFolder)
+            .map(|folder| folder.trim().to_owned())
+            .filter(|folder| !folder.is_empty())
+            .unwrap_or_else(|| TEMPLATE_FOLDER.to_owned())
     }
 
     /// UC-003 step 2: the file name the note of `request` will get, shown
@@ -145,26 +184,53 @@ impl Session {
     /// is offered to open instead (A2, A3); a title or folder not allowed
     /// keeps the dialog (A1, A4); a failure to write closes it and says why
     /// in the status (A5).
+    ///
+    /// UC-003 A7, A8: with a template chosen, the note gets the template's
+    /// content and note format with its placeholders filled in, and the
+    /// cursor goes where the template marks it; a template that cannot be
+    /// read gives the note with only its title, and the status says so.
     pub fn create_note(&mut self, request: &NewNoteRequest) -> CreateNoteAnswer {
+        self.create_note_at(request, local_now())
+    }
+
+    /// [`Session::create_note`] at the time `now` of the local clock.
+    pub fn create_note_at(&mut self, request: &NewNoteRequest, now: DateTime) -> CreateNoteAnswer {
+        let template_folder = self.settings.workspace_text(SettingKey::TemplateFolder);
+        let formats = &self.formats;
         let Some(open) = &mut self.open else {
             return CreateNoteAnswer::Done;
         };
         let new = new_note(request);
-        let content = self
-            .formats
-            .new_note(new.format, &heading_title(&new.title));
-        match open.workspace.create_note(&new, &content) {
-            Ok(id) => {
-                self.open_note(&id);
-                self.status = format!("Created the note {}", id.title());
-                self.end_of(&id)
-                    .map_or(CreateNoteAnswer::Done, |(rev, offset)| {
-                        CreateNoteAnswer::Created {
-                            note: id.as_str().to_owned(),
-                            rev,
-                            offset,
-                        }
-                    })
+        let choice = open
+            .workspace
+            .template_choice(template_folder.as_deref(), request.template.as_deref());
+        let heading = |format, title: &str| formats.new_note(format, title);
+        match open
+            .workspace
+            .create_note_from(&new, &choice, now, &heading)
+        {
+            Ok(created) => {
+                let id = created.id;
+                if request.side {
+                    self.open_note_to_side(&id);
+                } else {
+                    self.open_note(&id);
+                }
+                self.status = match created.template {
+                    TemplateUse::Unreadable { name, reason } => format!(
+                        "Created the note {} with only its title: the template {name} could not be read ({reason})",
+                        id.title()
+                    ),
+                    _ => format!("Created the note {}", id.title()),
+                };
+                self.place_in(&id, created.cursor).map_or(
+                    CreateNoteAnswer::Done,
+                    |(rev, offset)| CreateNoteAnswer::Created {
+                        note: id.as_str().to_owned(),
+                        rev,
+                        offset,
+                    },
+                )
             }
             Err(NewNoteProblem::Exists(id)) => CreateNoteAnswer::Problem {
                 problem: format!(
@@ -184,14 +250,16 @@ impl Session {
         }
     }
 
-    /// The end of the backend's text of the open note `id`: its revision
-    /// and the place in web units.
-    fn end_of(&self, id: &NoteId) -> Option<(u32, u32)> {
+    /// The place `cursor` (in characters; `None` for the end) of the
+    /// backend's text of the open note `id`: its revision and the place in
+    /// web units.
+    pub(super) fn place_in(&self, id: &NoteId, cursor: Option<usize>) -> Option<(u32, u32)> {
         let open = self.open.as_ref()?;
         let tab = open.tabs.get(open.tabs.find(id)?);
         let rope = tab.mirror.rope();
-        let end = WebOffsets::of(rope).to_web(rope, rope.len_chars());
-        Some((tab.mirror.rev(), units(end)))
+        let at = cursor.map_or(rope.len_chars(), |at| at.min(rope.len_chars()));
+        let place = WebOffsets::of(rope).to_web(rope, at);
+        Some((tab.mirror.rev(), units(place)))
     }
 
     /// UC-006 step 1, M-14.2: the dialog "Rename note" for `note`, its
@@ -376,6 +444,8 @@ impl Session {
             ));
         }
         self.status = status;
+        // UC-026 BR-003: its snapshots that could not follow it.
+        self.report_snapshot_problem();
     }
 
     /// UC-006 step 7: the tab of the renamed note shows it under its new
@@ -391,6 +461,7 @@ impl Session {
             return;
         }
         open.tabs.rename(&planned.from, planned.to.clone());
+        open.panes.rename(&planned.from, &planned.to);
         let root = open.root().to_owned();
         let path = root.join(planned.to_file());
         let written = std::fs::read_to_string(&path).ok();
@@ -522,7 +593,7 @@ impl Session {
         let root = open.root().to_owned();
         let reopen = match open.tabs.find(id) {
             Some(index) => {
-                open.tabs.close(index);
+                open.close_note(index);
                 true
             }
             None => false,
@@ -532,6 +603,8 @@ impl Session {
         self.refresh_overview();
         self.refresh_deleted();
         self.status = format!("Deleted {}", id.title());
+        // UC-026 BR-003: its snapshots that could not go with it.
+        self.report_snapshot_problem();
         self.undo_delete = deleted.map(|deleted| UndoDelete {
             deleted,
             reopen,
@@ -622,6 +695,8 @@ impl Session {
         self.refresh_overview();
         self.refresh_deleted();
         self.status = format!("Restored {}", id.title());
+        // UC-026 BR-003: its snapshots that could not come back.
+        self.report_snapshot_problem();
         RestoreAnswer::Restored {
             note: id.as_str().to_owned(),
         }
@@ -721,6 +796,28 @@ fn taken(existing: &NoteId) -> String {
         "A note named {} exists in that folder. Choose another title or folder.",
         existing.title()
     )
+}
+
+/// UC-003 BR-008: how the dialog offers `template`: its title, with the
+/// folders below the template folder (`deeper`, ending in `/`) after it.
+///
+/// The folders are shown as written, so `a-b` and `a b` stay apart.
+fn template_view(template: &Template, deeper: &str) -> TemplateView {
+    let id = template.id.as_str();
+    let in_folder = !deeper.is_empty()
+        && id
+            .get(..deeper.len())
+            .is_some_and(|start| start.to_lowercase() == deeper.to_lowercase());
+    let below = in_folder
+        .then(|| &id[deeper.len()..])
+        .and_then(|rest| rest.rsplit_once('/'))
+        .map(|(folders, _)| folders.to_owned());
+    let title = template.title();
+    TemplateView {
+        note: template.id.as_str().to_owned(),
+        label: below.map_or_else(|| title.clone(), |folders| format!("{title} ({folders})")),
+        format: template.format.into(),
+    }
 }
 
 /// The core's request of `request`.

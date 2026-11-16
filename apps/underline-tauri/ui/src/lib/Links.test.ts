@@ -84,6 +84,7 @@ describe('M-07.3 following links (UC-004 A2 to A4)', () => {
       note: LINK_TOUR_NOTE,
       at: LINK_TOUR_TEXT.indexOf('Down to the details'),
       rev: 1,
+      side: false,
     });
   });
 
@@ -252,7 +253,7 @@ describe('M-07.3 following links (UC-004 A2 to A4)', () => {
     await fireEvent.click(view.view.contentDOM, { ctrlKey: true, clientX: 5, clientY: 5 });
 
     await waitFor(() =>
-      expect(follow).toHaveBeenCalledWith({ note: LINK_TOUR_NOTE, at: label, rev: 1 }),
+      expect(follow).toHaveBeenCalledWith({ note: LINK_TOUR_NOTE, at: label, rev: 1, side: false }),
     );
     await waitFor(() => expect(jump).toHaveBeenCalledWith(headingAt('Details'), 1));
     await waitFor(() => expect(view.view.state.selection.main.head).toBe(headingAt('Details')));

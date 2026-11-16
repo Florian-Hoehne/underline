@@ -433,7 +433,7 @@ impl DiffJob {
 
 /// M-19.3: the hunks as the window shows them; with the tab's `rope`, each
 /// line knows where a click puts the cursor (UC-011 steps 7–8).
-fn hunks_view(hunks: &[Hunk], rope: Option<&Rope>) -> Vec<HunkView> {
+pub(super) fn hunks_view(hunks: &[Hunk], rope: Option<&Rope>) -> Vec<HunkView> {
     let web = rope.map(WebOffsets::of);
     let number = |n: Option<usize>| n.map_or_else(|| "    ".to_owned(), |n| format!("{n:>4}"));
     hunks
@@ -1276,7 +1276,7 @@ impl Session {
             .delete_note(id, now())
             .map_err(|err| err.to_string())?;
         if let Some(index) = open.tabs.find(id) {
-            open.tabs.close(index);
+            open.close_note(index);
         }
         self.state.note_deleted(&root, id);
         Ok(())
@@ -1311,7 +1311,7 @@ impl Session {
                         .map(|()| {
                             if let Some(open) = &mut self.open {
                                 if let Some(index) = open.tabs.find(&id) {
-                                    open.tabs.close(index);
+                                    open.close_note(index);
                                 }
                             }
                         }),

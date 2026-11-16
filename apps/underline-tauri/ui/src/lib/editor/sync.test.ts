@@ -5,6 +5,7 @@
 // goes on, flushing before commands and before closing, and a core that
 // failed for good opened anew.
 
+import { NO_SWITCHES } from '../search.svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CloseQuestion, MirrorView, SyncAnswer, SyncBatch } from '../bindings';
 import { MirrorCore } from './core';
@@ -343,7 +344,10 @@ describe('M-13.2 the hits after a burst of typing (app-tester F9)', () => {
         if (views.found) found.push(views.found.count);
       },
     };
-    setSearches({ overlay: 'ferry', find: null });
+    setSearches({
+      overlay: { text: 'ferry', switches: NO_SWITCHES, oneText: false, shownOnly: false },
+      find: null,
+    });
     await vi.waitFor(() => expect(found).toEqual([1]));
 
     // Typed within the 300 ms the core waits: the views right after the
@@ -355,6 +359,6 @@ describe('M-13.2 the hits after a burst of typing (app-tester F9)', () => {
     expect(found).toEqual([1]);
 
     await vi.waitFor(() => expect(found).toEqual([1, 2]), { timeout: 2000 });
-    setSearches({ overlay: '', find: null });
+    setSearches({ overlay: null, find: null });
   });
 });

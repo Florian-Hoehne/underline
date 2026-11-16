@@ -40,6 +40,23 @@
 //   shows the core's text again.
 // - Line numbers (M-08.7, `numbers.ts`), the fold arrows (`folding.ts`) and
 //   the marked hits (`found.ts`) are further extensions.
+// - FR-080, UC-005 A23: after typed text (also of the Vim keys' insert mode)
+//   the core is asked whether the place of a link is typed at the cursor
+//   (`linkContext`), Ctrl+Space asks for it in a written link; the list
+//   (`linkCompletion.svelte.ts`) takes its keys before anyone else while it
+//   shows, and its choice is written by the core (`completeLink`). A click
+//   elsewhere or leaving the text closes it.
+// - Package 4 (FR-081 to FR-086): close pairs, moving and duplicating lines
+//   and indenting list items are the core's (their keys go there as any
+//   key; the palette's commands come as `edit`); going to a line asks the
+//   core for the patch (`goToLine`); the current line and the matching
+//   bracket are an extension of the view (`currentLine.ts`, BR-022).
+// - FR-099, UC-005 BR-023, A28 (ADR-030): the words the spell check marks
+//   come as `spell-marks` events (`spellMarks.ts`), applied as the colours
+//   are. The context menu (the right mouse button, Shift+F10, the menu key)
+//   on a marked word asks the window for the spell menu (`onSpellMenu`);
+//   elsewhere the text has no context menu, as in egui. A correction is one
+//   change of the core (`correct`).
 
 import {
   Annotation,
@@ -55,19 +72,29 @@ import {
   type TransactionSpec,
 } from '@codemirror/state';
 import { EditorView, drawSelection, type ViewUpdate } from '@codemirror/view';
+import type { Refusal } from './refusal';
 import {
+  type AttributeChangeView,
+  type AttributeEdited,
   type ClipAction,
+  type EditActionName,
   type Insertion,
   type EditorCommandName,
   type EditorInput,
   type EditorPatch,
   type EditorState as EditorStateView,
   type FindAnswer,
+  type FindSpec,
   type FindStep,
   type FoundView,
   type AgentMarkView,
   type HighlightView,
   type KeysStatusView,
+  type SpellMarksView,
+  type LineTargetView,
+  type LinkChoice,
+  type LinkContextView,
+  type Replaced,
   type SectionsView,
   type TextChange,
   type VimChange,
@@ -75,15 +102,19 @@ import {
   type UiError,
   type VimState,
 } from '../bindings';
-import type { CursorMark } from '../facade/active';
+import type { CursorMark, ReplaceDone } from '../facade/active';
+import { linkCompletion, type CompletionTarget } from './linkCompletion.svelte';
 import { onPointerReleased, type Clipboarded } from './clipboard';
 import { folding, sectionsField, setSections } from './folding';
 import { foundField, foundRanges, setFound } from './found';
 import { agentMarksField, agentMarksTheme, setAgentMarks } from './agentMarks';
 import { colorField, setColors } from './highlight';
+import { setSpellMarks, spellField, spellTheme, spellWordAt, spellWordNext } from './spellMarks';
+import { correctionOf, shownWordOf, type ShownWord } from './spellWord';
 import { routeKey, type InputModeName } from './keys';
 import type { CoreListener } from './sync';
 import { lineNumbersOn, type LineNumberSide } from './numbers';
+import { lineAndBrackets } from './currentLine';
 
 /**
  * The Vim keys (`vim.ts` with `codemirror-vim`), loaded once the Vim mode
@@ -121,10 +152,17 @@ export interface EditorBackend {
   /** Sets the selection; gives the place for the status line. */
   select(note: string, rev: number, anchor: number, head: number): Promise<string>;
   /**
-   * UC-008 A6, M-13.4: a step of the find field holding `text`: the hit the
-   * core selected, `null` when nothing is found.
+   * UC-008 A6, A7, M-13.4: a step of the find field holding `spec`: the hit
+   * the core selected, `null` when nothing is found.
    */
-  find(note: string, text: string, step: FindStep): Promise<FindAnswer | null>;
+  find(note: string, spec: FindSpec, step: FindStep): Promise<FindAnswer | null>;
+  /** UC-005 A20, A21: replaces the selected occurrence of `spec`, or all. */
+  replace(
+    note: string,
+    spec: FindSpec,
+    replacement: string,
+    all: boolean,
+  ): Promise<Replaced<EditorPatch>>;
   viewport(note: string, from: number, to: number): Promise<void>;
   /**
    * A-01: the Vim keys' changes; `newStep` marks the start of an insert
@@ -151,19 +189,43 @@ export interface EditorBackend {
    * colours apply when the core is in step with their revision (`inStep`).
    */
   attach(note: string, listener: CoreListener): () => void;
+  /** FR-097: the view took the keyboard; the window reads the core as this view. */
+  focused?(note: string): void;
+  /**
+   * FR-097, UC-005 BR-016: the changes the note's other view made since
+   * revision `base`, with this view's selection; `null` when the view takes
+   * the whole text again.
+   */
+  since?(note: string, base: number): Promise<EditorPatch | null>;
   inStep(note: string, rev: number): boolean;
   /** M-11: the input mode of the settings, for the core's keys. */
   setMode(note: string, mode: InputModeName): void;
+  /**
+   * FR-080, UC-005 A23: the place of a link typed at the cursor; `manual`
+   * for Ctrl+Space. Without it, no link completion.
+   */
+  linkContext?(note: string, manual: boolean): LinkContextView | null;
+  /** FR-080: writes the link chosen; `null` when the text changed meanwhile. */
+  completeLink?(note: string, choice: LinkChoice): Promise<EditorPatch | null>;
+  /** UC-004 A16, BR-017: the cursor to the line and column of `target`. */
+  goToLine?(note: string, target: LineTargetView): Promise<EditorPatch>;
+  /** UC-024 step 4: writes `change` of a note attribute, one undo step; or says why not. */
+  attribute?(note: string, change: AttributeChangeView): Promise<AttributeEdited<EditorPatch>>;
 }
 
 /** Marks the transactions that bring the backend's text. */
 const fromBackend = Annotation.define<boolean>();
+
+/** UC-004 A16: how long a jump to a line waits for the sections to open a fold, in ms. */
+const REVEAL_MS = 1000;
 
 /** M-08.9: the cursor blinks as egui's: half a second on, half off. */
 const BLINK_MS = 1000;
 
 /**
  * M-08.1: DejaVu Sans Mono 14 px with soft wrap, in the theme's colours
+ * (UC-010 BR-009, BR-011: times the editor zoom, `--editor-zoom`; soft wrap
+ * as the settings say, `setSoftWrap`)
  * (the `--palette-*` variables, lib/theme.ts). egui leaves 6 px around
  * the text. The line numbers and the "…" of a folded heading are 45 % of
  * the text colour (M-08.7); a marked hit is behind the text in the theme's
@@ -182,7 +244,7 @@ const sourceTheme = EditorView.theme({
   '&.cm-focused': { outline: 'none', borderColor: 'var(--ui-focus)' },
   '.cm-scroller': {
     fontFamily: 'var(--font-mono)',
-    fontSize: '14px',
+    fontSize: 'calc(14px * var(--editor-zoom, 1))',
     lineHeight: '1.25',
   },
   '.cm-content': { padding: '6px 0', caretColor: 'var(--palette-foreground)' },
@@ -264,6 +326,11 @@ const scrolled = new Map<string, StateEffect<unknown>>();
 export type SourceViewOptions = {
   /** The command key is Cmd (macOS) instead of Ctrl. */
   mac: boolean;
+  /**
+   * UC-005 BR-016: what the view's reading position is remembered under, so
+   * the tab of a note in each pane keeps its own; the note when not given.
+   */
+  place?: string;
   /** The name of the text field for screen readers: the note's title. */
   label: string;
   /** A command failed; the message is a status text. */
@@ -287,7 +354,32 @@ export type SourceViewOptions = {
   /** UC-005 A2: a toolbar function asks first (Link, Image; feature F6). */
   onRequest?: (tool: ToolName) => void;
   /** M-07.3, UC-004 BR-006: a Ctrl+click (Cmd+click) at `at` (web units) follows the link there. */
-  onFollow?: (at: number) => void;
+  /** M-07.3; UC-004 A18: with Shift held too, into the other pane (`side`). */
+  onFollow?: (at: number, side: boolean) => void;
+  /** UC-010 BR-011: long lines wrap (the default) or run on. */
+  softWrap?: boolean;
+  /** UC-010 BR-009: the editor zoom in percent (100 by default). */
+  zoom?: number;
+  /**
+   * UC-005 A28: the context menu was asked for on the marked word `word`
+   * at `from`..`to` (web units); the menu opens at `x`, `y`.
+   */
+  onSpellMenu?: (request: SpellMenuRequest) => void;
+};
+
+/** UC-005 A28: where the spell menu opens, and for which word. */
+export type SpellMenuRequest = {
+  /** The word as shown, with the markup offset of each unit. */
+  shown: ShownWord;
+  /** The markup the mark covers, `from`..`to` in web units. */
+  markup: string;
+  from: number;
+  to: number;
+  /** Where the menu opens: below the word's line. */
+  x: number;
+  y: number;
+  /** The core's revision of the text the word was marked in. */
+  rev: number;
 };
 
 /** What changed for those who follow the view (`subscribe`). */
@@ -309,6 +401,17 @@ function covering(changes: ChangeSet, after: Text): TextChange | null {
     return null;
   }
   return { from: fromA, to: toA, insert: after.sliceString(fromB, toB) };
+}
+
+/** FR-080: the attributes of the text naming the list of link completion. */
+function linkAriaOf(aria: { expanded: boolean; controls?: string; active?: string }): Extension {
+  // `aria-expanded` belongs to a combobox, not to the text box the text is
+  // (ARIA 1.2); the list is named by `aria-controls` and its chosen entry by
+  // `aria-activedescendant` while it shows.
+  const attributes: Record<string, string> = { 'aria-haspopup': 'listbox' };
+  if (aria.controls) attributes['aria-controls'] = aria.controls;
+  if (aria.active) attributes['aria-activedescendant'] = aria.active;
+  return EditorView.contentAttributes.of(attributes);
 }
 
 export class SourceView {
@@ -338,6 +441,8 @@ export class SourceView {
   #pending: HighlightView | null = null;
   #pendingSections: SectionsView | null = null;
   #pendingFound: FoundView | null = null;
+  /** FR-099: the spell check's marks for a revision the view has not reached yet. */
+  #pendingSpell: SpellMarksView | null = null;
   /** What an input method changed in CodeMirror, taken back at its end. */
   #composed: { changes: ChangeSet; startDoc: Text } | null = null;
   #composing = new WeakSet<Transaction>();
@@ -349,6 +454,12 @@ export class SourceView {
   #wantedMode: InputModeName;
   #modeSlot = new Compartment();
   #numbersSlot = new Compartment();
+  /** UC-010 BR-009: a theme per editor zoom, so CodeMirror measures its lines anew. */
+  #zoomSlot = new Compartment();
+  /** UC-010 BR-011: soft wrap on or off. */
+  #wrapSlot = new Compartment();
+  /** FR-080: what the text says of the list of link completion, for screen readers. */
+  #linkAriaSlot = new Compartment();
   /** The Nano search prompt is open (M-11.3). */
   #prompting = false;
   #unwatchVim: (() => void) | null = null;
@@ -359,6 +470,21 @@ export class SourceView {
   #detach: (() => void) | null = null;
   /** M-10.7: stops waiting for the mouse buttons to be let go. */
   #unwatchPointer: (() => void) | null = null;
+  /** UC-004 A16: until when (`performance.now()`) a jump to a line waits for the sections; 0: none. */
+  #revealUntil = 0;
+  /** FR-080: the next patch is that of typed text, after which a link may be typed. */
+  #linkAfter = false;
+  /** FR-080: this view as the link completion writes into it. */
+  #linkTarget: CompletionTarget = {
+    note: '',
+    complete: (choice) => {
+      const complete = this.#backend.completeLink;
+      if (complete) {
+        this.#enqueue(() => complete(this.note, choice));
+      }
+    },
+    place: (from) => this.#linkPlace(from),
+  };
   /** Measuring (`bench.ts`): when an input's handling began and its patch was in. */
   probe: ((start: number, patched: number) => void) | null = null;
 
@@ -379,8 +505,9 @@ export class SourceView {
     this.view = new EditorView({
       parent,
       state: editorState,
-      scrollTo: scrolled.get(state.note),
+      scrollTo: scrolled.get(options.place ?? state.note),
     });
+    this.view.dom.style.setProperty('--editor-zoom', String((options.zoom ?? 100) / 100));
     this.view.scrollDOM.addEventListener('scroll', this.#scrolled, { passive: true });
     // A paste is the view's before the Vim keys see it: `codemirror-vim`
     // would enter insert mode and paste there (A-66); the Vim command line
@@ -397,6 +524,11 @@ export class SourceView {
       }
     });
     this.#attach();
+    this.#linkTarget = { ...this.#linkTarget, note: state.note };
+    // FR-080: the list's keys come before CodeMirror's and the Vim keys'.
+    this.view.contentDOM.addEventListener('keydown', this.#linkKey, true);
+    this.view.contentDOM.addEventListener('blur', this.#linkBlur);
+    this.view.contentDOM.addEventListener('focus', this.#focused);
     this.#modeStarted();
     this.#options.onPlace?.(state.place);
     if (this.#mode === 'Nano') {
@@ -489,10 +621,185 @@ export class SourceView {
     this.view.dispatch({ effects: this.#numbersSlot.reconfigure(lineNumbersOn(shown, side)) });
   }
 
+  /**
+   * UC-010 A3, BR-011: soft wrap on or off. The note is not changed: the
+   * line numbers and go to line count its lines either way. The line at
+   * the top stays there.
+   */
+  setSoftWrap(on: boolean): void {
+    if (this.#destroyed || (this.#options.softWrap !== false) === on) {
+      return;
+    }
+    this.#options.softWrap = on;
+    this.#keepingPlace(() =>
+      this.view.dispatch({
+        effects: this.#wrapSlot.reconfigure(on ? EditorView.lineWrapping : []),
+      }),
+    );
+  }
+
+  /**
+   * UC-010 A11, BR-009: the text `zoom` percent of its normal size; the line
+   * at the top stays there, and the cursor stays in view when it was.
+   */
+  setZoom(zoom: number): void {
+    const now = String(zoom / 100);
+    if (this.#destroyed || this.view.dom.style.getPropertyValue('--editor-zoom') === now) {
+      return;
+    }
+    this.#keepingPlace(() => {
+      this.view.dom.style.setProperty('--editor-zoom', now);
+      this.view.requestMeasure();
+    });
+    // UX review M1: CodeMirror keeps the gutter's line heights until it
+    // measures again; once the new size is laid out, the gutter is made
+    // anew and measured, so the numbers stand beside their lines.
+    const frame = globalThis.requestAnimationFrame ?? ((f: () => void) => setTimeout(f, 16));
+    frame(() => this.#remeasureGutter());
+  }
+
+  /** The line numbers made anew and the view measured again. */
+  #remeasureGutter(): void {
+    if (this.#destroyed) {
+      return;
+    }
+    const numbers = this.#options.lineNumbers;
+    // A changed theme is what makes CodeMirror measure the height of its
+    // lines again (a CSS variable alone does not); the gutter follows.
+    const zoom = this.view.dom.style.getPropertyValue('--editor-zoom') || '1';
+    this.view.dispatch({
+      effects: [
+        this.#zoomSlot.reconfigure(EditorView.theme({ '&': { '--editor-zoom-measured': zoom } })),
+        this.#numbersSlot.reconfigure(
+          lineNumbersOn(numbers?.shown ?? false, numbers?.side ?? 'Left'),
+        ),
+      ],
+    });
+    this.view.requestMeasure();
+  }
+
+  /**
+   * Runs `change`, which lays the text out anew, and scrolls back to the
+   * line that was at the top; the cursor, if it was in view, stays so.
+   */
+  #keepingPlace(change: () => void): void {
+    const view = this.view;
+    const before = this.#shownLines();
+    change();
+    if (before === null) {
+      return;
+    }
+    const head = view.state.selection.main.head;
+    const cursorShown = before.from <= head && head <= before.to;
+    view.dispatch({ effects: EditorView.scrollIntoView(before.from, { y: 'start' }) });
+    if (!cursorShown) {
+      return;
+    }
+    // Once laid out anew: the cursor back into view if it left it.
+    const frame = globalThis.requestAnimationFrame ?? ((f: () => void) => setTimeout(f, 16));
+    frame(() => {
+      const after = this.#shownLines();
+      const now = view.state.selection.main.head;
+      if (!this.#destroyed && after !== null && (now < after.from || now > after.to)) {
+        view.dispatch({ effects: EditorView.scrollIntoView(now, { y: 'nearest' }) });
+      }
+    });
+  }
+
+  /** The text from the line at the top of the view to the end of the line at its bottom. */
+  #shownLines(): { from: number; to: number } | null {
+    const view = this.view;
+    try {
+      const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop;
+      const top = view.lineBlockAtHeight(Math.max(0, height));
+      const bottom = view.lineBlockAtHeight(Math.max(0, height + view.scrollDOM.clientHeight));
+      return { from: top.from, to: bottom.to };
+    } catch {
+      // Without a layout (the tests) there is no place to keep.
+      return null;
+    }
+  }
+
   /** M-10.2: a button of the toolbar; the keyboard goes back into the text. */
   tool(tool: ToolName): void {
     this.#enqueue(() => this.#backend.input(this.note, { kind: 'tool', tool }));
     this.focus();
+  }
+
+  /**
+   * UC-005 A26, A27: an action of the editing comfort from the command
+   * palette, as its key does it; the keyboard goes back into the text.
+   */
+  edit(action: EditActionName): void {
+    this.#enqueue(() => this.#backend.input(this.note, { kind: 'edit', action }));
+    this.focus();
+  }
+
+  /** UC-004 A16 step 1: how many lines the note has, as the line numbers count them. */
+  lineCount(): number {
+    return this.view.state.doc.lines;
+  }
+
+  /**
+   * UC-004 A16 step 3, BR-017: the cursor to the line and column of
+   * `target`, after the inputs before it; shown, with the keyboard.
+   */
+  goToLine(target: LineTargetView): void {
+    const go = this.#backend.goToLine;
+    if (go) {
+      this.#enqueue(async () => {
+        const patch = await go(this.note, target);
+        // A folded section that holds the line opens only with the next
+        // sections; the cursor is shown again once they are laid out.
+        this.#revealUntil = performance.now() + REVEAL_MS;
+        return patch;
+      });
+    }
+    this.focus();
+  }
+
+  /**
+   * UC-004 A16, BR-017: after the sections changed, the cursor is scrolled
+   * into view again, centred, while a jump to a line waits for them.
+   */
+  #revealAfterSections(): void {
+    if (this.#revealUntil === 0) {
+      return;
+    }
+    const waiting = performance.now() <= this.#revealUntil;
+    this.#revealUntil = 0;
+    if (waiting && !this.#destroyed) {
+      const head = this.view.state.selection.main.head;
+      this.view.dispatch({ effects: EditorView.scrollIntoView(head, { y: 'center' }) });
+    }
+  }
+
+  /**
+   * UC-024 step 4, BR-006: writes `change` of a note attribute into the
+   * text, after the inputs before it, as one undo step; resolves once it is
+   * shown, with why nothing was written and what about (A3, A4), else
+   * `null`.
+   */
+  attribute(change: AttributeChangeView): Promise<Refusal | null> {
+    const write = this.#backend.attribute;
+    if (!write) {
+      return Promise.resolve({
+        problem: 'The note attributes cannot be changed here.',
+        about: 'note',
+      });
+    }
+    let refusal: Refusal | null = null;
+    this.#enqueue(async () => {
+      const edited = await write(this.note, change);
+      refusal = edited.problem === null ? null : { problem: edited.problem, about: edited.about };
+      return edited.patch;
+    });
+    return this.#queue.then(() => refusal);
+  }
+
+  /** UC-024 BR-006: undoes the last change of the note, as Ctrl+Z (Cmd+Z) in it does. */
+  undo(): void {
+    this.#history('Z');
   }
 
   /**
@@ -558,17 +865,18 @@ export class SourceView {
   }
 
   /**
-   * UC-008 A6, M-13.4: a step of the find field holding `text`, after the
-   * inputs before it: the core selects the hit, the view shows it (egui's
-   * `select_chars`, which scrolls to it); the keyboard stays where it is.
+   * UC-008 A6, A7, M-13.4: a step of the find field holding `spec`, after
+   * the inputs before it: the core selects the hit, the view shows it
+   * (egui's `select_chars`, which scrolls to it); the keyboard stays where
+   * it is.
    */
-  find(text: string, step: FindStep): Promise<FindAnswer | null> {
+  find(spec: FindSpec, step: FindStep): Promise<FindAnswer | null> {
     return new Promise((resolve) => {
       this.#enqueue(async () => {
         let answer: FindAnswer | null = null;
         try {
           if (!this.#destroyed) {
-            answer = await this.#backend.find(this.note, text, step);
+            answer = await this.#backend.find(this.note, spec, step);
           }
           if (answer && !this.#destroyed && this.#inStep(answer.rev)) {
             this.view.dispatch({
@@ -582,6 +890,32 @@ export class SourceView {
           resolve(answer);
         }
         return null;
+      });
+    });
+  }
+
+  /**
+   * UC-005 A20, A21, FR-073: replaces the selected occurrence of `spec`
+   * with `replacement`, or all of them, after the inputs before it; the
+   * view shows the change and the next occurrence selected. What the find
+   * field says then, and how many were replaced; `null` once the view is
+   * gone.
+   */
+  replace(spec: FindSpec, replacement: string, all: boolean): Promise<ReplaceDone | null> {
+    return new Promise((resolve, reject) => {
+      this.#enqueue(async () => {
+        if (this.#destroyed) {
+          resolve(null);
+          return null;
+        }
+        try {
+          const done = await this.#backend.replace(this.note, spec, replacement, all);
+          resolve({ replaced: done.replaced, status: done.status });
+          return done.patch;
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+          return null;
+        }
       });
     });
   }
@@ -610,6 +944,13 @@ export class SourceView {
       },
       synced: () => this.#takePending(),
       reopened: () => this.#enqueue(() => this.#reload()),
+      // FR-097: the note's other view changed the text; it shows here at once.
+      sibling: () =>
+        this.#enqueue(async () => {
+          const since = this.#backend.since;
+          const patch = since ? await since(this.note, this.#rev) : null;
+          return patch ?? this.#reload();
+        }),
     });
   }
 
@@ -633,6 +974,106 @@ export class SourceView {
     return this.#local.length === 0 && this.#backend.inStep(this.note, rev);
   }
 
+  /**
+   * FR-099, UC-005 BR-023: the words the spell check marks; kept for a
+   * later revision, while the marks shown move along with the edits.
+   */
+  takeSpell(marks: SpellMarksView): void {
+    if (marks.note !== this.note || this.#destroyed) {
+      return;
+    }
+    if (this.#colorsInStep(marks.rev)) {
+      this.#pendingSpell = null;
+      this.view.dispatch({ effects: setSpellMarks.of(marks.marks) });
+    } else {
+      this.#pendingSpell = marks;
+    }
+  }
+
+  /**
+   * UC-005 A28 step 2, TC-005-39: the marked word of `request` becomes
+   * `suggestion`, as one change of the core, undone alone; only the units
+   * that differ change, so markup inside the word stays. When the text
+   * there is no longer the word, nothing changes.
+   */
+  correct(request: SpellMenuRequest, suggestion: string): Promise<boolean> {
+    const change = correctionOf(request.shown, suggestion);
+    if (
+      change === null ||
+      request.rev !== this.#rev ||
+      this.#local.length > 0 ||
+      this.view.state.sliceDoc(request.from, request.to) !== request.markup
+    ) {
+      // ADR-030: the text changed since the word was marked.
+      return Promise.resolve(false);
+    }
+    this.#enqueue(async () => {
+      await this.#backend.select(this.note, this.#rev, change.from, change.to);
+      return this.#backend.insert(this.note, { kind: 'correction', text: change.text });
+    });
+    return this.#queue.then(() => true);
+  }
+
+  /**
+   * UC-005 A28: the cursor to the next marked word (`back`: the one
+   * before), shown, with the keyboard; false when no word is marked.
+   */
+  stepSpell(back: boolean): boolean {
+    const word = spellWordNext(this.view, this.view.state.selection.main.head, back);
+    if (!word) {
+      return false;
+    }
+    this.view.dispatch({
+      selection: { anchor: word[0] },
+      effects: EditorView.scrollIntoView(word[0], { y: 'center' }),
+    });
+    this.view.focus();
+    return true;
+  }
+
+  /**
+   * UC-005 A28: asks for the spell menu of the marked word at `at`, opening
+   * at `x`, `y`; false when no word is marked there.
+   */
+  #spellMenu(at: number, x: number, y: number): boolean {
+    const word = this.#options.onSpellMenu ? spellWordAt(this.view, at) : null;
+    if (!word) {
+      return false;
+    }
+    const [from, to] = word;
+    const markup = this.view.state.sliceDoc(from, to);
+    // Below the word's line, so the word stays readable.
+    const box = this.view.coordsAtPos(from);
+    const place = box ? { x: box.left, y: box.bottom } : { x, y };
+    this.#options.onSpellMenu?.({
+      shown: shownWordOf(markup, from),
+      markup,
+      from,
+      to,
+      ...place,
+      rev: this.#rev,
+    });
+    return true;
+  }
+
+  /** The context menu by the mouse: the spell menu on a marked word, else none. */
+  #onContextMenu(event: MouseEvent, view: EditorView): boolean {
+    event.preventDefault();
+    const at = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (at !== null) {
+      this.#spellMenu(at, event.clientX, event.clientY);
+    }
+    return true;
+  }
+
+  /** Shift+F10, the menu key or the palette: the spell menu of the marked word at the cursor. */
+  spellMenuAtCursor(): boolean {
+    const head = this.view.state.selection.main.head;
+    // Where the cursor is drawn; the text's corner when it is not laid out.
+    const box = this.view.coordsAtPos(head) ?? this.view.contentDOM.getBoundingClientRect();
+    return this.#spellMenu(head, box.left, box.bottom);
+  }
+
   /** M-08.8: the sections the core found; kept for a later revision. */
   #ownSections(sections: SectionsView): void {
     if (sections.note !== this.note) {
@@ -640,6 +1081,7 @@ export class SourceView {
     }
     if (this.#inStep(sections.rev)) {
       this.view.dispatch({ effects: setSections.of(sections.sections) });
+      this.#revealAfterSections();
     } else {
       this.#pendingSections = sections;
     }
@@ -673,6 +1115,7 @@ export class SourceView {
     }
     this.#destroyed = true;
     this.#detach?.();
+    this.view.contentDOM.removeEventListener('focus', this.#focused);
     this.#unwatchPointer?.();
     if (this.#viewportTimer !== null) {
       clearTimeout(this.#viewportTimer);
@@ -681,8 +1124,11 @@ export class SourceView {
     vimModule?.dropVimKeys(this.view);
     this.view.scrollDOM.removeEventListener('scroll', this.#scrolled);
     this.view.dom.removeEventListener('paste', this.#pasteFirst, true);
+    this.view.contentDOM.removeEventListener('keydown', this.#linkKey, true);
+    this.view.contentDOM.removeEventListener('blur', this.#linkBlur);
+    linkCompletion.close(this.note);
     this.#listeners.clear();
-    scrolled.set(this.note, this.view.scrollSnapshot());
+    scrolled.set(this.#options.place ?? this.note, this.view.scrollSnapshot());
     this.view.destroy();
   }
 
@@ -735,7 +1181,8 @@ export class SourceView {
     return [
       // A-01: the Vim keys see the keys first.
       this.#modeSlot.of(this.#modeExtension()),
-      EditorView.lineWrapping,
+      this.#linkAriaSlot.of(linkAriaOf({ expanded: false })),
+      this.#wrapSlot.of(this.#options.softWrap === false ? [] : EditorView.lineWrapping),
       drawSelection({ cursorBlinkRate: BLINK_MS }),
       EditorView.contentAttributes.of({
         spellcheck: 'false',
@@ -744,6 +1191,7 @@ export class SourceView {
         'aria-label': this.#options.label,
       }),
       folding((line) => this.#enqueue(() => this.#backend.fold(this.note, line))),
+      this.#zoomSlot.of([]),
       this.#numbersSlot.of(
         lineNumbersOn(
           this.#options.lineNumbers?.shown ?? false,
@@ -751,7 +1199,12 @@ export class SourceView {
         ),
       ),
       colorField,
+      // FR-084, FR-085: the current line and the matching bracket.
+      lineAndBrackets(),
       foundField,
+      // FR-099, UC-005 BR-023: the words the spell check marks.
+      spellField,
+      spellTheme,
       // M-17.6: the agent cursor.
       agentMarksField,
       agentMarksTheme,
@@ -767,8 +1220,9 @@ export class SourceView {
         // text is not dropped or dragged (FR-034 open, D-15).
         drop: (event) => this.#refuse(event),
         dragstart: (event) => this.#refuse(event),
-        // The egui editor has no context menu.
-        contextmenu: (event) => this.#refuse(event),
+        // The egui editor has no context menu; a word the spell check
+        // marks has one (UC-005 A28).
+        contextmenu: (event, view) => this.#onContextMenu(event, view),
         compositionend: () => {
           // CodeMirror takes in the last change of the composition after
           // this event.
@@ -802,6 +1256,15 @@ export class SourceView {
   #onKey(event: KeyboardEvent): boolean {
     if (event.defaultPrevented) {
       // The Vim keys took it.
+      return true;
+    }
+    if (
+      ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') &&
+      !this.view.composing &&
+      this.spellMenuAtCursor()
+    ) {
+      // UC-005 A28: the spell menu of the word at the cursor.
+      event.preventDefault();
       return true;
     }
     if (event.key === 'Escape' && !this.view.composing && this.#mode === 'Normal') {
@@ -838,6 +1301,7 @@ export class SourceView {
     event.preventDefault();
     const text = event.data;
     if (event.inputType === 'insertText' && text) {
+      this.#linkAfter = true;
       this.#enqueue(() => this.#backend.input(this.note, { kind: 'text', text }));
     }
     return true;
@@ -873,9 +1337,10 @@ export class SourceView {
       return false;
     }
     const follow = this.#options.onFollow;
+    const side = event.shiftKey;
     this.#enqueue(async () => {
       if (!this.#destroyed) {
-        follow(at);
+        follow(at, side);
       }
       return null;
     });
@@ -940,6 +1405,7 @@ export class SourceView {
       annotations: fromBackend.of(true),
     });
     if (text !== '') {
+      this.#linkAfter = true;
       this.#enqueue(() => this.#backend.input(this.note, { kind: 'text', text }));
     }
   }
@@ -959,6 +1425,11 @@ export class SourceView {
         // M-08.3: the selection the mouse (or the Vim keys) made.
         this.#selectionDirty = true;
         sync = true;
+        if (!tr.docChanged && !tr.selection.eq(tr.startState.selection)) {
+          // FR-080: the cursor went elsewhere; the list closes. A selection
+          // read back unchanged from the page (after Ctrl+Space) keeps it.
+          linkCompletion.close(this.note);
+        }
       }
     }
     if (sync) {
@@ -989,6 +1460,9 @@ export class SourceView {
   }
 
   #scrolled = (): void => this.#notify('scroll');
+
+  /** FR-097: the keyboard came to this view. */
+  #focused = (): void => this.#backend.focused?.(this.note);
 
   /** M-08.6, M-10.6: a paste into the text, taken before anyone else sees it. */
   #pasteFirst = (event: ClipboardEvent): void => {
@@ -1045,6 +1519,8 @@ export class SourceView {
       }
       this.#baseDoc = doc;
       this.#rev = answer.rev;
+      // FR-080: text typed in the insert mode of the Vim keys.
+      this.#linkAfter = !!vimModule?.vimInserting(this.view);
       this.#took(answer);
     } else if (dirty) {
       const place = await this.#backend.select(this.note, this.#rev, anchor, head);
@@ -1160,7 +1636,98 @@ export class SourceView {
       this.#options.onRequest?.(patch.request);
     }
     this.#takePending();
+    this.#afterPatch();
   }
+
+  /**
+   * FR-080: after typed text, or any patch while the list shows, the core
+   * is asked again whether a link is typed at the cursor.
+   */
+  #afterPatch(): void {
+    const typed = this.#linkAfter;
+    this.#linkAfter = false;
+    if (typed || linkCompletion.active(this.note)) {
+      this.#askLink(false);
+    }
+  }
+
+  /** FR-080, OQ-247: link completion in the place of the link at the cursor, as Ctrl+Space asks. */
+  completeLink(): void {
+    this.focus();
+    this.#enqueue(async () => {
+      this.#askLink(true);
+      return null;
+    });
+  }
+
+  /** FR-080, UC-005 A23: asks the core for the link typed at the cursor and offers it to the list. */
+  #askLink(manual: boolean): void {
+    const ask = this.#backend.linkContext;
+    if (!ask || this.#destroyed || this.#local.length > 0) {
+      return;
+    }
+    let context: LinkContextView | null;
+    try {
+      context = ask(this.note, manual);
+    } catch (error) {
+      this.#fail(error);
+      return;
+    }
+    const place = context !== null ? this.#linkPlace(context.from) : null;
+    linkCompletion.offer(this.#linkTarget, context, place, manual);
+  }
+
+  /** FR-080: where the link starting at `from` is on the screen; `null` when it is not laid out. */
+  #linkPlace(from: number): { left: number; top: number; bottom: number } | null {
+    if (this.#destroyed) {
+      return null;
+    }
+    const at = Math.min(from, this.view.state.doc.length);
+    let coords = null;
+    try {
+      coords =
+        this.view.coordsAtPos(at) ?? this.view.coordsAtPos(this.view.state.selection.main.head);
+    } catch {
+      // Nothing laid out (a test's DOM): the list shows without a place.
+    }
+    return coords ? { left: coords.left, top: coords.top, bottom: coords.bottom } : null;
+  }
+
+  /** FR-080: tells screen readers of the list of link completion while it shows. */
+  setLinkAria(aria: { expanded: boolean; controls?: string; active?: string }): void {
+    if (this.#destroyed) {
+      return;
+    }
+    this.view.dispatch({ effects: this.#linkAriaSlot.reconfigure(linkAriaOf(aria)) });
+  }
+
+  /**
+   * FR-080: the keys of the list while it shows (UC-005 A23 step 2, A24),
+   * and Ctrl+Space, which asks for the completion in the place of a link.
+   */
+  #linkKey = (event: KeyboardEvent): void => {
+    if (!this.#backend.linkContext || this.view.composing) {
+      return;
+    }
+    if (linkCompletion.key(event, this.note)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.key === ' ' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#enqueue(async () => {
+        this.#askLink(true);
+        return null;
+      });
+    }
+  };
+
+  /** FR-080: leaving the text closes the list. */
+  #linkBlur = (): void => {
+    linkCompletion.close(this.note);
+  };
 
   /** Colours, sections and hits that waited for the revision shown now. */
   #takePending(): void {
@@ -1173,6 +1740,12 @@ export class SourceView {
     if (sections && this.#inStep(sections.rev)) {
       this.#pendingSections = null;
       this.view.dispatch({ effects: setSections.of(sections.sections) });
+      this.#revealAfterSections();
+    }
+    const spell = this.#pendingSpell;
+    if (spell && this.#colorsInStep(spell.rev)) {
+      this.#pendingSpell = null;
+      this.view.dispatch({ effects: setSpellMarks.of(spell.marks) });
     }
     const found = this.#pendingFound;
     if (found && this.#inStep(found.rev)) {
@@ -1201,6 +1774,10 @@ export class SourceView {
     this.#pendingFound = null;
     this.#viewport = null;
     this.#attach();
+    this.#linkTarget = { ...this.#linkTarget, note: state.note };
+    // FR-080: the list's keys come before CodeMirror's and the Vim keys'.
+    this.view.contentDOM.addEventListener('keydown', this.#linkKey, true);
+    this.view.contentDOM.addEventListener('blur', this.#linkBlur);
     this.#modeStarted();
     this.#options.onPlace?.(state.place);
     this.#reportViewport(true);

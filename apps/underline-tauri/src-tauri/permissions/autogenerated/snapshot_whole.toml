@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-snapshot-whole"
+description = "Enables the snapshot_whole command without any pre-configured scope."
+commands.allow = ["snapshot_whole"]
+
+[[permission]]
+identifier = "deny-snapshot-whole"
+description = "Denies the snapshot_whole command without any pre-configured scope."
+commands.deny = ["snapshot_whole"]

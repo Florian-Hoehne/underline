@@ -14,7 +14,8 @@
 
   M-06.4 (features F8, F11): the context menu of a tab, "Rename…  F2",
   "Delete…" and "Export…  Ctrl+Shift+E" ("Cmd+Shift+E" on macOS, inventory
-  D-11 fixed); it also opens with Shift+F10 or the context menu key (A-80).
+  D-11 fixed), then "Snapshots…" (UC-026 step 1); it also opens with
+  Shift+F10 or the context menu key (A-80).
 
   M-06.5 (feature F15, UC-021 BR-006): while the todo list is open, the
   one tab "Todos (N)" follows the note tabs, N the open todos ("Todos"
@@ -25,27 +26,57 @@
   The active tab scrolls into view. After a tab closed with the keyboard,
   the keyboard goes to the tab now at its place, else to the one left of
   it, else to the note overview.
+
+  Package 7a (FR-096, FR-097, UC-004 A18 to A20, BR-018): each pane of the
+  split view has its own tab bar (`pane`); the tab "Todos" is the left
+  pane's. A tab's context menu has "Open to the side" (A18; for the active
+  tab's note A19 shows its other editing view) and, while the split view
+  shows, "End the split view" (A20). A click on a tab makes its pane the
+  active one. After the review: the right pane's tab bar ends with a
+  button "End the split view" (and, while the window is too narrow for the
+  tool panel beside two panes, a switch of the tool panel, `trailing`); a
+  tab whose note is open in the other pane too carries "⇆" with the hint
+  "Also open in the other pane"; the active tab of the pane not active is
+  dimmed.
 -->
 <script lang="ts">
   import { tick } from 'svelte';
   import ContextMenu, { asksForMenu, menuPlace, type MenuEntry } from './ContextMenu.svelte';
+  import { keyText } from './commands';
+  import type { Snippet } from 'svelte';
+  import type { PaneName } from './bindings';
+  import { COMMAND } from './commandList';
+  import { openElsewhere, paneOf } from './panes';
   import type { Shell } from './shell.svelte';
-  import { focusTabAt, markDescription, NOTE_PANEL_ID, TODO_TAB_ID, tabId } from './tabs';
+  import { focusTabAt, markDescription, notePanelId, TODO_TAB_ID, tabId } from './tabs';
 
-  type Props = { shell: Shell };
+  type Props = {
+    shell: Shell;
+    pane?: PaneName;
+    /** UC-004 BR-018: whether this pane is the active one (only with the split view). */
+    paneActive?: boolean;
+    /** Buttons at the end of the bar. */
+    trailing?: Snippet;
+  };
 
-  let { shell }: Props = $props();
+  let { shell, pane = 'left', paneActive = true, trailing }: Props = $props();
 
+  const mac = $derived(shell.platform === 'macos');
+
+  /** UC-004 BR-018: the tabs of this pane. */
+  const own = $derived(paneOf(shell.tabs, pane));
+  const tabs = $derived(own.tabs);
+  /** M-06.5: the tab "Todos" is the left pane's. */
+  const todoTab = $derived(pane === 'left' && shell.tabs.todoList.open);
   /** M-06.5: while the tab "Todos" is active, no note tab is. */
-  const todosActive = $derived(shell.tabs.todoList.open && shell.tabs.todoList.active);
-  const active = $derived(todosActive ? null : shell.tabs.active);
+  const todosActive = $derived(todoTab && shell.tabs.todoList.active);
+  const active = $derived(todosActive ? null : own.active);
+  const panelId = $derived(notePanelId(pane));
   /** The tab "Todos" stands for itself in `reachable`. */
   const TODOS = '\u0000todos';
   /** The tab in the Tab sequence: the active one, else the first. */
   const reachable = $derived(
-    todosActive
-      ? TODOS
-      : (active ?? shell.tabs.tabs[0]?.note ?? (shell.tabs.todoList.open ? TODOS : null)),
+    todosActive ? TODOS : (active ?? tabs[0]?.note ?? (todoTab ? TODOS : null)),
   );
   /** M-06.5: "Todos (N)". */
   const todosLabel = $derived(shell.todos === null ? 'Todos' : `Todos (${shell.todos.openCount})`);
@@ -65,13 +96,14 @@
 
   /** M-06.3: closes the tab of `note`; with `moveFocus` the keyboard moves on. */
   async function close(note: string, moveFocus: boolean) {
-    const at = shell.tabs.tabs.findIndex((tab) => tab.note === note);
-    const closed = await shell.closeTab(note);
+    const at = tabs.findIndex((tab) => tab.note === note);
+    const closed = await shell.closeTab(note, false, pane);
     if (!moveFocus || !closed) {
       return;
     }
     await tick();
-    focusTabAt(at);
+    // The pane may be gone (A20); the keyboard goes to the tabs left then.
+    focusTabAt(at, bar?.isConnected ? bar : document);
   }
 
   function onAuxClick(event: MouseEvent, note: string) {
@@ -100,15 +132,34 @@
 
   /** The entries of the menu of `note`; they act on it after the menu closed. */
   function entriesFor(note: string): MenuEntry[] {
+    const side: MenuEntry[] = [
+      // UC-004 A18, A19: to the other pane; the active note in its other view.
+      {
+        label: 'Open to the side',
+        separatorBefore: true,
+        shortcut: keyText(shell.commandById(COMMAND.split)?.key, mac),
+        action: () => void shell.openToSide(note),
+      },
+      ...(shell.split
+        ? [{ label: 'End the split view', action: () => void shell.endSplit() }]
+        : []),
+    ];
     return [
-      { label: 'Rename…', shortcut: 'F2', action: () => void shell.startRename(note) },
+      {
+        label: 'Rename…',
+        shortcut: keyText(shell.commandById('note.rename')?.key, mac),
+        action: () => void shell.startRename(note),
+      },
       { label: 'Delete…', action: () => void shell.startDelete(note) },
       // UC-009 step 1: asks for the kind first.
       {
         label: 'Export…',
-        shortcut: `${shell.command}+Shift+E`,
+        shortcut: keyText(shell.commandById('note.export')?.key, mac),
         action: () => void shell.startExport(note),
       },
+      // UC-026 step 1: the snapshots of the note.
+      { label: 'Snapshots…', action: () => void shell.showSnapshots(note) },
+      ...side,
     ];
   }
 
@@ -142,21 +193,21 @@
   /** Arrow keys, Home and End move among the tabs; Delete closes one. */
   function onKey(event: KeyboardEvent, note: string | null) {
     if (note !== null && asksForMenu(event)) {
-      const tab = shell.tabs.tabs.find((t) => t.note === note);
+      const tab = tabs.find((t) => t.note === note);
       openMenu(event, note, tab?.title ?? note);
       return;
     }
-    const tabs = tabButtons();
-    const at = tabs.indexOf(event.currentTarget as HTMLElement);
+    const buttons = tabButtons();
+    const at = buttons.indexOf(event.currentTarget as HTMLElement);
     const to = {
       ArrowLeft: at - 1,
       ArrowRight: at + 1,
       Home: 0,
-      End: tabs.length - 1,
+      End: buttons.length - 1,
     }[event.key];
     if (to !== undefined) {
       event.preventDefault();
-      tabs[(to + tabs.length) % tabs.length]?.focus();
+      buttons[(to + buttons.length) % buttons.length]?.focus();
     } else if (event.key === 'Delete') {
       event.preventDefault();
       if (note === null) {
@@ -168,75 +219,97 @@
   }
 </script>
 
-<div class="tab-bar" bind:this={bar}>
-  <div class="tabs" role="tablist" aria-label="Open notes">
-    {#each shell.tabs.tabs as tab (tab.note)}
-      <div class="tab" class:active={tab.note === active} role="presentation">
-        <button
-          type="button"
-          role="tab"
-          id={tabId(tab.note)}
-          class="label"
-          title={tab.path}
-          aria-selected={tab.note === active}
-          aria-controls={tab.note === active ? NOTE_PANEL_ID : undefined}
-          tabindex={tab.note === reachable ? 0 : -1}
-          aria-describedby={markDescription(tab.label, tab.title)
-            ? `${tabId(tab.note)}-marks`
-            : undefined}
-          aria-keyshortcuts="Delete Shift+F10"
-          onclick={() => shell.activateTab(tab.note)}
-          onkeydown={(event) => onKey(event, tab.note)}
-          onmousedown={onMouseDown}
-          oncontextmenu={(event) => openMenu(event, tab.note, tab.title)}
-          onauxclick={(event) => onAuxClick(event, tab.note)}>{tab.label}</button
-        >
-        {#if markDescription(tab.label, tab.title)}
-          <span id="{tabId(tab.note)}-marks" hidden>{markDescription(tab.label, tab.title)}</span>
-        {/if}
-        <button
-          type="button"
-          class="close"
-          tabindex="-1"
-          aria-label="Close {tab.label}"
-          onmousedown={onMouseDown}
-          onauxclick={(event) => onAuxClick(event, tab.note)}
-          onclick={() => close(tab.note, true)}>×</button
-        >
-      </div>
-    {/each}
-    {#if shell.tabs.todoList.open}
-      <div class="tab" class:active={todosActive} role="presentation">
-        <button
-          type="button"
-          role="tab"
-          id={TODO_TAB_ID}
-          class="label"
-          aria-selected={todosActive}
-          aria-controls={todosActive ? NOTE_PANEL_ID : undefined}
-          tabindex={reachable === TODOS ? 0 : -1}
-          aria-keyshortcuts="Delete"
-          onclick={() => {
-            if (!todosActive) {
-              void shell.showTodoList();
-            }
-          }}
-          onkeydown={(event) => onKey(event, null)}
-          onmousedown={onMouseDown}
-          onauxclick={onTodosAuxClick}>{todosLabel}</button
-        >
-        <button
-          type="button"
-          class="close"
-          tabindex="-1"
-          aria-label="Close Todos"
-          onmousedown={onMouseDown}
-          onauxclick={onTodosAuxClick}
-          onclick={() => closeTodos(true)}>×</button
-        >
-      </div>
-    {/if}
+<div class="tab-bar" class:inactive={!paneActive} bind:this={bar}>
+  <div class="scroll">
+    <div
+      class="tabs"
+      role="tablist"
+      aria-label={shell.split ? `Open notes, ${pane} pane` : 'Open notes'}
+    >
+      {#each tabs as tab (tab.note)}
+        <div class="tab" class:active={tab.note === active} role="presentation">
+          <button
+            type="button"
+            role="tab"
+            id={tabId(tab.note, pane)}
+            class="label"
+            title={tab.path}
+            aria-selected={tab.note === active}
+            aria-controls={tab.note === active ? panelId : undefined}
+            tabindex={tab.note === reachable ? 0 : -1}
+            aria-describedby={[
+              markDescription(tab.label, tab.title) ? `${tabId(tab.note, pane)}-marks` : '',
+              openElsewhere(shell.tabs, pane, tab.note) ? `${tabId(tab.note, pane)}-both` : '',
+            ]
+              .filter(Boolean)
+              .join(' ') || undefined}
+            aria-keyshortcuts="Delete Shift+F10"
+            onclick={() => shell.activateTab(tab.note, pane)}
+            onkeydown={(event) => onKey(event, tab.note)}
+            onmousedown={onMouseDown}
+            oncontextmenu={(event) => openMenu(event, tab.note, tab.title)}
+            onauxclick={(event) => onAuxClick(event, tab.note)}
+            >{tab.label}{#if openElsewhere(shell.tabs, pane, tab.note)}<span
+                class="both"
+                title="Also open in the other pane"
+                aria-hidden="true">⇆</span
+              >{/if}</button
+          >
+          {#if openElsewhere(shell.tabs, pane, tab.note)}
+            <span id="{tabId(tab.note, pane)}-both" hidden>also open in the other pane</span>
+          {/if}
+          {#if markDescription(tab.label, tab.title)}
+            <span id="{tabId(tab.note, pane)}-marks" hidden
+              >{markDescription(tab.label, tab.title)}</span
+            >
+          {/if}
+          <button
+            type="button"
+            class="close"
+            tabindex="-1"
+            aria-label="Close {tab.label}"
+            onmousedown={onMouseDown}
+            onauxclick={(event) => onAuxClick(event, tab.note)}
+            onclick={() => close(tab.note, true)}>×</button
+          >
+        </div>
+      {/each}
+      {#if todoTab}
+        <div class="tab" class:active={todosActive} role="presentation">
+          <button
+            type="button"
+            role="tab"
+            id={TODO_TAB_ID}
+            class="label"
+            aria-selected={todosActive}
+            aria-controls={todosActive ? panelId : undefined}
+            tabindex={reachable === TODOS ? 0 : -1}
+            aria-keyshortcuts="Delete"
+            onclick={() => {
+              if (!todosActive) {
+                void shell.showTodoList();
+              }
+            }}
+            onkeydown={(event) => onKey(event, null)}
+            onmousedown={onMouseDown}
+            onauxclick={onTodosAuxClick}>{todosLabel}</button
+          >
+          <button
+            type="button"
+            class="close"
+            tabindex="-1"
+            aria-label="Close Todos"
+            onmousedown={onMouseDown}
+            onauxclick={onTodosAuxClick}
+            onclick={() => closeTodos(true)}>×</button
+          >
+        </div>
+      {/if}
+    </div>
   </div>
+  {#if trailing}
+    <div class="trailing">{@render trailing()}</div>
+  {/if}
 </div>
 {#if menu}
   <ContextMenu
@@ -250,10 +323,35 @@
 
 <style>
   .tab-bar {
+    display: flex;
     flex: none;
+    align-items: center;
+    border-bottom: 1px solid var(--ui-rule);
+  }
+
+  .scroll {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
-    border-bottom: 1px solid var(--ui-rule);
+  }
+
+  .trailing {
+    display: flex;
+    flex: none;
+    gap: 2px;
+    padding: 0 var(--space-1);
+  }
+
+  .both {
+    margin-left: var(--space-1);
+    color: var(--ui-hint);
+  }
+
+  /* UC-004 BR-018: the active tab of the pane not active is dimmed. */
+  .inactive .active .label {
+    background: color-mix(in srgb, var(--ui-chosen) 45%, transparent);
+    box-shadow: inset 0 -2px 0 var(--ui-hint);
   }
 
   .tabs {

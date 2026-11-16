@@ -7,8 +7,9 @@ use tauri_specta::Event as _;
 use underline_session::{
     AgentMarksView, AgentsView, ChangedView, ChangesView, CloseQuestion, ConflictBarView,
     DeletedNoteView, DiffView, EnrichView, Event, FlushView, GitBarView, HighlightView,
-    IndexesView, OverviewItem, SearchView, SettingsView, SettingsWindowView, StatusView,
-    TabPropertiesView, TabsView, TodoConflictView, TodosView, WorkspaceView,
+    IndexesView, LinksView, OverviewItem, ReplaceView, SearchView, SettingsView,
+    SettingsWindowView, SpellMarksView, SpellStateView, StatusView, TabPropertiesView, TabsView,
+    TodoConflictView, TodosView, WorkspaceView,
 };
 
 /// M-04.7: the status message changed.
@@ -47,6 +48,17 @@ pub struct TabsEvent(pub TabsView);
 #[tauri_specta(event_name = "ed-highlight")]
 pub struct HighlightEvent(pub HighlightView);
 
+/// FR-099, UC-005 BR-023, ADR-030: the words of a note the spell check
+/// marks, for a revision of its text.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "spell-marks")]
+pub struct SpellMarksEvent(pub SpellMarksView);
+
+/// FR-100, UC-005 BR-023: what the status bar shows of the spell check.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "spell-state")]
+pub struct SpellStateEvent(pub SpellStateView);
+
 /// M-16.2: the properties of the active tab's note; `null` without one.
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
 #[tauri_specta(event_name = "properties")]
@@ -80,6 +92,12 @@ pub struct EnrichEvent(pub EnrichView);
 #[tauri_specta(event_name = "indexes")]
 pub struct IndexesEvent(pub IndexesView);
 
+/// FR-078, FR-079 (UC-004 BR-015): the backlinks and the outgoing links of
+/// the active tab's note.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "links")]
+pub struct LinksEvent(pub LinksView);
+
 /// M-05.6, UC-007 A5: the deleted notes of the workspace, most recently
 /// deleted first.
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
@@ -91,6 +109,12 @@ pub struct DeletedEvent(pub Vec<DeletedNoteView>);
 #[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
 #[tauri_specta(event_name = "search")]
 pub struct SearchEvent(pub SearchView);
+
+/// UC-022 step 2: the problem or the places of the replace of the workspace
+/// changed.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "replace")]
+pub struct ReplaceEvent(pub ReplaceView);
 
 /// M-19.1, M-19.2, UC-011, UC-012: the git changes of the workspace;
 /// `null` without git or before git answered.
@@ -139,6 +163,12 @@ pub struct AgentsEvent(pub AgentsView);
 #[tauri_specta(event_name = "agent-marks")]
 pub struct AgentMarksEvent(pub Vec<AgentMarksView>);
 
+/// UC-026 A4: the note whose snapshots are shown, or its snapshots,
+/// changed; the window asks for the list and the differences again.
+#[derive(Debug, Clone, Serialize, specta::Type, tauri_specta::Event)]
+#[tauri_specta(event_name = "snapshots-changed")]
+pub struct SnapshotsChangedEvent(pub String);
+
 /// Sends `events` to the window. A failure is logged: the next change sends
 /// the whole state again.
 pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
@@ -151,13 +181,17 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Overview(overview) => OverviewEvent(overview).emit(app),
             Event::Tabs(tabs) => TabsEvent(tabs).emit(app),
             Event::Highlight(highlight) => HighlightEvent(highlight).emit(app),
+            Event::SpellMarks(marks) => SpellMarksEvent(marks).emit(app),
+            Event::SpellState(state) => SpellStateEvent(state).emit(app),
             Event::Properties(properties) => PropertiesEvent(properties).emit(app),
             Event::Changed(changed) => ChangedEvent(changed).emit(app),
             Event::Flush(flush) => FlushEvent(flush).emit(app),
             Event::Enrich(enrich) => EnrichEvent(*enrich).emit(app),
             Event::Indexes(indexes) => IndexesEvent(indexes).emit(app),
+            Event::Links(links) => LinksEvent(links).emit(app),
             Event::Deleted(deleted) => DeletedEvent(deleted).emit(app),
             Event::Search(search) => SearchEvent(search).emit(app),
+            Event::Replace(replace) => ReplaceEvent(replace).emit(app),
             Event::Changes(changes) => ChangesEvent(changes).emit(app),
             Event::Diff(diff) => DiffEvent(diff).emit(app),
             Event::GitBar(bar) => GitBarEvent(bar).emit(app),
@@ -167,6 +201,7 @@ pub fn emit_all<R: Runtime>(app: &AppHandle<R>, events: Vec<Event>) {
             Event::Agents(agents) => AgentsEvent(agents).emit(app),
             Event::AgentMarks(marks) => AgentMarksEvent(marks).emit(app),
             Event::CloseQuestion(question) => CloseQuestionEvent(question).emit(app),
+            Event::SnapshotsChanged(note) => SnapshotsChangedEvent(note).emit(app),
         };
         if let Err(error) = sent {
             eprintln!("An event could not be sent to the window: {error}");

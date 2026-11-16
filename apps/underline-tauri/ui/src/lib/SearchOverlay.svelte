@@ -30,11 +30,26 @@
   live region tells screen readers how many notes were found; a line's name
   is "{title}: {line}"; Tab out of the overlay closes it; closing gives the
   keyboard back where it was (`SearchState.close`).
+
+  Package 1 (FR-074, FR-075, UC-008 A7, A9, A10, UC-022):
+  - the search switches after the field (Alt+C, Alt+W, Alt+R anywhere in
+    the overlay); what is wrong with an expression stands instead of the
+    found notes;
+  - the button "Replace" before the field (Ctrl+Shift+H opens the overlay
+    with it) turns the overlay into the replace of the workspace, with the
+    text and the switches of the search: the field "Replace with", the
+    places with their lines before and after (ReplaceList.svelte), and
+    "Replace", or Ctrl+Alt+Enter (Cmd+Alt+Enter), to replace every chosen
+    place. Escape or the button again closes the replace, and the search
+    shows with its text (A8).
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import type { FoundLineView, FoundNoteView } from './bindings';
-  import { choiceOf, type FoundEntry } from './search.svelte';
+  import { keyText } from './commands';
+  import ReplaceList from './ReplaceList.svelte';
+  import SearchSwitches from './SearchSwitches.svelte';
+  import { choiceOf, switchKey, type FoundEntry } from './search.svelte';
   import type { Shell } from './shell.svelte';
 
   type Props = { shell: Shell };
@@ -46,6 +61,11 @@
 
   let frame = $state<HTMLElement | null>(null);
   let field = $state<HTMLInputElement | null>(null);
+  let replaceField = $state<HTMLInputElement | null>(null);
+  /** Counts the requests that the list of places take the keyboard. */
+  let listFocus = $state(0);
+  const replace = $derived(search.replace);
+  const mac = $derived(shell.platform === 'macos');
   let list = $state<HTMLElement | null>(null);
   /** Enter was pressed while the list was of an older text (A-96). */
   let enterWaits = $state(false);
@@ -65,6 +85,10 @@
     }
     if (search.error !== null) {
       return '';
+    }
+    if (search.problem !== null) {
+      // UC-008 A9: told politely, not as an alert on every key.
+      return search.problem;
     }
     if (searching || result === null) {
       return 'Searching…';
@@ -108,6 +132,91 @@
     }
   });
 
+  // UC-022 BR-008: Ctrl+Shift+H with a search text: the replace field takes it.
+  $effect(() => {
+    if (replace.focusAsked > 0 && replaceField) {
+      replaceField.focus();
+      replaceField.select();
+    }
+  });
+
+  /**
+   * Anywhere in the overlay: Alt+C/W/R switch the search switches (UC-008
+   * A7), Ctrl+Alt+Enter replaces while it replaces (UC-022 step 4).
+   */
+  function onFrameKey(event: KeyboardEvent) {
+    const name = switchKey(event);
+    if (name !== null) {
+      event.preventDefault();
+      search.toggleSwitch(name);
+      return;
+    }
+    const command = mac ? event.metaKey : event.ctrlKey;
+    if (search.replacing && event.key === 'Enter' && command && event.altKey) {
+      event.preventDefault();
+      void shell.confirmReplace();
+    }
+  }
+
+  /** UC-022 BR-008: in the fields, Down goes into the list of places. */
+  function onReplacingKey(event: KeyboardEvent, inReplaceField: boolean) {
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+      return;
+    }
+    if (event.key === 'ArrowDown' && replace.entries.length > 0) {
+      event.preventDefault();
+      listFocus++;
+    } else if (event.key === 'Enter' && !inReplaceField) {
+      event.preventDefault();
+      replaceField?.focus();
+    }
+  }
+
+  /** UC-008 A10, UC-022 A8: "Replace" opens or closes the replace. */
+  function toggleReplace() {
+    if (search.replacing) {
+      search.stopReplacing();
+    } else {
+      search.showReplace();
+    }
+  }
+
+  /** UC-022 step 2: what a screen reader is told of the places. */
+  const replaceAnnouncement = $derived.by(() => {
+    if (!search.replacing || search.text === '') {
+      return '';
+    }
+    if (replace.problem !== null) {
+      return replace.problem;
+    }
+    const places = replace.result;
+    if (places === null || replace.searching) {
+      return 'Searching…';
+    }
+    if (replace.said !== '') {
+      return replace.said;
+    }
+    return places.places === 0 ? `No note holds “${search.text}”.` : places.summary;
+  });
+
+  /** The replace's announcement, once typing pauses (UX: no alert per key). */
+  let spokenReplace = $state('');
+  $effect(() => {
+    const said = replaceAnnouncement;
+    const timer = setTimeout(() => (spokenReplace = said), 500);
+    return () => clearTimeout(timer);
+  });
+
+  /** Whether "Replace" can replace now. */
+  const canReplace = $derived(
+    replace.result !== null &&
+      replace.result.places > 0 &&
+      (replace.chosen?.places ?? 1) > 0 &&
+      replace.problem === null &&
+      !replace.searching &&
+      !replace.replacing,
+  );
+
   // The chosen entry is scrolled into view.
   $effect(() => {
     if (chosen === null) {
@@ -130,6 +239,10 @@
   });
 
   function onKey(event: KeyboardEvent) {
+    if (search.replacing) {
+      onReplacingKey(event, false);
+      return;
+    }
     if (event.ctrlKey || event.altKey || event.metaKey) {
       return;
     }
@@ -175,7 +288,8 @@
   /** The keyboard left the overlay (Tab): it closes, unless to the magnifier. */
   function onFocusOut(event: FocusEvent) {
     const to = event.relatedTarget as Element | null;
-    if (to && !frame?.contains(to) && !to.closest?.('[data-search-toggle]')) {
+    // UX: while it replaces, the replacement and what was left out stay.
+    if (to && !search.replacing && !frame?.contains(to) && !to.closest?.('[data-search-toggle]')) {
       search.close(false);
     }
   }
@@ -184,7 +298,11 @@
   onMount(() => {
     const outside = (event: PointerEvent) => {
       const target = event.target as Element | null;
-      if (frame?.contains(target) || target?.closest?.('[data-search-toggle]')) {
+      if (
+        search.replacing ||
+        frame?.contains(target) ||
+        target?.closest?.('[data-search-toggle]')
+      ) {
         return;
       }
       search.close();
@@ -194,41 +312,100 @@
   });
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="search-overlay"
   role="search"
-  aria-label="Search notes"
+  aria-label={search.replacing ? 'Replace in notes' : 'Search notes'}
   bind:this={frame}
   onfocusout={onFocusOut}
+  onkeydown={onFrameKey}
 >
-  <input
-    bind:this={field}
-    class="field"
-    type="text"
-    role="combobox"
-    placeholder="Search notes"
-    aria-label="Search notes"
-    aria-autocomplete="list"
-    aria-controls={LIST_ID}
-    aria-expanded={search.searched !== '' && search.notes.length > 0}
-    aria-activedescendant={chosen ? entryId(chosen.note, chosen.line) : undefined}
-    spellcheck="false"
-    autocomplete="off"
-    value={search.text}
-    oninput={(event) => onInput(event.currentTarget.value)}
-    onkeydown={onKey}
-  />
-  <p class="visually-hidden" aria-live="polite">{announcement}</p>
-  {#if search.searched !== ''}
+  <!-- In the order of Tab: the search field, then the replace field and its
+       button, then the switches, which the grid shows after the search field. -->
+  <div class="fields" class:replacing={search.replacing}>
+    {#if shell.workspace !== null}
+      <button
+        type="button"
+        class="toggle"
+        aria-expanded={search.replacing}
+        aria-label="Replace in notes"
+        title={`Replace in notes (${keyText(shell.commandById('search.replace')?.key, mac)})`}
+        onclick={toggleReplace}><span aria-hidden="true">›</span></button
+      >
+    {/if}
+    <input
+      bind:this={field}
+      class="field search"
+      type="text"
+      role="combobox"
+      placeholder="Search notes"
+      aria-label="Search notes"
+      aria-autocomplete="list"
+      aria-controls={search.replacing ? 'replace-places' : LIST_ID}
+      aria-expanded={search.replacing
+        ? replace.notes.length > 0
+        : search.searched !== '' && search.notes.length > 0}
+      aria-activedescendant={!search.replacing && chosen
+        ? entryId(chosen.note, chosen.line)
+        : undefined}
+      aria-invalid={(search.replacing ? replace.problem : search.problem) !== null}
+      spellcheck="false"
+      autocomplete="off"
+      value={search.text}
+      oninput={(event) => onInput(event.currentTarget.value)}
+      onkeydown={onKey}
+    />
+    {#if search.replacing}
+      <input
+        bind:this={replaceField}
+        class="field with"
+        type="text"
+        placeholder="Replace with"
+        aria-label="Replace with"
+        spellcheck="false"
+        autocomplete="off"
+        value={replace.replacement}
+        oninput={(event) => search.setReplacement(event.currentTarget.value)}
+        onkeydown={(event) => onReplacingKey(event, true)}
+      />
+      <button
+        type="button"
+        class="replace"
+        aria-disabled={!canReplace}
+        aria-keyshortcuts={mac ? 'Meta+Alt+Enter' : 'Control+Alt+Enter'}
+        title={mac ? 'Cmd+Alt+Enter' : 'Ctrl+Alt+Enter'}
+        onclick={() => {
+          if (canReplace) void shell.confirmReplace();
+        }}>{replace.replacing ? 'Replacing…' : (replace.chosen?.action ?? 'Replace')}</button
+      >
+    {/if}
+    <div class="switches">
+      <SearchSwitches switches={search.switches} onToggle={(name) => search.toggleSwitch(name)} />
+    </div>
+  </div>
+  {#if search.replacing}
+    <ReplaceList {shell} focusAsked={listFocus} onLeaveTop={() => replaceField?.focus()} />
+  {/if}
+  <p class="visually-hidden" aria-live="polite">
+    {search.replacing ? spokenReplace : announcement}
+  </p>
+  {#if !search.replacing && search.searched === ''}
+    <!-- UC-008 A8, BR-012 (UX review): how to search by tag. -->
+    <p class="weak tip">#tag finds the notes with that tag.</p>
+  {/if}
+  {#if !search.replacing && search.searched !== ''}
     <div class="results" bind:this={list} onscroll={onScroll}>
-      {#if search.error !== null}
+      {#if search.problem !== null}
+        <p class="error problem">{search.problem}</p>
+      {:else if search.error !== null}
         <p class="error" role="alert">{search.error}</p>
       {:else if result === null || searching}
         <p class="weak">Searching…</p>
       {:else if result.total === 0}
         <p class="weak">No note holds “{search.searched}”.</p>
       {/if}
-      {#if result !== null && result.total > 0}
+      {#if search.problem === null && result !== null && result.total > 0}
         <ul
           id={LIST_ID}
           class="found"
@@ -302,6 +479,117 @@
     border-radius: var(--radius);
     box-shadow: 0 6px 16px rgb(0 0 0 / 0.25);
     transform: translateX(-50%);
+  }
+
+  /* The search field and its switches on one row, the replace field and
+     its button under them; the order of Tab is the order in the markup. */
+  .fields {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'toggle search switches';
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .fields.replacing {
+    grid-template-areas:
+      'toggle search switches'
+      '. with action';
+  }
+
+  .toggle {
+    grid-area: toggle;
+  }
+
+  .search {
+    grid-area: search;
+  }
+
+  .with {
+    grid-area: with;
+  }
+
+  .replace {
+    grid-area: action;
+  }
+
+  .switches {
+    grid-area: switches;
+  }
+
+  /* A narrow window: the button under the replace field. */
+  @media (max-width: 420px) {
+    .fields.replacing {
+      grid-template-areas:
+        'toggle search switches'
+        '. with with'
+        '. action action';
+    }
+  }
+
+  /* UC-008 A10: the chevron turns down while the overlay replaces. */
+  .toggle {
+    flex: 0 0 auto;
+    width: 24px;
+    min-height: 28px;
+    padding: 0;
+    font: inherit;
+    color: var(--ui-text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+
+  .toggle:hover {
+    border-color: var(--ui-border);
+  }
+
+  .toggle:focus-visible,
+  .replace:focus-visible {
+    outline: 2px solid var(--ui-focus);
+    outline-offset: 1px;
+  }
+
+  .toggle span {
+    display: inline-block;
+    transition: transform 120ms ease-out;
+  }
+
+  .toggle[aria-expanded='true'] span {
+    transform: rotate(90deg);
+  }
+
+  /* UC-022 step 4: the one action of the replace. */
+  .replace {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 0 var(--space-3, 12px);
+    font: inherit;
+    font-weight: 600;
+    color: var(--ui-chosen-text);
+    background: var(--ui-chosen);
+    border: 1px solid var(--ui-focus);
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+
+  .replace[aria-disabled='true'] {
+    color: var(--ui-hint);
+    background: var(--ui-button);
+    border-color: var(--ui-border);
+    font-weight: normal;
+    cursor: default;
+  }
+
+  .problem::before {
+    content: '⚠ ';
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .toggle span {
+      transition: none;
+    }
   }
 
   .field {
@@ -390,6 +678,11 @@
     margin: 0;
     color: var(--ui-hint);
     overflow-wrap: anywhere;
+  }
+
+  .tip {
+    margin: var(--space-1) 0 0;
+    font-size: 0.85em;
   }
 
   .error {

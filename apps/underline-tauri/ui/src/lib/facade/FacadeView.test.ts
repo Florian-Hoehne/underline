@@ -67,6 +67,7 @@ function extraBlocks(at: number, line: number): BlockView[] {
     link: null,
     offsets: [[0, 0]] as [number, number][],
     end: text.length,
+    formula: null,
   });
   return [
     {
@@ -159,6 +160,7 @@ function backendWith(opened: FacadeState): FacadeBackend & {
   select: ReturnType<typeof vi.fn>;
   fold: ReturnType<typeof vi.fn>;
   find: ReturnType<typeof vi.fn>;
+  replace: ReturnType<typeof vi.fn>;
   input: ReturnType<typeof vi.fn>;
   clipboard: ReturnType<typeof vi.fn>;
   pasteImage: ReturnType<typeof vi.fn>;
@@ -174,6 +176,11 @@ function backendWith(opened: FacadeState): FacadeBackend & {
     select: vi.fn(async () => 'Ln 3, Col 2'),
     fold: vi.fn(async () => PATCH),
     find: vi.fn(async () => null),
+    replace: vi.fn(async () => ({
+      patch: FACADE_PATCH,
+      replaced: 0,
+      status: { at: null, count: 0, problem: null },
+    })),
     input: vi.fn(async () => FACADE_PATCH),
     clipboard: vi.fn(async () => ({ patch: FACADE_PATCH, image: null })),
     pasteImage: vi.fn(async () => FACADE_PATCH),
@@ -274,6 +281,146 @@ describe('M-09.1, M-09.2 the facade draws every kind of block', () => {
     expect(block(failed).querySelector('.frame')).toHaveTextContent('@startuml');
     const rust = blocks.length - 1;
     expect(within(block(rust)).getByText('fn')).toHaveStyle({ color: '#aa0000' });
+  });
+});
+
+/** FR-098: a formula as the backend sends it, typeset unless `picture` is null. */
+function formulaView(source: string, display: boolean, picture: string | null, error = null) {
+  return { source, display, picture, width: 2400, height: 1200, depth: 250, error };
+}
+
+/**
+ * TC-004-38, TC-005-42: `Energy $E=mc^2$ here.` and the block formula
+ * `$$a^2$$` after it, as the editor core shows them.
+ */
+function formulaBlocks(inline: string | null, block: string | null, error: string | null = null) {
+  const text = 'Energy $E=mc^2$ here.';
+  const plain = (part: string, at: number) => ({
+    text: part,
+    bold: false,
+    italic: false,
+    strike: false,
+    code: false,
+    link: null,
+    offsets: [[0, at]] as [number, number][],
+    end: at + part.length,
+    formula: null,
+  });
+  const paragraph: BlockView = {
+    kind: { type: 'paragraph' },
+    start: 0,
+    line: 0,
+    length: text.length + 1,
+    lines: 1,
+    prefix: '',
+    runs: [
+      plain('Energy ', 0),
+      {
+        ...plain('$E=mc^2$', 7),
+        formula: { ...formulaView('E=mc^2', false, inline), error },
+      },
+      plain(' here.', 15),
+    ],
+    colors: null,
+    figure: null,
+  };
+  const formula: BlockView = {
+    kind: { type: 'formula', formula: formulaView('a^2', true, block) },
+    start: text.length + 2,
+    line: 2,
+    length: 8,
+    lines: 1,
+    prefix: '',
+    runs: [{ ...plain('$$a^2$$', 0) }],
+    colors: null,
+    figure: null,
+  };
+  return [paragraph, formula];
+}
+
+describe('FR-098 formulas', () => {
+  it('TC-004-38: typeset inline at the baseline and as a centred block, in em, the source as alternative text', async () => {
+    await show(state(formulaBlocks('formula/1.svg?v=1', 'formula/2.svg?v=2'), 0));
+
+    const inline = block(0).querySelector<HTMLImageElement>('.formula img')!;
+    expect(inline.getAttribute('src')).toBe('ul-asset://localhost/formula/1.svg?v=1');
+    expect(inline).toHaveAttribute('alt', 'Formula: E=mc^2');
+    expect(inline.parentElement).toHaveAttribute('title', 'Edit formula');
+    expect(inline.style.width).toBe('2.4em');
+    expect(inline.style.verticalAlign).toBe('-0.25em');
+    expect(block(0).querySelector('.text')?.textContent).toBe('Energy  here.');
+    const shown = block(1).querySelector<HTMLImageElement>('.formula img')!;
+    expect(shown).toHaveAttribute('alt', 'Formula: a^2');
+    expect(shown.getAttribute('src')).toBe('ul-asset://localhost/formula/2.svg?v=2');
+    expect(block(1).querySelector('.frame')).toBeNull();
+  });
+
+  it('TC-004-38: until the picture comes, the formula shows its source', async () => {
+    await show(state(formulaBlocks(null, null), 0));
+
+    expect(block(0).querySelector('img')).toBeNull();
+    expect(within(block(0)).getByText('$E=mc^2$')).toHaveClass('source');
+    expect(block(1).querySelector('.frame')).toHaveTextContent('$$a^2$$');
+  });
+
+  it('UC-004 A21: a formula with an error shows its source and the reason', async () => {
+    const reason = "This formula cannot be typeset: Expected '}'";
+    const blocks = formulaBlocks(null, null, null);
+    blocks[1] = {
+      ...blocks[1],
+      kind: { type: 'formula', formula: { ...formulaView('a^2', true, null), error: reason } },
+    };
+    blocks[0].runs[1].formula!.error = reason;
+    await show(state(blocks, 0));
+
+    const source = within(block(0)).getByText('$E=mc^2$');
+    expect(source).toHaveClass('failed');
+    const said = source.nextElementSibling;
+    expect(said).toHaveClass('reason');
+    expect(said).toHaveAttribute('role', 'status');
+    expect(said).toHaveTextContent(reason);
+    expect(within(block(1)).getByRole('status')).toHaveTextContent(reason);
+    // A click on the reason puts the cursor at the end of the formula.
+    expect(block(0).querySelector('.reason')).toHaveAttribute('contenteditable', 'false');
+    expect(block(1).querySelector('.frame')).toHaveTextContent('$$a^2$$');
+  });
+
+  it('TC-005-42: the cursor in a formula shows its markup in its place or below the block', async () => {
+    await show(state(formulaBlocks('formula/1.svg', 'formula/2.svg'), 9));
+
+    expect(block(0).querySelector('img')).toBeNull();
+    expect(within(block(0)).getByText('$E=mc^2$')).toHaveClass('source');
+    // The block formula keeps its picture.
+    expect(block(1).querySelector('img')).not.toBeNull();
+  });
+
+  it('TC-005-42 step 1: the cursor in the block formula shows its markup below it', async () => {
+    const blocks = formulaBlocks('formula/1.svg', 'formula/2.svg');
+    await show(state(blocks, blocks[1].start + 3));
+
+    expect(block(1).querySelector('img')).not.toBeNull();
+    expect(block(1).querySelector('.frame')).toHaveTextContent('$$a^2$$');
+  });
+
+  it('TC-005-42 step 3: a click on the inline formula puts the cursor into its source', async () => {
+    const { backend } = await show(state(formulaBlocks('formula/1.svg', 'formula/2.svg'), 0));
+
+    await fireEvent.mouseDown(block(0).querySelector('.formula')!);
+
+    await waitFor(() => expect(backend.select).toHaveBeenCalledWith('Home', 1, 8, 8));
+    await waitFor(() => expect(block(0).querySelector('img')).toBeNull());
+    expect(within(block(0)).getByText('$E=mc^2$')).toHaveClass('source');
+  });
+
+  it('TC-005-42 step 1 (review): a click on the block formula puts the cursor into its source', async () => {
+    const blocks = formulaBlocks('formula/1.svg', 'formula/2.svg');
+    const { backend } = await show(state(blocks, 0));
+
+    await fireEvent.click(block(1).querySelector('.formula')!);
+
+    const inside = blocks[1].start + 2;
+    await waitFor(() => expect(backend.select).toHaveBeenCalledWith('Home', 1, inside, inside));
+    await waitFor(() => expect(block(1).querySelector('.frame')).toHaveTextContent('$$a^2$$'));
   });
 });
 

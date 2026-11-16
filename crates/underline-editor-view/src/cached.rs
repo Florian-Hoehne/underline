@@ -13,11 +13,11 @@ use underline_editor_core::facade::{moved_indices, MakeViews, Part};
 use underline_markup::blocks::{Block, BlockKind};
 use underline_markup::diagram::DiagramLanguage;
 
-use crate::facade_view::{BlockKindView, BlockView, CodeColors, FigureView};
+use crate::facade_view::{BlockKindView, BlockView, CodeColors, FigureView, FormulaView};
 use crate::sync_view::EnrichView;
 use crate::views::{
-    carry_colors, colors_key, diagram_key, diagram_language, picture_figure, rendering_figure,
-    Enrich, ViewMaker, WebWalker,
+    carry_colors, colors_key, diagram_key, diagram_language, formula_key, pending_formula,
+    picture_figure, refresh_formulas, rendering_figure, Enrich, ViewMaker, WebWalker,
 };
 
 /// How many colours and figures the backend sends before it starts anew
@@ -37,6 +37,12 @@ pub struct CachedViews {
     images: HashMap<String, FigureView>,
     /// M-09.7: the last picture of each diagram block, by block index.
     last_pictures: HashMap<usize, String>,
+    /// FR-098: the formulas typeset, or with their error, by key
+    /// ([`formula_key`]).
+    formulas: HashMap<String, FormulaView>,
+    /// FR-098, TC-005-42: the last typeset picture of each block formula,
+    /// shown while its changed source is typeset.
+    last_formulas: HashMap<usize, FormulaView>,
 }
 
 impl CachedViews {
@@ -67,6 +73,11 @@ impl CachedViews {
         self.images.insert(target.to_owned(), figure);
     }
 
+    /// FR-098: the formula kept by `key` ([`formula_key`]).
+    pub fn insert_formula(&mut self, key: String, formula: FormulaView) {
+        self.formulas.insert(key, formula);
+    }
+
     /// Whether these views are for the theme named `theme`, dark or not.
     #[must_use]
     pub fn is_for(&self, theme: &str, dark: bool) -> bool {
@@ -80,10 +91,15 @@ impl CachedViews {
         if sent.clear || !self.is_for(&sent.theme, sent.dark) {
             let same = self.is_for(&sent.theme, sent.dark);
             let last = std::mem::take(&mut self.last_pictures);
+            let last_formulas = std::mem::take(&mut self.last_formulas);
             *self = Self::new(&sent.theme, sent.dark);
             if same {
                 self.last_pictures = last;
+                self.last_formulas = last_formulas;
             }
+        }
+        for (key, formula) in &sent.formulas {
+            self.insert_formula(key.clone(), formula.clone());
         }
         for (key, colors) in &sent.colors {
             self.insert_colors(key.clone(), colors.clone());
@@ -141,6 +157,12 @@ impl CachedViews {
                 }
                 _ => {}
             }
+            let refreshed = refresh_formulas(block, view, index, &mut |at, source, display| {
+                self.formula(at, source, display)
+            });
+            if refreshed && changed.last() != Some(&index) {
+                changed.push(index);
+            }
         }
         changed
     }
@@ -187,6 +209,35 @@ impl Enrich for CachedViews {
                 ..FigureView::default()
             })
     }
+
+    /// FR-098, TC-005-42: a formula as the backend sent it; until it comes,
+    /// a block formula keeps its last picture, an inline one shows its
+    /// source.
+    fn formula(&mut self, block: Option<usize>, source: &str, display: bool) -> FormulaView {
+        let sent = self
+            .formulas
+            .get(&formula_key(&self.theme, display, source))
+            .cloned();
+        match (sent, block) {
+            (Some(formula), Some(index)) => {
+                if formula.picture.is_some() {
+                    self.last_formulas.insert(index, formula.clone());
+                } else {
+                    self.last_formulas.remove(&index);
+                }
+                formula
+            }
+            (Some(formula), None) => formula,
+            (None, Some(index)) => match self.last_formulas.get(&index) {
+                Some(last) => FormulaView {
+                    source: source.to_owned(),
+                    ..last.clone()
+                },
+                None => pending_formula(source, display),
+            },
+            (None, None) => pending_formula(source, display),
+        }
+    }
 }
 
 impl MakeViews for CachedViews {
@@ -195,6 +246,7 @@ impl MakeViews for CachedViews {
     fn all(&mut self, blocks: &[Block], text: &str, rope: &Rope) -> Vec<BlockView> {
         let views = ViewMaker::new(self, blocks).views(text, rope);
         self.last_pictures.retain(|index, _| *index < blocks.len());
+        self.last_formulas.retain(|index, _| *index < blocks.len());
         views
     }
 
@@ -211,7 +263,9 @@ impl MakeViews for CachedViews {
 
     fn blocks_moved(&mut self, replaced: Range<usize>, grown: isize) {
         let last = std::mem::take(&mut self.last_pictures);
-        self.last_pictures = moved_indices(last, replaced, grown);
+        self.last_pictures = moved_indices(last, replaced.clone(), grown);
+        let last = std::mem::take(&mut self.last_formulas);
+        self.last_formulas = moved_indices(last, replaced, grown);
     }
 
     fn made(&mut self, _index: usize, view: &mut BlockView, old: Option<&BlockView>) {
@@ -320,6 +374,7 @@ mod tests {
             colors: vec![(colors_key("Light", "rust", &code), Some(colors.clone()))],
             diagrams: Vec::new(),
             images: vec![("img/plan.png".into(), picture.clone())],
+            formulas: Vec::new(),
         };
 
         cached.take(&sent);
@@ -369,6 +424,7 @@ mod tests {
             colors: Vec::new(),
             diagrams: Vec::new(),
             images: Vec::new(),
+            formulas: Vec::new(),
         };
 
         cached.take(&sent("Light", false));
@@ -384,5 +440,76 @@ mod tests {
         cached.take(&sent("Dark", false));
         assert!(cached.last_pictures.is_empty());
         assert!(cached.is_for("Dark", false));
+    }
+
+    fn typeset(source: &str, display: bool, picture: &str) -> FormulaView {
+        FormulaView {
+            picture: Some(picture.into()),
+            width: 2000,
+            height: 1200,
+            depth: 250,
+            ..pending_formula(source, display)
+        }
+    }
+
+    /// TC-004-38, TC-005-42, FR-098: an inline formula shows its source
+    /// until its picture is sent; a block formula keeps its last picture
+    /// while its changed source is typeset; an error is shown as sent.
+    #[test]
+    fn tc005_42_formulas_follow_what_was_sent() {
+        let text = "Energy $E=mc^2$ here.\n\n$$a^2$$\n";
+        let mut cached = CachedViews::new("Dark", true);
+        let views = views_of(&mut cached, text);
+        let inline = views[0].runs[1].formula.clone().unwrap();
+        assert_eq!(inline, pending_formula("E=mc^2", false), "its source first");
+        assert!(matches!(
+            &views[1].kind,
+            BlockKindView::Formula { formula } if formula.picture.is_none() && formula.source == "a^2"
+        ));
+
+        let (blocks, _) = parse_all(text, NoteFormat::Markdown);
+        let mut views = views;
+        cached.take(&EnrichView {
+            note: "Math.md".into(),
+            rev: 1,
+            theme: "Dark".into(),
+            dark: true,
+            clear: false,
+            colors: Vec::new(),
+            diagrams: Vec::new(),
+            images: Vec::new(),
+            formulas: vec![
+                (
+                    formula_key("Dark", false, "E=mc^2"),
+                    typeset("E=mc^2", false, "formula/1.svg?v=1"),
+                ),
+                (
+                    formula_key("Dark", true, "a^2"),
+                    typeset("a^2", true, "formula/2.svg?v=2"),
+                ),
+            ],
+        });
+        assert_eq!(cached.enrich(&blocks, &mut views), [0, 1]);
+        assert_eq!(
+            views[0].runs[1]
+                .formula
+                .as_ref()
+                .and_then(|f| f.picture.as_deref()),
+            Some("formula/1.svg?v=1")
+        );
+
+        // The block formula changes: its last picture stays meanwhile.
+        let changed = text.replace("a^2", "a^2+b^2");
+        let views = views_of(&mut cached, &changed);
+        let BlockKindView::Formula { formula } = &views[1].kind else {
+            panic!("{:?}", views[1].kind);
+        };
+        assert_eq!(formula.picture.as_deref(), Some("formula/2.svg?v=2"));
+        assert_eq!(formula.source, "a^2+b^2");
+
+        // Another theme is another picture.
+        assert!(!cached
+            .formulas
+            .contains_key(&formula_key("Light", false, "E=mc^2")));
     }
 }

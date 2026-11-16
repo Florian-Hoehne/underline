@@ -13,12 +13,20 @@ import {
   type FacadePatch,
   type FacadeState,
   type FindAnswer,
+  type FindSpec,
   type FindStep,
   type Insertion,
   type KeysStatusView,
+  type LineTargetView,
+  type LinkChoice,
+  type LinkContextView,
+  type PaneName,
   type Platform,
+  type Replaced,
   type RowsView,
   type UiError,
+  type AttributeChangeView,
+  type AttributeEdited,
 } from '../bindings';
 import type { Clipboarded } from '../editor/clipboard';
 import type { CoreListener } from '../editor/sync';
@@ -35,10 +43,20 @@ export interface FacadeBackend {
   /** M-08.8: folds or expands the section of the heading on `line`. */
   fold(note: string, line: number): Promise<EditorPatch>;
   /**
-   * UC-008 A6, M-13.4: a step of the find field holding `text`: the hit it
-   * selected in the core, or `null` when nothing is found.
+   * UC-008 A6, A7, M-13.4: a step of the find field holding `spec`: the hit
+   * it selected in the core, or `null` when nothing is found.
    */
-  find(note: string, text: string, step: FindStep): Promise<FindAnswer | null>;
+  find(note: string, spec: FindSpec, step: FindStep): Promise<FindAnswer | null>;
+  /**
+   * UC-005 A20, A21, BR-017: replaces the selected occurrence of `spec`, or
+   * all, in the text the facade shows.
+   */
+  replace(
+    note: string,
+    spec: FindSpec,
+    replacement: string,
+    all: boolean,
+  ): Promise<Replaced<FacadePatch>>;
   /**
    * UC-005, M-09.10 to M-09.13: one input at the selection `at`, with the
    * rows measured around the cursor and, when the Vim keys asked, the
@@ -82,6 +100,8 @@ export interface FacadeBackend {
    * figures come from `attach`.
    */
   attach(note: string, listener: CoreListener): () => void;
+  /** FR-097: the facade took the keyboard; the window reads the core as this view. */
+  focused?(note: string): void;
   /** ADR-025: the facade after a change of the backend. */
   refresh(note: string): Promise<FacadePatch>;
   /**
@@ -89,6 +109,34 @@ export interface FacadeBackend {
    * it drew, of their version, which `open` may take again.
    */
   leave(note: string, kept: { version: number; blocks: BlockView[] } | null): void;
+  /**
+   * FR-080, UC-005 A23: the place of a link typed at the selection `at`
+   * (`[[`); `manual` for Ctrl+Space. Without it, no link completion.
+   */
+  linkContext?(note: string, at: FacadeAt, manual: boolean): LinkContextView | null;
+  /** FR-080, BR-018: writes the link chosen at `at`; `null` when the text changed meanwhile. */
+  completeLink?(note: string, at: FacadeAt, choice: LinkChoice): Promise<FacadePatch | null>;
+  /** UC-004 A16, BR-017: the cursor to the block holding the line of `target`. */
+  goToLine?(note: string, at: FacadeAt, target: LineTargetView): Promise<FacadePatch>;
+  /**
+   * FR-099, ADR-030: whether the core of `note` holds the backend's text of
+   * revision `rev` and nothing of its own, so the spell check's marks of
+   * that revision apply as they are.
+   */
+  inStep?(note: string, rev: number): boolean;
+  /**
+   * UC-005 A28: the markup `from`..`to` (web units) of the core's text, so
+   * a correction keeps the markup inside a word; `null` without it.
+   */
+  markupOf?(note: string, from: number, to: number): string | null;
+  /** UC-004 A16 step 1: how many lines the note has; `null` without its core. */
+  lineCount?(note: string): number | null;
+  /** UC-024 step 4: writes `change` of a note attribute at `at`, one undo step; or says why not. */
+  attribute?(
+    note: string,
+    at: FacadeAt,
+    change: AttributeChangeView,
+  ): Promise<AttributeEdited<FacadePatch>>;
 }
 
 type Result<T> = { status: 'ok'; data: T } | { status: 'error'; error: UiError };
@@ -102,8 +150,12 @@ async function unwrap<T>(result: Promise<Result<T>>): Promise<T> {
 }
 
 /** M-07.2: the tab of `note` shows `view` from now on. */
-export async function setEditingView(note: string, view: EditingViewName): Promise<void> {
-  await unwrap(commands.tabSetView(note, view));
+export async function setEditingView(
+  note: string,
+  view: EditingViewName,
+  pane: PaneName | null = null,
+): Promise<void> {
+  await unwrap(commands.tabSetView(note, view, pane));
 }
 
 /**

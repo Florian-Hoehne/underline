@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-snapshots-close"
+description = "Enables the snapshots_close command without any pre-configured scope."
+commands.allow = ["snapshots_close"]
+
+[[permission]]
+identifier = "deny-snapshots-close"
+description = "Denies the snapshots_close command without any pre-configured scope."
+commands.deny = ["snapshots_close"]

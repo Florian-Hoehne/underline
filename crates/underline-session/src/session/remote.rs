@@ -503,7 +503,8 @@ impl Session {
             .collect();
         for path in paths {
             if path.exists() {
-                self.outside_change(&path);
+                // UC-026 BR-001: what git changed has the cause Git.
+                self.take_file_version(&path, true, underline_core::SnapshotCause::Git);
             }
         }
         if let Some(open) = &mut self.open {

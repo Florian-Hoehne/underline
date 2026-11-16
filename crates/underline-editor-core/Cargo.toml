@@ -11,4 +11,5 @@ rust-version.workspace = true
 # too (docs/migration/plan.md, section 3, 6 and 17; ADR-025).
 [dependencies]
 ropey.workspace = true
+thiserror.workspace = true
 underline-markup.workspace = true

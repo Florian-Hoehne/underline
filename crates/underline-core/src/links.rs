@@ -24,11 +24,51 @@ pub enum LinkTarget {
     Outside,
 }
 
+/// UC-004 BR-005, A4: the schemes without `//` an address for another program
+/// starts with. Only these: a note may be named `Note: x`, and `C:` is a drive
+/// on Windows (OQ-245).
+const WEB_SCHEMES: [&str; 4] = ["mailto:", "tel:", "sms:", "urn:"];
+
 /// UC-004 BR-005: where `link`, written in the note at `note` (a file of the
 /// workspace at `root`), leads.
 pub fn resolve_link(root: &Path, note: &Path, link: &str) -> LinkTarget {
+    let normal = normalize(root).unwrap_or_else(|| root.to_owned());
+    resolve_link_with(
+        root,
+        note,
+        link,
+        |id| {
+            NoteFormat::ALL
+                .into_iter()
+                .any(|format| normal.join(id.file_name(format)).is_file())
+        },
+        Path::is_file,
+    )
+}
+
+/// UC-004 BR-005, BR-015: [`resolve_link`] with the questions to the disk
+/// answered by the caller: `is_note` says whether the workspace holds the
+/// note `id` (in any note format), `is_file` whether a file without the
+/// extension of a note exists at a place. The backlinks and the outgoing
+/// links (FR-078, FR-079) answer them from the notes they know, so the
+/// links of 10,000 notes are resolved without asking the disk for each
+/// (NFR-019).
+pub fn resolve_link_with(
+    root: &Path,
+    note: &Path,
+    link: &str,
+    is_note: impl Fn(&NoteId) -> bool,
+    is_file: impl Fn(&Path) -> bool,
+) -> LinkTarget {
     let link = link.trim();
-    if link.contains("://") && !link.starts_with("file://") || link.starts_with("mailto:") {
+    // A scheme counts only before the `#`: a heading may name an address.
+    let before_fragment = link.split_once('#').map_or(link, |(path, _)| path);
+    if before_fragment.contains("://") && !link.starts_with("file://")
+        || WEB_SCHEMES.iter().any(|scheme| {
+            link.get(..scheme.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+        })
+    {
         return LinkTarget::Web(link.to_owned());
     }
     if let Some(path) = link.strip_prefix("file://") {
@@ -68,14 +108,11 @@ pub fn resolve_link(root: &Path, note: &Path, link: &str) -> LinkTarget {
         relative.as_str()
     };
     let id = NoteId::from_relative(stem);
-    let exists = NoteFormat::ALL
-        .into_iter()
-        .any(|format| root.join(id.file_name(format)).is_file());
-    if exists {
+    if is_note(&id) {
         return LinkTarget::Note { id, heading };
     }
     if is_note_extension || extension.is_none() {
-        if extension.is_none() && target.is_file() {
+        if extension.is_none() && is_file(&target) {
             return LinkTarget::File(target);
         }
         return LinkTarget::MissingNote {
@@ -134,14 +171,21 @@ pub(crate) fn normalize(path: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
-/// Decodes `%20` and the like in a link.
-pub(crate) fn percent_decode(text: &str) -> String {
+/// Decodes `%20` and the like in a link; a `%` that starts no escape stays.
+pub fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&text[i + 1..i + 3], 16) {
+        if bytes[i] == b'%' {
+            // On the bytes: a `%` before a character of several bytes is no
+            // escape, and must not split it.
+            let hex = bytes.get(i + 1..i + 3).and_then(|pair| {
+                let high = char::from(pair[0]).to_digit(16)?;
+                let low = char::from(pair[1]).to_digit(16)?;
+                u8::try_from(high * 16 + low).ok()
+            });
+            if let Some(byte) = hex {
                 out.push(byte);
                 i += 3;
                 continue;
@@ -156,6 +200,21 @@ pub(crate) fn percent_decode(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UC-004 BR-005, FR-078: a `%` before a character of several bytes,
+    /// or at the end, is taken as it is, never splitting the character.
+    #[test]
+    fn uc004_br005_percent_before_multibyte_characters() {
+        assert_eq!(percent_decode("x%aé.md"), "x%aé.md");
+        assert_eq!(percent_decode("%é"), "%é");
+        assert_eq!(percent_decode("a%2"), "a%2");
+        assert_eq!(percent_decode("a%20b%C3%A9"), "a bé");
+        let root = Path::new("/w");
+        assert!(matches!(
+            resolve_link_with(root, Path::new("/w/N.md"), "x%aé.md", |_| true, |_| false),
+            LinkTarget::Note { .. }
+        ));
+    }
     use std::fs;
 
     /// TC-004-12 to TC-004-15: where links lead.
@@ -238,5 +297,39 @@ mod tests {
     fn heading_anchors_as_asciidoctor_makes_them() {
         assert_eq!(asciidoc_anchor("Getting Started!"), "_getting_started");
         assert_eq!(asciidoc_anchor("Setup > Linux"), "_setup_linux");
+    }
+
+    /// UC-004 A4, BR-005 (chaos): an address with a scheme other than
+    /// `mailto:` that has no `//` (`tel:`, `sms:`, `urn:`) is no note to
+    /// create but an address for another program.
+    #[test]
+    fn uc004_br005_chaos_tel_is_no_note() {
+        for link in ["tel:+491234567", "sms:+491234567", "urn:isbn:0451450523"] {
+            let target = resolve_link_with(
+                Path::new("/w"),
+                Path::new("/w/N.md"),
+                link,
+                |_| false,
+                |_| false,
+            );
+            assert!(
+                matches!(target, LinkTarget::Web(_)),
+                "{link} resolved to {target:?}"
+            );
+        }
+    }
+
+    /// UC-004 BR-005 (chaos): a heading named after a `#` may hold `://`;
+    /// the link still leads to the note.
+    #[test]
+    fn uc004_br005_chaos_fragment_with_scheme_is_still_a_note_link() {
+        let target = resolve_link_with(
+            Path::new("/w"),
+            Path::new("/w/N.md"),
+            "Plan.md#see-http://x",
+            |_| true,
+            |_| false,
+        );
+        assert!(matches!(target, LinkTarget::Note { .. }), "{target:?}");
     }
 }

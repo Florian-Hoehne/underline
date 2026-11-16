@@ -205,6 +205,6 @@
 
   .caption {
     margin: 6px 0 0;
-    font-size: 14px;
+    font-size: calc(14px * var(--editor-zoom, 1));
   }
 </style>

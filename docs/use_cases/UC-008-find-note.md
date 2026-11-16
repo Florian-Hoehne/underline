@@ -9,7 +9,7 @@
 **Trigger:** The user starts to type in the search field of the note overview.  
 **Status:** Reviewed  
 
-**Requirements:** [FR-007, FR-017, FR-018, NFR-002, NFR-003, NFR-011, NFR-013](../requirements.md)
+**Requirements:** [FR-007, FR-017, FR-018, FR-075, FR-092, NFR-002, NFR-003, NFR-011, NFR-013](../requirements.md)
 
 ## Preconditions
 
@@ -76,6 +76,38 @@
 4. Escape closes the find field, keeps the selection, and returns the focus to the text.
 5. Use case ends.
 
+### A7: Search switches
+
+**Trigger:** The user switches match case, whole word, or regular expression on or off at the search field or at the find field of the note (step 1)  
+**Flow:**
+
+1. The system shows which search switches are on and searches again by the rules of BR-011.
+2. Use case continues at step 2, or at A6 step 2 in the find field of the note.
+
+### A8: Search by tag
+
+**Trigger:** The user types a word that starts with `#` into the search field, or chooses a tag of the active note in the tool panel (UC-004 A15) (step 1)  
+**Flow:**
+
+1. The system finds the notes that carry that tag, or a tag below it, by the rules of BR-012, and lists them as in step 2, with the lines that hold the tag as the places found.
+2. Use case continues at step 3.
+
+### A9: Regular expression not valid
+
+**Trigger:** The search switch regular expression is on and the search text is no valid regular expression (step 2)  
+**Flow:**
+
+1. The system says what is wrong with the search text and lists no notes.
+2. Use case continues at step 1.
+
+### A10: Replace what was found
+
+**Trigger:** The user asks to replace from the search of the workspace (step 5)  
+**Flow:**
+
+1. The system opens the replace of the workspace with the search text and the search switches taken over (UC-022).
+2. Use case ends.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -95,7 +127,7 @@ The search looks at the title and the folder of every note of the workspace and 
 
 ### BR-002: What matches
 
-The search text is split into words at spaces. A note matches when every word occurs in its title, folder, or text, each word anywhere, in any order, also inside a longer word. Upper and lower case do not matter; accents and umlauts do, so `uber` does not find `über`. Words in double quotes are one word with their spaces, so `"release plan"` finds exactly that sequence. There are no further options.
+The search text is split into words at spaces. A note matches when every word occurs in its title, folder, or text, each word anywhere, in any order, also inside a longer word. Upper and lower case do not matter; accents and umlauts do, so `uber` does not find `über`. Words in double quotes are one word with their spaces, so `"release plan"` finds exactly that sequence. The search switches change these rules (BR-011), and a word that starts with `#` searches for a tag (BR-012).
 
 ### BR-003: Order of the found notes
 
@@ -127,5 +159,19 @@ Finding in the active note (A6) follows the matching rules of BR-002 within that
 
 ### BR-010: Nothing remembered
 
-The search text is not remembered when Underline closes.
+The search text and the search switches are not remembered when Underline closes; until then, the search field and the find field of the note each keep their own search switches.
+
+### BR-011: Search switches
+
+The search field of the workspace and the find field of the note offer three search switches, each off at first (FR-075):
+
+- **Match case:** upper and lower case must match as typed.
+- **Whole word:** a word matches only where it is not part of a longer word; letters and digits belong to a word.
+- **Regular expression:** the search text is one regular expression, in the usual notation of programming editors, not split into words and without the meaning of double quotes; it matches within one line of the title, the folder, or the text. Without match case, upper and lower case do not matter in it either.
+
+Accents and umlauts count with every option (BR-002). Alt+C, Alt+W, and Alt+R switch the options while the focus is in the field (NFR-011). The search answers within the time of BR-005 with any option.
+
+### BR-012: Tags in the search
+
+A search word that is `#` followed by a tag (UC-004 BR-016) matches the notes that carry that tag, in their text or in their note attribute `tags`, and the notes that carry a tag below it, so `#project` also finds `#project/alpha`; upper and lower case do not matter (FR-092). Together with other words, every word must match as BR-002 says. The places found are the lines that hold the tag. With the search switch regular expression on, `#` has no meaning of its own.
 

@@ -8,6 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::panes::PaneSide;
 use crate::todos::TodoListState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -79,10 +80,20 @@ pub struct WorkspaceState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabState {
     pub note: NoteId,
-    /// Place of the tab from the left, starting at 1.
+    /// UC-004 BR-018: the pane of the split view the tab is in; the left one
+    /// without the split view (and in a state file written before it).
+    #[serde(default, skip_serializing_if = "is_left")]
+    pub pane: PaneSide,
+    /// Place of the tab from the left of its pane, starting at 1.
     pub position: u32,
     pub editing_view: EditingView,
     pub active: bool,
+}
+
+/// The left pane is not written, so a state file without the split view
+/// stays as it was.
+fn is_left(pane: &PaneSide) -> bool {
+    *pane == PaneSide::Left
 }
 
 /// The editing view a tab shows its note in.
@@ -225,20 +236,22 @@ impl StateStore {
             .map(|w| w.directory.as_path())
     }
 
-    /// The remembered tabs of the workspace at `directory`, left to right.
+    /// The remembered tabs of the workspace at `directory`, those of the
+    /// left pane first, each pane's left to right (UC-004 BR-018).
     pub fn tabs(&mut self, directory: &Path) -> Vec<TabState> {
         let mut tabs = self.workspace(directory).state.tabs.clone();
-        tabs.sort_by_key(|tab| tab.position);
+        tabs.sort_by_key(|tab| (tab.pane, tab.position));
         tabs
     }
 
-    /// The note of the active tab of the workspace at `directory`.
+    /// The note of the active tab of the workspace at `directory`: of the
+    /// left pane, which is the active pane after a restart (BR-018).
     pub fn active_note(&mut self, directory: &Path) -> Option<NoteId> {
         self.workspace(directory)
             .state
             .tabs
             .iter()
-            .find(|tab| tab.active)
+            .find(|tab| tab.active && tab.pane == PaneSide::Left)
             .map(|tab| tab.note.clone())
     }
 
@@ -286,6 +299,7 @@ impl StateStore {
         let loaded = self.workspace(directory);
         loaded.state.tabs = vec![TabState {
             note: note.clone(),
+            pane: PaneSide::Left,
             position: 1,
             editing_view: view,
             active: true,
@@ -442,11 +456,23 @@ fn prune(directory: &Path, state: &mut WorkspaceState) -> bool {
     };
     state.notes.retain(|n| exists(&n.note));
     state.tabs.retain(|t| exists(&t.note));
-    for (index, tab) in state.tabs.iter_mut().enumerate() {
-        tab.position = u32::try_from(index + 1).unwrap_or(u32::MAX);
-    }
-    if !state.tabs.is_empty() && !state.tabs.iter().any(|t| t.active) {
-        state.tabs[0].active = true;
+    state.tabs.sort_by_key(|tab| (tab.pane, tab.position));
+    // UC-004 BR-018: places and the active tab count per pane.
+    for side in [PaneSide::Left, PaneSide::Right] {
+        let mut position = 0;
+        let mut first = None;
+        let mut any_active = false;
+        for (index, tab) in state.tabs.iter_mut().enumerate() {
+            if tab.pane == side {
+                position += 1;
+                tab.position = position;
+                first.get_or_insert(index);
+                any_active |= tab.active;
+            }
+        }
+        if let (Some(first), false) = (first, any_active) {
+            state.tabs[first].active = true;
+        }
     }
     *state != before
 }
@@ -840,5 +866,57 @@ mod git_tests {
         );
         assert!(!workspace.join(".gitignore").exists());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// UC-004 step 6, BR-018: a tab of the right pane is remembered with its
+    /// pane; a state file written before the split view reads as the left
+    /// pane; places and the active tab count per pane.
+    #[test]
+    fn uc004_br018_tabs_are_remembered_with_their_pane() {
+        let old: WorkspaceState = serde_norway::from_str(
+            "tabs:\n- note: A\n  position: 1\n  editing_view: facade\n  active: true\n",
+        )
+        .unwrap();
+        assert_eq!(old.tabs[0].pane, PaneSide::Left);
+        let written = serde_norway::to_string(&old).unwrap();
+        assert!(!written.contains("pane"), "{written}");
+        let tab = |note: &str, pane: PaneSide, position: u32, active: bool| TabState {
+            note: NoteId::from_title(note),
+            pane,
+            position,
+            editing_view: EditingView::Source,
+            active,
+        };
+        let mut state = WorkspaceState {
+            tabs: vec![
+                tab("B", PaneSide::Right, 7, false),
+                tab("A", PaneSide::Left, 3, true),
+                tab("C", PaneSide::Right, 9, false),
+            ],
+            ..WorkspaceState::default()
+        };
+        let dir =
+            std::env::temp_dir().join(format!("underline-state-panes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["A", "B", "C"] {
+            std::fs::write(dir.join(format!("{name}.md")), "").unwrap();
+        }
+        assert!(prune(&dir, &mut state));
+        let summary: Vec<(String, PaneSide, u32, bool)> = state
+            .tabs
+            .iter()
+            .map(|t| (t.note.to_string(), t.pane, t.position, t.active))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("A".to_owned(), PaneSide::Left, 1, true),
+                ("B".to_owned(), PaneSide::Right, 1, true),
+                ("C".to_owned(), PaneSide::Right, 2, false),
+            ]
+        );
+        let written = serde_norway::to_string(&state).unwrap();
+        assert!(written.contains("pane: right"), "{written}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

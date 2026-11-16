@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tab-open-side"
+description = "Enables the tab_open_side command without any pre-configured scope."
+commands.allow = ["tab_open_side"]
+
+[[permission]]
+identifier = "deny-tab-open-side"
+description = "Denies the tab_open_side command without any pre-configured scope."
+commands.deny = ["tab_open_side"]

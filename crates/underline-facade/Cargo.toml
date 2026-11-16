@@ -20,6 +20,13 @@ resvg = { version = "=0.45.1", default-features = false, features = ["text"] }
 # Mermaid (ADR-009): every diagram family, SVG without the ELK layout.
 merman = { version = "=0.9.3", default-features = false, features = ["all-diagrams", "complete-svg"] }
 serde_json.workspace = true
+# FR-098, ADR-029: formulas typeset by RaTeX at exactly the version merman
+# links (its `math` feature), so the build holds one copy; they are updated
+# together with merman. The KaTeX fonts (OFL-1.1) are embedded.
+ratex-parser = "=0.1.15"
+ratex-layout = "=0.1.15"
+ratex-types = "=0.1.15"
+ratex-svg = { version = "=0.1.15", features = ["embed-fonts"] }
 # PDF export (ADR-015): Typst set as a library, its fonts and the system's.
 typst = "=0.15.1"
 typst-layout = "=0.15.1"

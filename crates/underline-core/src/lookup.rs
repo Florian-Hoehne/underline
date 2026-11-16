@@ -349,6 +349,7 @@ impl AgentSearch {
 pub fn search_for_agent(workspace: &Workspace, listed: &[ListedNote], words: &str) -> AgentSearch {
     let request = SearchRequest {
         text: words.to_owned(),
+        switches: crate::search::Switches::default(),
         notes: listed.iter().map(|l| l.entry.clone()).collect(),
         open: Default::default(),
     };

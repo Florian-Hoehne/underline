@@ -11,9 +11,15 @@ import {
   facadeHits,
   facadeMarks,
   hitParts,
+  markParts,
+  shownWordIn,
+  spellAt,
   mapHits,
   foldingOf,
   gapAfter,
+  em,
+  formulaClick,
+  inFormula,
   isFigure,
   pointOf,
   revealIndex,
@@ -21,7 +27,17 @@ import {
 } from './model';
 
 function run(text: string, offsets: [number, number][], end: number): RunView {
-  return { text, bold: false, italic: false, strike: false, code: false, link: null, offsets, end };
+  return {
+    text,
+    bold: false,
+    italic: false,
+    strike: false,
+    code: false,
+    link: null,
+    offsets,
+    end,
+    formula: null,
+  };
 }
 
 function paragraph(start: number, line: number, runs: RunView[], length = 10): BlockView {
@@ -216,6 +232,44 @@ describe('ADR-024 the heights of a virtualized facade', () => {
   });
 });
 
+describe('FR-099 the spell check in the facade (UC-005 BR-023, A28)', () => {
+  // "**Under**lne ferri" shows "Underlne ferri": "Under" stands at 12,
+  // "lne ferri" at 19 (the block starts at 10).
+  const shown = paragraph(10, 0, [run('Under', [[0, 2]], 7), run('lne ferri', [[0, 9]], 18)], 18);
+
+  it('br023 marks the units of a marked word, its markup left out, with the hits', () => {
+    const spell = [
+      [12, 22],
+      [23, 28],
+    ] as const;
+    expect(markParts(shown, shown.runs[0], 0, 5, [], null, spell)).toEqual([
+      { from: 0, to: 5, hit: false, current: false, spell: true },
+    ]);
+    expect(markParts(shown, shown.runs[1], 0, 9, [[23, 25]], null, spell)).toEqual([
+      { from: 0, to: 3, hit: false, current: false, spell: true },
+      { from: 3, to: 4, hit: false, current: false, spell: false },
+      { from: 4, to: 6, hit: true, current: false, spell: true },
+      { from: 6, to: 9, hit: false, current: false, spell: true },
+    ]);
+  });
+
+  it('uc005_a28 finds the marked word at a place and the word it shows', () => {
+    const spell = [
+      [12, 22],
+      [23, 28],
+    ] as const;
+    expect(spellAt(spell, 12)).toEqual([12, 22]);
+    expect(spellAt(spell, 22)).toEqual([12, 22]);
+    expect(spellAt(spell, 25)).toEqual([23, 28]);
+    expect(spellAt(spell, 5)).toBeNull();
+    expect(shownWordIn([shown], 12, 22)).toEqual({
+      word: 'Underlne',
+      places: [12, 13, 14, 15, 16, 19, 20, 21, 22],
+    });
+    expect(shownWordIn([shown], 23, 28)?.word).toBe('ferri');
+  });
+});
+
 describe('M-13.2 the hits of a search in the facade (UC-008 BR-008)', () => {
   // "**bold** ferry" shows "bold ferry": "bold" stands at 2, " ferry" at 8.
   const shown = paragraph(10, 0, [run('bold', [[0, 2]], 8), run(' ferry', [[0, 8]], 14)], 15);
@@ -309,5 +363,41 @@ describe('M-13.2 the hits of a search in the facade (UC-008 BR-008)', () => {
         6,
       ),
     ).toEqual([]);
+  });
+});
+
+describe('FR-098 formulas', () => {
+  const formula = {
+    source: 'x',
+    display: false,
+    picture: 'formula/1.svg',
+    width: 600,
+    height: 1000,
+    depth: 200,
+    error: null,
+  };
+  const inline: RunView = { ...run('$x$', [[0, 4]], 7), formula };
+  const block = paragraph(10, 0, [run('A ', [[0, 0]], 2), inline]);
+
+  it('UC-005 BR-008: the cursor is in a formula after its first character and before its end', () => {
+    expect(inFormula(block, inline, 14)).toBe(false);
+    expect(inFormula(block, inline, 15)).toBe(true);
+    expect(inFormula(block, inline, 16)).toBe(true);
+    expect(inFormula(block, inline, 17)).toBe(false);
+    expect(inFormula(block, inline, null)).toBe(false);
+  });
+
+  it('TC-005-42 step 3: a click goes to the start of its source', () => {
+    expect(formulaClick(block, inline)).toBe(15);
+    const macro: RunView = {
+      ...run('latexmath:[x]', [[0, 0]], 13),
+      formula: { ...formula, source: 'x' },
+    };
+    expect(formulaClick(paragraph(0, 0, [macro]), macro)).toBe(11);
+  });
+
+  it('a block formula is a figure; sizes are in em', () => {
+    expect(isFigure({ ...block, kind: { type: 'formula', formula } })).toBe(true);
+    expect(em(1250)).toBe('1.250em');
   });
 });

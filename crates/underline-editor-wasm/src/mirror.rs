@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use ropey::Rope;
 use underline_editor_core::facade::{parse_all, MakeViews};
 use underline_editor_core::sync::{Batch, Server};
-use underline_editor_view::facade_view::{BlockKindView, FigureView};
+use underline_editor_view::facade_view::{BlockKindView, FigureView, FormulaView};
 use underline_editor_view::sync_view::{EnrichView, SyncAnswer, SyncBatch};
-use underline_editor_view::views::{diagram_key, diagram_language};
+use underline_editor_view::views::{diagram_key, diagram_language, formula_key};
 use underline_editor_view::CachedViews;
 use underline_markup::blocks::BlockKind;
 use underline_markup::NoteFormat;
@@ -87,7 +87,9 @@ impl Mirror {
 
     /// `EnrichView` of the note `note` in `format` for the mock: the
     /// figures of its images from `images` (by target), every diagram with
-    /// `diagram`; keyed as the backend keys them.
+    /// `diagram`, every formula with the placeholder `formula` (FR-098), or
+    /// with an error when its braces do not match (UC-004 A21); keyed as the
+    /// backend keys them.
     ///
     /// # Errors
     ///
@@ -99,6 +101,7 @@ impl Mirror {
         (theme, dark): (&str, bool),
         images: &str,
         diagram: &str,
+        formula: &str,
     ) -> Result<String, CallError> {
         let images: HashMap<String, FigureView> =
             serde_json::from_str(images).map_err(|reason| CallError::Invalid {
@@ -108,6 +111,11 @@ impl Mirror {
         let diagram: FigureView =
             serde_json::from_str(diagram).map_err(|reason| CallError::Invalid {
                 what: "The diagram",
+                reason,
+            })?;
+        let formula: FormulaView =
+            serde_json::from_str(formula).map_err(|reason| CallError::Invalid {
+                what: "The formula",
                 reason,
             })?;
         let text = self.0.text();
@@ -127,8 +135,20 @@ impl Mirror {
             colors: Vec::new(),
             diagrams: Vec::new(),
             images: Vec::new(),
+            formulas: Vec::new(),
         };
         for (block, view) in blocks.iter().zip(&views) {
+            let block_formula = match &view.kind {
+                BlockKindView::Formula { formula } => Some(formula),
+                _ => None,
+            };
+            let inline = view.runs.iter().filter_map(|run| run.formula.as_ref());
+            for shown in block_formula.into_iter().chain(inline) {
+                sent.formulas.push((
+                    formula_key(theme, shown.display, &shown.source),
+                    mock_formula(&formula, &shown.source, shown.display),
+                ));
+            }
             let code: String = view.runs.iter().map(|r| r.text.as_str()).collect();
             match (&block.kind, &view.kind) {
                 (BlockKind::Code { .. }, _) => {
@@ -155,5 +175,40 @@ impl Mirror {
     /// The answer could not be written.
     pub fn resync(&mut self, text: &str) -> Result<String, CallError> {
         json(&SyncAnswer::from(&self.0.resync(text).answer))
+    }
+}
+
+/// FR-098: the mock's formula with `source`: the placeholder `template`,
+/// or, when its braces do not match, the error the backend would give
+/// (UC-004 A21).
+fn mock_formula(template: &FormulaView, source: &str, display: bool) -> FormulaView {
+    let mut depth = 0_i32;
+    for c in source.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            break;
+        }
+    }
+    if depth != 0 {
+        return FormulaView {
+            source: source.to_owned(),
+            display,
+            error: Some(
+                "This formula cannot be typeset: Expected '}', got 'EOF' (at character 1)".into(),
+            ),
+            ..FormulaView::default()
+        };
+    }
+    // The placeholder is as wide as the source is long.
+    let chars = u32::try_from(source.chars().count()).unwrap_or(u32::MAX);
+    FormulaView {
+        source: source.to_owned(),
+        display,
+        width: template.width.max(1).saturating_mul(chars.clamp(1, 40)),
+        ..template.clone()
     }
 }

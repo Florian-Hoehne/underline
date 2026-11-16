@@ -1,0 +1,20 @@
+[package]
+name = "underline-spell"
+description = "Underline's spell check: Hunspell dictionaries read by spellbook, the words of a note to check, and the user's words"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# ADR-030: the spell check runs in the backend, on the mirror of a note; the
+# dictionaries are resource files read at run time, never compiled in.
+[dependencies]
+# The language setting and atomic writes (ADR-005).
+underline-core.workspace = true
+# The blocks and inline runs the skip rules of UC-005 BR-023 are taken from.
+underline-markup.workspace = true
+spellbook.workspace = true
+# The words of a text, as ADR-027 counts them.
+unicode-segmentation.workspace = true
+thiserror.workspace = true

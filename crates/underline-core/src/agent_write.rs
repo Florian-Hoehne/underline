@@ -17,6 +17,7 @@ use crate::format::NoteFormat;
 use crate::lookup::{find_note, LookupError};
 use crate::new_note::NewNote;
 use crate::note::NoteId;
+use crate::snapshots::{SnapshotCause, SnapshotStore};
 use crate::state::{underline_folder, UNDERLINE_FOLDER};
 use crate::workspace::{NoteEntry, Workspace};
 
@@ -384,6 +385,17 @@ fn apply_to_file_inner(
     let base = fs::read_to_string(&path).map_err(|e| write(e.to_string()))?;
     let splice = plan_splice(entry.id.as_str(), &base, change)?;
     let (text, lines) = apply_splice(&base, &splice);
+    // UC-026 BR-001: a snapshot of the content before an agent changes it;
+    // the change is not made without it.
+    let snapshots = SnapshotStore::new(workspace.root());
+    snapshots
+        .take(
+            &entry.id.file_name(entry.format),
+            &base,
+            SnapshotCause::AgentChange,
+            crate::state::now(),
+        )
+        .map_err(|e| write(e.to_string()))?;
     write_atomic(&path, text.as_bytes()).map_err(|e| write(e.to_string()))?;
     Ok((entry.id, lines))
 }

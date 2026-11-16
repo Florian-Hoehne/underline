@@ -26,9 +26,16 @@ impl NoteId {
         &self.0
     }
 
-    /// Title shown to the user: the page name with `-` turned into spaces.
+    /// Title shown to the user: the page name with `-` turned into spaces
+    /// (UC-003 BR-001). OQ-272: a page name that is exactly a date,
+    /// `2026-11-11`, keeps its dashes, so a daily note is shown by its date
+    /// (UC-025 BR-001, TC-025-01).
     pub fn title(&self) -> String {
-        self.page().replace('-', " ")
+        let page = self.page();
+        if crate::templates::daily_date(page).is_some() {
+            return page.to_owned();
+        }
+        page.replace('-', " ")
     }
 
     /// The folder of the note inside the workspace, `None` at the top.
@@ -103,6 +110,21 @@ mod tests {
             "Getting-Started.adoc"
         );
         assert_eq!(note.title(), "Getting Started");
+    }
+
+    /// TC-025-01, OQ-272: a page name that is exactly a date keeps its
+    /// dashes in the title; any other keeps the rule of UC-003 BR-001.
+    #[test]
+    fn uc025_oq272_a_date_keeps_its_dashes() {
+        assert_eq!(
+            NoteId::from_relative("daily/2026-11-11").title(),
+            "2026-11-11"
+        );
+        assert_eq!(
+            NoteId::from_relative("2026-11-11-Kickoff").title(),
+            "2026 11 11 Kickoff"
+        );
+        assert_eq!(NoteId::from_relative("2026-13-11").title(), "2026 13 11");
     }
 
     /// UC-002 BR-003 / BR-004: notes in folders keep their folder.

@@ -1,7 +1,7 @@
 # Test Cases: Edit Note
 
 **Use Case:** [UC-005 Edit Note](../use_cases/UC-005-edit-note.md)  
-**Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-032, FR-033, FR-034, FR-044, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012](../requirements.md)
+**Requirements:** [FR-008, FR-009, FR-010, FR-011, FR-012, FR-021, FR-023, FR-024, FR-025, FR-026, FR-031, FR-032, FR-033, FR-034, FR-044, FR-073, FR-075, FR-080, FR-081, FR-082, FR-083, FR-084, FR-085, FR-097, FR-098, FR-099, NFR-002, NFR-005, NFR-006, NFR-007, NFR-011, NFR-012, NFR-014, NFR-015, NFR-018](../requirements.md)
 
 ## Coverage
 
@@ -35,6 +35,20 @@
 | TC-005-26 | A17 Paste formatted and plain text                   | BR-014                       |
 | TC-005-27 | A18 Paste an image                                   | BR-014                       |
 | TC-005-28 | A19 Large file                                       | BR-012                       |
+| TC-005-29 | A20 Replace in the note                              | FR-073, BR-017               |
+| TC-005-30 | A21 Replace all, undone at once                      | FR-073, BR-017, BR-004       |
+| TC-005-31 | A22 Nothing to replace                               | BR-017                       |
+| TC-005-32 | Replace in the facade and in the source view         | BR-017, FR-075               |
+| TC-005-33 | A23 Complete a link                                  | FR-080, BR-018               |
+| TC-005-34 | A24 Link completion dismissed; speed                 | BR-018, NFR-018              |
+| TC-005-35 | A25 Close pairs                                      | FR-081, BR-019               |
+| TC-005-36 | A26 Move and duplicate lines and blocks              | FR-082, BR-020               |
+| TC-005-37 | A27 Indent and outdent list items                    | FR-083, BR-021               |
+| TC-005-38 | Current line and matching bracket                    | FR-084, FR-085, BR-022       |
+| TC-005-39 | A28 Correct a word, add it to the dictionary         | FR-099, BR-023               |
+| TC-005-40 | What the spell check leaves out; offline             | BR-023, NFR-014, NFR-015, NFR-002 |
+| TC-005-41 | The same note on both sides                          | FR-097, BR-016               |
+| TC-005-42 | Edit a formula                                       | FR-098, BR-008               |
 
 ## TC-005-01: Edit in the source view
 
@@ -363,3 +377,172 @@
 | 4    | Follow the link (UC-004 A4).               | The video opens in the program the system uses for it.                                 |
 | 5    | Drop it again and choose to copy.          | `talk.mp4` is copied next to the note and inserted as a link.                         |
 | 6    | Drop a file of 5 MB.                       | It is copied without asking.                                                          |
+
+## TC-005-29: Replace in the note
+
+**Flow:** A20, BR-017, FR-073  
+**Preconditions:** `Trip.md` holds "ferry" three times and is open in the source view, the cursor before the first; the input mode is Normal.
+
+| Step | Action                                                   | Expected result                                                         |
+|------|----------------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Press Ctrl+H, type `ferry`, Tab, `boat`.                 | The find field shows the replace field; 3 occurrences; the first is selected. |
+| 2    | Press Enter in the replace field.                        | The first "ferry" is "boat"; the second is selected; 2 are left.        |
+| 3    | Wait 2 seconds and look at `Trip.md`.                    | It holds one "boat" and two "ferry".                                    |
+
+## TC-005-30: Replace all, undone at once
+
+**Flow:** A21, BR-017, BR-004  
+**Preconditions:** As TC-005-29 before step 2.
+
+| Step | Action                                         | Expected result                                          |
+|------|------------------------------------------------|----------------------------------------------------------|
+| 1    | Press Ctrl+Alt+Enter.                          | All three are "boat"; the field says 3 were replaced.    |
+| 2    | Press Ctrl+Z in the note.                      | All three are "ferry" again.                             |
+
+## TC-005-31: Nothing to replace
+
+**Flow:** A22  
+**Preconditions:** As TC-005-29.
+
+| Step | Action                                                      | Expected result                                                  |
+|------|-------------------------------------------------------------|------------------------------------------------------------------|
+| 1    | Search `zebra` in the replace field.                         | The field says there is no occurrence; nothing can be replaced.  |
+| 2    | Switch regular expression on and search `[a-`.               | The field says what is wrong with the expression.                |
+
+## TC-005-32: Replace in the facade and in the source view
+
+**Flow:** BR-017, FR-075  
+**Preconditions:** `Links.md` holds "See [the plan](plan.md) and the Plan."
+
+| Step | Action                                                                 | Expected result                                                         |
+|------|------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| 1    | In the facade, replace all `plan` with `roadmap`, match case off.      | The text reads "See the roadmap and the roadmap."; the markup holds `[the roadmap](plan.md)`. |
+| 2    | Undo, switch to the source view, and do the same.                      | The markup holds `[the roadmap](roadmap.md) and the roadmap.`           |
+| 3    | Undo; with regular expression on, replace `(\w+)\.md` with `$1.adoc`.  | The markup holds `(plan.adoc)`.                                         |
+
+## TC-005-33: Complete a link
+
+**Flow:** A23, BR-018, FR-080  
+**Preconditions:** The workspace holds `travel/Packing.md` with the headings "Clothes" and "Papers", and `Plan.md`; `Ideas.md` is open in the source view; `Guide.adoc` exists.
+
+| Step | Action                                                     | Expected result                                                              |
+|------|------------------------------------------------------------|------------------------------------------------------------------------------|
+| 1    | Type `[list](pack`.                                        | The list shows "Packing" with its folder `travel`.                           |
+| 2    | Press Enter.                                               | The note holds a link to `travel/Packing.md` as the toolbar writes it, with the text "list"; the cursor is after it. |
+| 3    | Type `[](travel/Packing.md#` and choose "Papers".           | The link names the heading as GitHub names it, with the text "Papers".      |
+| 4    | In the facade, type `[[plan` and press Enter.              | A link to "Plan" with the text "Plan" is inserted; `[[` is not in the note. |
+| 5    | In `Guide.adoc` in the source view, type `xref:pla` and choose "Plan". | A link of AsciiDoc to "Plan" is written.                     |
+
+## TC-005-34: Link completion dismissed; speed
+
+**Flow:** A24, BR-018, NFR-018  
+**Preconditions:** As TC-005-33; a second workspace of 10,000 notes.
+
+| Step | Action                                                  | Expected result                                               |
+|------|---------------------------------------------------------|---------------------------------------------------------------|
+| 1    | In the facade, type `[[` and press Escape.              | The list closes; `[[` stays as typed text.                    |
+| 2    | In the source view, type `[x](zzzz`.                    | No note matches; the list closes; the text stays as typed.   |
+| 3    | In the large workspace, type 20 link places.            | The list follows within 200 milliseconds of each key.         |
+
+## TC-005-35: Close pairs
+
+**Flow:** A25, BR-019, FR-081  
+**Preconditions:** `Pairs.md` is open in the source view; close pairs is on.
+
+| Step | Action                                                   | Expected result                                                 |
+|------|----------------------------------------------------------|-----------------------------------------------------------------|
+| 1    | At the end of a line, type `(`.                          | `()` with the cursor between.                                  |
+| 2    | Type `a)`.                                               | `(a)`, the cursor after `)`; no second `)`.                    |
+| 3    | Type `(` and press Backspace.                            | Both are gone.                                                  |
+| 4    | Type `**` within a line.                                 | `****` with the cursor in the middle.                          |
+| 5    | At the start of a line, type `* item`.                   | `* item`, a list item, nothing added.                          |
+| 6    | Select `word` and type `_`.                              | `_word_`, still selected.                                      |
+| 7    | Type `(` before the letter `x`.                          | `(x`, no closing bracket.                                       |
+| 8    | Switch close pairs off (UC-010) and type `(`.            | Only `(`.                                                       |
+
+## TC-005-36: Move and duplicate lines and blocks
+
+**Flow:** A26, BR-020, FR-082  
+**Preconditions:** `Lines.md` holds the lines "one", "two", "three", then an empty line, a paragraph of two lines "four" and "five", and a list with "a" and its item "a1" below it, then "b".
+
+| Step | Action                                                       | Expected result                                                  |
+|------|--------------------------------------------------------------|------------------------------------------------------------------|
+| 1    | In the source view, put the cursor in "two" and press Alt+Down. | The lines read "one", "three", "two".                         |
+| 2    | Press Ctrl+Shift+D.                                          | "two" is there twice; the cursor is in the copy.                |
+| 3    | Press Ctrl+Z twice.                                          | The lines are as at the start.                                  |
+| 4    | In the facade, put the cursor in "a" and press Alt+Down.     | The list reads "b", then "a" with "a1" below it.                |
+| 5    | Put the cursor in "four" and press Ctrl+Shift+D.             | The whole paragraph "four five" is there twice.                 |
+| 6    | Put the cursor in "one" and press Alt+Up.                    | Nothing changes.                                                |
+
+## TC-005-37: Indent and outdent list items
+
+**Flow:** A27, BR-021, FR-083  
+**Preconditions:** `List.md` holds `- a`, `- b`, `- c`; `List.adoc` holds `* a`, `* b`.
+
+| Step | Action                                                   | Expected result                                              |
+|------|----------------------------------------------------------|--------------------------------------------------------------|
+| 1    | In the facade of "List" (Markdown), put the cursor in "b" and press Tab. | "b" is an item of "a"; the markup indents `- b` to the text of "a". |
+| 2    | Select "b" and "c" and press Tab.                        | "c" becomes an item of "a" too; "b" does not move deeper than one level below "a". |
+| 3    | Press Shift+Tab twice.                                   | Both are top-level items again; the second Shift+Tab changes nothing. |
+| 4    | Put the cursor in "a" and press Tab.                     | Nothing changes: "a" has no item before it.                  |
+| 5    | In the source view of `List.adoc`, put the cursor in "b" and press Tab. | The markup reads `** b`.                    |
+| 6    | In the Vim input mode, insert mode, press Tab in "b"; then in normal mode type `<<`. | Tab indents "b"; `<<` outdents it.  |
+
+## TC-005-38: Current line and matching bracket
+
+**Flow:** BR-022, FR-084, FR-085  
+**Preconditions:** `Code.md` holds `f(a[1], {b})` and `g((x)` and is open in the source view.
+
+| Step | Action                                     | Expected result                                                  |
+|------|--------------------------------------------|------------------------------------------------------------------|
+| 1    | Put the cursor in the first line.          | The first line is highlighted in a color of the theme.           |
+| 2    | Put the cursor right after `[`.            | `[` and `]` are highlighted.                                     |
+| 3    | Select `a[1]`.                             | No line is highlighted while the selection exists.               |
+| 4    | Put the cursor right after the first `(` of `g((x)`. | That bracket is marked as without a counterpart.        |
+| 5    | Switch to the facade.                      | Neither the line nor brackets are highlighted.                   |
+
+## TC-005-39: Correct a word, add it to the dictionary
+
+**Flow:** A28, BR-023, FR-099  
+**Preconditions:** The spell check language is English (US); `Spell.md` holds "The ferri leaves" and "Underline"; `Other.md` holds "Kubernetes" twice and is open in another tab.
+
+| Step | Action                                                       | Expected result                                                 |
+|------|--------------------------------------------------------------|-----------------------------------------------------------------|
+| 1    | Open "Spell" in the facade.                                  | "ferri" is marked with a wavy line.                             |
+| 2    | Press Shift+F10 on "ferri".                                  | Up to five corrections, among them "ferry", and "Add to dictionary". |
+| 3    | Choose "ferry".                                              | The text reads "The ferry leaves"; Ctrl+Z brings "ferri" back. |
+| 4    | In "Other", add "Kubernetes" to the dictionary.              | Both "Kubernetes" lose their mark; in a second workspace and in German it is not marked either. |
+
+## TC-005-40: What the spell check leaves out; offline
+
+**Flow:** BR-023, NFR-014, NFR-015, NFR-002  
+**Preconditions:** The network is off; the spell check language is German (Switzerland). `Mixed.md` holds "Strasse", "Straße", `` `fehlr` ``, a code block with "fehlr", `[Link](https://exampel.org)`, "#taggg", "HTTPX", "abc123", a formula `$fehlr$`, and a front matter `statsu: offen`.
+
+| Step | Action                                         | Expected result                                                           |
+|------|------------------------------------------------|---------------------------------------------------------------------------|
+| 1    | Open "Mixed" in both editing views.            | Only words of the shown text the dictionary does not know are marked; none of the code, the address, the tag, "HTTPX", "abc123", the formula, or the name "statsu" is marked. |
+| 2    | Type a long paragraph at 10 characters a second. | Every character appears within 16 milliseconds; marks follow within 1 second of each word. |
+| 3    | Switch the spell check language to Off (UC-010). | No word is marked.                                                      |
+
+## TC-005-41: The same note on both sides
+
+**Flow:** BR-016, FR-097  
+**Preconditions:** "Plan" is open in the left pane in the facade and in the right pane in the source view (UC-004 A19).
+
+| Step | Action                                              | Expected result                                                        |
+|------|-----------------------------------------------------|------------------------------------------------------------------------|
+| 1    | Type `left` in the facade, then `right` in the source view. | Each appears on the other side at once.                        |
+| 2    | Press Ctrl+Z in the facade.                         | `right` is taken back on both sides.                                   |
+| 3    | Fold a section in the facade.                       | The source view keeps its sections expanded and its own cursor.        |
+
+## TC-005-42: Edit a formula
+
+**Flow:** BR-008, FR-098  
+**Preconditions:** `Math.md` holds the block `$$a^2$$` and the inline formula `$b$`; it is open in the facade.
+
+| Step | Action                                       | Expected result                                                         |
+|------|----------------------------------------------|-------------------------------------------------------------------------|
+| 1    | Click into the block formula.                | Its source is shown in a frame below the typeset formula.              |
+| 2    | Change it to `a^2+b^2`.                      | The typeset formula follows each change.                               |
+| 3    | Click into the inline formula.               | Its source is shown in its place.                                       |
+| 4    | Type `\frac{` in the block and leave it.     | The block is shown as its source with the error.                       |

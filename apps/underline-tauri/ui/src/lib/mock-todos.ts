@@ -27,6 +27,7 @@ import type {
   TodosView,
   UrgencyName,
 } from './bindings';
+import { mockTitle } from './mock-title';
 
 /** A todo as the mock keeps it. */
 export type MockTodo = {
@@ -102,7 +103,7 @@ function checkTitle(title: string): string | Error {
   return clean;
 }
 
-const titleOf = (link: string) => (link.split('/').at(-1) ?? link).replace(/-/g, ' ');
+const titleOf = (link: string) => mockTitle(link);
 const minutes = (time: string) => time.slice(0, 16).replace('T', ' ');
 const nameOf = (todo: MockTodo) => `#${todo.number} ${todo.title}`;
 

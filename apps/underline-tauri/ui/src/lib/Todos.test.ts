@@ -335,7 +335,7 @@ describe('M-06.5, M-18.6 to M-18.8 the tab "Todos" (UC-021)', () => {
     expect(overdue).toHaveClass('overdue');
     expect(within(rows[1] as HTMLElement).getByText('+2')).toHaveAttribute(
       'title',
-      'Trip, 2026 11 09 +2',
+      'Trip, 2026-11-09 +2',
     );
     // The tool panel shows the todos beside it, but no note to link.
     expect(within(tools()).getByText('Todos (3)')).toBeInTheDocument();

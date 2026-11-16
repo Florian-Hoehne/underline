@@ -46,7 +46,12 @@ describe('M-01.1 start (UC-002 A1, A2, plan section 14)', () => {
                 snapshot: {
                   workspace: null,
                   overview: [],
-                  tabs: { tabs: [], active: null, todoList: { open: false, active: false } },
+                  tabs: {
+                    tabs: [],
+                    active: null,
+                    todoList: { open: false, active: false },
+                    split: null,
+                  },
                 },
               });
           }),

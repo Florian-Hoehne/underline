@@ -15,16 +15,18 @@ use specta_typescript::Typescript;
 use tauri::Runtime;
 use tauri_specta::{collect_commands, collect_events, Builder};
 use underline_session::{
-    ClipAction, Clipped, CopyOnSelectView, EditorInput, EditorPatch, EditorState, FacadeAt,
-    FacadeInput, FacadePatch, FacadeState, FindAnswer, FindStep, RemoteApplied, RowsView, TabViews,
-    VimChange, VimState,
+    AttributeChangeView, AttributeEdited, ClipAction, Clipped, CopyOnSelectView, EditorInput,
+    EditorPatch, EditorState, FacadeAt, FacadeInput, FacadePatch, FacadeState, FindAnswer,
+    FindSpec, FindStatus, FindStep, LineTargetAnswer, LinkChoice, LinkContextView, NoteHeadView,
+    RemoteApplied, Replaced, RowsView, TabViews, TextStatisticsView, VimChange, VimState,
 };
 
 use crate::commands;
 use crate::events::{
     AgentMarksEvent, AgentsEvent, ChangedEvent, ChangesEvent, CloseQuestionEvent, ConflictEvent,
     DeletedEvent, DiffEvent, EnrichEvent, FlushEvent, GitBarEvent, HighlightEvent, IndexesEvent,
-    OverviewEvent, PropertiesEvent, SearchEvent, SettingsEvent, SettingsWindowEvent, StatusEvent,
+    LinksEvent, OverviewEvent, PropertiesEvent, ReplaceEvent, SearchEvent, SettingsEvent,
+    SettingsWindowEvent, SnapshotsChangedEvent, SpellMarksEvent, SpellStateEvent, StatusEvent,
     TabsEvent, TodoConflictsEvent, TodosEvent, WorkspaceEvent,
 };
 
@@ -60,7 +62,10 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::ws_check_new,
             commands::ws_create,
             commands::tab_open,
+            commands::tab_open_side,
             commands::tab_activate,
+            commands::pane_focus,
+            commands::split_end,
             commands::tab_close,
             commands::tab_store,
             commands::tab_set_view,
@@ -85,6 +90,8 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::note_new_start,
             commands::note_plan,
             commands::note_create,
+            commands::note_daily_open,
+            commands::note_daily_step,
             commands::note_rename_start,
             commands::note_plan_rename,
             commands::note_rename,
@@ -97,6 +104,23 @@ pub fn builder<R: Runtime>() -> Builder<R> {
             commands::search_set,
             commands::search_page,
             commands::search_open,
+            commands::links_open,
+            commands::links_headings,
+            commands::links_follow,
+            commands::replace_set,
+            commands::replace_page,
+            commands::replace_leave_out,
+            commands::replace_confirm,
+            commands::replace_undo,
+            commands::replace_close,
+            commands::snapshots_list,
+            commands::snapshot_diff,
+            commands::snapshot_whole,
+            commands::snapshot_restore,
+            commands::snapshot_undo_restore,
+            commands::snapshots_close,
+            commands::spell_suggest,
+            commands::spell_add_word,
             commands::export_start,
             commands::export_choose,
             commands::export_run,
@@ -134,20 +158,25 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         ])
         .events(collect_events![
             StatusEvent,
+            SnapshotsChangedEvent,
             SettingsEvent,
             SettingsWindowEvent,
             WorkspaceEvent,
             OverviewEvent,
             TabsEvent,
             HighlightEvent,
+            SpellMarksEvent,
+            SpellStateEvent,
             PropertiesEvent,
             CloseQuestionEvent,
             ChangedEvent,
             FlushEvent,
             EnrichEvent,
             IndexesEvent,
+            LinksEvent,
             DeletedEvent,
             SearchEvent,
+            ReplaceEvent,
             ChangesEvent,
             DiffEvent,
             GitBarEvent,
@@ -175,6 +204,18 @@ pub fn builder<R: Runtime>() -> Builder<R> {
         .typ::<RemoteApplied>()
         .typ::<FindStep>()
         .typ::<FindAnswer>()
+        .typ::<FindSpec>()
+        .typ::<FindStatus>()
+        .typ::<Replaced<EditorPatch>>()
+        .typ::<Replaced<FacadePatch>>()
+        .typ::<LinkContextView>()
+        .typ::<LinkChoice>()
+        .typ::<LineTargetAnswer>()
+        .typ::<TextStatisticsView>()
+        .typ::<NoteHeadView>()
+        .typ::<AttributeChangeView>()
+        .typ::<AttributeEdited<EditorPatch>>()
+        .typ::<AttributeEdited<FacadePatch>>()
         .disable_serde_phases()
 }
 

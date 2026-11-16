@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use tauri::{Manager, RunEvent, WindowEvent};
 use underline_core::Workspace;
-use underline_session::Session;
+use underline_session::{Dictionaries, Session, DICTIONARY_DIR};
 
 use crate::clipboard::SystemClipboard;
 use crate::commands::{
@@ -135,6 +135,11 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
         })
         .setup(move |app| {
             bindings.mount_events(app);
+            // ADR-030: the spell check reads the dictionaries among the
+            // app's resources, each when it is first needed.
+            app.state::<SharedSession>()
+                .lock()
+                .set_dictionaries(Dictionaries::new(dictionaries_dir(app.handle())));
             let handle = app.handle().clone();
             app.manage(Closer::new(move || handle.exit(0)));
             // ADR-025 section 3.9: when the window answered the close
@@ -167,6 +172,30 @@ fn run_window(given: Option<PathBuf>) -> tauri::Result<()> {
         _ => {}
     });
     Ok(())
+}
+
+/// ADR-030: the folder of the bundled dictionaries, one folder per
+/// language; in a debug build run from the sources (`cargo tauri dev`)
+/// the sources' folder when the resources were not copied.
+fn dictionaries_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let bundled = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join(DICTIONARY_DIR))
+        .filter(|dir| dir.is_dir());
+    #[cfg(debug_assertions)]
+    let bundled = bundled.or_else(|| {
+        Some(PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/dictionaries"
+        )))
+        .filter(|dir| dir.is_dir())
+    });
+    if bundled.is_none() {
+        eprintln!("ADR-030: the dictionaries of the spell check were not found");
+    }
+    bundled
 }
 
 /// M-21.4, UC-005 BR-001: closing the window or ending the app stores every

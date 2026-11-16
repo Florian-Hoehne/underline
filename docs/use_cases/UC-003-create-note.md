@@ -9,7 +9,7 @@
 **Trigger:** The user asks to create a new note.  
 **Status:** Reviewed  
 
-**Requirements:** [FR-003, FR-004, FR-018, FR-021, FR-071, NFR-006, NFR-013, C-002](../requirements.md)
+**Requirements:** [FR-003, FR-004, FR-018, FR-021, FR-071, FR-094, NFR-006, NFR-013, C-002](../requirements.md)
 
 ## Preconditions
 
@@ -78,11 +78,27 @@
 1. The system closes the dialog without creating anything.
 2. Use case ends.
 
+### A7: Create from a template
+
+**Trigger:** The user chooses one of the templates of the workspace that the dialog offers (step 3)  
+**Flow:**
+
+1. The system sets the note format to the note format of the template and does not let it be changed.
+2. Use case continues at step 4; in step 5 the note gets the content of the template with its placeholders filled in (BR-008) instead of only its title, and in step 6 the cursor is placed where the template marks it, otherwise at the end of the note.
+
+### A8: Template cannot be read
+
+**Trigger:** The chosen template cannot be read, or was deleted after it was offered (step 5)  
+**Flow:**
+
+1. The system creates the note holding only its title as heading, as without a template, and says in the status bar that the template could not be read.
+2. Use case continues at step 6.
+
 ## Postconditions
 
 ### Success Postconditions
 
-- The workspace holds the new note in the chosen folder and note format, holding only its title as heading.
+- The workspace holds the new note in the chosen folder and note format, holding only its title as heading, or the content of the chosen template with its placeholders filled in.
 - The note is open in a tab in the facade, listed first in the note overview, and remembered as the active tab.
 - The default format recorded in the workspace settings file is unchanged.
 
@@ -106,7 +122,7 @@ A folder never holds two notes with the same file name, without its extension. F
 
 ### BR-004: Content of a new note
 
-A new note holds only its title as heading, in the markup of its note format, like the Home note of a new workspace (UC-001 BR-003).
+A new note holds only its title as heading, in the markup of its note format, like the Home note of a new workspace (UC-001 BR-003), unless it is created from a template (BR-008).
 
 ### BR-005: Note format
 
@@ -119,3 +135,17 @@ The folder of the note in the active tab is preselected. The user may choose any
 ### BR-007: Written at once
 
 The note is written to the disk as soon as it is created, never half written (NFR-006), so it survives a crash and a git repository sees it at once. Later changes are saved by autosave (UC-005).
+
+### BR-008: Templates
+
+The templates of a workspace are its notes in the template folder, `templates` unless the workspace settings name another (UC-010 BR-001), and in its folders. The dialog offers them by title, with "No template" preselected; without templates it offers none. A note created from a template gets the content and the note format of the template, with these placeholders filled in:
+
+| Placeholder  | Filled in with                                             |
+|--------------|------------------------------------------------------------|
+| `{{title}}`  | the title of the new note                                  |
+| `{{date}}`   | the date of today as `2026-11-11`, or the date of the daily note (UC-025) |
+| `{{time}}`   | the time of creation as `14:30`                            |
+| `{{cursor}}` | nothing; the cursor is placed there (A7)                   |
+
+Any other text in double curly braces stays as it is written. A template is a note like any other: it is listed in the note overview, searched, and edited, and its placeholders are filled in only in the notes made from it, never in the template itself.
+

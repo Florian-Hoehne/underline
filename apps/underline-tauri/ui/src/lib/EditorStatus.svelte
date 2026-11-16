@@ -6,10 +6,16 @@
     theme's colour of the mode (only the mode below 450 px), what is typed
     but not done yet, and the commands as key and action. Commands that do
     not fit are left out whole, the least important (last) first.
-  - Right, always: the switches "Copy on select" and "Minimap", the choice
+  - Right, always: the switches "Copy on select", "Soft wrap" (package 5,
+    UC-010 A3, BR-011), "Focus mode" (A12, BR-010, UX review: it stays in
+    the focus mode, so the mode can be seen and left) and "Minimap", the choice
     "Keys: {mode}", and the place of the cursor in a box of its own. Below
-    720 px the switches have their short names ("Copy", "Map") and the
+    720 px the switches have their short names ("Copy", "Wrap", "Focus", "Map") and the
     choice drops "Keys:".
+
+  Package 7a (FR-096, review): in a pane narrower than 420 px (the split
+  view) the four switches fold into one button "Switches", whose menu holds
+  them, so the line stays one row.
 
   Every switch is stored at once (UC-010 A3). In a narrow editor the
   commands go first; then the right part moves to a second row, so the
@@ -18,6 +24,7 @@
 -->
 <script lang="ts">
   import type { KeysStatusView } from './bindings';
+  import ContextMenu, { menuPlace, type MenuEntry } from './ContextMenu.svelte';
   import { statusTexts } from './editor/status';
 
   type Props = {
@@ -29,9 +36,18 @@
     inputMode: string;
     inputModes: readonly string[];
     copyOnSelect: boolean;
+    /** UC-010 BR-011: soft wrap is on. */
+    softWrap: boolean;
+    /** UC-010 BR-010: the focus mode is on. */
+    focusMode?: boolean;
+    /** The keys of soft wrap and the focus mode, as the platform names them and for `aria-keyshortcuts`. */
+    softWrapKey?: { text: string; aria?: string };
+    focusModeKey?: { text: string; aria?: string };
     minimap: boolean;
     onInputMode: (mode: string) => void;
     onCopyOnSelect: (on: boolean) => void;
+    onSoftWrap: (on: boolean) => void;
+    onFocusMode?: (on: boolean) => void;
     onMinimap: (on: boolean) => void;
   };
 
@@ -41,9 +57,15 @@
     inputMode,
     inputModes,
     copyOnSelect,
+    softWrap,
+    focusMode = false,
+    softWrapKey = { text: 'Alt+Z', aria: 'Alt+Z' },
+    focusModeKey = { text: 'Ctrl+Alt+F', aria: 'Control+Alt+F' },
     minimap,
     onInputMode,
     onCopyOnSelect,
+    onSoftWrap,
+    onFocusMode = () => {},
     onMinimap,
   }: Props = $props();
 
@@ -53,6 +75,36 @@
   let fitting = $state(Infinity);
 
   const texts = $derived(statusTexts(width, keys));
+
+  /** FR-096: below this width the switches fold into a menu. */
+  const FOLD_BELOW = 420;
+  const folded = $derived(width > 0 && width < FOLD_BELOW);
+  let switchesMenu = $state<{ x: number; y: number } | null>(null);
+  let switchesButton = $state<HTMLElement | null>(null);
+
+  const switchEntries = $derived<MenuEntry[]>([
+    { label: 'Copy on select', checked: copyOnSelect, action: () => onCopyOnSelect(!copyOnSelect) },
+    {
+      label: 'Soft wrap',
+      shortcut: softWrapKey.text,
+      checked: softWrap,
+      action: () => onSoftWrap(!softWrap),
+    },
+    {
+      label: 'Focus mode',
+      shortcut: focusModeKey.text,
+      checked: focusMode,
+      action: () => onFocusMode(!focusMode),
+    },
+    { label: 'Minimap', checked: minimap, action: () => onMinimap(!minimap) },
+  ]);
+
+  function closeSwitches(back: boolean) {
+    switchesMenu = null;
+    if (back) {
+      switchesButton?.focus();
+    }
+  }
 
   // The commands that fit on the line; laid out in one wrapping row, those
   // that wrap below it are left out (and hidden from screen readers).
@@ -75,7 +127,13 @@
   });
 </script>
 
-<div class="editor-status" role="group" aria-label="Editor status" bind:clientWidth={width}>
+<div
+  class="editor-status"
+  class:folded
+  role="group"
+  aria-label="Editor status"
+  bind:clientWidth={width}
+>
   {#if keys}
     <span class="mode-status" role="status" aria-live="polite">
       <span
@@ -101,20 +159,47 @@
     <div class="keys"></div>
   {/if}
   <div class="switches">
-    <button
-      type="button"
-      class="switch"
-      aria-pressed={copyOnSelect}
-      title="Put a selection on the clipboard as soon as it is made"
-      onclick={() => onCopyOnSelect(!copyOnSelect)}>{texts.copy}</button
-    >
-    <button
-      type="button"
-      class="switch"
-      aria-pressed={minimap}
-      title="Show or hide the minimap beside the editor"
-      onclick={() => onMinimap(!minimap)}>{texts.minimap}</button
-    >
+    {#if folded}
+      <button
+        type="button"
+        class="switch"
+        aria-haspopup="menu"
+        aria-expanded={switchesMenu !== null}
+        bind:this={switchesButton}
+        onclick={(event) => (switchesMenu = menuPlace(event))}>Switches</button
+      >
+    {:else}
+      <button
+        type="button"
+        class="switch"
+        aria-pressed={copyOnSelect}
+        title="Put a selection on the clipboard as soon as it is made"
+        onclick={() => onCopyOnSelect(!copyOnSelect)}>{texts.copy}</button
+      >
+      <button
+        type="button"
+        class="switch"
+        aria-pressed={softWrap}
+        title="Wrap long lines at the edge of the editor ({softWrapKey.text})"
+        aria-keyshortcuts={softWrapKey.aria}
+        onclick={() => onSoftWrap(!softWrap)}>{texts.wrap}</button
+      >
+      <button
+        type="button"
+        class="switch"
+        aria-pressed={focusMode}
+        title="Hide the note overview, the tool panel and the toolbars ({focusModeKey.text})"
+        aria-keyshortcuts={focusModeKey.aria}
+        onclick={() => onFocusMode(!focusMode)}>{texts.focus}</button
+      >
+      <button
+        type="button"
+        class="switch"
+        aria-pressed={minimap}
+        title="Show or hide the minimap beside the editor"
+        onclick={() => onMinimap(!minimap)}>{texts.minimap}</button
+      >
+    {/if}
     <span class="separator" aria-hidden="true"></span>
     <label class="mode">
       {#if texts.keysLabel}<span>{texts.keysLabel}</span>{/if}
@@ -132,6 +217,16 @@
     <span class="place">{place}</span>
   </div>
 </div>
+{#if switchesMenu}
+  <ContextMenu
+    label="Switches"
+    entries={switchEntries}
+    x={switchesMenu.x}
+    y={switchesMenu.y}
+    above
+    onClose={closeSwitches}
+  />
+{/if}
 
 <style>
   .editor-status {
@@ -143,6 +238,16 @@
     min-height: 28px;
     padding: 2px var(--space-2);
     white-space: nowrap;
+  }
+
+  /* FR-096: one row in a narrow pane; the place gives way last. */
+  .editor-status.folded,
+  .folded .switches {
+    flex-wrap: nowrap;
+  }
+
+  .folded .place {
+    min-width: 8ch;
   }
 
   .mode-status {

@@ -73,6 +73,9 @@ pub struct FacadeModel {
     /// Markdown: the note may hold link reference definitions, so an edit
     /// parses it whole.
     pub refs: bool,
+    /// FR-097: the text of revision `parsed`, so the blocks can follow a
+    /// change another view made by parsing only around it.
+    pub rope: Option<ropey::Rope>,
 }
 
 impl FacadeModel {
@@ -163,7 +166,7 @@ fn source_key_input(input: &EditorInput, mac: bool) -> Option<KeyInput<'_>> {
             pressed: true,
             modifiers: Modifiers::from_web(*ctrl, *alt, *shift, *meta, mac),
         }),
-        EditorInput::Tool { .. } => None,
+        EditorInput::Tool { .. } | EditorInput::Edit { .. } => None,
     }
 }
 
@@ -182,22 +185,33 @@ fn facade_key_input(input: &FacadeInput, mac: bool) -> Option<KeyInput<'_>> {
             pressed: true,
             modifiers: Modifiers::from_web(*ctrl, *alt, *shift, *meta, mac),
         }),
-        FacadeInput::Tool { .. } => None,
+        FacadeInput::Tool { .. } | FacadeInput::Edit { .. } => None,
     }
 }
 
-/// An input the keys of the input mode left to the facade's own rules.
-fn facade_plain_input(edit: &mut FacadeEdit<'_>, input: FacadeInput, mac: bool) {
+/// An input the keys of the input mode left to the facade's own rules;
+/// `pairs` while close pairs is on (UC-005 BR-019).
+fn facade_plain_input(edit: &mut FacadeEdit<'_>, input: FacadeInput, mac: bool, pairs: bool) {
     match input {
-        FacadeInput::Text { text } => edit.type_text(&text),
+        FacadeInput::Text { text } => {
+            if !(pairs && edit.type_paired(&text)) {
+                edit.type_text(&text);
+            }
+        }
         FacadeInput::Tool { tool } => edit.apply_tool(tool.into()),
+        FacadeInput::Edit { action } => comfort::facade_edit(edit, action.into()),
         FacadeInput::Key {
             key,
             ctrl,
             alt,
             shift,
             meta,
-        } => edit.key(key.into(), Modifiers::from_web(ctrl, alt, shift, meta, mac)),
+        } => {
+            let modifiers = Modifiers::from_web(ctrl, alt, shift, meta, mac);
+            if !comfort::facade_key(edit, key.into(), modifiers, pairs) {
+                edit.key(key.into(), modifiers);
+            }
+        }
     }
 }
 
@@ -285,6 +299,12 @@ pub struct EditorTab {
     pub(crate) found: Found,
     /// The host's clock, in milliseconds ([`EditorTab::set_now`]).
     pub(crate) now_ms: f64,
+    /// UC-010 BR-001, UC-005 BR-019: close pairs is on.
+    pub(crate) close_pairs: bool,
+    /// UC-004 BR-020: what the text statistics keep between two asks.
+    pub(crate) statistics: statistics::StatisticsCache,
+    /// UC-024: the note attributes and tags of the last revision asked for.
+    pub(crate) head: attributes::HeadCache,
 }
 
 impl EditorTab {
@@ -301,6 +321,9 @@ impl EditorTab {
             folds: Folds::default(),
             found: Found::default(),
             now_ms: 0.0,
+            close_pairs: true,
+            statistics: statistics::StatisticsCache::default(),
+            head: attributes::HeadCache::default(),
         }
     }
 
@@ -381,7 +404,7 @@ impl EditorTab {
 
     /// The colours, the folds and the patch for the window after `outcome`,
     /// which started at revision `base`; `unstored` is the host's.
-    fn after_input(&mut self, base: u64, outcome: &Outcome) -> EditorPatch {
+    pub(crate) fn after_input(&mut self, base: u64, outcome: &Outcome) -> EditorPatch {
         self.refold_after(outcome);
         self.unfold_at_cursor();
         self.patch(base, outcome)
@@ -446,8 +469,16 @@ impl EditorTab {
     /// (`key` of the egui widget).
     fn source_plain_input(&mut self, input: EditorInput, mac: bool, done: &mut Done) {
         match input {
-            EditorInput::Text { text } => done.take(self.editor.type_text(&text)),
+            EditorInput::Text { text } => {
+                let paired = if self.close_pairs {
+                    self.editor.type_paired(&text, self.format)
+                } else {
+                    None
+                };
+                done.take(paired.unwrap_or_else(|| self.editor.type_text(&text)));
+            }
             EditorInput::Tool { tool } => self.apply_tool(tool.into(), done),
+            EditorInput::Edit { action } => done.take(self.source_edit(action.into())),
             EditorInput::Key {
                 key,
                 ctrl,
@@ -461,6 +492,8 @@ impl EditorTab {
                     done.outcome.moved |= self.fold_key(fold);
                 } else if let Some(tool) = Tool::for_key(key.into(), modifiers) {
                     self.apply_tool(tool, done);
+                } else if let Some(outcome) = self.source_comfort_key(key.into(), modifiers) {
+                    done.take(outcome);
                 } else {
                     done.take(self.editor.key(key.into(), modifiers, page as usize));
                 }
@@ -526,17 +559,18 @@ impl EditorTab {
         let base = self.editor.revision();
         let mut done = Done::default();
         let nano = self.keys.mode == KeysInputMode::Nano;
-        let through = if nano && !matches!(input, EditorInput::Tool { .. }) {
-            let mut target = SourceKeys::new(&mut self.editor);
-            let (through, _) =
-                self.keys
-                    .handle(vec![input], |i| source_key_input(i, mac), &mut target);
-            done.take(std::mem::take(&mut target.outcome));
-            done.commands = target.commands;
-            through
-        } else {
-            vec![input]
-        };
+        let through =
+            if nano && !matches!(input, EditorInput::Tool { .. } | EditorInput::Edit { .. }) {
+                let mut target = SourceKeys::new(&mut self.editor);
+                let (through, _) =
+                    self.keys
+                        .handle(vec![input], |i| source_key_input(i, mac), &mut target);
+                done.take(std::mem::take(&mut target.outcome));
+                done.commands = target.commands;
+                through
+            } else {
+                vec![input]
+            };
         for input in through {
             self.source_plain_input(input, mac, &mut done);
         }
@@ -693,6 +727,9 @@ impl EditorTab {
         if self.facade.parsed == Some(rev) {
             return Vec::new();
         }
+        if let Some(changes) = self.follow_facade(views) {
+            return changes;
+        }
         let text = self.editor.text();
         let (blocks, refs) = parse_all(&text, self.format);
         let made = views.all(&blocks, &text, self.editor.document().rope());
@@ -701,7 +738,57 @@ impl EditorTab {
         self.facade.blocks = Arc::new(blocks);
         self.facade.parsed = Some(rev);
         self.facade.refs = refs;
+        self.facade.rope = Some(self.editor.document().rope().clone());
         self.facade.versioned(changes)
+    }
+
+    /// FR-097, UC-005 BR-016: the blocks of the text the facade last showed
+    /// follow what changed since (another view's edits, a change of the
+    /// backend), parsing only around it, and the views of the changed
+    /// blocks are made anew; `None` when the facade has no blocks to follow
+    /// from, and they are made anew whole.
+    fn follow_facade<M: MakeViews<View = BlockView>>(
+        &mut self,
+        views: &mut M,
+    ) -> Option<Vec<Versioned>> {
+        let old = self.facade.rope.clone()?;
+        let parsed = self.facade.parsed?;
+        if self.facade.views.len() != self.facade.blocks.len() {
+            return None;
+        }
+        let rev = self.editor.revision();
+        let before = Before {
+            rev: parsed,
+            blocks: self.facade.blocks.len(),
+            web: underline_editor_core::utf16::WebOffsets::of(&old).to_web(&old, old.len_chars()),
+            lines: old.len_lines(),
+        };
+        let rope = self.editor.document().rope().clone();
+        let blocks = Arc::make_mut(&mut self.facade.blocks);
+        let dirty = underline_editor_core::facade::reparse_between(
+            blocks,
+            &old,
+            &rope,
+            self.format,
+            &mut self.facade.refs,
+        );
+        self.facade.parsed = Some(rev);
+        self.facade.rope = Some(rope);
+        let Some(dirty) = dirty else {
+            return Some(Vec::new());
+        };
+        let (changes, recaptioned) = self.refresh_views(views, dirty, before);
+        if !recaptioned {
+            return Some(changes);
+        }
+        // The captions are numbered anew: every view is made again.
+        let text = self.editor.text();
+        let made = views.all(&self.facade.blocks, &text, self.editor.document().rope());
+        let again = splices(&self.facade.views, &made);
+        self.facade.views = made;
+        let mut changes = changes;
+        changes.extend(self.facade.versioned(again));
+        Some(changes)
     }
 
     /// ADR-025: the facade after the text changed without an input of the
@@ -867,7 +954,7 @@ impl EditorTab {
         // FR-024, FR-025: the Vim or Nano keys take the input first; what
         // they leave goes to the facade's rules right after.
         let through = if self.keys.mode != KeysInputMode::Normal
-            && !matches!(input, FacadeInput::Tool { .. })
+            && !matches!(input, FacadeInput::Tool { .. } | FacadeInput::Edit { .. })
         {
             self.with_edit(&mut gathered, (rows, clipboard), |edit, keys| {
                 let mut target = FacadeTarget { edit };
@@ -894,8 +981,9 @@ impl EditorTab {
                     continue;
                 }
             }
+            let pairs = self.close_pairs;
             self.with_edit(&mut gathered, (rows, clipboard), |edit, _| {
-                facade_plain_input(edit, input, mac);
+                facade_plain_input(edit, input, mac, pairs);
             });
         }
         self.facade_finish(call, before, gathered)
@@ -989,6 +1077,7 @@ impl EditorTab {
         } = call;
         let rev = self.editor.revision();
         self.facade.parsed = Some(rev);
+        self.facade.rope = Some(self.editor.document().rope().clone());
         let mut recaptioned = false;
         if let Some(dirty) = gathered.dirty.range() {
             let (refreshed, again) = self.refresh_views(views, dirty, before);
@@ -1052,7 +1141,13 @@ impl EditorTab {
     }
 }
 
+mod attributes;
+mod comfort;
+mod slots;
+pub use slots::{ViewSlots, ViewState};
+mod complete;
 mod insert;
+mod statistics;
 pub use insert::FacadeClipped;
 use insert::{pasted, Pasted};
 

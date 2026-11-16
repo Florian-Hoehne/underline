@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-replace-page"
+description = "Enables the replace_page command without any pre-configured scope."
+commands.allow = ["replace_page"]
+
+[[permission]]
+identifier = "deny-replace-page"
+description = "Denies the replace_page command without any pre-configured scope."
+commands.deny = ["replace_page"]

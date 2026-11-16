@@ -1,6 +1,7 @@
 // M-11.4 (FR-026): the texts of the editor's status line for its width, as
 // the egui app picks them (`editor_status_line`, `mode_badge`): below
-// 720 px the switches have their short names and the choice drops "Keys:";
+// 720 px the switches have their short names (package 5: "Soft wrap" is
+// "Wrap", "Focus mode" is "Focus") and the choice drops "Keys:";
 // below 450 px the badge shows the mode only.
 
 import type { KeysStatusView } from '../bindings';
@@ -14,6 +15,10 @@ export type StatusTexts = {
   /** The badge; empty with the usual keys. */
   badge: string;
   copy: string;
+  /** UC-010 A3, BR-011: the switch of soft wrap. */
+  wrap: string;
+  /** UC-010 A12, BR-010 (UX review): the switch of the focus mode. */
+  focus: string;
   minimap: string;
   /** "Keys:" before the choice of the input mode, or nothing. */
   keysLabel: string;
@@ -33,6 +38,8 @@ export function statusTexts(width: number, keys: KeysStatusView | null): StatusT
   return {
     badge,
     copy: narrow ? 'Copy' : 'Copy on select',
+    wrap: narrow ? 'Wrap' : 'Soft wrap',
+    focus: narrow ? 'Focus' : 'Focus mode',
     minimap: narrow ? 'Map' : 'Minimap',
     keysLabel: narrow ? '' : 'Keys:',
   };

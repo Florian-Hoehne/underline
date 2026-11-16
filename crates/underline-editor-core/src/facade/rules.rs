@@ -213,6 +213,38 @@ pub(super) fn insert_typed(
     if new_offsets.len() != text.chars().count() {
         return false;
     }
+    // At the border of two runs the typed text belongs to the run whose
+    // markup it stands in: the one before when it ends where the text goes
+    // and the one after starts later (a closing `*` between), the one after
+    // when it starts there and the one before ended earlier. Where both
+    // meet the place (a line break between two lines of a paragraph), only
+    // a parse knows, so the blocks are parsed around it (found by the
+    // monkey of package 7a).
+    let mut rest = facade_at;
+    let mut take = None;
+    let count = block.runs.len();
+    for (i, run) in block.runs.iter().enumerate() {
+        let len = run.offsets.len();
+        if rest < len || (rest == len && i + 1 == count) {
+            take = Some((i, rest));
+            break;
+        }
+        if rest == len {
+            let next = &block.runs[i + 1];
+            let before = run.end == at;
+            let after = next.offsets.first() == Some(&at);
+            take = match (before, after) {
+                (true, false) => Some((i, rest)),
+                (false, true) => Some((i + 1, 0)),
+                _ => return false,
+            };
+            break;
+        }
+        rest -= len;
+    }
+    let Some((run_index, rest)) = take else {
+        return false;
+    };
     let shift = raw.len();
     let by = isize::try_from(shift).unwrap_or(isize::MAX);
     for block in blocks.iter_mut() {
@@ -227,31 +259,24 @@ pub(super) fn insert_typed(
             block.span.start = start;
         }
     }
-    // The run that holds facade character `facade_at`, or the last one.
+    // The run chosen above takes the typed text.
     let block = &mut blocks[index];
     if block.span.start > at {
         block.span.start = at;
     }
-    let mut rest = facade_at;
-    let count = block.runs.len();
-    for (i, run) in block.runs.iter_mut().enumerate() {
-        let len = run.offsets.len();
-        if rest < len || (rest == len && i + 1 == count) {
-            let byte = run
-                .text
-                .char_indices()
-                .nth(rest)
-                .map_or(run.text.len(), |(b, _)| b);
-            run.text.insert_str(byte, text);
-            run.offsets.splice(rest..rest, new_offsets);
-            if rest == len {
-                run.end = at + shift;
-            }
-            return true;
-        }
-        rest -= len;
+    let run = &mut block.runs[run_index];
+    let len = run.offsets.len();
+    let byte = run
+        .text
+        .char_indices()
+        .nth(rest)
+        .map_or(run.text.len(), |(b, _)| b);
+    run.text.insert_str(byte, text);
+    run.offsets.splice(rest..rest, new_offsets);
+    if rest == len {
+        run.end = at + shift;
     }
-    false
+    true
 }
 
 /// Markdown: whether `text` holds a line that may be a link reference

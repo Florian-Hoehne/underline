@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use ropey::Rope;
 use underline_core::{resolve_link, LinkTarget, NoteFormat, Theme};
 use underline_editor_view::views::{
-    message_figure, picture_figure, rendering_figure, Enrich, ViewMaker,
+    message_figure, pending_formula, picture_figure, rendering_figure, Enrich, ViewMaker,
 };
 use underline_facade::blocks::Block;
 use underline_facade::diagram::{DiagramError, DiagramLanguage};
@@ -26,9 +26,10 @@ use underline_facade::highlight::{highlight_code, HighlightSet};
 use underline_facade::images::ImageError;
 
 use super::super::diagrams::{SvgDiagrams, SvgState};
+use super::super::formulas::{FormulaState, SvgFormulas, Wanted};
 use crate::assets::{check_file, file_asset_path, FileProblem};
 use crate::editor_view::{units, SpanStyle};
-use crate::facade_view::{BlockView, CodeColors, FigureView};
+use crate::facade_view::{BlockView, CodeColors, FigureView, FormulaView};
 
 /// Code blocks whose colours are kept; more are coloured again.
 const CODE_COLORS_KEPT: usize = 4096;
@@ -56,6 +57,9 @@ pub(in crate::session) struct Context {
     pub(super) colors: Option<Arc<HighlightSet>>,
     pub(super) dark: bool,
     pub(super) diagrams: Option<Arc<SvgDiagrams>>,
+    /// FR-098: the formulas, and the theme's text colour they are drawn in.
+    pub(super) formulas: Option<Arc<SvgFormulas>>,
+    pub(super) color: underline_facade::themes::Rgb,
     pub(super) code_colors: Arc<Mutex<CodeColorCache>>,
     pub(super) images: Arc<Mutex<ImageCache>>,
     pub(super) root: PathBuf,
@@ -69,6 +73,7 @@ pub(in crate::session) struct Job {
     pub(super) seq: u64,
     pub(super) rev: u64,
     pub(super) generation: u64,
+    pub(super) formulas_generation: u64,
     /// A snapshot of the text (a rope is copied in no time).
     pub(super) rope: Rope,
     pub(super) format: NoteFormat,
@@ -84,6 +89,7 @@ pub(in crate::session) struct Built {
     pub(super) rev: u64,
     pub(super) looks: Looks,
     pub(super) generation: u64,
+    pub(super) formulas_generation: u64,
     pub(super) blocks: Arc<Vec<Block>>,
     pub(super) views: Vec<BlockView>,
     pub(super) last_pictures: HashMap<usize, String>,
@@ -275,6 +281,61 @@ impl Enrich for Maker<'_> {
     fn image(&mut self, target: &str, alt: &str) -> FigureView {
         image_figure(self.ctx, target, alt)
     }
+
+    fn formula(&mut self, _block: Option<usize>, source: &str, display: bool) -> FormulaView {
+        formula_view(
+            self.ctx.formulas.as_deref(),
+            self.ctx.looks.0,
+            self.ctx.color,
+            source,
+            display,
+        )
+    }
+}
+
+/// FR-098, UC-004 BR-019, A21: the formula with `source` as the facade
+/// shows it in `theme`, drawn in `color`: typeset, still being typeset (its
+/// source), or with the reason it cannot be. Without the formula service,
+/// it says it cannot be typeset.
+pub(super) fn formula_view(
+    formulas: Option<&SvgFormulas>,
+    theme: Theme,
+    color: underline_facade::themes::Rgb,
+    source: &str,
+    display: bool,
+) -> FormulaView {
+    let state = formulas.map_or_else(
+        || {
+            FormulaState::Failed(underline_facade::math::MathError::Engine(
+                "the typesetting could not be started".into(),
+            ))
+        },
+        |formulas| {
+            formulas.get(
+                &Wanted {
+                    source,
+                    display,
+                    theme: theme.label(),
+                    color,
+                },
+                Duration::ZERO,
+            )
+        },
+    );
+    match state {
+        FormulaState::Pending => pending_formula(source, display),
+        FormulaState::Ready(picture, size) => FormulaView {
+            picture: Some(picture),
+            width: size.width,
+            height: size.height,
+            depth: size.depth,
+            ..pending_formula(source, display)
+        },
+        FormulaState::Failed(error) => FormulaView {
+            error: Some(format!("This formula cannot be typeset: {error}")),
+            ..pending_formula(source, display)
+        },
+    }
 }
 
 /// The key the colours of `code` in `language` are kept by, in `theme`:
@@ -373,6 +434,7 @@ pub(in crate::session) fn run(job: Job) -> Built {
         rev: job.rev,
         looks: job.ctx.looks,
         generation: job.generation,
+        formulas_generation: job.formulas_generation,
         views,
         last_pictures,
         blocks,
@@ -388,6 +450,7 @@ pub(super) fn views_of(text: &str, format: NoteFormat) -> Vec<BlockView> {
         seq: 0,
         rev: 0,
         generation: 0,
+        formulas_generation: 0,
         rope: Rope::from_str(text),
         format,
         blocks: None,
@@ -397,6 +460,8 @@ pub(super) fn views_of(text: &str, format: NoteFormat) -> Vec<BlockView> {
             colors: None,
             dark: false,
             diagrams: None,
+            formulas: None,
+            color: [0, 0, 0],
             code_colors: Arc::default(),
             images: Arc::default(),
             root: PathBuf::from("/nowhere"),

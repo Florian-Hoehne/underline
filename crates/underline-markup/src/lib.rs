@@ -8,12 +8,18 @@
 //! re-export it under their former paths.
 
 mod asciidoc;
+pub use asciidoc::{stem_in_lines, stem_is_latexmath};
+pub mod attributes;
 pub mod blocks;
+pub mod completion;
 pub mod diagram;
 mod format;
 pub mod formatting;
 pub mod html;
 pub mod search;
 pub mod sections;
+pub mod statistics;
+pub mod suggest;
+pub mod tags;
 
 pub use format::NoteFormat;

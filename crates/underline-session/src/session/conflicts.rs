@@ -651,7 +651,7 @@ impl Session {
             done.push((id, path));
         }
         for path in stale {
-            self.take_file_version(&path, false);
+            self.take_file_version(&path, false, underline_core::SnapshotCause::Git);
         }
         if done.is_empty() {
             return;
@@ -735,6 +735,15 @@ impl Session {
         if edits.is_empty() {
             return;
         }
+        // UC-026 BR-001: the note with its conflicting places, kept before
+        // the resolution changes it (cause Git).
+        let job = self.open.as_ref().and_then(|open| {
+            let tab = open.tabs.get(open.tabs.find(note)?);
+            tab.snapshot_job(text.clone(), underline_core::SnapshotCause::Git)
+        });
+        if let Some(job) = job {
+            self.saver.snapshot(job);
+        }
         if let Err(error) = self.backend_edit(note, &edits, false) {
             eprintln!("UC-015: the choice could not be made: {}", error.message);
         }
@@ -802,7 +811,7 @@ impl Session {
                     .delete_note(id, now())
                     .map_err(|e| e.to_string())?;
                 if let Some(index) = open.tabs.find(id) {
-                    open.tabs.close(index);
+                    open.close_note(index);
                 }
                 self.persist_tabs();
                 self.views_dirty = true;

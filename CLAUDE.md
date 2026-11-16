@@ -64,6 +64,12 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-023 | Webview loads nothing from the network; own `ul-asset://` protocol | Accepted |
 | ADR-024 | The backend owns the note text; one IPC command per edit; facade virtualized | Superseded by ADR-025 |
 | ADR-025 | The webview owns the note text: editor core as WASM, backend mirror with rebase | Accepted |
+| ADR-026 | Regular expressions of every search with the `regex` crate | Proposed |
+| ADR-027 | Text statistics with `unicode-segmentation` in the WASM core | Proposed |
+| ADR-028 | Note attributes edited as lines, checked with `serde_norway` | Proposed |
+| ADR-029 | Mathematics typeset with RaTeX in the backend, SVG for facade and exports | Proposed |
+| ADR-030 | Spell check with `spellbook` and Hunspell dictionaries in the backend | Proposed |
+| ADR-031 | Snapshots as plain files in the workspace's `.underline/` folder | Proposed |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 
@@ -71,7 +77,8 @@ Follow the accepted ones; a proposed one becomes binding once the user accepts i
 
 - Domain logic lives in the library crates (`crates/underline-core`, `crates/underline-markup`,
   `crates/underline-facade`, `crates/underline-editor-core`, `crates/underline-editor-view`,
-  `crates/underline-editor-wasm`, `crates/underline-session`, `crates/underline-wiki`, `crates/underline-mcp`);
+  `crates/underline-editor-wasm`, `crates/underline-session`, `crates/underline-spell`, `crates/underline-wiki`,
+  `crates/underline-mcp`);
   `apps/underline-tauri` only wires them to the window and the command line.
 - Unit tests sit next to the code in `#[cfg(test)] mod tests`.
 - Errors are typed with `thiserror` in the library crates.

@@ -5,8 +5,11 @@
 mod agents;
 mod branches;
 mod conflicts;
+mod daily;
 mod diagrams;
+mod formulas;
 pub(crate) use diagrams::SvgDiagrams;
+pub(crate) use formulas::SvgFormulas;
 mod editing;
 mod embed;
 mod export;
@@ -14,9 +17,13 @@ mod facade;
 mod git;
 mod indexes;
 mod links;
+mod note_links;
 mod notes;
 mod remote;
+mod replace;
 mod search;
+mod snapshots;
+mod spell;
 mod sync;
 mod tab;
 mod todos;
@@ -36,7 +43,13 @@ pub use self::git::{
     NEEDS_MESSAGE, NOTHING_CHOSEN,
 };
 pub use self::links::Followed;
+pub use self::note_links::HeadingsPlan;
 pub use self::remote::CLOSING_SYNC_AT_MOST;
+pub use self::replace::{ReplaceDone, ReplaceJob};
+pub use self::snapshots::{
+    SnapshotShowJob, SnapshotsJob, NO_SNAPSHOT, SNAPSHOTS_KEPT, SNAPSHOTS_TAKEN,
+};
+pub use self::spell::{SuggestJob, SPELL_AT_THE_LATEST, SPELL_DEBOUNCE, USER_WORDS_POLL};
 pub use self::sync::{KeepCopy, Synced};
 pub use self::todos::{calendar_view, TodoDone, TodoJob, TODOS_EVERY};
 pub use self::workspace::{CreatePlan, OpenPlan, PreparedCreate, PreparedOpen};
@@ -127,6 +140,9 @@ pub struct Session {
     /// M-09.7: the diagrams of the facade as SVG (ADR-009), started with
     /// the first facade.
     diagrams: Option<Arc<diagrams::SvgDiagrams>>,
+    /// FR-098, ADR-029: the formulas of the facade as SVG, on a queue of
+    /// their own, started with the first facade.
+    formulas: Option<Arc<formulas::SvgFormulas>>,
     /// M-09: what the facades share: the colours of code blocks, what was
     /// found of image files, and the results of the tick's jobs.
     facade: facade::Shared,
@@ -142,8 +158,17 @@ pub struct Session {
     undo_delete: Option<notes::UndoDelete>,
     /// UC-007 A6: the deleted note "Restore note" asks a new place for.
     restoring: Option<notes::Restoring>,
+    /// UC-025 A4: the report that the daily note folder is not allowed.
+    /// The status bar offers "Open settings" while the status is exactly
+    /// this text; any other report ends the offer, as for `undo_delete`.
+    settings_offer: Option<String>,
     /// UC-008: the search of the overlay, kept when another workspace opens.
     search: search::Search,
+    /// UC-022: the replace of the workspace.
+    replace: replace::Replace,
+    /// UC-026: the clock of the snapshots, the undo of a restore and the
+    /// note whose snapshots are shown.
+    snapshots: snapshots::Snapshots,
     /// UC-009: the last folder, the chosen file, the open dialog, the
     /// running exports and the reports the status shows.
     exports: export::Exports,
@@ -168,6 +193,8 @@ pub struct Session {
     agents: agents::Agents,
     /// UC-020, UC-021: the todos of the open workspace (feature F15).
     todos: todos::TodoState,
+    /// FR-099, ADR-030: the spell check of the open notes.
+    spell: spell::Spell,
     /// The workspace or the tab bar may have changed since the window was
     /// told; their views are built only then, not every tick.
     views_dirty: bool,
@@ -216,6 +243,9 @@ struct Told {
     properties: Option<TabPropertiesView>,
     /// The number of the tool panel's lists last sent (M-16.5).
     indexes: Option<u64>,
+    /// The number of the backlinks and outgoing links last sent (FR-078,
+    /// FR-079).
+    links: Option<u64>,
 }
 
 impl Session {
@@ -254,6 +284,7 @@ impl Session {
             tabs: TabsView::default(),
             properties: None,
             indexes: None,
+            links: None,
         };
         let own_writes = OwnWrites::default();
         let mut session = Self {
@@ -273,13 +304,17 @@ impl Session {
             wake: Wake::default(),
             open: None,
             diagrams: None,
+            formulas: None,
             facade: facade::Shared::default(),
             index_jobs: indexes::IndexJobs::default(),
             web_allowed: false,
             web_asked: None,
             undo_delete: None,
             restoring: None,
+            settings_offer: None,
             search: search::Search::default(),
+            replace: replace::Replace::default(),
+            snapshots: snapshots::Snapshots::default(),
             exports: export::Exports::default(),
             changes: git::GitChanges::default(),
             remote: remote::Remote::default(),
@@ -289,6 +324,7 @@ impl Session {
             git_report: None,
             agents: agents::Agents::new(),
             todos: todos::TodoState::default(),
+            spell: spell::Spell::default(),
             views_dirty: false,
             told,
         };
@@ -368,7 +404,7 @@ impl Session {
             .open
             .as_ref()
             .map(|open| open.workspace.default_format());
-        self.settings.window_view(derived)
+        self.settings.window_view(derived, &self.templates())
     }
 
     /// UC-010 steps 3 and 4, A1, A2, A8, M-20.5: `key` changed to `value`
@@ -433,6 +469,8 @@ impl Session {
         // UC-020 A7, A9: the todos every second (M-18.9).
         self.todos_tick(now);
         self.autosave(now);
+        // UC-026 BR-001: the snapshots the saver could not take.
+        self.take_snapshot_outcomes();
         if let Err(err) = self.state.write_if_due(now) {
             self.status = err.to_string();
         }
@@ -441,12 +479,18 @@ impl Session {
         events.extend(self.highlight_event(now));
         events.extend(self.facade_events());
         events.extend(self.indexes_events(now));
+        events.extend(self.links_events(now));
         events.extend(self.search_events());
+        events.extend(self.replace_events());
         events.extend(self.git_events(now));
         events.extend(self.conflict_events());
         events.extend(self.todos_event());
         events.extend(self.git_bar_event(now));
         events.extend(self.agent_marks_event(now));
+        // UC-026 A4: the note or the snapshots shown changed.
+        events.extend(self.snapshots_event(now));
+        // FR-099, UC-005 BR-023: the marks of the spell check.
+        events.extend(self.spell_events(now));
         events
     }
 
@@ -540,6 +584,20 @@ impl Session {
         let undo_note = self.undo_delete.as_ref().map(|_| StatusOffer::UndoDelete);
         // M-04.6: the undo of a deleted or marked todo, likewise.
         let offer = self.todo_offer().or(undo_note);
+        // UC-022 A6: the undo of a replacement, likewise.
+        let replace = self.replace_offer();
+        let offer = offer.or(replace);
+        // UC-026 A3: the undo of a restore, likewise.
+        let restore = self.restore_offer();
+        let offer = offer.or(restore);
+        // UC-025 A4: the settings of the workspace, likewise.
+        if self.settings_offer.as_ref() != Some(&self.status) {
+            self.settings_offer = None;
+        }
+        let offer = offer.or(self
+            .settings_offer
+            .as_ref()
+            .map(|_| StatusOffer::WorkspaceSettings));
         // M-04.8: "Open" and "Show" of the exports reported, likewise.
         let (exports, error) = self.export_offers();
         let busy = self.exporting();
@@ -594,6 +652,7 @@ impl Session {
             || self.git_report.as_deref() == Some(self.status.as_str())
             || self.agent_report_kept()
             || self.todo_report_kept()
+            || self.restore_report_kept()
     }
 
     /// The settings' messages become the status, the last one wins.

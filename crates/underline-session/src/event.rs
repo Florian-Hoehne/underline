@@ -7,9 +7,12 @@ use crate::agents_view::{AgentMarksView, AgentOpenView, AgentsView};
 use crate::editor_view::{HighlightView, IndexesView, TabPropertiesView};
 use crate::export_view::ExportOfferView;
 use crate::git_view::{ChangesView, DiffView};
+use crate::links_view::LinksView;
 use crate::notes_view::{DeletedNoteView, StatusOffer};
 use crate::remote_view::{ConflictBarView, GitBarView, TodoConflictView};
+use crate::replace_view::ReplaceView;
 use crate::search_view::SearchView;
+use crate::spell_view::{SpellMarksView, SpellStateView};
 use crate::sync_view::{ChangedView, EnrichView, FlushView};
 use crate::todos_view::TodosView;
 use crate::workspace_view::{OverviewItem, TabsView, WorkspaceView};
@@ -68,10 +71,16 @@ pub enum Event {
     Enrich(Box<EnrichView>),
     /// M-16.5: the outline, code and figures of the active tab's note.
     Indexes(IndexesView),
+    /// FR-078, FR-079: the backlinks and the outgoing links of the active
+    /// tab's note.
+    Links(LinksView),
     /// M-05.6, UC-007 A5: the deleted notes of the workspace changed.
     Deleted(Vec<DeletedNoteView>),
     /// M-13.1, UC-008 step 2: the text or the result of the search changed.
     Search(SearchView),
+    /// UC-022 step 2: the problem or the places of the replace of the
+    /// workspace changed.
+    Replace(ReplaceView),
     /// M-19.1, M-19.2, UC-011, UC-012: the git changes of the workspace
     /// changed; `None` without git or before git answered.
     Changes(Option<ChangesView>),
@@ -94,6 +103,13 @@ pub enum Event {
     Agents(AgentsView),
     /// M-17.6: the agent cursors in the open notes.
     AgentMarks(Vec<AgentMarksView>),
+    /// UC-026 A4: the note whose snapshots are shown, or its snapshots,
+    /// changed; the window asks for the list and the differences again.
+    SnapshotsChanged(String),
+    /// FR-099, UC-005 BR-023: the words of a note the spell check marks.
+    SpellMarks(SpellMarksView),
+    /// FR-100: what the status bar shows of the spell check changed.
+    SpellState(SpellStateView),
     /// Review F15: "Changes not stored" before another workspace opens,
     /// as the todos of this one cannot be stored.
     CloseQuestion(crate::CloseQuestion),

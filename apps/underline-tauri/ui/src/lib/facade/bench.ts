@@ -83,8 +83,8 @@ async function showFacade(host: HTMLElement, note: string) {
 }
 
 export async function measureF5(host: HTMLElement, note: string): Promise<F5Results> {
-  await commands.tabSetView(note, 'source');
-  await commands.tabSetView(note, 'facade');
+  await commands.tabSetView(note, 'source', null);
+  await commands.tabSetView(note, 'facade', null);
   // ADR-025: opening the facade is the core's: cold with the text fetched
   // and the blocks made, warm with the core kept.
   dropCore(note);
@@ -101,15 +101,15 @@ export async function measureF5(host: HTMLElement, note: string): Promise<F5Resu
   const toSource: number[] = [];
   const toFacade: number[] = [];
   for (let round = 0; round < 5; round++) {
-    await commands.tabSetView(note, 'source');
-    await commands.tabSetView(note, 'facade');
+    await commands.tabSetView(note, 'source', null);
+    await commands.tabSetView(note, 'facade', null);
     start = performance.now();
     let facade = await showFacade(host, note);
     open.push((await painted()) - start);
 
     // Facade → source.
     start = performance.now();
-    await commands.tabSetView(note, 'source');
+    await commands.tabSetView(note, 'source', null);
     await unmount(facade);
     const source = await SourceView.open(host, note, sourceBackend, {
       mac: false,
@@ -121,7 +121,7 @@ export async function measureF5(host: HTMLElement, note: string): Promise<F5Resu
     // Source → facade.
     start = performance.now();
     await source.settled();
-    await commands.tabSetView(note, 'facade');
+    await commands.tabSetView(note, 'facade', null);
     source.destroy();
     facade = await showFacade(host, note);
     toFacade.push((await painted()) - start);
@@ -420,7 +420,7 @@ export async function measureF5b(
   apply: Record<string, { apply: Stats99; folding: Stats99 }>;
   enrich: { colors: Stats99; diagrams: Stats99 } | null;
 }> {
-  await commands.tabSetView(note, 'facade');
+  await commands.tabSetView(note, 'facade', null);
   let enrich: { colors: Stats99; diagrams: Stats99 } | null = null;
   const rows: F5bRow[] = [];
   const apply: Record<string, { apply: Stats99; folding: Stats99 }> = {};

@@ -18,6 +18,8 @@ underline-facade.workspace = true
 underline-editor-core.workspace = true
 underline-editor-view.workspace = true
 underline-wiki.workspace = true
+# FR-099, ADR-030: the spell check of the open notes, on their mirror.
+underline-spell.workspace = true
 # UC-016, ADR-017: MCP install for the section "Agents" of the settings.
 underline-mcp.workspace = true
 ropey.workspace = true
@@ -25,6 +27,9 @@ serde.workspace = true
 # UC-020: a todo file is read again before it is written over (F15).
 serde_norway.workspace = true
 thiserror.workspace = true
+# UC-025 BR-001: the local date of the daily note, with the clock injected
+# in tests (the same version underline-core uses).
+jiff = "0.2"
 specta = { workspace = true, optional = true }
 
 [dev-dependencies]

@@ -19,6 +19,7 @@ import type {
   AgentsSectionView,
   AgentsView,
 } from './bindings';
+import { mockTitle } from './mock-title';
 
 /** The levels in their order (`AgentAccess::ALL`). */
 export const ACCESS_LEVELS: readonly { level: AgentLevelName; label: string; status: string }[] = [
@@ -171,7 +172,7 @@ export class MockAgents {
         ? this.report.items.filter((i) => i.note !== note)
         : [];
     items = [...items, { verb, note }];
-    const title = (n: string) => (n.split('/').at(-1) ?? n).replace(/-/g, ' ');
+    const title = (n: string) => mockTitle(n);
     const parts = (['created', 'changed'] as const)
       .map((v) => {
         const notes = items.filter((i) => i.verb === v).map((i) => title(i.note));
@@ -189,7 +190,7 @@ export class MockAgents {
     if (!report || report.status !== status) {
       return [];
     }
-    const title = (n: string) => (n.split('/').at(-1) ?? n).replace(/-/g, ' ');
+    const title = (n: string) => mockTitle(n);
     return [...report.items]
       .reverse()
       .slice(0, 3)

@@ -76,6 +76,8 @@ fn request(title: &str, folder: &str) -> NewNoteRequest {
         title: title.into(),
         folder: folder.into(),
         format: FormatName::Markdown,
+        template: None,
+        side: false,
     }
 }
 
@@ -738,4 +740,22 @@ fn uc007_a7_a_stale_key_removes_nothing() {
 
     assert_eq!(session.deleted_view().len(), 1);
     assert_eq!(session.status(), status);
+}
+
+/// UC-004 A18, A3 (package 7a review): a missing note offered by a link
+/// followed to the side opens to the side once created.
+#[test]
+fn uc004_a18_a_note_created_from_a_link_to_the_side_opens_there() {
+    let dir = temp_dir("new-side");
+    let (mut session, _) = session_with(&dir, &[("Home.md", "# Home\n")]);
+    session.open_note(&id("Home"));
+    let mut asked = request("Plan", "");
+    asked.side = true;
+
+    session.create_note(&asked);
+
+    let split = session.snapshot().tabs.split.expect("the split view shows");
+    let right: Vec<String> = split.right.into_iter().map(|tab| tab.note).collect();
+    assert_eq!(right, ["Plan"]);
+    assert_eq!(tabs(&session), ["Home"]);
 }

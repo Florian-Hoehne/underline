@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use underline_editor_core::sync::{Answer, Batch, Change, Remote};
 
 use crate::editor_view::units;
-use crate::facade_view::{CodeColors, FigureView};
+use crate::facade_view::{CodeColors, FigureView, FormulaView};
 
 /// One edit: at char `at`, `remove` chars are replaced by `insert`. The
 /// edits of a list apply one after the other.
@@ -260,6 +260,9 @@ pub struct EnrichView {
     pub diagrams: Vec<(String, FigureView)>,
     /// The figures of images by target.
     pub images: Vec<(String, FigureView)>,
+    /// FR-098: the formulas typeset, or with their error, by key
+    /// (`formula_key`).
+    pub formulas: Vec<(String, FormulaView)>,
 }
 
 #[cfg(test)]

@@ -12,3 +12,10 @@ rust-version.workspace = true
 [dependencies]
 serde.workspace = true
 comrak.workspace = true
+regex.workspace = true
+regex-syntax.workspace = true
+unicode-segmentation.workspace = true
+# UC-024 BR-001, A5: whether a front matter is YAML GitHub reads (ADR-004's
+# YAML crate; builds for wasm32-unknown-unknown).
+serde_norway.workspace = true
+thiserror.workspace = true

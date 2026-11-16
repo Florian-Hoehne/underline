@@ -435,8 +435,14 @@ pub struct Hunk {
 
 /// UC-011 step 6, BR-004: the changed parts of `new` against `old`, with
 /// `context` unchanged lines around each, parts joined when they come close.
+///
+/// NFR-005 (UC-026 step 4): the search for the fewest changes gives up after
+/// [`crate::snapshots::DIFF_DEADLINE`]; what is left shows as larger changed
+/// parts, never as a wrong diff.
 pub fn diff(old: &str, new: &str, context: usize) -> Vec<Hunk> {
-    let diff = TextDiff::from_lines(old, new);
+    let diff = TextDiff::configure()
+        .timeout(crate::snapshots::DIFF_DEADLINE)
+        .diff_lines(old, new);
     let mut hunks = Vec::new();
     for group in diff.grouped_ops(context) {
         let mut lines = Vec::new();

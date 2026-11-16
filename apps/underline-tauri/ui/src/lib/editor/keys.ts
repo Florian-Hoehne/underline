@@ -18,6 +18,10 @@
 // - Link (Ctrl+K) and Image (Ctrl+Shift+I) ask first: the core answers
 //   with a request, which opens their dialog (feature F6). Nano's Ctrl+K
 //   cuts the line.
+// - Package 4 (UC-005 A26, A27): Alt+Up and Alt+Down (with the arrows,
+//   above) move lines, Ctrl+Shift+D (Cmd+Shift+D) duplicates them, and Tab
+//   and Shift+Tab indent list items; the core decides. In the Vim keys'
+//   normal mode they stay Vim's (BR-009).
 
 import type { EditorInput, KeyName } from '../bindings';
 
@@ -142,6 +146,8 @@ export function routeKey(
     letter !== null &&
     (event.shiftKey ? TOOL_SHIFT_KEYS.has(letter) : TOOL_KEYS.has(letter));
   const toolRoute = (): KeyRoute => send(letter as KeyName);
+  // UC-005 A26, OQ-203: Ctrl+Shift+D (Cmd+Shift+D) duplicates the line.
+  const duplicate = command && event.shiftKey && !event.altKey && letter === 'D';
 
   if (state.mode === 'Nano') {
     const ctrl = event.ctrlKey || (mac && event.metaKey);
@@ -186,6 +192,9 @@ export function routeKey(
   }
   if (tool) {
     return toolRoute();
+  }
+  if (duplicate) {
+    return send('D');
   }
   if (letter !== null && command && WITH_COMMAND.has(letter)) {
     return send(letter as KeyName);

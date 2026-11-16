@@ -48,6 +48,9 @@ pub struct Workspace {
     settings_problem: Option<String>,
     excluded: Vec<PathBuf>,
     listing: Listing,
+    /// UC-026 BR-003: why the snapshots of a note renamed, deleted or
+    /// restored last did not follow it; they stayed where they were.
+    pub(crate) snapshot_problem: Option<String>,
 }
 
 impl Workspace {
@@ -94,9 +97,17 @@ impl Workspace {
             settings_problem,
             excluded,
             listing: Listing::default(),
+            snapshot_problem: None,
         };
         workspace.rescan();
         Ok(workspace)
+    }
+
+    /// UC-026 BR-003: why the snapshots of the note renamed, deleted or
+    /// restored last could not follow it, once; they are kept where they
+    /// were.
+    pub fn take_snapshot_problem(&mut self) -> Option<String> {
+        self.snapshot_problem.take()
     }
 
     pub fn root(&self) -> &Path {
