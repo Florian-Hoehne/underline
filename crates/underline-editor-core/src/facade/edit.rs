@@ -1081,6 +1081,10 @@ impl Target for FacadeTarget<'_, '_> {
     fn command(&mut self, command: EditorCommand) {
         self.edit.gathered.commands.push(command);
     }
+
+    fn shift(&mut self, from: usize, to: usize, outdent: bool, times: usize) -> bool {
+        self.edit.vim_shift(from, to, outdent, times)
+    }
 }
 
 /// FR-098, UC-005 BR-008: whether the source byte `byte` lies inside the

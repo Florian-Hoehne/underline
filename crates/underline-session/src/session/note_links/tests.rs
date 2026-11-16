@@ -8,15 +8,17 @@ use std::time::{Duration, Instant};
 
 use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
 
-use super::LINKS_SWEEP;
-use crate::links_view::{HeadingView, LinkKindName, LinkPlace, LinksView, OutgoingLinkView};
+use super::{LINKS_SWEEP, MENTIONS_SHOWN};
+use crate::links_view::{
+    HeadingView, LinkFormName, LinkKindName, LinkPlace, LinksView, MentionsView, OutgoingLinkView,
+};
 use crate::{Event, Session, SettingsState};
 
 /// A scratch folder that is removed again.
-struct Scratch(PathBuf);
+pub(in crate::session) struct Scratch(PathBuf);
 
 impl Scratch {
-    fn new(name: &str) -> Self {
+    pub(in crate::session) fn new(name: &str) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "underline-session-links-{name}-{}",
             std::process::id()
@@ -26,7 +28,7 @@ impl Scratch {
         Self(dir)
     }
 
-    fn root(&self) -> PathBuf {
+    pub(in crate::session) fn root(&self) -> PathBuf {
         self.0.join("notes")
     }
 }
@@ -37,19 +39,23 @@ impl Drop for Scratch {
     }
 }
 
-fn write(root: &Path, name: &str, text: &str) {
+pub(in crate::session) fn write(root: &Path, name: &str, text: &str) {
     let path = root.join(name);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
 }
 
-fn id(note: &str) -> NoteId {
+pub(in crate::session) fn id(note: &str) -> NoteId {
     NoteId::from_relative(note)
 }
 
 /// A session on the workspace of `scratch` with the notes `files`, `open`
 /// in the active tab.
-fn session_with(scratch: &Scratch, files: &[(&str, &str)], open: &str) -> Session {
+pub(in crate::session) fn session_with(
+    scratch: &Scratch,
+    files: &[(&str, &str)],
+    open: &str,
+) -> Session {
     let root = scratch.root();
     for (name, text) in files {
         write(&root, name, text);
@@ -71,7 +77,7 @@ fn session_with(scratch: &Scratch, files: &[(&str, &str)], open: &str) -> Sessio
 }
 
 /// Ticks until lists come for which `wanted` holds, at most `within`.
-fn links_until(
+pub(in crate::session) fn links_until(
     session: &mut Session,
     within: Duration,
     wanted: impl Fn(&LinksView) -> bool,
@@ -95,7 +101,7 @@ fn links_until(
     }
 }
 
-fn links(session: &mut Session) -> LinksView {
+pub(in crate::session) fn links(session: &mut Session) -> LinksView {
     links_until(session, Duration::from_secs(5), |_| true)
 }
 
@@ -722,4 +728,491 @@ fn uc_004_br_015_chaos_anchor_case_and_escapes() {
     let view = links(&mut session);
     let broken: Vec<_> = view.outgoing.iter().map(|l| l.broken).collect();
     assert_eq!(broken, [false, false, false], "{:#?}", view.outgoing);
+}
+
+/// The outgoing links of a view as (text, target, kind, form, broken).
+fn forms(view: &LinksView) -> Vec<(String, String, LinkKindName, LinkFormName, bool)> {
+    view.outgoing
+        .iter()
+        .map(|link| {
+            (
+                link.text.clone(),
+                link.target.clone(),
+                link.kind,
+                link.form,
+                link.broken,
+            )
+        })
+        .collect()
+}
+
+/// TC-004-41 step 1, OQ-244, BR-015: pictures and included files are
+/// outgoing links, marked as such; a missing one is broken; in code they
+/// are none. Markdown and AsciiDoc.
+#[test]
+fn tc_004_41_step_1_pictures_and_includes_are_outgoing_links() {
+    let scratch = Scratch::new("tc41");
+    let hub = "# Hub\n\n![Logo](img/logo.png) ![gone](img/gone.png)\n\
+        ![web](https://example.org/a.png)\n`![x](img/logo.png)`\n";
+    let book = "= Book\n\ninclude::Chapter.adoc[]\ninclude::Missing.adoc[]\n\
+        image::img/logo.png[Logo]\nimage:img/gone.png[]\n----\ninclude::Code.adoc[]\n----\n";
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Hub.md", hub),
+            ("Book.adoc", book),
+            ("Chapter.adoc", "= Chapter\n"),
+            ("img/logo.png", "png"),
+        ],
+        "Hub",
+    );
+    let file = |text: &str, target: &str, broken| {
+        (
+            text.to_owned(),
+            target.to_owned(),
+            LinkKindName::File,
+            LinkFormName::Picture,
+            broken,
+        )
+    };
+
+    let view = links(&mut session);
+    assert_eq!(
+        forms(&view),
+        [
+            file("img/logo.png", "img/logo.png", false),
+            file("img/gone.png", "img/gone.png", true),
+            (
+                "https://example.org/a.png".to_owned(),
+                "https://example.org/a.png".to_owned(),
+                LinkKindName::Web,
+                LinkFormName::Picture,
+                false
+            ),
+        ]
+    );
+
+    assert!(session.open_note(&id("Book")));
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        view.note == "Book"
+    });
+    assert_eq!(
+        forms(&view),
+        [
+            (
+                "Chapter.adoc".to_owned(),
+                "Chapter".to_owned(),
+                LinkKindName::Note,
+                LinkFormName::Include,
+                false
+            ),
+            (
+                "Missing.adoc".to_owned(),
+                "Missing.adoc".to_owned(),
+                LinkKindName::Note,
+                LinkFormName::Include,
+                true
+            ),
+            file("img/logo.png", "img/logo.png", false),
+            file("img/gone.png", "img/gone.png", true),
+        ]
+    );
+}
+
+/// TC-004-41 step 2, OQ-244, FR-078: a note included by another lists it
+/// as a backlink, marked as an include; a link and an include of the same
+/// note are told apart.
+#[test]
+fn tc_004_41_step_2_an_include_is_a_backlink() {
+    let scratch = Scratch::new("tc41-back");
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Chapter.adoc", "= Chapter\n"),
+            (
+                "Book.adoc",
+                "= Book\n\nxref:Chapter.adoc[The chapter]\ninclude::Chapter.adoc[]\n",
+            ),
+            ("Pics.md", "# Pics\n\n![chapter](Chapter.adoc)\n"),
+        ],
+        "Chapter",
+    );
+
+    let view = links(&mut session);
+
+    assert_eq!(view.backlink_count, 3);
+    let seen: Vec<(&str, u32, LinkFormName, &str)> = view
+        .backlinks
+        .iter()
+        .flat_map(|note| {
+            note.links.iter().map(|link| {
+                (
+                    note.title.as_str(),
+                    link.line,
+                    link.form,
+                    link.link.as_str(),
+                )
+            })
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (
+                "Book",
+                3,
+                LinkFormName::Link,
+                "xref:Chapter.adoc[The chapter]"
+            ),
+            ("Book", 4, LinkFormName::Include, "include::Chapter.adoc[]"),
+            ("Pics", 3, LinkFormName::Picture, "![chapter](Chapter.adoc)"),
+        ]
+    );
+}
+
+/// TC-004-41 step 3, OQ-244, A14: following an included note from the
+/// outgoing links opens it; following a picture opens it with the system's
+/// program; a picture of a program asks first (Q-61).
+#[test]
+fn tc_004_41_step_3_following_a_picture_and_an_include() {
+    let scratch = Scratch::new("tc41-follow");
+    let book = "= Book\n\ninclude::Chapter.adoc[]\nimage::logo.png[]\nimage::run.desktop[]\n";
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Book.adoc", book),
+            ("Chapter.adoc", "= Chapter\n"),
+            ("logo.png", "png"),
+            ("run.desktop", "[Desktop Entry]\n"),
+        ],
+        "Book",
+    );
+    let view = links(&mut session);
+    let (rev, include, picture, program) = (
+        view.rev,
+        view.outgoing[0].offset,
+        view.outgoing[1].offset,
+        view.outgoing[2].offset,
+    );
+
+    let followed = session.follow_outgoing(&id("Book"), picture, rev).unwrap();
+    let opened = followed.open.expect("opened with the system");
+    assert!(opened.ends_with("logo.png"), "{opened}");
+
+    let followed = session.follow_outgoing(&id("Book"), program, rev).unwrap();
+    assert!(followed.open.is_none(), "asked first");
+    assert!(
+        matches!(
+            followed.answer,
+            crate::editor_view::LinkAnswer::AskOpen { .. }
+        ),
+        "{:?}",
+        followed.answer
+    );
+
+    session.follow_outgoing(&id("Book"), include, rev).unwrap();
+    assert_eq!(session.tabs_view().active.as_deref(), Some("Chapter"));
+}
+
+/// The mentions of a view as (note, line, before, mention, after).
+fn mentioned(view: &MentionsView) -> Vec<(String, u32, String, String, String)> {
+    view.notes
+        .iter()
+        .flat_map(|note| {
+            note.mentions.iter().map(|mention| {
+                (
+                    note.title.clone(),
+                    mention.line,
+                    mention.before.clone(),
+                    mention.mention.clone(),
+                    mention.after.clone(),
+                )
+            })
+        })
+        .collect()
+}
+
+/// TC-004-42 step 1, FR-103, BR-021: the unlinked mentions of "Road map"
+/// in the other notes, in the order of the overview, with their lines;
+/// not the linked one, not in code, not in the note itself; both formats.
+#[test]
+fn tc_004_42_step_1_unlinked_mentions() {
+    let scratch = Scratch::new("tc42");
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Road-map.md", "# Road map\n\nThe road map itself.\n"),
+            (
+                "Ideas.md",
+                "# Ideas\n\nSee the road map first.\n[Road map](Road-map.md)\n`road map`\n",
+            ),
+            ("travel/Trip.adoc", "= Trip\n\nThe ROAD MAP, again.\r\n"),
+            ("Log.md", "# Log\n\nroadmap and road maps\n"),
+        ],
+        "Road-map",
+    );
+
+    let view = links(&mut session);
+
+    let mut seen = mentioned(&view.mentions);
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            (
+                "Ideas".to_owned(),
+                3,
+                "See the ".to_owned(),
+                "road map".to_owned(),
+                " first.".to_owned()
+            ),
+            (
+                "Trip".to_owned(),
+                3,
+                "The ".to_owned(),
+                "ROAD MAP".to_owned(),
+                ", again.".to_owned()
+            ),
+        ]
+    );
+    assert_eq!((view.mentions.count, view.mentions.more), (2, 0));
+    assert!(!view.mentions.too_short);
+    let trip = view
+        .mentions
+        .notes
+        .iter()
+        .find(|note| note.title == "Trip")
+        .unwrap();
+    assert_eq!(trip.folder.as_deref(), Some("travel"));
+    // The backlink of "Ideas" is a backlink, not a mention.
+    assert_eq!(view.backlink_count, 1);
+}
+
+/// TC-004-42 step 2, BR-021: a note open in a tab counts with its text not
+/// stored yet; a title of fewer than three characters has no mentions.
+#[test]
+fn tc_004_42_step_2_open_tabs_and_short_titles() {
+    let scratch = Scratch::new("tc42-open");
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Plan.md", "# Plan\n"),
+            ("Ideas.md", "# Ideas\n"),
+            ("Go.md", "# Go\n\nGo plan go\n"),
+        ],
+        "Plan",
+    );
+    let view = links(&mut session);
+    assert_eq!(view.mentions.count, 1, "{:?}", view.mentions);
+
+    assert!(session.open_note(&id("Ideas")));
+    session
+        .editor_resync(&id("Ideas"), "# Ideas\n\nA plan, a Plan.\n")
+        .unwrap();
+    session.activate_tab(&id("Plan"));
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        view.note == "Plan" && view.mentions.count == 3
+    });
+    let ideas = view
+        .mentions
+        .notes
+        .iter()
+        .find(|note| note.title == "Ideas")
+        .unwrap();
+    assert_eq!(ideas.mentions.len(), 2, "not stored yet");
+
+    assert!(session.open_note(&id("Go")));
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        view.note == "Go"
+    });
+    assert!(view.mentions.too_short);
+    assert!(view.mentions.notes.is_empty());
+    assert_eq!(view.mentions.count, 0);
+}
+
+/// TC-004-42 step 4, BR-021: at most 200 mentions are listed; "Show more"
+/// lists 200 more, and another note starts at 200 again.
+#[test]
+fn tc_004_42_step_4_at_most_200_then_more() {
+    let scratch = Scratch::new("tc42-more");
+    let many = "plan ".repeat(150);
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Plan.md", "# Plan\n"),
+            ("A.md", many.as_str()),
+            ("B.md", many.as_str()),
+            ("C.md", many.as_str()),
+        ],
+        "Plan",
+    );
+    let view = links(&mut session);
+    let listed = |view: &LinksView| {
+        view.mentions
+            .notes
+            .iter()
+            .map(|note| note.mentions.len())
+            .sum::<usize>()
+    };
+    assert_eq!(listed(&view), MENTIONS_SHOWN);
+    assert_eq!((view.mentions.count, view.mentions.more), (450, 250));
+
+    session.links_more_mentions(&id("Plan"));
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        view.mentions.more == 50
+    });
+    assert_eq!(listed(&view), 400);
+
+    // Another note's "Show more" changes nothing here.
+    session.links_more_mentions(&id("A"));
+    assert!(session.open_note(&id("A")));
+    links_until(&mut session, Duration::from_secs(5), |view| {
+        view.note == "A"
+    });
+    session.activate_tab(&id("Plan"));
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        view.note == "Plan"
+    });
+    assert_eq!(listed(&view), MENTIONS_SHOWN, "back to 200");
+}
+
+/// NFR-019 for the unlinked mentions: the mentions of a note's title in
+/// 10,000 notes are found within 2 s of switching to it, and a change of
+/// one note shows within 2 s.
+#[test]
+fn nfr_019_mentions_in_ten_thousand_notes() {
+    let scratch = Scratch::new("nfr019-mentions");
+    let root = scratch.root();
+    for n in 0..10_000 {
+        let text = format!(
+            "# Note {n}\n\nSome text about the hub and note {n}, see [the hub](../Hub.md) \
+             and `hub`.\n\n- an item with <https://example.org/{n}>\n"
+        );
+        write(&root, &format!("f{}/Note-{n}.md", n % 50), &text);
+    }
+    write(&root, "Hub.md", "# Hub\n");
+    let mut session = session_with(&scratch, &[], "f7/Note-7");
+    links_until(&mut session, Duration::from_secs(60), |view| {
+        view.note == "f7/Note-7"
+    });
+
+    assert!(session.open_note(&id("Hub")));
+    let started = Instant::now();
+    let view = links_until(&mut session, Duration::from_secs(60), |view| {
+        view.note == "Hub"
+    });
+    let took = started.elapsed();
+    // Every note mentions "Hub", so every one is read and searched; the
+    // lists of a note shown first are no stored change, so NFR-019 does
+    // not bound this time (as in `nfr_019_ten_thousand_notes`).
+    eprintln!("NFR-019: the mentions of Hub in 10,000 notes after {took:?}");
+    assert_eq!(view.mentions.count, 10_000);
+    assert_eq!(view.mentions.more, 10_000 - 200);
+
+    // A note no other note mentions is shown at once: no file is read.
+    assert!(session.open_note(&id("f9/Note-9")));
+    let started = Instant::now();
+    let view = links_until(&mut session, Duration::from_secs(60), |view| {
+        view.note == "f9/Note-9"
+    });
+    let took = started.elapsed();
+    eprintln!("NFR-019: the mentions of Note 9 in 10,000 notes after {took:?}");
+    assert_eq!(view.mentions.count, 0);
+    assert!(took < Duration::from_secs(2), "{took:?}");
+    session.activate_tab(&id("Hub"));
+    links_until(&mut session, Duration::from_secs(60), |view| {
+        view.note == "Hub"
+    });
+
+    let changed = Instant::now();
+    write(&root, "f3/Note-3.md", "# Note 3\n\nNo mention any more.\n");
+    links_until(&mut session, Duration::from_secs(5), |view| {
+        view.mentions.count == 9_999
+    });
+    let took = changed.elapsed();
+    eprintln!("NFR-019: one changed mention of 10,000 showed after {took:?}");
+    assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+/// TC-004-41 step 1, OQ-244, BR-015 (monkey): a picture that holds its
+/// data in its address (`data:image/png;base64,…`) is no link to a note
+/// that is missing: the outgoing links do not mark it as broken.
+#[test]
+fn tc_004_41_monkey_data_picture_is_not_a_broken_note() {
+    let scratch = Scratch::new("tc41-data");
+    let mut session = session_with(
+        &scratch,
+        &[("Hub.md", "# Hub\n\n![x](data:image/png;base64,AAAA)\n")],
+        "Hub",
+    );
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        !view.outgoing.is_empty()
+    });
+    let link = &view.outgoing[0];
+    assert!(
+        !link.broken,
+        "marked broken, as a {:?} to {:?}",
+        link.kind, link.target
+    );
+}
+
+/// OQ-244 (review): a picture held in the note is listed as such, with its
+/// place shortened, and following it opens nothing.
+#[test]
+fn tc_004_41_data_picture_is_shortened_and_not_followed() {
+    let scratch = Scratch::new("tc41-data-follow");
+    let data = format!("data:image/png;base64,{}", "A".repeat(5000));
+    let hub = format!("# Hub\n\n![x]({data})\n");
+    let mut session = session_with(&scratch, &[("Hub.md", hub.as_str())], "Hub");
+    let view = links_until(&mut session, Duration::from_secs(5), |view| {
+        !view.outgoing.is_empty()
+    });
+    let link = &view.outgoing[0];
+    assert_eq!(
+        (link.kind, link.form, link.broken),
+        (LinkKindName::Inline, LinkFormName::Picture, false)
+    );
+    assert!(link.target.chars().count() <= 81, "{}", link.target.len());
+    assert!(link.target.ends_with('…'));
+    let followed = session
+        .follow_outgoing(&id("Hub"), link.offset, view.rev)
+        .unwrap();
+    assert!(followed.open.is_none());
+    assert_eq!(
+        session.status(),
+        "This picture is held in the note itself; there is nothing to open"
+    );
+}
+
+/// BR-015 (review): links and pictures of files that exist, which are no
+/// notes, are not broken: a script, a picture, a relative `file://` place.
+#[test]
+fn uc_004_br_015_existing_files_are_not_broken() {
+    let scratch = Scratch::new("files-not-broken");
+    let hub = "# Hub\n\n[deploy](tools/deploy.sh) ![plan](img/plan.svg) \
+        [f](file://tools/deploy.sh) [g](tools/gone.sh)\n";
+    let mut session = session_with(
+        &scratch,
+        &[
+            ("Hub.md", hub),
+            ("tools/deploy.sh", "echo\n"),
+            ("img/plan.svg", "<svg/>"),
+        ],
+        "Hub",
+    );
+    let view = links(&mut session);
+    let broken: Vec<(&str, bool)> = view
+        .outgoing
+        .iter()
+        .map(|link| (link.text.as_str(), link.broken))
+        .collect();
+    assert_eq!(
+        broken,
+        [
+            ("deploy", false),
+            ("img/plan.svg", false),
+            ("f", false),
+            ("g", true)
+        ]
+    );
 }

@@ -114,7 +114,7 @@ The sort and the filter last chosen are kept for each workspace on this computer
 
 ### BR-006: One tab
 
-There is at most one tab "Todos" per window; opening it again shows the open one. It does not count towards the limit of open note tabs (UC-004), and it closes with its workspace.
+There is at most one tab "Todos" per window; opening it again shows the open one. It does not count towards the limit of open note tabs (UC-004), and it closes with its workspace. In the split view (UC-004 BR-018) it opens in the active pane, after that pane's note tabs, and shows the todo list in place of that pane's note while the other pane keeps its note; opened from the other pane, it moves there. With the other pane made active, the tool panel and the commands act on that pane's note while the todo list stays. When the split view ends, it stays open in the one pane left.
 
 ### BR-007: Choosing the sort
 

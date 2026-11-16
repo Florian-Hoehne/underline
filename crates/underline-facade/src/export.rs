@@ -677,13 +677,15 @@ fn longest_line_of(text: &str, c: char) -> usize {
         .unwrap_or(0)
 }
 
-/// FR-098: AsciiDoc text in which `latexmath:[` and `stem:[` stay text: a
-/// backslash before them, as Asciidoctor escapes a macro.
+/// FR-098, OQ-222: AsciiDoc text in which `latexmath:[`, `asciimath:[` and
+/// `stem:[` stay text: a backslash before them, as Asciidoctor escapes a
+/// macro.
 fn escape_formula_macros(text: &str) -> String {
     if !text.contains(":[") {
         return text.to_owned();
     }
     text.replace("latexmath:[", "\\latexmath:[")
+        .replace("asciimath:[", "\\asciimath:[")
         .replace("stem:[", "\\stem:[")
 }
 
@@ -1913,6 +1915,37 @@ mod tests {
         );
     }
 
+    /// TC-009-18 step 4, OQ-222: AsciiMath of an AsciiDoc note goes to
+    /// Markdown as the LaTeX it is typeset from, inline and as a block; text
+    /// of a Markdown note that names `asciimath:[` stays text in AsciiDoc.
+    #[test]
+    fn tc009_18_asciimath_exports_to_markdown_as_latex() {
+        let sandbox = Sandbox::new("asciimath");
+        let note = "= Math\n:stem:\n\nSee stem:[x^2/2] and asciimath:[sqrt a].\n\n[asciimath]\n++++\nsum_(i=1)^n i\n++++\n";
+        let request = sandbox.request(note, NoteFormat::AsciiDoc, "out/Math.md");
+        let md =
+            String::from_utf8(export(&request, ExportKind::OtherFormat).unwrap().bytes).unwrap();
+        assert!(
+            md.contains("See $\\frac{x^{2}}{2}$ and $\\sqrt{a}$."),
+            "{md}"
+        );
+        assert!(md.contains("```math\n\\sum_{i=1}^{n} i\n```"), "{md}");
+        assert_eq!(
+            formulas_of(&md, NoteFormat::Markdown),
+            ["I:\\frac{x^{2}}{2}", "I:\\sqrt{a}", "B:\\sum_{i=1}^{n} i"]
+        );
+        let adoc = export_text(
+            "Write `x` as asciimath:[x] in AsciiDoc.\n",
+            NoteFormat::Markdown,
+            "out/Text.adoc",
+            ExportKind::OtherFormat,
+        );
+        assert!(
+            formulas_of(&adoc, NoteFormat::AsciiDoc).is_empty(),
+            "{adoc}"
+        );
+    }
+
     #[test]
     fn base64_as_the_standard_says() {
         assert_eq!(base64(b"Man"), "TWFu");
@@ -2136,6 +2169,53 @@ mod tests {
                     "{adoc:?} {back:?}"
                 );
             }
+        }
+    }
+
+    /// TC-009-18, OQ-222, FR-098 (test monkey): hostile AsciiMath (control
+    /// characters, markup, braces, backslash commands, right-to-left text)
+    /// exports as HTML and PDF without failing the export and without markup
+    /// of it in the HTML, and to Markdown with every formula's LaTeX kept.
+    #[test]
+    fn tc009_18_hostile_asciimath_exports_in_every_kind() {
+        let note = "= H\n:stem:\n\n\
+            Inline asciimath:[text(\"<script>alert(1)</script>\")] and \
+            asciimath:[\"\\def\\x{y}\"] and \
+            stem:[text(\"\\href{javascript:alert(2)}{x}\")] and \
+            asciimath:[\"\u{5d0}\u{5d1}\u{202e}\"] and asciimath:[((((((((x] and \
+            asciimath:[text(\"a\\]b\")].\n\n\
+            [asciimath]\n++++\ntext(\"x}\\input{y}\") + \"%#&$_^~\"\n++++\n\n\
+            [stem]\n++++\n\"</svg><script>alert(3)</script>\" + ((((\n++++\n";
+        let html = export_text(note, NoteFormat::AsciiDoc, "out/A.html", ExportKind::Html);
+        assert!(!html.contains("<script"), "{html}");
+        let sandbox = Sandbox::new("monkeyasciimath");
+        let request = sandbox.request(note, NoteFormat::AsciiDoc, "out/A.pdf");
+        let pdf = export(&request, ExportKind::Pdf);
+        assert!(pdf.is_ok(), "{:?}", pdf.err());
+        let request = sandbox.request(note, NoteFormat::AsciiDoc, "out/A.md");
+        let md =
+            String::from_utf8(export(&request, ExportKind::OtherFormat).unwrap().bytes).unwrap();
+        assert_eq!(
+            formulas_of(&md, NoteFormat::Markdown),
+            formulas_of(note, NoteFormat::AsciiDoc),
+            "{md}"
+        );
+    }
+
+    /// TC-009-18, OQ-222 (test monkey): control characters inside the text of
+    /// an AsciiMath formula do not fail the HTML or the PDF export (as for
+    /// LaTeX).
+    #[test]
+    fn tc009_18_control_characters_in_asciimath_export_as_html_and_pdf() {
+        let note = "= H\n:stem:\n\nA asciimath:[text(\"\u{1}x\u{fffe}\")] and asciimath:[\"a\u{0}b\"].\n\n[asciimath]\n++++\ntext(\"\u{7}\")\n++++\n";
+        let sandbox = Sandbox::new("monkeyasciimathctrl");
+        for (kind, target) in [
+            (ExportKind::Html, "out/C.html"),
+            (ExportKind::Pdf, "out/C.pdf"),
+        ] {
+            let request = sandbox.request(note, NoteFormat::AsciiDoc, target);
+            let exported = export(&request, kind);
+            assert!(exported.is_ok(), "{kind:?}: {:?}", exported.err());
         }
     }
 }

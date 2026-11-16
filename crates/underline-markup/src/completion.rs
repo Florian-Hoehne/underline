@@ -313,7 +313,7 @@ pub fn write_link(context: &LinkContext, format: NoteFormat, place: &str, label:
         .filter(|label| !label.is_empty())
     {
         Some(given) => given.to_owned(),
-        None => escape_label(label, format),
+        None => link_text(label, format),
     };
     match context.trigger {
         Trigger::Xref => format!("xref:{place}[{label}]"),
@@ -336,13 +336,64 @@ pub fn write_link(context: &LinkContext, format: NoteFormat, place: &str, label:
     }
 }
 
-/// `label` as the text of a link in `format`: the brackets that would end
-/// it are escaped (`\[`, `\]` in Markdown, `\]` in AsciiDoc).
-fn escape_label(label: &str, format: NoteFormat) -> String {
+/// UC-005 A2, A23, OQ-248: the link to the file `to` (relative to the
+/// workspace, with `/`) with the text `label`, as a note whose file is
+/// `from`, in `format`, holds it: its place written by [`link_place`], its
+/// text by [`link_text`], in the form the toolbar writes (`[text](place)`
+/// in Markdown, `link:place[text]` in AsciiDoc). The toolbar's "Insert
+/// link", link completion and the linking of an unlinked mention
+/// (UC-004 A22) write a link to a note through it, so they write alike.
+///
+/// # Examples
+///
+/// ```
+/// use underline_markup::completion::note_link;
+/// use underline_markup::NoteFormat;
+///
+/// assert_eq!(
+///     note_link("Ideas.md", "a b/Plan [v2].md", None, "Plan [v2]", NoteFormat::Markdown),
+///     "[Plan \\[v2\\]](a%20b/Plan%20%5Bv2%5D.md)"
+/// );
+/// assert_eq!(
+///     note_link("x/Ideas.adoc", "Road map.adoc", None, "Road map", NoteFormat::AsciiDoc),
+///     "link:../Road%20map.adoc[Road map]"
+/// );
+/// ```
+#[must_use]
+pub fn note_link(
+    from: &str,
+    to: &str,
+    anchor: Option<&str>,
+    label: &str,
+    format: NoteFormat,
+) -> String {
+    let link = Format::Link {
+        address: link_place(from, to, anchor),
+        label: Some(link_text(label, format)),
+    };
+    apply_format("", format, 0..0, &link).text
+}
+
+/// UC-005 A2, A23, OQ-248: `label`, a title or a heading, as the text of a
+/// link in `format`: the brackets that would end it are escaped (`\[`,
+/// `\]`, `\\` and `` \` `` in Markdown, `\]` in AsciiDoc). An AsciiDoc
+/// backtick stays: a single one marks nothing there.
+///
+/// # Examples
+///
+/// ```
+/// use underline_markup::completion::link_text;
+/// use underline_markup::NoteFormat;
+///
+/// assert_eq!(link_text("Plan [v2]", NoteFormat::Markdown), "Plan \\[v2\\]");
+/// assert_eq!(link_text("Plan [v2]", NoteFormat::AsciiDoc), "Plan [v2\\]");
+/// ```
+#[must_use]
+pub fn link_text(label: &str, format: NoteFormat) -> String {
     let mut out = String::with_capacity(label.len());
     for c in label.chars() {
         let escaped = match format {
-            NoteFormat::Markdown => matches!(c, '[' | ']' | '\\'),
+            NoteFormat::Markdown => matches!(c, '[' | ']' | '\\' | '`'),
             NoteFormat::AsciiDoc => c == ']',
         };
         if escaped {
@@ -394,13 +445,15 @@ pub fn link_place(from: &str, to: &str, anchor: Option<&str>) -> String {
 }
 
 /// A part of a place as a link writes it (OQ-248): `%`, `#`, spaces,
-/// brackets and angle brackets percent-encoded, so the place is read as one
-/// and its `#` does not start a heading.
+/// brackets, angle brackets, tabs, `:` and `` ` `` percent-encoded, so the
+/// place is read as one, its `#` does not start a heading, a name such as
+/// `Tel:-Alice.md` is no address of another program, and a backtick does
+/// not pair with one in the text.
 fn encode_place(part: &str) -> String {
     let mut out = String::with_capacity(part.len());
     for c in part.chars() {
         match c {
-            '%' | '#' | ' ' | '(' | ')' | '[' | ']' | '<' | '>' | '\t' => {
+            '%' | '#' | ' ' | '(' | ')' | '[' | ']' | '<' | '>' | '\t' | ':' | '`' => {
                 out.push_str(&format!("%{:02X}", u32::from(c)));
             }
             c => out.push(c),
@@ -795,5 +848,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// OQ-248 (review): `:` and a backtick are encoded in a place, so a
+    /// note named like an address (`Tel:-Alice`) stays a note, and a
+    /// backtick is escaped in a Markdown link text.
+    #[test]
+    fn oq_248_colon_and_backtick() {
+        assert_eq!(link_place("N.md", "Tel:-Alice.md", None), "Tel%3A-Alice.md");
+        assert_eq!(link_place("N.md", "Plan`s.md", None), "Plan%60s.md");
+        assert_eq!(link_text("Plan`s", NoteFormat::Markdown), "Plan\\`s");
+        assert_eq!(link_text("Plan`s", NoteFormat::AsciiDoc), "Plan`s");
+        assert_eq!(
+            note_link(
+                "N.md",
+                "Tel:-Alice.md",
+                None,
+                "Tel: Alice",
+                NoteFormat::Markdown
+            ),
+            "[Tel: Alice](Tel%3A-Alice.md)"
+        );
+    }
+
+    /// UC-005 A2, A23, OQ-248, UC-004 A22 (monkey): the AsciiDoc link
+    /// `note_link` writes for a title with a `]` shows the whole title as
+    /// the text of one link; the text ends at the unescaped `]`.
+    #[test]
+    fn uc_005_a23_monkey_asciidoc_link_text_with_a_bracket_is_one_link() {
+        let text = note_link(
+            "Ideas.adoc",
+            "Plan-[v2].adoc",
+            None,
+            "Plan [v2]",
+            NoteFormat::AsciiDoc,
+        );
+        let blocks = crate::blocks::parse_blocks(&text, NoteFormat::AsciiDoc);
+        let runs: Vec<_> = blocks
+            .iter()
+            .flat_map(|block| block.runs.iter())
+            .map(|run| (run.text.as_str(), run.style.link.is_some()))
+            .collect();
+        assert_eq!(runs, [("Plan [v2]", true)], "{text}");
     }
 }

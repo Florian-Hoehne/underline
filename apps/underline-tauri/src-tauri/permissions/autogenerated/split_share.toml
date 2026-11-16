@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-split-share"
+description = "Enables the split_share command without any pre-configured scope."
+commands.allow = ["split_share"]
+
+[[permission]]
+identifier = "deny-split-share"
+description = "Denies the split_share command without any pre-configured scope."
+commands.deny = ["split_share"]

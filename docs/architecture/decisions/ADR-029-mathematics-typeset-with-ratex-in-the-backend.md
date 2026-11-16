@@ -1,7 +1,7 @@
 # ADR-029: Typeset mathematics with RaTeX in the backend, as SVG for the facade and both exports
 
-**Status:** Proposed
-**Date:** 2026-11-13
+**Status:** Accepted
+**Date:** 2026-11-16
 **Requirements:** C-003, NFR-013, NFR-014, NFR-002, C-008, FR-098
 
 ## Context
@@ -101,3 +101,12 @@ and `ratex-font` 0.1.15. The KaTeX fonts (OFL-1.1) are embedded through `ratex-s
   - **`tex2typst-rs`:** GPL-3.0, against C-008.
   - **MathJax:** too large for the bundle or for QuickJS.
   - **RaTeX in the WASM core:** it would grow the 2.7 MB file, and typesetting is not on the key path.
+
+## Update 2026-11-16: AsciiMath
+
+The user decided that AsciiMath is typeset too (OQ-222). `underline-markup` converts AsciiMath to LaTeX while the note
+is parsed in the WASM core: `asciimath-parser` =0.7.0 (MIT, pure Rust, a depth limit, dependencies already in the
+build) parses it, and an own writer (`underline-markup::asciimath`) writes LaTeX. The formula's source is LaTeX from
+then on, so the worker, the cache, the facade and the exports typeset it with RaTeX as before. `stem` follows the
+document header as Asciidoctor reads it: `latexmath`, `latex` or `tex` mean LaTeX, any other value or none means
+AsciiMath. The alternative text of an AsciiMath formula shows the converted LaTeX.

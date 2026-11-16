@@ -264,6 +264,56 @@ mod tests {
         assert!(sum.height > small.height, "display style is larger");
     }
 
+    /// OQ-222, ADR-029: every spelling of AsciiMath (and each Unicode form
+    /// it reads), written as LaTeX, is typeset by RaTeX: alone, with
+    /// operands after it, and between two.
+    #[test]
+    fn oq222_every_asciimath_spelling_typesets() {
+        let mut failed = Vec::new();
+        for (spelling, _) in asciimath_parser::asciimath_spellings() {
+            for source in [
+                spelling.to_owned(),
+                format!("{spelling} x y"),
+                format!("a {spelling} b"),
+            ] {
+                let latex = underline_markup::asciimath::to_latex(&source);
+                if let Err(error) = typeset(&latex, false, WHITE) {
+                    failed.push(format!("{source:?} -> {latex:?}: {error}"));
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    /// OQ-222: the forms of the AsciiMath spec typeset.
+    #[test]
+    fn oq222_asciimath_forms_typeset() {
+        for source in [
+            "sum_(i=1)^n i^3=((n(n+1))/2)^2",
+            "int_0^1 f(x) dx",
+            "[(a,b),(c,d)]",
+            "[(a, |, b), (c, |, d)]",
+            "{: (x, y), (a, b) :}",
+            "root(3)(x) + sqrt(y)",
+            "color(red)(x) + text(if) y + \"50% & #1\"",
+            "bbsfit x + bbcc C + overarc AB + cancel x + lim_(n->oo) a_n",
+            "|__ x __| + |~ y ~| + (: a :) + norm(v) + ||x|| + |x|",
+            // LaTeX's special characters, written as AsciiMath.
+            "a \\ b ^ c ~ d",
+            "\\",
+            "x^",
+            "~",
+            "root(]a)(x) + color(#)(y) + color(#0a0)(z)",
+        ] {
+            let latex = underline_markup::asciimath::to_latex(source);
+            assert!(
+                typeset(&latex, true, WHITE).is_ok(),
+                "{source:?} -> {latex:?}: {:?}",
+                typeset(&latex, true, WHITE).err()
+            );
+        }
+    }
+
     /// TC-004-38, UC-004 A21: a formula with an error says why and where.
     #[test]
     fn uc004_a21_an_error_gives_its_reason() {
@@ -416,5 +466,208 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// OQ-222, ADR-029 (property, test monkey): hostile AsciiMath (text holding
+    /// `\`, braces, `$`, `%`, `#`, `&`, `\def`, `\href`, `]]`, `++++`, NUL and
+    /// right-to-left text, unbalanced brackets, deep nesting) gives LaTeX that
+    /// is brace-balanced, holds only control words the writer itself spells,
+    /// and typesets or says why, within a few seconds, without a panic.
+    #[test]
+    fn oq222_hostile_asciimath_never_injects_latex_and_typesets_or_fails_clean() {
+        let writer = include_str!("../../underline-markup/src/asciimath.rs");
+        let mut known: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let bytes = writer.as_bytes();
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes[at] == b'\\' {
+                let mut end = at + 1;
+                while end < bytes.len() && bytes[end].is_ascii_alphabetic() {
+                    end += 1;
+                }
+                known.insert(writer[at + 1..end].to_owned());
+                at = end.max(at + 1);
+            } else {
+                at += 1;
+            }
+        }
+        // Words of AsciiMath's symbol table are written as `\word` by
+        // `format!("\\{spelling}")`: the Greek letters.
+        for name in [
+            "alpha", "beta", "chi", "delta", "Delta", "eta", "gamma", "Gamma", "iota", "kappa",
+            "varkappa", "lambda", "Lambda", "mu", "nu", "omega", "Omega", "Phi", "pi", "Pi",
+            "varpi", "psi", "Psi", "rho", "varrho", "sigma", "Sigma", "tau", "theta", "vartheta",
+            "Theta", "upsilon", "Upsilon", "xi", "Xi", "zeta",
+        ] {
+            known.insert(name.to_owned());
+        }
+        for name in [
+            "sin", "cos", "tan", "sinh", "cosh", "tanh", "cot", "sec", "csc", "arcsin", "arccos",
+            "arctan", "coth", "exp", "log", "ln", "det", "gcd",
+        ] {
+            known.insert(name.to_owned());
+        }
+        const PIECES: &[&str] = &[
+            "text(",
+            "\"",
+            ")",
+            "(",
+            "[",
+            "]",
+            "{",
+            "}",
+            "{:",
+            ":}",
+            "\\",
+            "\\def",
+            "\\href",
+            "\\input",
+            "\\write18",
+            "\\catcode",
+            "\\newcommand",
+            "\\url",
+            "$",
+            "%",
+            "#",
+            "&",
+            "_",
+            "^",
+            "~",
+            "]]",
+            "++++",
+            "\u{0}",
+            "\u{5d0}\u{5d1}",
+            "\u{202e}",
+            "\n",
+            "color(",
+            "red",
+            "#f00",
+            "}\\input{x}",
+            "mbox(",
+            "sqrt",
+            "frac",
+            "root",
+            "abs",
+            "norm",
+            "ubrace",
+            "sum",
+            "int",
+            "lim",
+            "oo",
+            "x",
+            "1",
+            " ",
+            "/",
+            "|",
+            "||",
+            "\u{1F600}",
+            "e\u{301}",
+            "'",
+            "!",
+            "sin",
+            "f",
+            "bb",
+            "cc",
+            "hat",
+            "stackrel",
+            "id",
+            "class",
+            "text",
+            "a b",
+            "[(a,b),(c,d)]",
+            "[(a,|,b)]",
+            "<<",
+            ">>",
+            "lfloor",
+            "|__",
+            "__|",
+            "|~",
+            "~|",
+            "obrace",
+            "underset",
+            "overset",
+        ];
+        let mut state = 0x1357_9bdf_u64;
+        eprintln!("seed {state}");
+        let started = std::time::Instant::now();
+        let mut failures = Vec::new();
+        let mut slowest = (std::time::Duration::ZERO, String::new());
+        for round in 0..2500 {
+            let mut source = String::new();
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let n = (state >> 33) % 24;
+            for _ in 0..n {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                source.push_str(
+                    PIECES[usize::try_from((state >> 33) % PIECES.len() as u64).unwrap()],
+                );
+            }
+            let latex = underline_markup::asciimath::to_latex(&source);
+            let mut depth = 0_i64;
+            let mut escaped = false;
+            let mut ok = true;
+            let mut chars = latex.chars().peekable();
+            while let Some(c) = chars.next() {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match c {
+                    '\\' => {
+                        escaped = true;
+                        let mut word = String::new();
+                        while let Some(&l) = chars.peek() {
+                            if l.is_ascii_alphabetic() {
+                                word.push(l);
+                                chars.next();
+                                escaped = false;
+                            } else {
+                                break;
+                            }
+                        }
+                        if !word.is_empty() && !known.contains(&word) {
+                            failures.push(format!("round {round}: unknown control word \\{word}: {source:?} -> {latex:?}"));
+                            ok = false;
+                        }
+                    }
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                if depth < 0 {
+                    ok = false;
+                }
+            }
+            if depth != 0 || !ok && failures.is_empty() {
+                failures.push(format!(
+                    "round {round}: unbalanced ({depth}): {source:?} -> {latex:?}"
+                ));
+            }
+            let t = std::time::Instant::now();
+            let latex2 = latex.clone();
+            let result = std::panic::catch_unwind(|| typeset(&latex2, false, WHITE));
+            let took = t.elapsed();
+            if took > slowest.0 {
+                slowest = (took, format!("{source:?}"));
+            }
+            match result {
+                Err(_) => failures.push(format!(
+                    "round {round}: typeset panicked: {source:?} -> {latex:?}"
+                )),
+                Ok(Err(MathError::Engine(e))) => failures.push(format!(
+                    "round {round}: engine failure {e}: {source:?} -> {latex:?}"
+                )),
+                Ok(_) => {}
+            }
+            if failures.len() > 15 {
+                break;
+            }
+        }
+        eprintln!("slowest {:?}, total {:?}", slowest, started.elapsed());
+        assert!(failures.is_empty(), "{:#?}", failures);
     }
 }

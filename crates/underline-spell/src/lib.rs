@@ -13,21 +13,30 @@
 //!   words written only in capitals.
 //! - [`NoteSpeller`] marks the words a dictionary does not know, block by
 //!   block, keeping the marks of blocks it checked before.
-//! - [`UserWords`] are the words the user added, never marked.
+//! - [`UserWords`] are the words the user added, never marked: those of
+//!   the user's file and those of the workspace's file
+//!   ([`WORKSPACE_WORDS_FILE_NAME`], OQ-208).
+//! - [`note_language`] reads the language a note names for itself with its
+//!   attribute `lang` (OQ-207).
 //!
 //! Nothing here holds a window or a session: the session runs the check on
 //! a thread of its own and sends the marks to the window.
 
 mod checker;
 mod dictionary;
+mod language;
 mod marks;
 mod user_words;
 mod words;
 
 pub use checker::{Hunspell, SpellChecker, WordList};
 pub use dictionary::{decode, Dictionaries, DICTIONARY_DIR};
+pub use language::{note_language, NoteLanguage, LANG_ATTRIBUTE, LANG_HEAD_BYTES, MAX_SHOWN_TAG};
 pub use marks::{NoteSpeller, MAX_SUGGESTED_LENGTH, MAX_SUGGESTIONS};
-pub use user_words::{UserWords, MAX_WORDS_FILE_SIZE, MAX_WORD_LENGTH, USER_WORDS_FILE_NAME};
+pub use user_words::{
+    UserWords, MAX_WORDS_FILE_SIZE, MAX_WORD_LENGTH, USER_WORDS_FILE_NAME,
+    WORKSPACE_WORDS_FILE_NAME,
+};
 pub use words::{is_checked_word, note_words, BlockWords, Word};
 
 use std::path::PathBuf;

@@ -1,7 +1,7 @@
 # ADR-027: Count the words and characters of a note with the `unicode-segmentation` crate, in the WASM editor core
 
-**Status:** Proposed
-**Date:** 2026-11-12
+**Status:** Accepted
+**Date:** 2026-11-16
 **Requirements:** NFR-002, NFR-013, C-008, FR-090
 
 ## Context

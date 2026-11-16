@@ -15,6 +15,7 @@ import {
   mockHandlers,
   mockHooks,
   mockIndexes,
+  mockOpenQuestion,
   type MockHandlers,
   type MockStart,
 } from './mock-backend';
@@ -177,15 +178,28 @@ describe('M-07.3 following links (UC-004 A2 to A4)', () => {
     await waitFor(() => expect(shell.status).toBe('/home/user/Work/report.pdf does not exist'));
   });
 
-  it('UC-004 A4 a web address is asked about once per session', async () => {
+  it('UC-004 BR-007 Q-62 a web address opens directly, every time', async () => {
     const shell = await workbench();
     await shell.openNote(LINK_TOUR_NOTE);
     const address = 'https://example.com/underline';
 
     await fireEvent.click(await linkRun(address), { ctrlKey: true });
-    const dialog = await screen.findByRole('dialog', { name: 'Open web address' });
-    expect(dialog).toHaveTextContent(`Open ${address} in your browser?`);
-    expect(dialog).toHaveTextContent('Underline asks this once until it is closed.');
+    await waitFor(() => expect(mockHooks().openedWithSystem()).toEqual([address]));
+    await fireEvent.click(await linkRun(address), { ctrlKey: true });
+    await waitFor(() => expect(mockHooks().openedWithSystem()).toEqual([address, address]));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('UC-004 BR-007 Q-62 another scheme is asked about every time, naming it', async () => {
+    const shell = await workbench();
+    await shell.openNote(LINK_TOUR_NOTE);
+    const address = 'ssh://server.example/home';
+
+    await fireEvent.click(await linkRun(address), { ctrlKey: true });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Open ssh: link' });
+    expect(dialog).toHaveAccessibleDescription(
+      `This link uses the ssh: scheme and opens another program on this computer. Open it? Address: ${address}`,
+    );
     // The keyboard starts on "Cancel"; Escape cancels too (D-02).
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
     await fireEvent.keyDown(dialog, { key: 'Escape' });
@@ -194,15 +208,65 @@ describe('M-07.3 following links (UC-004 A2 to A4)', () => {
 
     // Asked again; "Open" opens it.
     await fireEvent.click(await linkRun(address), { ctrlKey: true });
-    const again = await screen.findByRole('dialog', { name: 'Open web address' });
-    await fireEvent.click(within(again).getByRole('button', { name: 'Open' }));
+    const again = await screen.findByRole('alertdialog', { name: 'Open ssh: link' });
+    await fireEvent.click(within(again).getByRole('button', { name: 'Open link' }));
     await waitFor(() => expect(mockHooks().openedWithSystem()).toEqual([address]));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
-    // From now on it opens without asking.
+    // "Open" lets nothing through without asking.
     await fireEvent.click(await linkRun(address), { ctrlKey: true });
-    await waitFor(() => expect(mockHooks().openedWithSystem()).toEqual([address, address]));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const third = await screen.findByRole('alertdialog', { name: 'Open ssh: link' });
+    await fireEvent.click(within(third).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockHooks().openedWithSystem()).toEqual([address]);
+  });
+
+  it('UC-004 BR-007 Q-61 a link to a program asks first, naming the file and its kind', async () => {
+    const shell = await workbench();
+    await shell.openNote(LINK_TOUR_NOTE);
+
+    await fireEvent.click(await linkRun('tools/deploy.sh'), { ctrlKey: true });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Open program' });
+    expect(dialog).toHaveTextContent(
+      'deploy.sh is a shell script. ⚠ Warning: Opening it may run it on this computer. Open it?',
+    );
+    expect(within(dialog).getByText('Opening it may run it on this computer.').tagName).toBe(
+      'STRONG',
+    );
+    expect(dialog).toHaveTextContent('/home/user/Work/tools/deploy.sh');
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockHooks().openedWithSystem()).toEqual([]);
+
+    await fireEvent.click(await linkRun('tools/deploy.sh'), { ctrlKey: true });
+    const again = await screen.findByRole('alertdialog', { name: 'Open program' });
+    await fireEvent.click(within(again).getByRole('button', { name: 'Open program' }));
+    await waitFor(() =>
+      expect(mockHooks().openedWithSystem()).toEqual(['/home/user/Work/tools/deploy.sh']),
+    );
+  });
+
+  it('UC-004 A4 Q-61 a file:// target asks first, naming the file and its kind', async () => {
+    const shell = await workbench();
+    await shell.openNote(LINK_TOUR_NOTE);
+    const link = 'file:///home/user/Documents/report.pdf';
+
+    await fireEvent.click(await linkRun(link), { ctrlKey: true });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Open file' });
+    expect(dialog).toHaveTextContent(
+      'This link points to a file on this computer: report.pdf, PDF file. Open it?',
+    );
+    expect(dialog).toHaveTextContent('Address: /home/user/Documents/report.pdf');
+    // "Copy" puts the address on the clipboard.
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Copy' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Copied' })).toBeInTheDocument(),
+    );
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Open file' }));
+    await waitFor(() =>
+      expect(mockHooks().openedWithSystem()).toEqual(['/home/user/Documents/report.pdf']),
+    );
   });
 
   it('ADR-025 the edits reach the backend before the link is followed', async () => {
@@ -415,5 +479,36 @@ describe('M-07.3 a jump carries the revision of its place', () => {
 
     jumpTo(LINK_TOUR_NOTE, 1, headingAt('Details'));
     await waitFor(() => expect(view.view.state.selection.main.head).toBe(headingAt('Details')));
+  });
+});
+
+describe('the mock asks as the session does (Q-61, Q-62)', () => {
+  it('opens http, https and mailto directly, and asks about every other scheme', () => {
+    expect(mockOpenQuestion('HTTPS://example.org', 'address')).toBeNull();
+    expect(mockOpenQuestion('mailto:me@example.org', 'address')).toBeNull();
+    expect(mockOpenQuestion('ms-msdt://id', 'address')?.title).toBe('Open ms-msdt: link');
+    expect(mockOpenQuestion('smb://server/share', 'address')?.target).toBe('smb://server/share');
+    // An unreadable scheme is named as written, never "Open : link".
+    expect(mockOpenQuestion('\u200bhttp://x', 'address')?.title).toBe('Open \\u{200b}http: link');
+  });
+
+  it('names a program and its kind with one article, as the session does', () => {
+    expect(mockOpenQuestion('/w/run.BAT', 'file')).toMatchObject({
+      about: 'program',
+      question: 'run.BAT is a batch file.',
+      warning: 'Opening it may run it on this computer.',
+    });
+    expect(mockOpenQuestion('/w/x.hta', 'file')?.question).toBe('x.hta is an HTML application.');
+    expect(mockOpenQuestion('/w/a.exe::$DATA', 'file')?.about).toBe('program');
+    expect(mockOpenQuestion('/w/report.pdf', 'file')).toBeNull();
+    expect(mockOpenQuestion('/home/user/Pictures', 'fileUrl')?.question).toBe(
+      'This link points to a file on this computer: Pictures, folder.',
+    );
+    expect(mockOpenQuestion('//server/share/a.pdf', 'file')?.question).toBe(
+      'This link points to a file on another computer or a device: a.pdf.',
+    );
+    expect(mockOpenQuestion('/w/evil\u202efdp.exe', 'file')?.question).toBe(
+      'evil\\u{202e}fdp.exe is a Windows program.',
+    );
   });
 });

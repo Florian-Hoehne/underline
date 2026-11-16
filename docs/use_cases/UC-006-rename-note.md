@@ -121,7 +121,7 @@ Renaming never changes the note format: the extension of the file name stays `.m
 
 ### BR-003: Links that are updated
 
-Every local link (UC-004 BR-005) in the notes of the workspace that leads to the renamed note is changed to lead to it under its new title and folder, in the markup of the note format of the linking note, keeping the heading it names and whether it was written with or without the extension. When the text of the link shows exactly the old title, it shows the new title; any other link text stays as it is. Links to other notes and files, and anything that is not a link, stay unchanged, so the linking notes change only where the links are (NFR-007). Links in places the system cannot see, such as other repositories or web pages, cannot be updated.
+Every local link (UC-004 BR-005) in the notes of the workspace that leads to the renamed note, pictures and included files among them (UC-004 BR-015), is changed to lead to it under its new title and folder, in the markup of the note format of the linking note, keeping the heading it names and whether it was written with or without the extension. When the text of the link shows exactly the old title, it shows the new title; any other link text stays as it is. Links to other notes and files, and anything that is not a link, stay unchanged, so the linking notes change only where the links are (NFR-007). Links in places the system cannot see, such as other repositories or web pages, cannot be updated.
 
 ### BR-004: First heading
 
@@ -129,7 +129,7 @@ When the first heading of the note shows exactly the old title, as it does in a 
 
 ### BR-005: Links of a moved note
 
-When the note moves to another folder, the notes and files it links to stay where they are. Its local links, which name places relative to the note, are changed so they lead to the same notes and files from the new folder. A link of the note to itself that names its place leads to its new place (BR-003); links that name only a heading of the note, web addresses, and links by full place stay unchanged.
+When the note moves to another folder, the notes and files it links to stay where they are. Its local links, which name places relative to the note, its pictures and included files among them, are changed so they lead to the same notes and files from the new folder. A link of the note to itself that names its place leads to its new place (BR-003); links that name only a heading of the note, web addresses, and links by full place stay unchanged.
 
 ### BR-006: Todo links
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-links-link-mention"
+description = "Enables the links_link_mention command without any pre-configured scope."
+commands.allow = ["links_link_mention"]
+
+[[permission]]
+identifier = "deny-links-link-mention"
+description = "Denies the links_link_mention command without any pre-configured scope."
+commands.deny = ["links_link_mention"]

@@ -171,6 +171,66 @@ describe('FR-083 indent list items (UC-005 A27, BR-021)', () => {
   });
 });
 
+describe('OQ-260 Vim `>>` and `<<` on list items (UC-005 BR-021)', () => {
+  const VIM_SOURCE: MockStart = { ...SOURCE, settings: { inputMode: 'Vim' } };
+  const VIM_FACADE: MockStart = { ...FACADE, settings: { inputMode: 'Vim' } };
+
+  function press(field: HTMLElement, keys: string) {
+    for (const key of keys) {
+      field.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    }
+  }
+
+  /** The cursor to the start of line `line` (from 0); jsdom lays out no lines for `j`. */
+  function toLine(line: number) {
+    const view = activeSourceView()!.view;
+    view.dispatch({ selection: { anchor: view.state.doc.line(line + 1).from } });
+  }
+
+  it('TC-005-37 step 6: `>>` and `<<` on an AsciiDoc item of the source view follow the list rule, `u` undoes each', async () => {
+    const shell = await workbench(VIM_SOURCE);
+    const field = await sourceField(shell, 'Bullets');
+    toLine(1);
+    press(field, '>>');
+    await becomes('Bullets', '* a\n** b\n');
+    // The cursor is the core's: on the marker of "b", so `<<` acts on it.
+    await waitFor(() => expect(activeSourceView()!.view.state.selection.main.head).toBe(4));
+    press(field, '<<');
+    await becomes('Bullets', '* a\n* b\n');
+    press(field, 'u');
+    await becomes('Bullets', '* a\n** b\n');
+  });
+
+  it('a count and visual mode take every item line; elsewhere `>>` shifts as Vim does', async () => {
+    const shell = await workbench(VIM_SOURCE);
+    const list = await sourceField(shell, 'List');
+
+    toLine(1);
+    press(list, 'VG>');
+    await becomes('List', '- a\n  - b\n  - c\n');
+    press(list, 'u');
+    await becomes('List', '- a\n- b\n- c\n');
+    press(list, 'gg2>>');
+    await becomes('List', '- a\n  - b\n- c\n');
+
+    const lines = await sourceField(shell, 'Lines');
+    press(lines, 'gg>>');
+    await becomes('Lines', '  one\ntwo\nthree\n\nfour\nfive\n\n- a\n  - a1\n- b\n');
+  });
+
+  it('in the facade, `>>` and `<<` on a list item indent and outdent it', async () => {
+    const shell = await workbench(VIM_FACADE);
+    const field = await facadeField(shell, 'List');
+    activeFacade()!.jump(COMFORT_TEXTS.List.indexOf('b'));
+    await activeFacade()!.mark();
+
+    type(field, '>>');
+    await becomes('List', '- a\n  - b\n- c\n');
+    type(field, '<<');
+    await becomes('List', '- a\n- b\n- c\n');
+  });
+});
+
 describe('FR-086 go to line (UC-004 A16, A17, BR-017)', () => {
   it('TC-004-33 steps 1, 2 and 5: Ctrl+G asks, names 300 lines, refuses "abc", goes to 120:8', async () => {
     const shell = await workbench(SOURCE);

@@ -1,7 +1,7 @@
 # ADR-030: Check spelling with `spellbook` and Hunspell dictionaries in the backend, marks sent as events
 
-**Status:** Proposed
-**Date:** 2026-11-13
+**Status:** Accepted
+**Date:** 2026-11-16
 **Requirements:** NFR-002, NFR-013, NFR-014, NFR-015, C-006, C-008, FR-099, FR-100
 
 ## Context
@@ -91,6 +91,51 @@ None of them lets the app skip markup reliably, keep its own dictionary, or read
 
 - `spell_check_language` takes `off` or a language code, in both settings layers (ADR-004).
 
+### Update 2026-11-16
+
+The user decided OQ-299, OQ-208 and OQ-207 (decisions of 2026-11-16):
+
+- **German and Italian ship (OQ-299).** `de-DE` and `de-CH` (igerman98 / frami, GPL-2.0 or GPL-3.0) and `it-IT`
+  (LibreItalia, GPL-3.0) come from the LibreOffice dictionaries repository at a pinned commit, each in a resource folder
+  of its own, unmodified (only the `.aff` and `.dic` are renamed to the language code).
+  - *License reasoning:* the dictionaries are data files the program reads at run time, never compiled in, linked or
+    converted. Shipped unmodified and separately next to the MIT program, they are "mere aggregation" (GPLv2 §2,
+    GPLv3 §5), as LibreOffice and VS Code's cSpell ship them; Underline's code stays MIT.
+  - *Obligations:* each folder holds the GPL texts and the README of its dictionary; `SOURCES.md` records version,
+    commit and sha256 and offers the corresponding source (the LibreOffice repository at the commit, the igerman98
+    tarball); `THIRD-PARTY-NOTICES.md` at the root of the repository names every dictionary with its license and is
+    bundled as a resource; the installers' license reads "MIT and others". Changing a GPL dictionary would oblige
+    Underline to publish the change under the GPL, so they are never changed.
+  - The system-language default maps `de_CH` (and `de_LI`) to German (Switzerland), other German to German (Germany),
+    and Italian of any region to Italian.
+- **Workspace dictionary (OQ-208).** `underline-words.txt` in the root of the workspace, the same format as the user's
+  file, committed with the workspace. It is followed like the user's file (time and size polled every 500 ms, read on
+  the check thread), written atomically after reading it first, so hand edits stay, and never written over when it
+  cannot be read. The words in effect are the dictionary's, the user's and the workspace's. The spell menu gains
+  "Add to workspace dictionary" (command `spell_add_workspace_word`).
+  - The workspace file is untrusted input (a cloned repository): no part of its path below the workspace root may be
+    a symbolic link (`underline_core::link_below`, shared with the snapshots), only a regular file is read, and every
+    words file, the user's too, is read through `take(2 MiB + 1)`, so a pipe, a device or a `/proc` file never blocks
+    or fills the check thread. A linked workspace file is neither read nor written; adding a word then refuses and
+    says why.
+  - Adding a word re-reads the file under a lock file next to it (`underline-words.txt.lock`, `create_new`, waiting
+    up to 3 s, a lock older than 10 s taken over) and writes the union, so two windows adding at once lose no word.
+  - A workspace in the folder of the user settings file has one file for both, read once, as the user's.
+- **A note's language (OQ-207).** The note attribute `lang` (front matter `lang: de-CH`, AsciiDoc `:lang: de-CH`; `-`
+  or `_`, any case) overrides the language of the settings for that note. The check thread reads it from the head of
+  the text it checks (at most 64 KiB, with `underline-markup::attributes`), so the marks follow a change of it; the
+  suggestions command takes the note to use the same language. A language not offered marks nothing and the status
+  bar names the note ("{title}: no dictionary for …") while that note is active. The value of `lang` is not checked,
+  and the setting `off` wins over the note. `lang` is read as `SpellCheckLanguage::of_tag` (also behind the system
+  default): region and variant subtags (`de-CH-1996`), `de` and `it` alone, `gsw`; no value, `null`, `~` and `off`
+  leave the settings; of AsciiDoc entries set twice the last wins; a language not offered is shown cut to 35
+  characters on one line.
+- **Typographic apostrophe.** A word with `’` the dictionary does not know is checked again with `'`, in every
+  language; its corrections keep the `’`.
+- **Memory of dictionaries.** A tab keeps only the speller of the language it is checked in now. Every 60 s the
+  dictionaries neither the setting nor an open note uses are let go (`Dictionaries::retain`), and so are loads that
+  failed, which are tried again when needed.
+
 ## Consequences
 
 - **Same on every platform:** the marks, the suggestions and the user's words behave the same everywhere. The skip rules
@@ -117,6 +162,16 @@ None of them lets the app skip markup reliably, keep its own dictionary, or read
   windows adding a word at the same moment both write atomically; the file is never corrupted, but one window's word
   may be missing until it is added again.
 - **German depends on a license decision.** Without it, German, which is the user's language, is not offered.
+
+### Update 2026-11-16 (consequences)
+
+- German and Italian are offered. The installers grow by about 2.8 MB compressed (the three `.dic` files are 4.4, 4.4
+  and 1.3 MB, about 1.2, 1.2 and 0.35 MB gzip); the source tree by about 10 MB.
+- German loads in about 60 ms and takes about 18 MiB while in use, as measured above; only the languages in use are
+  loaded.
+- Every release must keep the GPL texts, the READMEs, `SOURCES.md` and `THIRD-PARTY-NOTICES.md` in the bundle, and a
+  new dictionary version means a new pinned commit and new checksums in `SOURCES.md`.
+- A team shares its project words through git; a word one member adds shows as a change of `underline-words.txt`.
 
 ### Alternatives considered
 

@@ -6,22 +6,26 @@
 //! entries, passthroughs) stays a markup block that the facade shows and
 //! writes back unchanged (NFR-007).
 //!
-//! FR-098, OQ-222, ADR-029: formulas are `latexmath:[…]`, `stem:[…]` while
-//! the header sets `:stem: latexmath`, and `[latexmath]` or such `[stem]`
-//! blocks delimited by `++++`. AsciiMath (`:stem:` without a value) stays
-//! its markup.
+//! FR-098, OQ-222, ADR-029: formulas are `latexmath:[…]` and
+//! `asciimath:[…]`, `stem:[…]` while the header sets `:stem:`, and
+//! `[latexmath]`, `[asciimath]` or such `[stem]` blocks delimited by `++++`.
+//! The notation of `stem` is the header's: `:stem: latexmath` is LaTeX,
+//! `:stem:` without a value or `:stem: asciimath` AsciiMath. A formula in
+//! AsciiMath is written as LaTeX (`crate::asciimath`), the notation that is
+//! typeset and exported.
 
 use std::ops::Range;
 
-use crate::blocks::{Block, BlockKind, CellAlign, Formula, ListMarker, Run, Style, Table};
+use crate::asciimath;
+use crate::blocks::{Block, BlockKind, CellAlign, Formula, ListMarker, Run, Stem, Style, Table};
 
 /// The labels of admonitions (`NOTE: …`, `[NOTE]`).
 const ADMONITIONS: [&str; 5] = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"];
 
 /// Splits an AsciiDoc `source` into the blocks of the facade; `stem`
-/// says whether the note's header sets `:stem: latexmath` (for a part of a
+/// is the notation the note's header sets with `:stem:` (for a part of a
 /// note parsed alone, whose header is elsewhere).
-pub(crate) fn asciidoc_blocks(source: &str, stem: bool) -> Vec<Block> {
+pub(crate) fn asciidoc_blocks(source: &str, stem: Stem) -> Vec<Block> {
     let lines = Line::split(source);
     let mut parser = Parser {
         source,
@@ -34,20 +38,22 @@ pub(crate) fn asciidoc_blocks(source: &str, stem: bool) -> Vec<Block> {
     parser.blocks
 }
 
-/// FR-098, OQ-222: whether the header of the AsciiDoc note `source` sets
-/// the attribute `stem` to `latexmath`, the notation Underline typesets.
-/// Asciidoctor reads `stem` only in the header: the lines from the start
-/// (after blank and comment lines) up to the first blank line, when they
-/// start with the document title or an attribute entry.
+/// FR-098, OQ-222: the notation the header of the AsciiDoc note `source`
+/// sets with the attribute `stem`, as Asciidoctor reads it: `latexmath`,
+/// `latex` and `tex` are LaTeX, any other value (none, `asciimath`)
+/// AsciiMath; `:stem!:` unsets it. Asciidoctor reads `stem` only in the
+/// header: the lines from the start (after blank and comment lines) up to
+/// the first blank line, when they start with the document title or an
+/// attribute entry.
 #[must_use]
-pub fn stem_is_latexmath(source: &str) -> bool {
+pub fn stem_notation(source: &str) -> Stem {
     stem_in_lines(source.lines())
 }
 
-/// [`stem_is_latexmath`] of a note given by its lines, read only up to the
+/// [`stem_notation`] of a note given by its lines, read only up to the
 /// end of its header.
 #[must_use]
-pub fn stem_in_lines<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> bool {
+pub fn stem_in_lines<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> Stem {
     let mut lines = lines
         .skip_while(|line| {
             let line = line.as_ref();
@@ -55,21 +61,30 @@ pub fn stem_in_lines<S: AsRef<str>>(lines: impl Iterator<Item = S>) -> bool {
         })
         .peekable();
     let Some(first) = lines.peek().map(AsRef::as_ref) else {
-        return false;
+        return Stem::Off;
     };
     if !(first.starts_with("= ") || attribute_entry(first).is_some()) {
-        return false;
+        return Stem::Off;
     }
-    let mut latexmath = false;
+    let mut stem = Stem::Off;
     for line in lines.take_while(|line| !line.as_ref().trim().is_empty()) {
         let line = line.as_ref().trim_end_matches(['\r', '\n']);
         match attribute_entry(line) {
-            Some(("stem", value)) => latexmath = value == "latexmath",
-            Some(("stem!" | "!stem", _)) => latexmath = false,
+            Some(("stem", "latexmath" | "latex" | "tex")) => stem = Stem::LatexMath,
+            Some(("stem", _)) => stem = Stem::AsciiMath,
+            Some(("stem!" | "!stem", _)) => stem = Stem::Off,
             _ => {}
         }
     }
-    latexmath
+    stem
+}
+
+/// The LaTeX of a formula's `source` written in `notation`.
+fn latex_of(source: &str, notation: Stem) -> String {
+    match notation {
+        Stem::AsciiMath => asciimath::to_latex(source),
+        _ => source.to_owned(),
+    }
 }
 
 /// The name and the value of the attribute entry `:name: value`.
@@ -127,9 +142,10 @@ struct Pending {
     title: Option<String>,
     /// The other block attribute lines, for a table's options.
     attributes: String,
-    /// FR-098: the line of a `[latexmath]` (or `[stem]`) attribute, whose
-    /// passthrough block is a formula.
-    formula: Option<usize>,
+    /// FR-098, OQ-222: the line of a `[latexmath]`, `[asciimath]` (or
+    /// `[stem]`) attribute, whose passthrough block is a formula, and its
+    /// notation.
+    formula: Option<(usize, Stem)>,
 }
 
 struct Parser<'s, 'l> {
@@ -138,8 +154,8 @@ struct Parser<'s, 'l> {
     blocks: Vec<Block>,
     /// The next number of the ordered list at each depth.
     numbers: Vec<usize>,
-    /// FR-098: the note's header sets `:stem: latexmath`.
-    stem: bool,
+    /// FR-098, OQ-222: the notation the note's header sets with `:stem:`.
+    stem: Stem,
 }
 
 impl Parser<'_, '_> {
@@ -180,11 +196,18 @@ impl Parser<'_, '_> {
                         i += 1;
                         continue;
                     }
-                    // FR-098: `[latexmath]`, and `[stem]` while the header
-                    // sets `:stem: latexmath`, mark a formula block.
-                    if style == "latexmath" || (style == "stem" && self.stem) {
-                        pending.style = Some("latexmath".into());
-                        pending.formula = Some(i);
+                    // FR-098, OQ-222: `[latexmath]`, `[asciimath]`, and
+                    // `[stem]` while the header sets `:stem:`, mark a
+                    // formula block.
+                    let notation = match style {
+                        "latexmath" => Stem::LatexMath,
+                        "asciimath" => Stem::AsciiMath,
+                        "stem" => self.stem,
+                        _ => Stem::Off,
+                    };
+                    if notation != Stem::Off {
+                        pending.style = Some(style.to_owned());
+                        pending.formula = Some((i, notation));
                         i += 1;
                         continue;
                     }
@@ -206,7 +229,7 @@ impl Parser<'_, '_> {
                 continue;
             }
             let passthrough = delimiter(text).is_some_and(|d| d.starts_with('+'));
-            if let (Some(start), false) = (pending.formula, passthrough) {
+            if let (Some((start, _)), false) = (pending.formula, passthrough) {
                 // FR-098: a `[latexmath]` line before anything but a
                 // passthrough block is shown as its markup.
                 pending.unused = Some(pending.unused.map_or(start, |u| u.min(start)));
@@ -231,9 +254,10 @@ impl Parser<'_, '_> {
                 i = close + 1;
                 continue;
             }
-            if let (Some(start), true) = (pending.formula, passthrough) {
+            if let (Some((start, notation)), true) = (pending.formula, passthrough) {
                 // FR-098: a `[latexmath]` passthrough block is a formula,
-                // its attribute line with it.
+                // its attribute line with it; OQ-222: one in AsciiMath is
+                // written as LaTeX.
                 pending.unused = self.flush_unused(pending.unused, start);
                 let close = (i + 1..range.end)
                     .find(|&j| self.lines[j].text == text)
@@ -245,7 +269,7 @@ impl Parser<'_, '_> {
                     .join("\n");
                 let mut block = markup_block(self.source, self.lines[start].start..span_end);
                 block.kind = BlockKind::Formula {
-                    source: inner.trim().to_owned(),
+                    source: latex_of(inner.trim(), notation),
                 };
                 self.blocks.push(block);
                 pending = Pending::default();
@@ -661,11 +685,11 @@ impl Parser<'_, '_> {
     }
 }
 
-/// Builds runs from characters and their source offsets; `stem` says
-/// whether the note's header sets `:stem: latexmath` (FR-098).
+/// Builds runs from characters and their source offsets; `stem` is the
+/// notation the note's header sets with `:stem:` (FR-098, OQ-222).
 struct Runs {
     runs: Vec<Run>,
-    stem: bool,
+    stem: Stem,
 }
 
 impl Runs {
@@ -752,22 +776,24 @@ fn closing_bracket(chars: &[(char, usize)], from: usize, unclosed: &mut Unclosed
 }
 
 /// FR-098, OQ-222: the inline formula starting at `chars[i]`:
-/// `latexmath:[…]`, or `stem:[…]` while `stem` (the header sets `:stem:
-/// latexmath`); its end (after the `]`) and its source. A `]` inside is
-/// escaped with a backslash, as Asciidoctor reads it.
+/// `latexmath:[…]`, `asciimath:[…]`, or `stem:[…]` while the header sets
+/// `:stem:` (`stem` its notation); its end (after the `]`) and its source in
+/// LaTeX. A `]` inside is escaped with a backslash, as Asciidoctor reads it.
 fn inline_formula(
     chars: &[(char, usize)],
     i: usize,
-    stem: bool,
+    stem: Stem,
     unclosed: &mut Unclosed,
 ) -> Option<(usize, String)> {
-    if !matches!(chars[i].0, 'l' | 's') || (i > 0 && chars[i - 1].0 == '\\') {
+    if !matches!(chars[i].0, 'l' | 's' | 'a') || (i > 0 && chars[i - 1].0 == '\\') {
         return None;
     }
-    let open = if reads(chars, i, "latexmath:[") {
-        i + 11
-    } else if stem && reads(chars, i, "stem:[") {
-        i + 6
+    let (open, notation) = if reads(chars, i, "latexmath:[") {
+        (i + 11, Stem::LatexMath)
+    } else if reads(chars, i, "asciimath:[") {
+        (i + 11, Stem::AsciiMath)
+    } else if stem != Stem::Off && reads(chars, i, "stem:[") {
+        (i + 6, stem)
     } else {
         return None;
     };
@@ -776,7 +802,8 @@ fn inline_formula(
         return None;
     }
     let source: String = chars[open..close].iter().map(|(c, _)| *c).collect();
-    Some((close + 1, source.replace("\\]", "]").trim().to_owned()))
+    let source = source.replace("\\]", "]");
+    Some((close + 1, latex_of(source.trim(), notation)))
 }
 
 /// FR-098: the end of the passthrough starting at `chars[i]`, if one does:
@@ -983,8 +1010,18 @@ fn link(chars: &[(char, usize)], i: usize, style: &Style, out: &mut Runs) -> Opt
         }
         return Some(j);
     }
-    let close = (j + 1..chars.len()).find(|&k| chars[k].0 == ']')?;
-    let text = &chars[j + 1..close];
+    // OQ-248: `\]` is a bracket of the text, as Asciidoctor reads it; the
+    // text ends at the first `]` without a backslash before it.
+    let close = (j + 1..chars.len()).find(|&k| chars[k].0 == ']' && chars[k - 1].0 != '\\')?;
+    let unescaped: Vec<(char, usize)> = chars[j + 1..close]
+        .iter()
+        .enumerate()
+        .filter(|(at, (c, _))| {
+            !(*c == '\\' && chars.get(j + 2 + at).is_some_and(|(next, _)| *next == ']'))
+        })
+        .map(|(_, char)| *char)
+        .collect();
+    let text = &unescaped[..];
     // `[text,window=_blank]`: the text is before the first named attribute.
     let text_end = text
         .iter()
@@ -1288,7 +1325,7 @@ mod tests {
     /// ADR-003: the blocks of an AsciiDoc note as Asciidoctor reads them.
     #[test]
     fn splits_asciidoc_into_blocks() {
-        let blocks = asciidoc_blocks(NOTE, false);
+        let blocks = asciidoc_blocks(NOTE, Stem::Off);
         assert_eq!(
             kinds(&blocks),
             [
@@ -1326,7 +1363,7 @@ mod tests {
 
     #[test]
     fn inline_styles_and_links() {
-        let blocks = asciidoc_blocks(NOTE, false);
+        let blocks = asciidoc_blocks(NOTE, Stem::Off);
         let style_of = |block: &Block, text: &str| {
             block
                 .runs
@@ -1357,7 +1394,7 @@ mod tests {
     /// Every shown character maps to the source character it stands for.
     #[test]
     fn facade_characters_map_to_their_source() {
-        let blocks = asciidoc_blocks(NOTE, false);
+        let blocks = asciidoc_blocks(NOTE, Stem::Off);
         for block in &blocks {
             let mut last = None;
             for (i, c) in block.text().chars().enumerate() {
@@ -1374,18 +1411,18 @@ mod tests {
 
     #[test]
     fn constrained_marks_need_word_boundaries() {
-        let text = |s: &str| asciidoc_blocks(s, false)[0].text();
+        let text = |s: &str| asciidoc_blocks(s, Stem::Off)[0].text();
         assert_eq!(text("snake_case_name\n"), "snake_case_name");
         assert_eq!(text("2 * 3 * 4\n"), "2 * 3 * 4");
         assert_eq!(text("a \\*not bold*\n"), "a *not bold*");
         assert_eq!(text("line one +\nline two\n"), "line one line two");
-        let runs = &asciidoc_blocks("*a*b\n", false)[0].runs;
+        let runs = &asciidoc_blocks("*a*b\n", Stem::Off)[0].runs;
         assert!(runs.iter().all(|r| !r.style.bold));
     }
 
     #[test]
     fn lists_number_and_continue() {
-        let blocks = asciidoc_blocks(". a\n.. b\n. c\n+\nmore about c\n\n3. d\n", false);
+        let blocks = asciidoc_blocks(". a\n.. b\n. c\n+\nmore about c\n\n3. d\n", Stem::Off);
         assert_eq!(
             kinds(&blocks),
             [
@@ -1402,7 +1439,7 @@ mod tests {
     #[test]
     fn admonition_and_quote_blocks() {
         let blocks =
-            asciidoc_blocks("[WARNING]\n====\nCareful.\n====\n\n[quote, Ada]\nAll of it.\n\n....\nraw *text*\n....\n", false);
+            asciidoc_blocks("[WARNING]\n====\nCareful.\n====\n\n[quote, Ada]\nAll of it.\n\n....\nraw *text*\n....\n", Stem::Off);
         assert_eq!(
             kinds(&blocks),
             [
@@ -1421,7 +1458,7 @@ mod tests {
     fn diagram_blocks_name_their_language() {
         let blocks = asciidoc_blocks(
             "[plantuml, flow, svg]\n----\nA -> B\n----\n\n[mermaid]\n....\ngraph TD\n....\n",
-            false,
+            Stem::Off,
         );
         assert_eq!(
             kinds(&blocks),
@@ -1438,7 +1475,7 @@ mod tests {
     fn block_images_with_captions() {
         let note =
             ".The architecture\nimage::img/arch.png[Architecture,600]\n\nimage::shot.png[]\n";
-        let blocks = asciidoc_blocks(note, false);
+        let blocks = asciidoc_blocks(note, Stem::Off);
         assert_eq!(
             kinds(&blocks),
             [
@@ -1469,7 +1506,7 @@ mod tests {
         };
         // Implicit header: the first line holds its cells, a blank line follows.
         let note = ".Sizes\n|===\n| Name | Size\n\n| *a* | 1\n| b | 22\n|===\n";
-        let blocks = asciidoc_blocks(note, false);
+        let blocks = asciidoc_blocks(note, Stem::Off);
         let BlockKind::Table(table) = &blocks[0].kind else {
             panic!("{:?}", blocks[0].kind);
         };
@@ -1484,7 +1521,7 @@ mod tests {
 
         // Cells one per line, columns from `cols`, header from the options.
         let note = "[cols=\"1,2\", options=\"header\"]\n|===\n|Key\n|Meaning\n\n|Ctrl+B\n|Bold,\nalso in the source\n|===\n";
-        let BlockKind::Table(table) = &asciidoc_blocks(note, false)[0].kind else {
+        let BlockKind::Table(table) = &asciidoc_blocks(note, Stem::Off)[0].kind else {
             panic!();
         };
         assert!(table.header);
@@ -1493,7 +1530,8 @@ mod tests {
             [["Key", "Meaning"], ["Ctrl+B", "Bold, also in the source"]]
         );
         // Without a blank line after the first line, there is no header.
-        let BlockKind::Table(table) = &asciidoc_blocks("|===\n|a |b\n|c |d\n|===\n", false)[0].kind
+        let BlockKind::Table(table) =
+            &asciidoc_blocks("|===\n|a |b\n|c |d\n|===\n", Stem::Off)[0].kind
         else {
             panic!();
         };
@@ -1503,14 +1541,14 @@ mod tests {
 
     #[test]
     fn unused_attribute_lines_are_markup() {
-        let blocks = asciidoc_blocks("[#intro.lead]\n.A title\nText here.\n", false);
+        let blocks = asciidoc_blocks("[#intro.lead]\n.A title\nText here.\n", Stem::Off);
         assert_eq!(kinds(&blocks), ["Markup", "Paragraph"]);
         assert_eq!(blocks[0].text(), "[#intro.lead]\n.A title");
     }
 
     #[test]
     fn unclosed_blocks_run_to_the_end() {
-        let blocks = asciidoc_blocks("----\ncode\nmore", false);
+        let blocks = asciidoc_blocks("----\ncode\nmore", Stem::Off);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].text(), "code\nmore");
     }
@@ -1533,8 +1571,8 @@ mod tests {
     fn tc004_38_asciidoc_formulas_with_stem_latexmath() {
         let note =
             "= Math\n:stem: latexmath\n\nSee stem:[a^2] and latexmath:[b^2], *latexmath:[c\\]]*.\n";
-        assert!(stem_is_latexmath(note));
-        let blocks = asciidoc_blocks(note, true);
+        assert_eq!(stem_notation(note), Stem::LatexMath);
+        let blocks = asciidoc_blocks(note, Stem::LatexMath);
         let paragraph = blocks.last().unwrap();
         assert_eq!(
             formulas(paragraph),
@@ -1556,17 +1594,58 @@ mod tests {
         }
     }
 
-    /// OQ-222: AsciiMath (`:stem:` without a value, or no `stem`) is shown
-    /// as its source; `latexmath:[…]` is a formula all the same.
+    /// TC-004-38 step 4, OQ-222: `:stem:` without a value, or `asciimath`,
+    /// makes `stem:[…]` AsciiMath, written as LaTeX; `asciimath:[…]` is
+    /// AsciiMath and `latexmath:[…]` LaTeX in every note; the markup maps
+    /// one to one.
     #[test]
-    fn oq222_asciimath_stays_its_source() {
+    fn tc004_38_asciidoc_asciimath_formulas() {
+        for header in [":stem:", ":stem: asciimath"] {
+            let note = format!(
+                "= Math\n{header}\n\nSee stem:[x^2/2], asciimath:[[0,1\\]] and latexmath:[\\frac 1 2].\n"
+            );
+            assert_eq!(stem_notation(&note), Stem::AsciiMath, "{note:?}");
+            let blocks = asciidoc_blocks(&note, Stem::AsciiMath);
+            let paragraph = blocks.last().unwrap();
+            assert_eq!(
+                formulas(paragraph),
+                [
+                    ("stem:[x^2/2]".into(), "\\frac{x^{2}}{2}".into()),
+                    ("asciimath:[[0,1\\]]".into(), "\\left[ 0,1\\right]".into()),
+                    ("latexmath:[\\frac 1 2]".into(), "\\frac 1 2".into()),
+                ],
+                "{note:?}"
+            );
+            for (i, c) in paragraph.text().chars().enumerate() {
+                let at = paragraph.source_offset(i);
+                assert_eq!(note[at..].chars().next(), Some(c));
+            }
+        }
+        // Without `stem`, `asciimath:[…]` is a formula all the same.
+        let blocks = asciidoc_blocks("See asciimath:[a/b].\n", Stem::Off);
+        assert_eq!(
+            formulas(&blocks[0]),
+            [("asciimath:[a/b]".into(), "\\frac{a}{b}".into())]
+        );
+        // An escaped macro stays text.
+        assert!(formulas(&asciidoc_blocks("See \\asciimath:[a].\n", Stem::Off)[0]).is_empty());
+    }
+
+    /// OQ-222: the notation of `stem` as Asciidoctor reads it: `latex` and
+    /// `tex` are LaTeX, any other value AsciiMath; no `stem`, a `stem` below
+    /// the header, or `:stem!:` leave `stem:[…]` as its markup.
+    #[test]
+    fn oq222_the_notation_of_stem() {
+        assert_eq!(stem_notation("= T\n:stem: latex\n"), Stem::LatexMath);
+        assert_eq!(stem_notation(":stem: tex\n"), Stem::LatexMath);
+        assert_eq!(stem_notation(":stem: anything\n"), Stem::AsciiMath);
         for note in [
-            ":stem:\n\nSee stem:[a^2] and latexmath:[b].\n",
             "See stem:[a^2] and latexmath:[b].\n",
             "= T\n:stem: latexmath\n:stem!:\n\nSee stem:[a^2] and latexmath:[b].\n",
+            "Text.\n\n:stem:\n\nSee stem:[a^2] and latexmath:[b].\n",
         ] {
-            let stem = stem_is_latexmath(note);
-            assert!(!stem, "{note:?}");
+            let stem = stem_notation(note);
+            assert_eq!(stem, Stem::Off, "{note:?}");
             let blocks = asciidoc_blocks(note, stem);
             assert_eq!(
                 formulas(blocks.last().unwrap()),
@@ -1574,18 +1653,17 @@ mod tests {
                 "{note:?}"
             );
         }
-        // An attribute entry below the header does not set it.
-        assert!(!stem_is_latexmath("Text.\n\n:stem: latexmath\n"));
-        assert!(stem_is_latexmath("// c\n:stem: latexmath\n"));
+        assert_eq!(stem_notation("// c\n:stem: latexmath\n"), Stem::LatexMath);
     }
 
-    /// FR-098, OQ-222: `[latexmath]` passthrough blocks, and `[stem]` ones
-    /// while the header sets `:stem: latexmath`, are block formulas with
-    /// their attribute line; otherwise they stay markup.
+    /// FR-098, OQ-222: `[latexmath]` and `[asciimath]` passthrough blocks,
+    /// and `[stem]` ones while the header sets `:stem:`, are block formulas
+    /// with their attribute line; otherwise they stay markup. AsciiMath is
+    /// written as LaTeX.
     #[test]
     fn fr098_latexmath_blocks() {
-        let note = "Before.\n\n[latexmath]\n++++\n\\sqrt{2}\n++++\n\n[stem]\n++++\nx\n++++\n\n[latexmath]\nNot a block.\n";
-        let blocks = asciidoc_blocks(note, false);
+        let note = "Before.\n\n[latexmath]\n++++\n\\sqrt{2}\n++++\n\n[stem]\n++++\nx/y\n++++\n\n[latexmath]\nNot a block.\n\n[asciimath]\n++++\nsqrt 2\n++++\n";
+        let blocks = asciidoc_blocks(note, Stem::Off);
         assert_eq!(
             blocks[1].kind,
             BlockKind::Formula {
@@ -1593,14 +1671,33 @@ mod tests {
             }
         );
         assert_eq!(blocks[1].text(), "[latexmath]\n++++\n\\sqrt{2}\n++++");
-        // `[stem]` without `:stem: latexmath`: its line and its block.
+        // `[stem]` without `:stem:`: its line and its block.
         assert_eq!(blocks[2].text(), "[stem]");
         assert_eq!(blocks[3].kind, BlockKind::Markup);
         assert_eq!(blocks[4].kind, BlockKind::Markup);
         assert_eq!(blocks[4].text(), "[latexmath]");
         assert_eq!(blocks[5].text(), "Not a block.");
-        let stem = asciidoc_blocks(note, true);
-        assert_eq!(stem[2].kind, BlockKind::Formula { source: "x".into() });
+        assert_eq!(
+            blocks[6].kind,
+            BlockKind::Formula {
+                source: "\\sqrt{2}".into()
+            }
+        );
+        assert_eq!(blocks[6].text(), "[asciimath]\n++++\nsqrt 2\n++++");
+        let latex = asciidoc_blocks(note, Stem::LatexMath);
+        assert_eq!(
+            latex[2].kind,
+            BlockKind::Formula {
+                source: "x/y".into()
+            }
+        );
+        let ascii = asciidoc_blocks(note, Stem::AsciiMath);
+        assert_eq!(
+            ascii[2].kind,
+            BlockKind::Formula {
+                source: "\\frac{x}{y}".into()
+            }
+        );
     }
 
     /// FR-098, OQ-222 (found by the test monkey): Asciidoctor takes
@@ -1616,7 +1713,7 @@ mod tests {
             "See ++latexmath:[x]++ here.\n",
             "See pass:[latexmath:[x]] here.\n",
         ] {
-            let blocks = asciidoc_blocks(note, false);
+            let blocks = asciidoc_blocks(note, Stem::Off);
             assert!(
                 formulas(blocks.last().unwrap()).is_empty(),
                 "a passthrough holds no formula: {note:?}"
@@ -1641,7 +1738,7 @@ mod benchmark {
         let mut times = Vec::new();
         for _ in 0..20 {
             let start = std::time::Instant::now();
-            let blocks = super::asciidoc_blocks(&note, false);
+            let blocks = super::asciidoc_blocks(&note, crate::blocks::Stem::Off);
             times.push(start.elapsed());
             assert!(blocks.len() > 3000);
         }

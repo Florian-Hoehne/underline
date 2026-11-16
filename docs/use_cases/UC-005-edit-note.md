@@ -38,7 +38,7 @@
 **Trigger:** The user chooses a function of the formatting toolbar: heading, bold, italic, code, list, quote, link, image, or table (step 1)  
 **Flow:**
 
-1. The system applies it to the selected text, or inserts it at the cursor when nothing is selected, in the markup of the note format; in the source view the user sees that markup. For a link it asks for a web address or a note of the workspace; for an image it asks for an image file and inserts it like a dropped one (A9 to A11, A19).
+1. The system applies it to the selected text, or inserts it at the cursor when nothing is selected, in the markup of the note format; in the source view the user sees that markup. For a link it asks for a web address or a note of the workspace; a link to a note is written as link completion writes it (BR-018): relative to the note, with the title of the linked note as its text unless text is selected, and with a space in its place written as `%20` and the other characters that would end the place or start a heading written as such escapes too (OQ-248). For an image it asks for an image file and inserts it like a dropped one (A9 to A11, A19).
 2. Use case continues at step 2.
 
 ### A3: Format-specific option
@@ -258,8 +258,8 @@
 **Trigger:** The user opens the context menu on a word the spell check marks, with the mouse or with Shift+F10 (step 2)  
 **Flow:**
 
-1. The system offers up to five corrections from the dictionary of the language of the spell check, and "Add to dictionary".
-2. When the user chooses a correction, the system replaces the word with it as one change; when the user adds the word to the dictionary, the system adds it to the user dictionary and removes its mark in every note.
+1. The system offers up to five corrections from the dictionary of the language the note is checked in (BR-023), "Add to my dictionary", and "Add to workspace dictionary", which says that the workspace dictionary is shared with everyone who uses the workspace.
+2. When the user chooses a correction, the system replaces the word with it as one change; when the user adds the word to the dictionary, the system adds it to the user dictionary and removes its mark in every note; when the user adds it to the workspace dictionary, the system adds it to the workspace dictionary, which is kept in the workspace and shared with it, and removes its mark in every note of the workspace.
 3. Use case continues at step 2.
 
 ## Postconditions
@@ -319,11 +319,15 @@ and edited there, and the table follows each change.
 
 A formula (UC-004 BR-019) is shown typeset. While the cursor is in it, its source is shown and edited in a frame
 below a block formula or in place of an inline one, and the typeset formula follows each change; a formula with an
-error is shown as its source with the error (UC-004 A21).
+error is shown as its source with the error (UC-004 A21). While the source of an inline formula is edited, the
+typeset formula is also shown in a small preview above it (below it at the top of the view), which follows the
+changes once the typing pauses and keeps the last typeset formula, dimmed, until the changed one is typeset. With an
+error, the preview shows the reason. The preview never takes the keyboard and is not read out; the reason after the
+source is read out as before. It goes when the cursor leaves the formula.
 
 ### BR-009: Vim keys
 
-The Vim input mode offers the normal, insert, and visual mode; motions, the operators delete, change, yank, and put; counts; undo and redo; search with `/` and `n`; `:q` to close the tab; and `:w` to store at once. The status bar shows the active mode and its most important commands (FR-026).
+The Vim input mode offers the normal, insert, and visual mode; motions, the operators delete, change, yank, put, and shift (`>`, `<`; on list items BR-021); counts; undo and redo; search with `/` and `n`; `:q` to close the tab; and `:w` to store at once. The status bar shows the active mode and its most important commands (FR-026).
 
 In the facade a line of the Vim keys is a block: `dd`, `yy`, and `p` delete, copy, and put a paragraph, list item, or
 heading with its markup, and `j` and `k` move by a shown line; keys that work on characters work on the text the
@@ -364,7 +368,7 @@ The find field of the note matches as the find field of UC-008 A6, with the sear
 
 ### BR-018: Link completion
 
-Link completion suggests the notes of the workspace and, after a `#`, the headings of a note (FR-080). The suggestions appear within 200 milliseconds of a key in a workspace of 10,000 notes (NFR-018). The chosen note is written as a local link (UC-004 BR-005), relative to the note that holds it, in the markup of the note format and in the same form the formatting toolbar writes a link to a note (A2); a heading is written as GitHub and GitLab name the place of a heading. A link typed in the source view keeps the text the user typed between the brackets; when there is none, the title of the note, or the heading, becomes the text. In the facade, `[[` only starts the completion: it is replaced by the link and is never stored, so the note holds a normal link of its note format (C-003, C-004).
+Link completion suggests the notes of the workspace and, after a `#`, the headings of a note (FR-080). The suggestions appear within 200 milliseconds of a key in a workspace of 10,000 notes (NFR-018). The chosen note is written as a local link (UC-004 BR-005), relative to the note that holds it, in the markup of the note format and in the same form the formatting toolbar writes a link to a note (A2), so both write a place alike: a space as `%20`, and `%`, `#`, brackets, angle brackets and tabs as such escapes, so the link always leads to its note (OQ-248); a heading is written as GitHub and GitLab name the place of a heading. A link typed in the source view keeps the text the user typed between the brackets; when there is none, the title of the note, or the heading, becomes the text. In the facade, `[[` only starts the completion: it is replaced by the link and is never stored, so the note holds a normal link of its note format (C-003, C-004).
 
 ### BR-019: Close pairs
 
@@ -376,7 +380,7 @@ In the source view, a line is a line of the markup; in the facade, a line is a b
 
 ### BR-021: Indenting list items
 
-Tab indents the list items at the cursor or in the selection by one level, making them items of the item before them, and Shift+Tab outdents them by one level, each with the items below it (FR-083). An item that has no item before it on its level is not indented further, and an item on the top level is not outdented. The indent is written as the note format writes the level of a list: in Markdown by indenting the item to the text of the item above, in AsciiDoc by one more or one less `*` or `.`. Outside a list item, Tab and Shift+Tab keep the meaning they had. In the Vim input mode, Tab and Shift+Tab work so in the insert mode; its normal mode keeps `>>` and `<<`.
+Tab indents the list items at the cursor or in the selection by one level, making them items of the item before them, and Shift+Tab outdents them by one level, each with the items below it (FR-083). An item that has no item before it on its level is not indented further, and an item on the top level is not outdented. The indent is written as the note format writes the level of a list: in Markdown by indenting the item to the text of the item above, in AsciiDoc by one more or one less `*` or `.`. Outside a list item, Tab and Shift+Tab keep the meaning they had. In the Vim input mode, Tab and Shift+Tab work so in the insert mode. In its normal mode, `>>` and `<<` on a list item indent and outdent it by these rules, in both editing views; with a count (`3>>`) they take the items of as many lines, and `>` and `<` on a selection in the visual mode take the items it touches, a count before them indenting as often as the rules let. Each is one change for undo, and the cursor stays on the first shifted line. Lines in no list item are shifted as in Vim, by two spaces in the source view, also within a selection that holds list items too; empty lines and lines of only spaces are not shifted. In the facade they change nothing outside a list item. A count shifts at most 100 times.
 
 ### BR-022: Current line and matching bracket
 
@@ -384,5 +388,5 @@ In the source view, the current line is highlighted in a color of the active the
 
 ### BR-023: Spell check
 
-The spell check marks, in both editing views, each word of the text the facade shows that the dictionary of the language of the spell check does not know and that is not in the user dictionary (FR-099), with a wavy line in a color of the active theme. It does not check code, link addresses, web addresses, diagrams, formulas, names of note attributes, tags, words holding digits, and words written only in capital letters. The language is chosen in the settings, for the user and for a workspace, or the spell check is off (UC-010 BR-001, FR-100). The dictionaries come with Underline: the spell check needs no network connection (NFR-014), and no word leaves the computer (NFR-015). A mark appears at most 1 second after a word was typed, and typing stays within the latency of NFR-002. A word added to the user dictionary is not marked in any workspace or language. Marks change nothing in the note.
+The spell check marks, in both editing views, each word of the text the facade shows that the dictionary of the language of the spell check does not know and that is not in the user dictionary (FR-099), with a wavy line in a color of the active theme. It does not check code, link addresses, web addresses, diagrams, formulas, names of note attributes, tags, words holding digits, and words written only in capital letters. The language is chosen in the settings, for the user and for a workspace, or the spell check is off (UC-010 BR-001, FR-100). A note can name its own language with the note attribute `lang` (such as `de-CH`, also written `de_CH`, `de-ch` or `de-CH-1996`; `de` alone is German (Germany), `it` Italian (Italy), `gsw` German (Switzerland)); it is then checked in that language, while the spell check is not off, and its marks follow at once when the attribute changes (OQ-207). A `lang` without a value, or `null` or `off`, leaves the language of the settings. A note naming a language Underline does not offer marks no word, and while it is the active note the status bar names the note and says it has no dictionary for that language. The value of `lang` itself is not checked. A typographic apostrophe (’) counts as the straight one ('). The dictionaries come with Underline: the spell check needs no network connection (NFR-014), and no word leaves the computer (NFR-015). A mark appears at most 1 second after a word was typed, and typing stays within the latency of NFR-002. A word added to the user dictionary is not marked in any workspace or language; a word added to the workspace dictionary is not marked in that workspace, in any language (OQ-208). Changes made to either dictionary outside Underline, by hand or by git, count within a second; a dictionary that cannot be read is never written over, and two windows adding words at the same moment lose none. Marks change nothing in the note.
 

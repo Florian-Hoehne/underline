@@ -19,3 +19,7 @@ unicode-segmentation.workspace = true
 # YAML crate; builds for wasm32-unknown-unknown).
 serde_norway.workspace = true
 thiserror.workspace = true
+# FR-098, OQ-222 (ADR-029): AsciiMath read by its own parser (MIT, pure Rust,
+# builds for wasm32-unknown-unknown) and written as LaTeX in `asciimath.rs`.
+# Pinned exactly: it is young (0.x) and its tree is matched field by field.
+asciimath-parser = "=0.7.0"

@@ -300,6 +300,21 @@ pub fn parse_blocks(source: &str, format: NoteFormat) -> Vec<Block> {
     parse_region(source, format, &Region::note(source, format))
 }
 
+/// FR-098, OQ-222: the notation the header of an AsciiDoc note gives
+/// `stem:[…]` and `[stem]` blocks by its attribute `stem`, as Asciidoctor
+/// reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub enum Stem {
+    /// No `stem` in the header: `stem:[…]` and `[stem]` stay markup.
+    #[default]
+    Off,
+    /// `:stem: latexmath` (or `latex`, `tex`): LaTeX.
+    LatexMath,
+    /// `:stem:` without a value, `:stem: asciimath`, or any other value:
+    /// AsciiMath, written as LaTeX to be typeset (`crate::asciimath`).
+    AsciiMath,
+}
+
 /// What a part of a note parsed on its own needs to know of the rest of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Region {
@@ -307,9 +322,9 @@ pub struct Region {
     /// its front matter (UC-024 BR-001), so a part parsed again on its own
     /// is not taken for one.
     pub at_start: bool,
-    /// FR-098, OQ-222: the header of the AsciiDoc note sets `:stem:
-    /// latexmath`, so `stem:[…]` and `[stem]` blocks are formulas.
-    pub stem: bool,
+    /// FR-098, OQ-222: the notation the header of the AsciiDoc note sets
+    /// with `:stem:`, so `stem:[…]` and `[stem]` blocks are formulas in it.
+    pub stem: Stem,
 }
 
 impl Region {
@@ -331,8 +346,12 @@ impl Region {
         }
     }
 
-    fn stem_of(note: &str, format: NoteFormat) -> bool {
-        format == NoteFormat::AsciiDoc && crate::asciidoc::stem_is_latexmath(note)
+    fn stem_of(note: &str, format: NoteFormat) -> Stem {
+        if format == NoteFormat::AsciiDoc {
+            crate::asciidoc::stem_notation(note)
+        } else {
+            Stem::Off
+        }
     }
 }
 

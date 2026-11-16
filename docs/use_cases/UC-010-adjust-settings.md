@@ -118,7 +118,7 @@
 
 ### A12: Focus mode
 
-**Trigger:** The user switches the focus mode with Ctrl+Alt+F (Cmd+Ctrl+F on macOS) or the command palette (UC-023) (step 1)  
+**Trigger:** The user switches the focus mode with Ctrl+Alt+F (Cmd+Shift+. on macOS) or the command palette (UC-023) (step 1)  
 **Flow:**
 
 1. The system hides the note overview, the tool panel, and the toolbars, or shows them again; the tabs, the notes, the split view, and the status bar stay (BR-010).
@@ -184,7 +184,7 @@ A changed setting is written to its settings file within 1 second (NFR-009), nev
 
 ### BR-006: Keyboard
 
-The settings open with `Ctrl+,` (`Cmd+,` on macOS) and with a settings button in the top bar; every setting can be changed by keyboard alone (NFR-011). The editor zoom changes with `Ctrl+Plus`, `Ctrl+Minus`, and `Ctrl+0` (`Cmd` on macOS), soft wrap with `Alt+Z`, and the focus mode with `Ctrl+Alt+F` (`Cmd+Ctrl+F` on macOS); every setting can also be changed through the command palette (UC-023).
+The settings open with `Ctrl+,` (`Cmd+,` on macOS) and with a settings button in the top bar; every setting can be changed by keyboard alone (NFR-011). The editor zoom changes with `Ctrl+Plus`, `Ctrl+Minus`, and `Ctrl+0` (`Cmd` on macOS), soft wrap with `Alt+Z`, and the focus mode with `Ctrl+Alt+F` (`Cmd+Shift+.` on macOS); every setting can also be changed through the command palette (UC-023).
 
 ### BR-007: Shared workspace settings
 

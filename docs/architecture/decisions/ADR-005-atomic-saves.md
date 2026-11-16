@@ -24,3 +24,9 @@ cannot be created must leave nothing half set up (UC-001).
   workspace is opened.
 - File watchers (including the one of ADR-002) see a rename instead of a modify event and must handle both.
 - On Windows the rename replaces the target with `MoveFileEx` semantics; flushing a directory is a no-op there.
+
+## Update 2026-11-16
+
+Replacing a file keeps its permission bits (the user's decision): the temporary file is created readable only by its
+owner and gets the old file's permissions before the rename, so a note with mode 0600 stays 0600, while a new file
+gets the system's default as before.

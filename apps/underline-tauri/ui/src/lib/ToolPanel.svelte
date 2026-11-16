@@ -50,6 +50,22 @@
   Choosing it puts the cursor on it in the note; with Ctrl (Cmd on macOS)
   held it is followed as a Ctrl+click in the text follows it.
 
+  Package 12 (OQ-244): pictures and included files are links too; a
+  backlink or an outgoing link that is one says "picture" or "include" in
+  a small label, and screen readers hear it. OQ-199 (FR-103, UC-004
+  BR-021, A22): "Unlinked mentions (N)" follows the backlinks: the places
+  in other notes where the note's title stands as plain text, grouped as
+  the backlinks, each with its line and the mention marked by a dashed
+  underline (a link is marked by a solid one). Choosing one opens its note
+  there (A14); "Link" beside it turns it into a link to the note, which a
+  line under the title says. At most 200 are listed; "Show more", before
+  the list, lists 200 more. A title shorter than three characters is not
+  looked for, and the section says so. Without mentions the section is
+  folded shut. The mentions of a note are one stop of Tab, Up and Down
+  move between them (Home and End to the first and last); after "Link"
+  the keyboard goes to the next "Link", or to the section's title when
+  none is left, and screen readers hear the new number.
+
   M-16.4 (feature F12): in a git workspace the commit box, "Changes (N)"
   and "Diff" (GitChanges.svelte) follow the properties, before the
   outline, as in egui. Without an active note tab the panel shows only
@@ -62,9 +78,11 @@
   {title}" links only the note of an active note tab.
 -->
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import type {
     IndexEntryView,
+    LinkFormName,
+    LinkPlace,
     NoteHeadView,
     OutgoingLinkView,
     TextStatisticsView,
@@ -97,8 +115,8 @@
   );
   /**
    * A note tab is active; without one only the git changes show. OQ-279:
-   * the tab "Todos" is the left pane's; with the right pane active, its
-   * note's sections show.
+   * the tab "Todos" is the active tab of its pane; with the other pane
+   * active, that pane's note's sections show.
    */
   const noteShown = $derived(shell.tabs.active !== null && !shell.todoListShown);
   const properties = $derived(shell.properties?.properties ?? null);
@@ -207,11 +225,123 @@
     void shell.followOutgoing(links.note, link.offset, links.rev);
   }
 
+  /** OQ-244: the small label of a picture or an included file; none for a link. */
+  function formLabel(form: LinkFormName): string | null {
+    return form === 'picture' ? 'picture' : form === 'include' ? 'include' : null;
+  }
+
   /** What a screen reader hears of an outgoing link. */
   function outgoingLabel(link: OutgoingLinkView): string {
-    const kind = { note: 'note', file: 'file', web: 'web address' }[link.kind];
+    const kind = {
+      note: 'note',
+      file: 'file',
+      web: 'web address',
+      inline: 'picture held in the note',
+    }[link.kind];
+    const form = formLabel(link.form);
     const broken = link.broken ? ', broken link' : '';
-    return `${link.text}, ${kind} ${link.target}${broken}, line ${link.line}`;
+    return `${link.text}, ${form ? `${form}, ` : ''}${kind} ${link.target}${broken}, line ${link.line}`;
+  }
+
+  /** A22: the mentions being linked, so their "Link" waits for the answer. */
+  let linking = $state<ReadonlySet<string>>(new Set());
+  /** The section of the unlinked mentions. */
+  let mentionsBox = $state<HTMLElement | null>(null);
+  /** BR-021: the section is open while there are mentions, shut without. */
+  let mentionsOpen = $state(true);
+  const mentionsFound = $derived(
+    links !== null && !links.mentions.tooShort && links.mentions.count > 0,
+  );
+  const mentionsShape = $derived(links === null ? null : `${links.note}:${mentionsFound}`);
+  $effect(() => {
+    if (mentionsShape !== null) {
+      untrack(() => (mentionsOpen = mentionsFound));
+    }
+  });
+  /** The row of each note's mentions that holds its Tab stop. */
+  let rove = $state<Record<string, number>>({});
+  /** After "Link": the place in the list the keyboard goes to once the list followed. */
+  let focusAfter = $state<{ index: number; key: string } | null>(null);
+
+  // A22: the keyboard to the next "Link", or to the title when none is left.
+  $effect(() => {
+    void shell.links;
+    const after = focusAfter;
+    if (after === null) {
+      return;
+    }
+    untrack(() => {
+      void tick().then(() => {
+        const buttons = [
+          ...(mentionsBox?.querySelectorAll<HTMLButtonElement>('button.link-mention') ?? []),
+        ];
+        // Until the list no longer holds the mention linked.
+        if (buttons.some((button) => button.dataset.key === after.key)) {
+          return;
+        }
+        focusAfter = null;
+        const next = buttons[Math.min(after.index, buttons.length - 1)];
+        if (next) {
+          next.focus();
+        } else {
+          mentionsBox?.querySelector('summary')?.focus();
+        }
+      });
+    });
+  });
+
+  /** A22: "Link" turns the mention at `place` in `note` into a link to the active note. */
+  async function linkMention(event: MouseEvent, note: string, place: LinkPlace) {
+    if (!links) {
+      return;
+    }
+    const all = [
+      ...(mentionsBox?.querySelectorAll<HTMLButtonElement>('button.link-mention') ?? []),
+    ];
+    const index = Math.max(0, all.indexOf(event.currentTarget as HTMLButtonElement));
+    const key = `${note}:${place.from}`;
+    linking = new Set([...linking, key]);
+    focusAfter = { index, key };
+    try {
+      await shell.linkMention(links.note, note, place);
+    } finally {
+      linking = new Set([...linking].filter((other) => other !== key));
+      // A mention not linked (the status says why) leaves the keyboard where it is.
+      setTimeout(() => {
+        if (focusAfter?.key === key) {
+          focusAfter = null;
+        }
+      }, 2000);
+    }
+  }
+
+  /** BR-021: Up, Down, Home and End move between the mentions of a note. */
+  function roveKey(event: KeyboardEvent, note: string, row: number, rows: number) {
+    const moves: Record<string, number> = {
+      ArrowDown: Math.min(row + 1, rows - 1),
+      ArrowUp: Math.max(row - 1, 0),
+      Home: 0,
+      End: rows - 1,
+    };
+    if (!(event.key in moves) || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    event.preventDefault();
+    const next = moves[event.key];
+    const kind = (event.currentTarget as HTMLElement).dataset.kind ?? 'mention';
+    rove = { ...rove, [note]: next };
+    void tick().then(() =>
+      mentionsBox
+        ?.querySelector<HTMLElement>(
+          `[data-note="${CSS.escape(note)}"][data-row="${next}"][data-kind="${kind}"]`,
+        )
+        ?.focus(),
+    );
+  }
+
+  /** The Tab stop of the mentions of `note`: its row, within the rows there are. */
+  function stop(note: string, rows: number): number {
+    return Math.min(rove[note] ?? 0, rows - 1);
   }
 
   /** Headings deeper than this many levels below the highest are indented no further (ux review F7). */
@@ -395,18 +525,106 @@
                 </p>
                 <ul class="entries" aria-label="Links in {source.title}">
                   {#each source.links as link (`${link.place.from}`)}
+                    {@const form = formLabel(link.form)}
                     <li>
                       <button
                         type="button"
                         class="entry backlink"
-                        aria-label="{link.line} {link.before}{link.link}{link.after}, in {source.title}"
+                        aria-label="{link.line} {link.before}{link.link}{link.after}, {form
+                          ? `${form}, `
+                          : ''}in {source.title}"
                         onclick={() => void shell.openBacklink(source.note, link.place)}
                       >
                         <span class="line" aria-hidden="true">{link.line}</span>
                         <span class="context" aria-hidden="true"
                           >{link.before}<mark>{link.link}</mark>{link.after}</span
                         >
+                        {#if form}
+                          <span class="form" aria-hidden="true">{form}</span>
+                        {/if}
                       </button>
+                    </li>
+                  {/each}
+                </ul>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </details>
+      <!-- FR-103, UC-004 BR-021, A22: the unlinked mentions of the note's title. -->
+      <details class="links" bind:open={mentionsOpen} bind:this={mentionsBox}>
+        <summary>Unlinked mentions{links ? ` (${links.mentions.count})` : ''}</summary>
+        <!-- The number, heard when it changes (after "Link" too). -->
+        <p class="announce" aria-live="polite">
+          {links ? `${links.mentions.count} unlinked mentions` : ''}
+        </p>
+        {#if !links}
+          <p class="weak" aria-live="polite">Looking for links…</p>
+        {:else if links.mentions.tooShort}
+          <p class="weak">
+            This note's title is shorter than 3 characters, so mentions are not searched.
+          </p>
+        {:else if links.mentions.notes.length === 0}
+          <p class="weak">None</p>
+        {:else}
+          <p class="weak hint">Link turns the underlined text into a link to this note.</p>
+          {#if links.mentions.more > 0}
+            <button
+              type="button"
+              class="ui-button more"
+              onclick={() => links && void shell.moreMentions(links.note)}
+              >Show more ({links.mentions.more} not listed)</button
+            >
+          {/if}
+          <ul class="entries" aria-label="Unlinked mentions">
+            {#each links.mentions.notes as source (source.note)}
+              {@const rows = source.mentions.length}
+              <li class="source">
+                <p class="source-name">
+                  <span class="title">{source.title}</span>
+                  {#if source.folder}
+                    <span class="weak folder">{source.folder}</span>
+                  {/if}
+                </p>
+                <ul class="entries" aria-label="Mentions in {source.title}">
+                  {#each source.mentions as mention, row (`${mention.place.from}`)}
+                    {@const tabStop = stop(source.note, rows) === row ? 0 : -1}
+                    <li class="mention">
+                      <button
+                        type="button"
+                        class="entry backlink"
+                        data-note={source.note}
+                        data-row={row}
+                        data-kind="mention"
+                        tabindex={tabStop}
+                        aria-label="line {mention.line}, unlinked mention “{mention.mention}”: {mention.before}{mention.mention}{mention.after}"
+                        onfocus={() => (rove = { ...rove, [source.note]: row })}
+                        onkeydown={(event) => roveKey(event, source.note, row, rows)}
+                        onclick={() => void shell.openBacklink(source.note, mention.place)}
+                      >
+                        <span class="line" aria-hidden="true">{mention.line}</span>
+                        <span class="context" aria-hidden="true"
+                          >{mention.before}<mark class="unlinked">{mention.mention}</mark
+                          >{mention.after}</span
+                        >
+                      </button>
+                      <button
+                        type="button"
+                        class="ui-button link-mention"
+                        data-note={source.note}
+                        data-row={row}
+                        data-kind="link"
+                        data-key="{source.note}:{mention.place.from}"
+                        tabindex={tabStop}
+                        title="Turn “{mention.mention}” into a link to this note"
+                        aria-label="Link “{mention.mention}” in {source.title}, line {mention.line}, mention {row +
+                          1} of {rows}"
+                        disabled={linking.has(`${source.note}:${mention.place.from}`)}
+                        onfocus={() => (rove = { ...rove, [source.note]: row })}
+                        onkeydown={(event) => roveKey(event, source.note, row, rows)}
+                        onclick={(event) => void linkMention(event, source.note, mention.place)}
+                        >Link</button
+                      >
                     </li>
                   {/each}
                 </ul>
@@ -441,6 +659,9 @@
                 >
                   <span class="text" aria-hidden="true">{link.text}</span>
                   <span class="target weak" aria-hidden="true">{link.target}</span>
+                  {#if formLabel(link.form)}
+                    <span class="form" aria-hidden="true">{formLabel(link.form)}</span>
+                  {/if}
                   {#if link.broken}
                     <span class="mark" aria-hidden="true">broken</span>
                   {/if}
@@ -585,10 +806,17 @@
     border-left: 1px solid var(--ui-rule);
   }
 
+  /* A long line wraps between words where it can; a badge goes to the end
+     of the last line rather than squeezing the line (review 21). */
   .backlink {
     display: flex;
-    gap: var(--space-2);
+    flex-wrap: wrap;
+    gap: 0 var(--space-2);
     align-items: baseline;
+  }
+
+  .backlink .form {
+    margin-left: auto;
   }
 
   /* The line number, in step with the editor's numbers. */
@@ -602,8 +830,9 @@
   }
 
   .context {
+    flex: 1 1 12ch;
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
   }
 
   /* The link in its line: marked by weight and an underline, not only a tint. */
@@ -639,6 +868,58 @@
     text-decoration: underline wavy;
     text-decoration-thickness: 1px;
     text-underline-offset: 3px;
+  }
+
+  /* OQ-244: "picture" or "include", quieter than "broken". */
+  .form {
+    flex: none;
+    padding: 0 var(--space-1);
+    font-size: 0.8em;
+    line-height: 1.4;
+    color: var(--ui-hint);
+    border: 1px dotted currentColor;
+    border-radius: var(--radius);
+  }
+
+  /* FR-103: a mention and its "Link" side by side. */
+  .mention {
+    display: flex;
+    gap: var(--space-1);
+    align-items: flex-start;
+  }
+
+  .mention .entry {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .link-mention {
+    flex: none;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+  }
+
+  /* A mention is plain text: marked by a dashed underline, not as a link. */
+  .context mark.unlinked {
+    font-weight: inherit;
+    text-decoration: underline dashed;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+
+  /* The number for screen readers only. */
+  .announce {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
+  .more {
+    margin-top: var(--space-2);
   }
 
   .mark {

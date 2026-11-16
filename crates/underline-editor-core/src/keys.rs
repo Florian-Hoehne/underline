@@ -245,6 +245,15 @@ pub trait Target {
     fn clipboard_write(&mut self, text: &str);
     /// Asks the window for `command`.
     fn command(&mut self, command: EditorCommand);
+    /// OQ-260, UC-005 BR-021: Vim's `>` (`outdent` false) or `<` on the
+    /// lines from the one holding `from` to the one holding `to`, `times`
+    /// times over: list items by the list rule of Tab and Shift+Tab.
+    /// Whether the text changed. A view without it shifts nothing (the
+    /// source view's Vim keys are `codemirror-vim`, A-01).
+    fn shift(&mut self, from: usize, to: usize, outdent: bool, times: usize) -> bool {
+        let _ = (from, to, outdent, times);
+        false
+    }
 }
 
 /// The state of the keys of one tab, shared by its two views.
@@ -595,11 +604,15 @@ impl Vim {
             self.pending = Some(c);
             return false;
         }
-        // Doubled operators work on lines: dd, cc, yy.
+        // Doubled operators work on lines: dd, cc, yy, >>, <<.
         if let Some((op, op_count)) = self.operator {
             if c == op {
                 let n = self.take_count() * op_count;
                 self.operator = None;
+                if matches!(op, '>' | '<') {
+                    let last = self.line_below(cursor, n, t);
+                    return self.shift(cursor, last, op == '<', 1, t);
+                }
                 let range = self.lines(cursor, n, t);
                 return self.operate(op, range, true, t);
             }
@@ -621,7 +634,15 @@ impl Vim {
                 self.operate(c, range, lines, t)
             }
             'x' if visual => self.char('d', t),
-            'd' | 'c' | 'y' => {
+            // OQ-260: `>` and `<` on a selection, a count times over.
+            '>' | '<' if visual => {
+                let VimMode::Visual { start, .. } = self.mode else {
+                    return false;
+                };
+                let cursor = self.visual_cursor;
+                self.shift(start.min(cursor), start.max(cursor), c == '<', n, t)
+            }
+            'd' | 'c' | 'y' | '>' | '<' => {
                 self.operator = Some((c, n));
                 false
             }
@@ -872,6 +893,10 @@ impl Vim {
         let from = self.cursor(t);
         if let Some((op, _)) = self.operator.take() {
             self.count.clear();
+            if matches!(op, '>' | '<') {
+                // OQ-260: `>` and `<` with a motion take whole lines.
+                return self.shift(from.min(motion.to), from.max(motion.to), op == '<', 1, t);
+            }
             if motion.lines {
                 let (a, b) = (from.min(motion.to), from.max(motion.to));
                 let start = t.whole_line(a).start;
@@ -896,6 +921,46 @@ impl Vim {
         }
         self.set(motion.to, t);
         false
+    }
+
+    /// OQ-260, UC-005 BR-021: `>` or `<` (`outdent`) on the lines from the
+    /// one holding `from` to the one holding `to`, `times` times over;
+    /// normal mode afterwards.
+    fn shift(
+        &mut self,
+        from: usize,
+        to: usize,
+        outdent: bool,
+        times: usize,
+        t: &mut dyn Target,
+    ) -> bool {
+        self.count.clear();
+        if let VimMode::Visual { .. } = self.mode {
+            t.set_cursor(from, from);
+        }
+        self.mode = VimMode::Normal;
+        t.shift(from, to, outdent, times)
+    }
+
+    /// OQ-260: a place in the line `n - 1` lines below the one at `at`, or
+    /// in the last line. The facade's blocks touch, so the start of a
+    /// block is taken for the end of the one before it; a char into the
+    /// line names it alone.
+    fn line_below(&mut self, at: usize, n: usize, t: &mut dyn Target) -> usize {
+        let mut last = at;
+        for _ in 1..n {
+            let probe = if t.char_at(last).is_some_and(|c| c != '\n') {
+                last + 1
+            } else {
+                last
+            };
+            let next = t.whole_line(probe.min(t.len())).end;
+            if next >= t.len() || next <= last {
+                break;
+            }
+            last = next;
+        }
+        last
     }
 
     /// `n` lines from the one at `at`, with their separators.
@@ -1362,6 +1427,8 @@ mod tests {
         undo: Vec<Vec<char>>,
         clipboard: Option<String>,
         commands: Vec<EditorCommand>,
+        /// OQ-260: the shifts asked for: the lines' chars, `<`, times.
+        shifts: Vec<(usize, usize, bool, usize)>,
     }
 
     impl Lines {
@@ -1474,6 +1541,10 @@ mod tests {
         }
         fn command(&mut self, command: EditorCommand) {
             self.commands.push(command);
+        }
+        fn shift(&mut self, from: usize, to: usize, outdent: bool, times: usize) -> bool {
+            self.shifts.push((from, to, outdent, times));
+            true
         }
     }
 
@@ -1612,6 +1683,33 @@ mod tests {
         let mut lines = run("x\n", 0, "u");
         lines.clipboard = Some("pasted".into());
         assert_eq!(lines.string(), "x\n");
+    }
+
+    /// TC-005-37 step 6, OQ-260: `>>` and `<<` ask the view to shift the
+    /// line, `3>>` three lines, `>j` the line and the one below; `>` in
+    /// visual mode the selected lines, a count times over, and ends visual
+    /// mode. The register stays as it was.
+    #[test]
+    fn tc_005_37_vim_shift_keys() {
+        let text = "a\nb\nc\nd\n";
+        assert_eq!(run(text, 2, ">>").shifts, [(2, 2, false, 1)]);
+        assert_eq!(run(text, 2, "<<").shifts, [(2, 2, true, 1)]);
+        assert_eq!(run(text, 0, "3>>").shifts, [(0, 4, false, 1)]);
+        assert_eq!(
+            run(text, 4, "9>>").shifts,
+            [(4, 6, false, 1)],
+            "up to the last line"
+        );
+        assert_eq!(run(text, 0, ">j").shifts, [(0, 2, false, 1)]);
+        let visual = run(text, 2, "Vj2>x");
+        assert_eq!(visual.shifts, [(2, 4, false, 2)]);
+        assert_eq!(
+            visual.string(),
+            "a\n\nc\nd\n",
+            "back in normal mode, x deletes"
+        );
+        let kept = run("one\n", 0, "yw>>P");
+        assert_eq!(kept.string(), "oneone\n");
     }
 
     /// FR-026: the status line of the Vim keys of another view (the

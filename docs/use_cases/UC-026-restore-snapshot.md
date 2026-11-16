@@ -76,6 +76,18 @@
 1. The system changes nothing.
 2. Use case ends.
 
+### A7: Remove all snapshots
+
+**Trigger:** The user looks at the settings of the workspace (UC-010) instead of the snapshots of a note (step 1)  
+**Flow:**
+
+1. The system shows how much space the snapshots of the workspace take and how many there are, or that there are none (BR-007).
+2. The user asks to remove all snapshots.
+3. The system asks for confirmation, naming how many snapshots and how much space, and that this cannot be undone.
+4. The user confirms; when the user cancels instead, nothing is removed and the use case ends.
+5. The system removes every snapshot of the workspace's notes and reports in the status bar how many it removed and the space that freed, or why some could not be removed. The snapshots kept with deleted notes stay with them (BR-003).
+6. Use case ends.
+
 ## Postconditions
 
 ### Success Postconditions
@@ -87,6 +99,7 @@
 ### Failure Postconditions
 
 - No snapshot is changed or removed by looking at it or restoring it.
+- Snapshots are removed only after 30 days (BR-002), with their deleted note (BR-003), or when the user confirms removing them all (A7); never without the user knowing.
 - A note is never half written, and its content from before the restore is kept as a snapshot before it changes.
 
 ## Business Rules
@@ -108,7 +121,7 @@ No snapshot is taken when the content is the same as in the newest snapshot of t
 
 ### BR-002: Kept for 30 days, on this computer
 
-A snapshot is kept for 30 days and then removed. Snapshots are kept in the Underline folder of the workspace, on this computer only, like the deleted notes (UC-007 BR-004): git ignores them, and they are not listed in the note overview, not searched, and not read or written by agents. Taking and keeping them needs no network connection (NFR-014), and no snapshot leaves the computer (NFR-015).
+A snapshot is kept for 30 days and then removed; there is no limit of their number or of the space they take. Snapshots are kept in the Underline folder of the workspace, on this computer only, like the deleted notes (UC-007 BR-004): git ignores them, and they are not listed in the note overview, not searched, and not read or written by agents. Taking and keeping them needs no network connection (NFR-014), and no snapshot leaves the computer (NFR-015).
 
 ### BR-003: Renamed and deleted notes
 
@@ -125,3 +138,7 @@ Snapshots are taken in every workspace, whether it is a git repository or not. T
 ### BR-006: Keyboard
 
 The list of snapshots, the differences, restoring, and undoing can be reached by keyboard alone (NFR-011).
+
+### BR-007: Space the snapshots take
+
+The settings of the workspace (UC-010) show the space the snapshots of the workspace take on this computer and how many there are, for example "12.4 MB in 1,203 snapshots", and how long they are kept. Snapshots are never dropped silently: the only ways they go are those of the failure postconditions, and removing them all asks first (A7).

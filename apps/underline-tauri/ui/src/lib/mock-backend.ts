@@ -59,6 +59,12 @@
 // `Hub` with a link of every kind and two broken ones, `travel/Checklist`
 // with "Clothes" and "Papers"); `img/logo.png` is a file there. Completing
 // a link is the window's editor core's, so the mock answers nothing more.
+// Package 12 (OQ-244, OQ-199, UC-004 A22): pictures (`![…](…)`, `image::`)
+// and included files (`include::`) count as links, marked as such
+// (`Itinerary` shows a missing map, `Guide` includes `Project-Plan`); the
+// unlinked mentions of the active note's title come with the lists
+// (`mockMentions`; `Diary` mentions "project plan" twice), and
+// `links_link_mention` links one as the backend does.
 //
 // Feature F9: the search of the overlay (`search_set`) runs over the fake
 // notes and the open texts with a rough stand-in for `search_notes` (words,
@@ -173,6 +179,7 @@ import type {
   PaneName,
   ReplaceNoteView,
   SearchSwitches,
+  SnapshotsSpaceView,
 } from './bindings';
 import type {
   commands,
@@ -239,8 +246,11 @@ import type {
   FoundPlace,
   BacklinkNoteView,
   HeadingView,
+  LinkFormName,
   LinkPlace,
   LinksView,
+  MentionNoteView,
+  MentionsView,
   OutgoingLinkView,
 } from './bindings';
 import { loadEditorCore, MirrorCore } from './editor/core';
@@ -250,6 +260,8 @@ import { MockSettings, userFileOf, type MockSettingsPlace } from './mock-setting
 import {
   MOCK_SPELL_LANGUAGE,
   MockSpeller,
+  noteLanguage,
+  offeredLanguage,
   SPELL,
   SPELL_TEXTS,
   spellLanguageName,
@@ -367,7 +379,7 @@ export type MockHandlers = {
     rev: number;
     side?: boolean;
   }) => Promise<Ok<typeof commands.edFollowLink>>;
-  link_open_web: (args: { open: boolean }) => Promise<Ok<typeof commands.linkOpenWeb>>;
+  link_answer: (args: { id: number; open: boolean }) => Promise<Ok<typeof commands.linkAnswer>>;
   note_new_start: () => Ok<typeof commands.noteNewStart>;
   note_plan: (args: { request: NewNoteRequest }) => Ok<typeof commands.notePlan>;
   note_create: (args: { request: NewNoteRequest }) => Promise<Ok<typeof commands.noteCreate>>;
@@ -427,8 +439,18 @@ export type MockHandlers = {
   }) => Promise<Ok<typeof commands.snapshotRestore>>;
   snapshot_undo_restore: () => Promise<Ok<typeof commands.snapshotUndoRestore>>;
   snapshots_close: () => Ok<typeof commands.snapshotsClose>;
-  spell_suggest: (args: { word: string }) => Promise<Ok<typeof commands.spellSuggest>>;
+  snapshots_space: () => Ok<typeof commands.snapshotsSpace>;
+  snapshots_remove_all: () => Promise<Ok<typeof commands.snapshotsRemoveAll>>;
+  palette_ran: (args: { id: string }) => Ok<typeof commands.paletteRan>;
+  split_share: (args: { share: number }) => Promise<Ok<typeof commands.splitShare>>;
+  spell_suggest: (args: {
+    word: string;
+    note: string;
+  }) => Promise<Ok<typeof commands.spellSuggest>>;
   spell_add_word: (args: { word: string }) => Promise<Ok<typeof commands.spellAddWord>>;
+  spell_add_workspace_word: (args: {
+    word: string;
+  }) => Promise<Ok<typeof commands.spellAddWorkspaceWord>>;
   search_page: (args: { serial: number; from: number }) => Ok<typeof commands.searchPage>;
   search_open: (args: {
     note: string;
@@ -441,6 +463,12 @@ export type MockHandlers = {
     at: number;
     rev: number;
   }) => Promise<Ok<typeof commands.linksFollow>>;
+  links_link_mention: (args: {
+    active: string;
+    note: string;
+    place: LinkPlace;
+  }) => Promise<Ok<typeof commands.linksLinkMention>>;
+  links_more_mentions: (args: { note: string }) => Ok<typeof commands.linksMoreMentions>;
   export_start: (args: { note: string }) => Promise<Ok<typeof commands.exportStart>>;
   export_choose: (args: {
     note: string;
@@ -556,6 +584,9 @@ Hold Ctrl and click a link.
 - [The web](https://example.com/underline)
 - [A report](report.pdf)
 - [Outside](../../etc/hosts)
+- [A server](ssh://server.example/home)
+- [A script](tools/deploy.sh)
+- [A full place](file:///home/user/Documents/report.pdf)
 
 ## Details
 
@@ -604,14 +635,16 @@ export const LINKS_TEXTS: Readonly<Record<string, string>> = {
   'Project-Plan': '# Project Plan\n\n## Goals\n\nShip it. See [the goals](#goals).\n',
   Brainstorm:
     '# Brainstorm\n\nOne idea\n[the plan](Project-Plan.md) first\n\nTwo\n\nThree\n[goals](Project-Plan.md#goals)\n',
-  'travel/Itinerary': '# Itinerary\n[Plan](../Project-Plan.md) for the trip\n',
+  'travel/Itinerary': '# Itinerary\n[Plan](../Project-Plan.md) for the trip\n![Map](map.png)\n',
   Snippets: '# Snippets\n\n`[x](Project-Plan.md)`\n\n```\n[y](Project-Plan.md)\n```\n',
   Hub:
     '# Hub\n\n[Project Plan](Project-Plan.md)\n[Gone](Gone.md)\n[Goals](Project-Plan.md#nothing)\n' +
     '[Logo](img/logo.png)\n<https://example.org>\n',
-  Diary: '# Diary\n\nNothing linked yet.\n',
+  Diary:
+    '# Diary\n\nNothing linked yet.\nThe project plan is late; ask about the Project Plan.\n' +
+    '`project plan` stays.\n',
   'travel/Checklist': '# Checklist\n\n## Clothes\n\n## Papers\n',
-  Guide: '= Guide\n\nType xref: here to link a note.\n',
+  Guide: '= Guide\n\nType xref: here to link a note.\n\ninclude::Project-Plan.md[]\n',
 };
 
 /**
@@ -706,6 +739,9 @@ export const READING_TEXTS: Readonly<Record<string, string>> = {
   // FR-098: TC-004-38 (`Math.md`, `Math.adoc`), TC-005-42 and TC-009-18.
   Math: 'Energy $E=mc^2$ and price 5$ or 6$\n\n$$\\sum_{i=1}^n i$$\n\n```math\n\\sqrt{2}\n```\n\n$$\\frac{1}{$$\n',
   'Math-AsciiDoc': '= Math\n:stem: latexmath\n\nSee stem:[a^2] and latexmath:[b^2].\n',
+  // OQ-222: TC-004-38 step 4, AsciiMath (`:stem:` without a value).
+  'Math-AsciiMath':
+    '= Math\n:stem:\n\nSee stem:[x^2/2] and asciimath:[sqrt a].\n\n[asciimath]\n++++\nsum_(i=1)^n i\n++++\n',
   'Math-Edit': '$$a^2$$\n\nThe inline formula $b$ here.\n',
   'Math-Export': 'Euler $e^{i\\pi}+1=0$.\n\n$$\\int_0^1 x\\,dx$$\n\n$$\\frac{1}{$$\n',
 };
@@ -759,6 +795,7 @@ const ASCIIDOC_NOTES: ReadonlySet<string> = new Set([
   'Plain-AsciiDoc',
   'Travel-Guide',
   'Math-AsciiDoc',
+  'Math-AsciiMath',
 ]);
 
 /** The note format of a fake note. */
@@ -828,6 +865,189 @@ export const FAKE_OUTSIDE: Readonly<Record<string, number>> = {
   '/home/user/Pictures/banner.png': 11 * 1024 * 1024,
   '/home/user/Documents/report.pdf': 120_000,
 };
+
+/**
+ * Q-61: files of the workspaces that are no notes, by their place in the
+ * workspace; a link to one opens it (or asks first when it may run).
+ */
+export const FAKE_WORKSPACE_FILES: readonly string[] = ['tools/deploy.sh', 'img/plan.svg'];
+
+/** Decodes `%20` and the like; a `%` that starts no escape stays (as `percent_decode`). */
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+/** UC-004 BR-007, Q-62: the scheme of `address` in lower case, as `link_scheme`. */
+export function mockLinkScheme(address: string): string | null {
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(address.trim());
+  return match ? match[1].toLowerCase() : null;
+}
+
+/** UC-004 BR-007, Q-62: only http, https and mailto open without asking. */
+export function mockOpensWithoutAsking(address: string): boolean {
+  return ['http', 'https', 'mailto'].includes(mockLinkScheme(address) ?? '');
+}
+
+/** Q-61: the kinds of programs by their ending, as `EXECUTABLE_ENDINGS` (deliberately not complete). */
+const MOCK_EXECUTABLE_ENDINGS: Readonly<Record<string, string>> = {
+  desktop: 'a desktop launcher',
+  sh: 'a shell script',
+  command: 'a shell script',
+  run: 'a program',
+  bin: 'a program',
+  appimage: 'a program',
+  py: 'a Python script',
+  pl: 'a Perl script',
+  rb: 'a Ruby script',
+  bat: 'a batch file',
+  cmd: 'a batch file',
+  lnk: 'a Windows shortcut',
+  url: 'an internet shortcut',
+  webloc: 'an internet shortcut',
+  inetloc: 'an internet shortcut',
+  exe: 'a Windows program',
+  com: 'a Windows program',
+  pif: 'a Windows program',
+  scf: 'a Windows Explorer command',
+  msi: 'a Windows installer',
+  msp: 'a Windows installer',
+  inf: 'a Windows setup file',
+  application: 'a Windows program',
+  'appref-ms': 'a Windows program',
+  gadget: 'a Windows gadget',
+  scr: 'a screen saver program',
+  ps1: 'a PowerShell script',
+  js: 'a script',
+  jse: 'a Windows script',
+  vbs: 'a Windows script',
+  vbe: 'a Windows script',
+  wsf: 'a Windows script',
+  wsh: 'a Windows script',
+  hta: 'an HTML application',
+  chm: 'a Windows help file',
+  msc: 'a Windows console',
+  cpl: 'a Control Panel item',
+  reg: 'a registry file',
+  'library-ms': 'a Windows library',
+  'search-ms': 'a Windows search',
+  'settingcontent-ms': 'a Windows settings shortcut',
+  jar: 'a Java program',
+  app: 'a macOS app',
+  terminal: 'a Terminal setting',
+  workflow: 'an Automator workflow',
+  scpt: 'an AppleScript',
+};
+
+/**
+ * UC-004 BR-007, Q-61: the kind of program a file is by its name, with
+ * its article, as `executable_by_name`: dots and spaces at the end and a
+ * `:stream` are left out first.
+ */
+export function mockExecutableKind(path: string): string | null {
+  const name = (path.split(/[/\\]/).at(-1) ?? path).split(':')[0].replace(/[. ]+$/, '');
+  const ending = /\.([^.]+)$/.exec(name)?.[1]?.toLowerCase();
+  return ending === undefined ? null : (MOCK_EXECUTABLE_ENDINGS[ending] ?? null);
+}
+
+/** Characters written as `\u{…}` in a question, as `shown_text`. */
+const MOCK_HIDDEN =
+  /[\p{Cc}\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/gu;
+
+/** Q-61: `text` with invisible and direction characters written out, as `shown_text`. */
+export function mockShownText(text: string): string {
+  return text.replace(MOCK_HIDDEN, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+}
+
+/** Q-62: the scheme as the question names it, as `shown_scheme`. */
+function mockShownScheme(address: string): string {
+  const scheme = mockLinkScheme(address);
+  if (scheme !== null) {
+    return scheme;
+  }
+  const raw = address.split(':')[0];
+  const shown = [...raw]
+    .map((c) => (/^[!-~]$/.test(c) ? c : `\\u{${c.codePointAt(0)!.toString(16)}}`))
+    .join('');
+  return shown === '' ? '?' : shown;
+}
+
+/** Q-61: a name of at most 60 characters, the middle left out, as `shortened`. */
+function mockShortened(name: string): string {
+  const chars = [...name];
+  return chars.length <= 60 ? name : `${chars.slice(0, 28).join('')}…${chars.slice(-28).join('')}`;
+}
+
+/** The question "Open …" of the session, without its id (`LinkAnswer` `askOpen`). */
+export type MockOpenQuestion = {
+  about: 'link' | 'program' | 'file';
+  title: string;
+  question: string;
+  warning: string | null;
+  target: string;
+};
+
+/**
+ * UC-004 A4, Q-61, Q-62: the question the session asks before opening
+ * `target`: of the scheme of an address, of a program, of a `file://`
+ * target, or of a place on another computer (`//server/share`), never
+ * looked at; `null` when it opens directly.
+ */
+export function mockOpenQuestion(
+  target: string,
+  how: 'address' | 'file' | 'fileUrl',
+): MockOpenQuestion | null {
+  const shown = mockShownText(target);
+  if (how === 'address') {
+    if (mockOpensWithoutAsking(target)) {
+      return null;
+    }
+    const scheme = mockShownScheme(target);
+    return {
+      about: 'link',
+      title: `Open ${scheme}: link`,
+      question: `This link uses the ${scheme}: scheme and opens another program on this computer.`,
+      warning: null,
+      target: shown,
+    };
+  }
+  const name = mockShortened(mockShownText(target.split(/[/\\]/).at(-1) ?? target));
+  const program = mockExecutableKind(target);
+  if (program !== null) {
+    return {
+      about: 'program',
+      title: 'Open program',
+      question: `${name} is ${program}.`,
+      warning: 'Opening it may run it on this computer.',
+      target: shown,
+    };
+  }
+  if (/^[/\\]{2}/.test(target)) {
+    return {
+      about: 'file',
+      title: 'Open file',
+      question: `This link points to a file on another computer or a device: ${name}.`,
+      warning: null,
+      target: shown,
+    };
+  }
+  if (how === 'fileUrl') {
+    const ending = /\.([^./]+)$/.exec(name)?.[1];
+    const kind =
+      FAKE_OUTSIDE[target] === -1 ? 'folder' : ending ? `${ending.toUpperCase()} file` : 'file';
+    return {
+      about: 'file',
+      title: 'Open file',
+      question: `This link points to a file on this computer: ${name}, ${kind}.`,
+      warning: null,
+      target: shown,
+    };
+  }
+  return null;
+}
 
 /** F8: a note among the deleted notes of the mock (UC-007 A5). */
 export type MockDeleted = { key: string; note: string; text: string; at: number };
@@ -1063,12 +1283,21 @@ export function mockLinkAt(text: string, at: number): string | null {
 }
 
 /** A link of a note as the mock finds it: its place, text and where it is. */
-type MockLink = { at: number; end: number; line: number; place: string; text: string };
+type MockLink = {
+  at: number;
+  end: number;
+  line: number;
+  place: string;
+  text: string;
+  form: LinkFormName;
+};
 
 /**
- * FR-078, FR-079: a rough stand-in for `found_links` over Markdown:
- * `[text](place)` (not pictures) and `<address>`, not in fenced code or a
- * code span. `at` and `end` are in UTF-16 units.
+ * FR-078, FR-079, OQ-244: a rough stand-in for `found_links`:
+ * `[text](place)`, pictures `![alt](place)`, `<address>`, and AsciiDoc's
+ * `include::place[]` and `image::place[]`, not in fenced code or a code
+ * span. `at` and `end` are in UTF-16 units; a picture's text is its place,
+ * as the backend lists it.
  */
 export function mockFoundLinks(text: string): MockLink[] {
   const found: MockLink[] = [];
@@ -1079,26 +1308,141 @@ export function mockFoundLinks(text: string): MockLink[] {
       fenced = !fenced;
     } else if (!fenced) {
       for (const match of line.matchAll(
-        /!?\[([^\]]*)\]\(([^)\s]*)\)|<((?:https?:\/\/|mailto:)[^>\s]+)>/g,
+        /(!?)\[([^\]]*)\]\(([^)\s]*)\)|<((?:https?:\/\/|mailto:)[^>\s]+)>|(include::|image::?)([^[\s]+)\[[^\]]*\]/g,
       )) {
         const at = match.index ?? 0;
         const ticks = (line.slice(0, at).match(/`/g) ?? []).length;
-        if (match[0].startsWith('!') || ticks % 2 === 1) {
+        if (ticks % 2 === 1) {
           continue;
         }
-        const place = match[2] ?? match[3];
+        const form: LinkFormName =
+          match[1] === '!' || match[5]?.startsWith('image')
+            ? 'picture'
+            : match[5] === 'include::'
+              ? 'include'
+              : 'link';
+        const place = match[3] ?? match[4] ?? match[6];
         found.push({
           at: start + at,
           end: start + at + match[0].length,
           line: index + 1,
           place,
-          text: match[3] === undefined ? match[1] : match[3],
+          text: form !== 'link' ? place : match[4] === undefined ? match[2] : match[4],
+          form,
         });
       }
     }
     start += line.length + 1;
   });
   return found;
+}
+
+/**
+ * OQ-248, UC-005 A2: the place of the note file `to` as a link in the note
+ * file `from` names it, as `link_place`: relative to its folder, with `%`,
+ * `#`, spaces, brackets and angle brackets percent-encoded.
+ */
+export function mockLinkPlace(from: string, to: string): string {
+  const folder = from.includes('/') ? from.slice(0, from.lastIndexOf('/')).split('/') : [];
+  const parts = to.split('/');
+  let common = 0;
+  while (common < folder.length && common < parts.length && folder[common] === parts[common]) {
+    common += 1;
+  }
+  const encode = (part: string) =>
+    part.replace(
+      /[%# ()[\]<>\t:`]/g,
+      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`,
+    );
+  return [...folder.slice(common).map(() => '..'), ...parts.slice(common).map(encode)].join('/');
+}
+
+/** OQ-248: a title as the text of a link, its brackets escaped, as `link_text`. */
+export function mockLinkText(label: string, markdown: boolean): string {
+  return markdown ? label.replace(/[[\]\\`]/g, '\\$&') : label.replace(/]/g, '\\]');
+}
+
+/** BR-021: titles with fewer characters than this have no unlinked mentions. */
+const MENTION_LEAST_CHARS = 3;
+
+/** BR-021: how many unlinked mentions are listed at first, and more each time. */
+export const MOCK_MENTIONS_SHOWN = 200;
+
+/**
+ * FR-103, UC-004 BR-021: a rough stand-in for `unlinked_mentions`: the
+ * title of `note` as whole words, upper and lower case alike, outside
+ * fenced code, code spans and links, in the other notes of `order`; at
+ * most `limit` listed. Places are bytes, as the backend counts them.
+ */
+export function mockMentions(
+  note: string,
+  order: readonly string[],
+  textOf: (note: string) => string,
+  limit = MOCK_MENTIONS_SHOWN,
+): MentionsView {
+  const title = mockTitle(note);
+  const words = title.split(/\s+/).filter((word) => word !== '');
+  if (words.join('').length < MENTION_LEAST_CHARS) {
+    return { notes: [], count: 0, more: 0, tooShort: true };
+  }
+  const escaped = words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(
+    `(?<![\\p{L}\\p{N}#])${escaped.join('[ \\t]+')}(?![\\p{L}\\p{N}])`,
+    'giu',
+  );
+  const notes: MentionNoteView[] = [];
+  let count = 0;
+  let listed = 0;
+  for (const other of order) {
+    if (other === note) {
+      continue;
+    }
+    const text = textOf(other);
+    const links = mockFoundLinks(text);
+    const mentions: MentionNoteView['mentions'] = [];
+    let fenced = false;
+    let start = 0;
+    text.split('\n').forEach((line, index) => {
+      if (line.startsWith('```')) {
+        fenced = !fenced;
+      } else if (!fenced) {
+        for (const match of line.matchAll(pattern)) {
+          const at = start + (match.index ?? 0);
+          const end = at + match[0].length;
+          const ticks = (line.slice(0, match.index).match(/`/g) ?? []).length;
+          if (ticks % 2 === 1 || links.some((link) => link.at < end && at < link.end)) {
+            continue;
+          }
+          count += 1;
+          if (listed + mentions.length >= limit) {
+            continue;
+          }
+          mentions.push({
+            line: index + 1,
+            before: line.slice(0, match.index).trimStart(),
+            mention: match[0],
+            after: line.slice((match.index ?? 0) + match[0].length).trimEnd(),
+            place: {
+              from: bytesBefore(text, at),
+              to: bytesBefore(text, end),
+              check: mockLinkCheck(match[0]),
+            },
+          });
+        }
+      }
+      start += line.length + 1;
+    });
+    if (mentions.length > 0) {
+      listed += mentions.length;
+      notes.push({
+        note: other,
+        title: mockTitle(other),
+        folder: other.includes('/') ? other.slice(0, other.lastIndexOf('/')) : null,
+        mentions,
+      });
+    }
+  }
+  return { notes, count, more: count - listed, tooShort: false };
 }
 
 /** The anchors of the ATX headings of `text`, with their labels and levels. */
@@ -1127,12 +1471,23 @@ type MockTarget =
   | { kind: 'web'; address: string }
   | { kind: 'heading'; anchor: string }
   | { kind: 'note'; id: string; anchor: string | null; exists: boolean }
-  | { kind: 'file'; path: string }
+  | { kind: 'file'; path: string; full?: boolean }
+  | { kind: 'inline' }
   | { kind: 'outside' };
 
-function mockTarget(note: string, place: string, notes: ReadonlySet<string>): MockTarget {
-  if ((place.includes('://') && !place.startsWith('file://')) || place.startsWith('mailto:')) {
-    return { kind: 'web', address: place };
+function mockTarget(note: string, written: string, notes: ReadonlySet<string>): MockTarget {
+  // OQ-244: a picture held in the note.
+  if (/^\s*data:/i.test(written)) {
+    return { kind: 'inline' };
+  }
+  if ((written.includes('://') && !/^file:\/\//i.test(written)) || /^mailto:/i.test(written)) {
+    return { kind: 'web', address: written };
+  }
+  // Q-63: a full `file://` place is a file of this computer; a relative
+  // one is relative to the note, as any place.
+  const place = written.replace(/^file:\/\//i, '');
+  if (place !== written && place.startsWith('/')) {
+    return { kind: 'file', path: place, full: true };
   }
   const hash = place.indexOf('#');
   const path = hash < 0 ? place : place.slice(0, hash);
@@ -1190,6 +1545,7 @@ export function mockLinks(
   textOf: (note: string) => string,
   files: readonly string[],
   all: readonly string[] = order,
+  mentionLimit = MOCK_MENTIONS_SHOWN,
 ): LinksView {
   const notes = new Set(all);
   const backlinks: BacklinkNoteView[] = [];
@@ -1198,7 +1554,7 @@ export function mockLinks(
       continue;
     }
     const text = textOf(other);
-    if (!text.includes('](')) {
+    if (!text.includes('](') && !text.includes('::')) {
       continue;
     }
     const lines = text.split('\n');
@@ -1215,6 +1571,7 @@ export function mockLinks(
           before: line.slice(0, link.at - lineStart).trimStart(),
           link: text.slice(link.at, link.end),
           after: line.slice(link.end - lineStart).trimEnd(),
+          form: link.form,
           place: {
             from: bytesBefore(text, link.at),
             to: bytesBefore(text, link.end),
@@ -1236,7 +1593,12 @@ export function mockLinks(
     new Set(mockHeadings(id === note ? own : textOf(id)).map((h) => h.anchor));
   const outgoing: OutgoingLinkView[] = mockFoundLinks(own).map((link) => {
     const target = mockTarget(note, link.place, notes);
-    const base = { text: link.text || link.place, line: link.line, offset: link.at };
+    const base = {
+      text: link.text || link.place,
+      line: link.line,
+      offset: link.at,
+      form: link.form,
+    };
     switch (target.kind) {
       case 'web':
         return { ...base, target: target.address, kind: 'web', broken: false };
@@ -1258,7 +1620,14 @@ export function mockLinks(
             !target.exists || (target.anchor !== null && !anchors(target.id).has(target.anchor)),
         };
       case 'file':
-        return { ...base, target: target.path, kind: 'file', broken: !files.includes(target.path) };
+        return {
+          ...base,
+          target: target.path,
+          kind: 'file',
+          broken: !target.full && !files.includes(target.path),
+        };
+      case 'inline':
+        return { ...base, target: link.place, kind: 'inline', broken: false };
       case 'outside':
         return { ...base, target: link.place, kind: 'file', broken: false };
     }
@@ -1269,6 +1638,7 @@ export function mockLinks(
     backlinks,
     backlinkCount: backlinks.reduce((sum, source) => sum + source.links.length, 0),
     outgoing,
+    mentions: mockMentions(note, order, textOf, mentionLimit),
   };
 }
 
@@ -1671,6 +2041,33 @@ export function mockLinesDiffering(old: string, now: string): number {
   return total + Math.max(removed, added);
 }
 
+/** UC-026 A7: "12.4 MB in 1,203 snapshots", roughly as `format_size` and `thousands` write it. */
+function mockSnapshotsAmount(all: readonly { text: string }[]): string {
+  const bytes = all.reduce((sum, s) => sum + new TextEncoder().encode(s.text).length, 0);
+  const size =
+    bytes < 1024
+      ? `${bytes} bytes`
+      : bytes < 1024 * 1024
+        ? `${Math.round(bytes / 1024)} KB`
+        : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const count = all.length === 1 ? '1 snapshot' : `${all.length.toLocaleString('en-US')} snapshots`;
+  return `${size} in ${count}`;
+}
+
+/** UC-026 A7, OQ-294: what the settings window shows of the snapshots `all`. */
+function mockSnapshotsSpace(all: readonly { text: string }[]): SnapshotsSpaceView {
+  const amount = mockSnapshotsAmount(all);
+  return {
+    summary: all.length === 0 ? 'None' : amount,
+    kept: 'Kept on this computer for 30 days',
+    any: all.length > 0,
+    question:
+      `Remove all snapshots of this workspace (${amount})? Earlier versions of its notes ` +
+      'can no longer be restored. This cannot be undone.',
+    problem: null,
+  };
+}
+
 /** UC-026 step 4: the differences as one part, with every line. */
 function mockHunks(old: string, now: string): HunkView[] {
   const number = (n: number | null) => (n === null ? '    ' : String(n).padStart(4));
@@ -1728,6 +2125,7 @@ export function mockHandlers(start: MockStart = {}): MockHandlers {
         tools: [...FAKE_TOOLS],
         inputModes: ['Normal', 'Vim', 'Nano'],
         exportKinds: FAKE_EXPORT_KINDS,
+        recentCommands: [],
         ...info,
         settings: model.effective(),
         status,
@@ -1830,7 +2228,7 @@ function workspaceHandlers(
   | 'ed_resync'
   | 'app_request_close'
   | 'ed_follow_link'
-  | 'link_open_web'
+  | 'link_answer'
   | 'note_new_start'
   | 'note_plan'
   | 'note_create'
@@ -1851,6 +2249,8 @@ function workspaceHandlers(
   | 'links_open'
   | 'links_headings'
   | 'links_follow'
+  | 'links_link_mention'
+  | 'links_more_mentions'
   | 'replace_set'
   | 'replace_page'
   | 'replace_leave_out'
@@ -1863,8 +2263,13 @@ function workspaceHandlers(
   | 'snapshot_restore'
   | 'snapshot_undo_restore'
   | 'snapshots_close'
+  | 'snapshots_space'
+  | 'snapshots_remove_all'
+  | 'palette_ran'
+  | 'split_share'
   | 'spell_suggest'
   | 'spell_add_word'
+  | 'spell_add_workspace_word'
   | 'export_start'
   | 'export_choose'
   | 'export_run'
@@ -1907,6 +2312,8 @@ function workspaceHandlers(
   /** Package 6b: the formats of the notes created here, which may be AsciiDoc. */
   const formats = new Map<string, FormatName>();
   const formatOf = (note: string): FormatName => formats.get(note) ?? mockFormat(note);
+  /** The file of `note` in the workspace, with its extension. */
+  const fileOf = (note: string) => `${note}.${formatOf(note) === 'AsciiDoc' ? 'adoc' : 'md'}`;
   /** Package 6b: the local clock, `2026-11-11T08:15`; `null` for the browser's. */
   let mockNow: string | null = start.now ?? null;
   let recent = [...(start.recent ?? start.recentWorkspaces ?? [])];
@@ -1920,6 +2327,10 @@ function workspaceHandlers(
   /** FR-096: the active pane, and the other pane of the split view. */
   let pane: PaneName = 'left';
   let other: { tabs: FakeTab[]; active: string | null } | null = null;
+  /** OQ-220: the remembered share of the left pane, in tenths of a percent, by workspace. */
+  const splitShares: Record<string, number> = {};
+  /** OQ-198: the commands run from the palette, the most recent first (`recentCommands`). */
+  let ranCommands = [...(start.recentCommands ?? [])];
   let clock = 0;
   /** What each workspace remembers: its tabs and when notes were opened. */
   const remembered: Record<
@@ -1959,6 +2370,8 @@ function workspaceHandlers(
     other = null;
     pane = 'left';
     active = keep !== null && tabs.some((t) => t.note === keep) ? keep : (tabs[0]?.note ?? null);
+    // OQ-279: the tab "Todos" stays, in the one pane left.
+    todos.list(root).pane = 'left';
   };
   /** A pane left without tabs ends the split view (A20). */
   const settlePanes = () => {
@@ -1972,6 +2385,10 @@ function workspaceHandlers(
     } else if (other.tabs.length === 0) {
       other = null;
       pane = 'left';
+    }
+    if (other === null) {
+      // OQ-279: the tab "Todos" stays, in the one pane left.
+      todos.list(root).pane = 'left';
     }
   };
   /** The tab of `note` goes from the other pane too (the note is gone). */
@@ -2058,10 +2475,10 @@ function workspaceHandlers(
   const before = new Map<string, MockClipboard>();
   /** How many images were pasted, for their names. */
   let pastedImages = 0;
-  /** F7, UC-004 A4: what the system's program opened, and the web question. */
+  /** F7, UC-004 A4: what the system's program opened, and what the question asks about. */
   const opened: string[] = [];
-  let webAllowed = false;
-  let webAsked: string | null = null;
+  let openAsked: { id: number; target: string } | null = null;
+  let openAsks = 0;
   /** The folder of `note` in the workspace, with a slash, or nothing. */
   const folderOf = (note: string) =>
     note.includes('/') ? note.slice(0, note.lastIndexOf('/') + 1) : '';
@@ -2320,6 +2737,23 @@ function workspaceHandlers(
   /** UC-006 BR-003, roughly: the links to `from` in `text`, as written from `note`. */
   const linkTo = (note: string, target: string) => `](${relativeTo(note, `${target}.md`)}`;
   const countLinks = (text: string, needle: string) => text.split(needle).length - 1;
+  /**
+   * UC-006 BR-003, OQ-244, roughly: the markup of each link of `other` to
+   * `target` (a link, an include, a picture), and as it reads for `to`.
+   */
+  const linkForms = (other: string, target: string, to: string): [string, string][] => {
+    const ext = formatOf(target) === 'AsciiDoc' ? 'adoc' : 'md';
+    const place = (id: string) => relativeTo(other, `${id}.${ext}`);
+    return [
+      [linkTo(other, target), linkTo(other, to)],
+      ...['include::', 'image::', 'image:'].map((macro): [string, string] => [
+        `${macro}${place(target)}[`,
+        `${macro}${place(to)}[`,
+      ]),
+    ];
+  };
+  const countAll = (text: string, forms: [string, string][]) =>
+    forms.reduce((sum, [needle]) => sum + countLinks(text, needle), 0);
   /** M-22.2: the remembered tabs and "last opened" follow a renamed note. */
   const renameEverywhere = (from: string, to: string) => {
     if (!root) {
@@ -2409,6 +2843,21 @@ function workspaceHandlers(
   const speller = new MockSpeller(Object.values(SPELL_TEXTS));
   /** The languages whose missing dictionary was said. */
   const spellSaid = new Set<string>();
+  /** What the status bar would show of the spell check while each note is active. */
+  const spellStates = new Map<string, { problem: string | null; detail: string | null }>();
+  /** OQ-207: the status bar shows the spell state of the active note, told only when it changes. */
+  const showSpellState = async () => {
+    const state = (active !== null ? spellStates.get(active) : undefined) ?? spellShown;
+    if (state.problem !== spellShown.problem || state.detail !== spellShown.detail) {
+      spellShown = state;
+      await emit('spell-state', state);
+    }
+  };
+  /** What the status bar was told of the spell check last. */
+  let spellShown: { problem: string | null; detail: string | null } = {
+    problem: null,
+    detail: null,
+  };
   /** The checks waiting for the text to rest (`SPELL_DEBOUNCE`), by note. */
   const spellTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** UC-005 BR-023: the marks of `note` for its mirror's revision (`spell-marks`). */
@@ -2417,18 +2866,37 @@ function workspaceHandlers(
     if (!mirror || disposed) {
       return;
     }
-    const language = model.spellLanguage();
-    if (language !== 'off' && language !== MOCK_SPELL_LANGUAGE && !spellSaid.has(language)) {
-      spellSaid.add(language);
-      const name = spellLanguageName(language);
+    const asciidoc = mockFormat(note) === 'AsciiDoc';
+    const setting = model.spellLanguage();
+    // OQ-207: the note's attribute `lang` overrides the setting, unless off.
+    const named = setting === 'off' ? null : noteLanguage(mirror.text(), asciidoc);
+    const language = named === null ? setting : (offeredLanguage(named) ?? named);
+    // FR-100, OQ-207: what the status bar shows, as `shown_spell_state` of
+    // the session: the note's own problem while it names its language, else
+    // that of the setting; told again whenever it changes, `null` too.
+    const missing = (code: string) => code !== 'off' && code !== MOCK_SPELL_LANGUAGE;
+    let state: { problem: string | null; detail: string | null } = { problem: null, detail: null };
+    // A note naming the setting's own language counts as the setting's.
+    if (named !== null && language !== setting) {
+      if (missing(language)) {
+        const name = spellLanguageName(language);
+        state = {
+          problem: `${title(note)}: no dictionary for ${name}`,
+          detail: `No dictionary for ${name}, the language this note names in its attribute \`lang\`. Change or remove the attribute.`,
+        };
+      }
+    } else if (missing(setting)) {
+      const name = spellLanguageName(setting);
       const detail = `No dictionary for ${name}. Choose another language in the settings.`;
-      await setStatus(detail);
-      await emit('spell-state', { problem: `Spell check: ${name}, no dictionary`, detail });
+      state = { problem: `Spell check: ${name}, no dictionary`, detail };
+      if (!spellSaid.has(setting)) {
+        spellSaid.add(setting);
+        await setStatus(detail);
+      }
     }
-    const marks =
-      language === MOCK_SPELL_LANGUAGE
-        ? speller.marks(mirror.text(), mockFormat(note) === 'AsciiDoc')
-        : [];
+    spellStates.set(note, state);
+    await showSpellState();
+    const marks = language === MOCK_SPELL_LANGUAGE ? speller.marks(mirror.text(), asciidoc) : [];
     await emit('spell-marks', { note, rev: mirror.rev, marks });
   };
   /** ADR-030: a note is checked once its text rested 250 ms. */
@@ -2451,7 +2919,9 @@ function workspaceHandlers(
   model.onChange = (key) => {
     if (key === 'spell_check_language') {
       spellSaid.clear();
-      void emit('spell-state', { problem: null, detail: null });
+      spellStates.clear();
+      spellShown = { problem: null, detail: null };
+      void emit('spell-state', spellShown);
       setTimeout(spellAll, 0);
     }
   };
@@ -2739,7 +3209,11 @@ function workspaceHandlers(
     try {
       await emit(
         'todos',
-        todos.view(root, files[root] ?? [], list.open && list.active ? null : active),
+        todos.view(
+          root,
+          files[root] ?? [],
+          list.open && list.active && list.pane === pane ? null : active,
+        ),
       );
     } catch {
       // The mock was taken down meanwhile (a test ended).
@@ -3264,7 +3738,11 @@ function workspaceHandlers(
     return {
       tabs: tabViews(left.tabs),
       active,
-      todoList: { open: todos.list(root).open, active: todos.list(root).active },
+      todoList: {
+        open: todos.list(root).open,
+        active: todos.list(root).active,
+        pane: todos.list(root).pane,
+      },
       split:
         right === null
           ? null
@@ -3273,6 +3751,7 @@ function workspaceHandlers(
               leftActive: left.active,
               rightActive: right.active,
               pane,
+              leftShare: (root !== null ? splitShares[root] : undefined) ?? 500,
             },
     };
   };
@@ -3368,6 +3847,11 @@ function workspaceHandlers(
    * open notes count with their text.
    */
   let linksTimer: ReturnType<typeof setTimeout> | null = null;
+  /** BR-021: how many unlinked mentions are listed, and of which note. */
+  const mentionLimit: { note: string | null; limit: number } = {
+    note: null,
+    limit: MOCK_MENTIONS_SHOWN,
+  };
   const linksSoon = () => {
     if (linksTimer !== null) {
       return;
@@ -3383,17 +3867,43 @@ function workspaceHandlers(
     }
     const note = active;
     const text = (id: string) => mirrors.get(id)?.text() ?? textOf(id);
-    // Only the notes that may hold a link, in the overview's order: the
-    // 10,000 notes of LARGE hold none, and sorting them all would hold up
-    // the window's keys (NFR-018 is measured there).
+    // Only the notes that may hold a link or a mention, in the overview's
+    // order: the 10,000 notes of LARGE hold none, and sorting them all
+    // would hold up the window's keys (NFR-018 is measured there).
     const notes = files[root] ?? [];
+    const named = title(note).toLowerCase();
     const order = [
       note,
-      ...notes.filter((other) => other !== note && text(other).includes('](')),
+      ...notes.filter((other) => {
+        if (other === note) {
+          return false;
+        }
+        const t = text(other);
+        return t.includes('](') || t.includes('::') || t.toLowerCase().includes(named);
+      }),
     ].sort(byOverview(lastOpened[root] ?? {}));
-    const others = root === LINKS ? LINKS_FILES : [];
+    // The files of the workspace that are no notes, as the backend asks
+    // the disk (package 12 review: existing pictures and scripts are not
+    // broken).
+    const others = [...(root === LINKS ? LINKS_FILES : []), ...FAKE_WORKSPACE_FILES];
+    // BR-021: another note lists the first 200 mentions again.
+    if (mentionLimit.note !== note) {
+      mentionLimit.note = note;
+      mentionLimit.limit = MOCK_MENTIONS_SHOWN;
+    }
     try {
-      await emit('links', mockLinks(note, mirrors.get(note)?.rev ?? 1, order, text, others, notes));
+      await emit(
+        'links',
+        mockLinks(
+          note,
+          mirrors.get(note)?.rev ?? 1,
+          order,
+          text,
+          others,
+          notes,
+          mentionLimit.limit,
+        ),
+      );
     } catch {
       // The mock was taken down meanwhile (a test ended).
     }
@@ -3736,6 +4246,7 @@ function workspaceHandlers(
       await sendIndexes();
       await sendGit();
       await sendTodos();
+      await showSpellState();
       if (settingsSaid !== undefined) {
         const said = settingsSaid;
         settingsSaid = undefined;
@@ -3829,30 +4340,54 @@ function workspaceHandlers(
   /** UC-004 A2 to A4: a rough stand-in for `follow_link` over the fake notes. */
   const followLink = async (note: string, raw: string, side = false): Promise<LinkAnswer> => {
     const link = raw.trim();
-    if ((link.includes('://') && !link.startsWith('file://')) || link.startsWith('mailto:')) {
-      if (webAllowed) {
-        openWithSystem(link);
+    // Q-61: a question not answered does not outlive the next link.
+    openAsked = null;
+    const fileUrl = /^file:\/\//i.test(link);
+    // Q-61, Q-62: opens `target` or asks first, every time.
+    const openOrAsk = (target: string, how: 'address' | 'file' | 'fileUrl'): LinkAnswer => {
+      const question = mockOpenQuestion(target, how);
+      if (question === null) {
+        openWithSystem(target);
         return { kind: 'done' };
       }
-      webAsked = link;
-      return { kind: 'askWeb', address: link };
+      openAsks += 1;
+      openAsked = { id: openAsks, target };
+      return { kind: 'askOpen', id: openAsks, ...question };
+    };
+    // Q-62: `://` makes an address only after something that can be a scheme.
+    const beforeAddress = link.split('#')[0].split('://');
+    const addressed = beforeAddress.length > 1 && /^[^/\\?]+$/.test(beforeAddress[0]);
+    if ((addressed && !fileUrl) || /^mailto:/i.test(link)) {
+      return openOrAsk(link, 'address');
     }
-    const [path, heading] = link.startsWith('file://')
-      ? [link.slice('file://'.length), undefined]
+    // Q-63: a `file://` place without query, fragment and `localhost`, decoded.
+    const [path, heading] = fileUrl
+      ? [
+          safeDecode(
+            link
+              .slice('file://'.length)
+              .split(/[#?]/)[0]
+              .replace(/^localhost\//i, '/'),
+          ),
+          undefined,
+        ]
       : (link.split(/#(.*)/s) as [string, string | undefined]);
-    if (path === '') {
+    if (path === '' && !fileUrl) {
       return jumpToHeading(note, heading ?? '');
+    }
+    // Q-61: a place on another computer is asked about from its text alone.
+    if (/^[/\\]{2}/.test(path)) {
+      return openOrAsk(path, 'file');
     }
     if (path.startsWith('/')) {
       if (path in FAKE_OUTSIDE) {
-        openWithSystem(path);
-      } else {
-        await setStatus(`${path} does not exist`);
+        return openOrAsk(path, fileUrl ? 'fileUrl' : 'file');
       }
+      await setStatus(`${path} does not exist`);
       return { kind: 'done' };
     }
     const parts = folderOf(note).split('/').filter(Boolean);
-    for (const part of decodeURIComponent(path).split('/')) {
+    for (const part of (fileUrl ? path : safeDecode(path)).split('/')) {
       if (part === '..') {
         if (parts.pop() === undefined) {
           await setStatus(`${link} leads outside the workspace and is not followed`);
@@ -3863,6 +4398,13 @@ function workspaceHandlers(
       }
     }
     const relative = parts.join('/');
+    if (FAKE_WORKSPACE_FILES.includes(relative)) {
+      return openOrAsk(`${root}/${relative}`, fileUrl ? 'fileUrl' : 'file');
+    }
+    if (fileUrl) {
+      await setStatus(`${root}/${relative} does not exist`);
+      return { kind: 'done' };
+    }
     const extension = /\.([^./]+)$/.exec(relative)?.[1];
     const isNote = extension === 'md' || extension === 'adoc';
     const id = isNote ? relative.replace(/\.[^./]+$/, '') : relative;
@@ -3903,7 +4445,11 @@ function workspaceHandlers(
     if (root) {
       lastOpened[root] = { ...lastOpened[root], [note]: ++clock };
       // F15, UC-021 step 6: the note shows; the tab "Todos" stays open.
-      todos.list(root).active = false;
+      // OQ-279: only in the tab's pane; the other pane keeps the todos.
+      const list = todos.list(root);
+      if (list.pane === pane) {
+        list.active = false;
+      }
     }
   };
   /**
@@ -4441,17 +4987,67 @@ function workspaceHandlers(
       snapshotsShown = null;
       return null;
     },
+    // UC-026 A7, OQ-294: a rough stand-in for `SnapshotStore::usage`, with
+    // the texts of `session/snapshots.rs`.
+    snapshots_space: () => mockSnapshotsSpace([...snapshotsOf.values()].flat()),
+    snapshots_remove_all: async () => {
+      const all = [...snapshotsOf.values()].flat();
+      snapshotsOf.clear();
+      restoreUndo = null;
+      const report =
+        all.length === 0
+          ? 'There were no snapshots to remove'
+          : `Removed all snapshots of this workspace: ${mockSnapshotsAmount(all)}`;
+      await setStatus(report);
+      if (snapshotsShown !== null) {
+        void emit('snapshots-changed', snapshotsShown);
+      }
+      return report;
+    },
+    // UC-023 BR-004, OQ-198: the user's recently run commands.
+    palette_ran: ({ id }) => {
+      ranCommands = [id, ...ranCommands.filter((known) => known !== id)].slice(0, 20);
+      return null;
+    },
+    // OQ-220: the width of the split view, within 15 percent of each pane.
+    split_share: async ({ share }) => {
+      if (root !== null) {
+        splitShares[root] = Math.min(850, Math.max(150, Math.round(share)));
+        await sendAll();
+      }
+      return null;
+    },
     // UC-005 A28: the corrections come a moment later, as from the backend.
-    spell_suggest: async ({ word }) => {
+    spell_suggest: async ({ word, note }) => {
       await new Promise((resolve) => setTimeout(resolve, 30));
-      return model.spellLanguage() === MOCK_SPELL_LANGUAGE ? speller.suggest(word) : [];
+      const setting = model.spellLanguage();
+      const text = mirrors.get(note)?.text() ?? '';
+      const named = setting === 'off' ? null : noteLanguage(text, mockFormat(note) === 'AsciiDoc');
+      const language = named === null ? setting : (offeredLanguage(named) ?? named);
+      if (language === 'off') {
+        return [];
+      }
+      if (language !== MOCK_SPELL_LANGUAGE) {
+        throw { kind: 'internal', message: `No dictionary for ${language}` };
+      }
+      return speller.suggest(word);
     },
     spell_add_word: async ({ word }) => {
       const refused = speller.add(word);
       if (refused !== null) {
         throw { kind: 'invalid', message: refused };
       }
-      await setStatus(`Added "${word.trim()}" to the dictionary`);
+      await setStatus(`Added "${word.trim()}" to your dictionary`);
+      spellAll();
+      return null;
+    },
+    // OQ-208: the workspace dictionary, `underline-words.txt` in the workspace.
+    spell_add_workspace_word: async ({ word }) => {
+      const refused = speller.add(word, 'workspace');
+      if (refused !== null) {
+        throw { kind: 'invalid', message: refused };
+      }
+      await setStatus(`Added "${word.trim()}" to the workspace dictionary`);
       spellAll();
       return null;
     },
@@ -4506,6 +5102,66 @@ function workspaceHandlers(
           ? (mockFoundLinks(mirror.text()).find((found) => found.at === at)?.place ?? null)
           : null;
       return link === null ? { kind: 'done' } : followLink(note, link);
+    },
+    // UC-004 A22: the mention, found again at its place, becomes a link.
+    links_link_mention: async ({ active, note, place }) => {
+      const text = mirrors.get(note)?.text() ?? textOf(note);
+      const found = mockMentions(active, [note], () => text, Infinity).notes[0]?.mentions.find(
+        (mention) =>
+          mention.place.from === place.from &&
+          mention.place.to === place.to &&
+          mention.place.check === place.check,
+      );
+      if (!root || !files[root]?.includes(active) || !files[root]?.includes(note)) {
+        throw { kind: 'invalid', message: `${note} is no note of the workspace` };
+      }
+      if (!found) {
+        const moved = `${title(note)} changed since the mentions were listed; the mention is no longer at its place`;
+        await setStatus(moved);
+        linksSoon();
+        return moved;
+      }
+      const from = webAtByte(text, place.from);
+      const to = webAtByte(text, place.to);
+      const markdown = formatOf(note) === 'Markdown';
+      const address = mockLinkPlace(fileOf(note), fileOf(active));
+      const label = mockLinkText(found.mention, markdown);
+      let link = markdown ? `[${label}](${address})` : `link:${address}[${label}]`;
+      let start = from;
+      // OQ-305: `!` would make a picture, an odd `\` would escape the `[`.
+      const slashes = (/\\*$/.exec(text.slice(0, from))?.[0].length ?? 0) % 2 === 1;
+      if (markdown && slashes) {
+        link = `\\${link}`;
+      } else if (markdown && text[from - 1] === '!') {
+        start = from - 1;
+        link = `\\!${link}`;
+      }
+      const open = mirrors.has(note);
+      if (!open) {
+        takeSnapshot(note, text, 'Editing');
+      }
+      const failed = await replaceWorkspaceNote(
+        note,
+        text,
+        text.slice(0, start) + link + text.slice(to),
+      );
+      const linked = `Linked the mention of ${title(active)} in ${title(note)}.`;
+      const status =
+        failed !== null
+          ? `${title(note)} could not be changed: ${failed}`
+          : open
+            ? `${linked} Undo with Ctrl+Z in ${title(note)}.`
+            : `${linked} The earlier version is in its snapshots.`;
+      await setStatus(status);
+      linksSoon();
+      return status;
+    },
+    links_more_mentions: ({ note }) => {
+      if (mentionLimit.note === note) {
+        mentionLimit.limit += MOCK_MENTIONS_SHOWN;
+        linksSoon();
+      }
+      return null;
     },
     links_headings: ({ note }) =>
       root && files[root]?.includes(note)
@@ -4686,10 +5342,11 @@ function workspaceHandlers(
       before.delete(note);
       return null;
     },
+    // OQ-248: as link completion writes the place and the text.
     ed_note_link: ({ note, target }) => ({
       kind: 'link',
-      address: relativeTo(note, `${target}.md`),
-      label: title(target),
+      address: mockLinkPlace(fileOf(note), fileOf(target)),
+      label: mockLinkText(title(target), formatOf(note) === 'Markdown'),
     }),
     ed_viewport: async ({ note, from, to }) => {
       const mirror = mirrors.get(note);
@@ -4995,25 +5652,31 @@ function workspaceHandlers(
         if (other === to) {
           continue;
         }
-        const needle = linkTo(other, note);
+        const forms = linkForms(other, note, to);
         const mirror = mirrors.get(other);
         const text = mirror?.text() ?? textOf(other);
-        const found = countLinks(text, needle);
+        const found = countAll(text, forms);
         if (found === 0) {
           continue;
         }
         links += found;
         notes += 1;
         if (!mirror) {
-          texts.set(other, text.split(needle).join(linkTo(other, to)));
+          texts.set(
+            other,
+            forms.reduce((now, [needle, by]) => now.split(needle).join(by), text),
+          );
           continue;
         }
         // UC-006 A7: the open note changes in its text, saved quietly.
-        let at = text.lastIndexOf(needle);
         let rev = mirror.rev;
-        while (at >= 0) {
-          rev = mirror.backendEdit(at, needle.length, linkTo(other, to), false) ?? rev;
-          at = at === 0 ? -1 : text.lastIndexOf(needle, at - 1);
+        for (const [needle, by] of forms) {
+          const now = mirror.text();
+          let at = now.lastIndexOf(needle);
+          while (at >= 0) {
+            rev = mirror.backendEdit(at, needle.length, by, false) ?? rev;
+            at = at === 0 ? -1 : now.lastIndexOf(needle, at - 1);
+          }
         }
         followMirror(other, mirror);
         // M-14.2: no mark for the rename's links of a tab without changes.
@@ -5039,7 +5702,7 @@ function workspaceHandlers(
         const found =
           other === note
             ? 0
-            : countLinks(mirrors.get(other)?.text() ?? textOf(other), linkTo(other, note));
+            : countAll(mirrors.get(other)?.text() ?? textOf(other), linkForms(other, note, note));
         links += found;
         notes += found > 0 ? 1 : 0;
       }
@@ -5617,11 +6280,11 @@ function workspaceHandlers(
         : todos.candidates(root, files[root] ?? [], number, query),
     todo_month: ({ day, step }) => mockCalendar(day, step),
     todo_list_show: async ({ filter }) => {
-      // OQ-279: the tab "Todos" is the left pane's, which becomes active.
-      focusPane('left');
+      // OQ-279: the tab "Todos" opens in the active pane (it moves there).
       const list = todos.list(root);
       list.open = true;
       list.active = true;
+      list.pane = other === null ? 'left' : pane;
       if (filter !== null) {
         list.filter = filter;
       }
@@ -5656,12 +6319,15 @@ function workspaceHandlers(
       await afterResolving(state);
       return null;
     },
-    link_open_web: async ({ open: answer }) => {
-      const address = webAsked;
-      webAsked = null;
-      if (answer && address !== null) {
-        webAllowed = true;
-        openWithSystem(address);
+    // Q-61, Q-62: "Open" opens what was asked about; nothing is remembered.
+    link_answer: async ({ id, open: answer }) => {
+      if (openAsked === null || openAsked.id !== id) {
+        return null;
+      }
+      const { target } = openAsked;
+      openAsked = null;
+      if (answer) {
+        openWithSystem(target);
       }
       return null;
     },
@@ -5687,6 +6353,8 @@ function workspaceHandlers(
     },
   };
   handlers.__hooks = {
+    recentCommands: () => [...ranCommands],
+    splitShare: () => (root === null ? null : (splitShares[root] ?? null)),
     addSnapshot: (note, text, cause = 'Editing', taken = Date.now()) =>
       takeSnapshot(note, text, mockCause(cause), taken).key,
     agentWrite: async (on) => {
@@ -5949,6 +6617,10 @@ function workspaceHandlers(
 
 /** ADR-025: what a test (or Playwright) may do as the backend would. */
 export type MockHooks = {
+  /** OQ-198: the commands the palette said it ran, the most recent first. */
+  recentCommands(): string[];
+  /** OQ-220: the share of the split view remembered for the open workspace, in tenths of a percent. */
+  splitShare(): number | null;
   /** As an agent: `remove` chars at char `at` replaced by `insert`. */
   backendEdit(
     note: string,

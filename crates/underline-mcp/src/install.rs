@@ -4,8 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
+use std::time::{Duration, Instant, SystemTime};
+
+use serde_json::value::RawValue;
 use serde_json::{json, Map, Value};
-use underline_core::write_atomic;
+use underline_core::write_atomic_private;
 
 /// The agent tools MCP install knows (FR-060).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -215,6 +218,21 @@ pub enum InstallError {
     /// A2: the entry starts another Underline; replacing it needs a yes.
     #[error("an entry for this workspace starts another Underline")]
     ForAnotherPlace(String),
+    /// A6, Q-110: the servers of the configuration are kept in something
+    /// else than a table of entries; it is left alone, never replaced.
+    #[error(
+        "in {}, \"{key}\" holds no list of servers, and Underline does not change it",
+        .path.display()
+    )]
+    NotAServerList { path: PathBuf, key: &'static str },
+    /// A6, Q-110: the user may not write the configuration (it was made
+    /// read-only); it is not replaced.
+    #[error("{} is read-only for you, and Underline does not replace it", .path.display())]
+    ReadOnly { path: PathBuf },
+    /// Q-110: another install or removal of Underline changes the same
+    /// configuration and did not finish within 10 seconds.
+    #[error("{} is being changed by another Underline; try again", .path.display())]
+    Busy { path: PathBuf },
 }
 
 /// UC-016 BR-001: `underline-` and the folder name.
@@ -239,9 +257,85 @@ fn base_name(workspace: &Path) -> String {
 /// The servers of a configuration, as name, program, and arguments.
 type Entries = Vec<(String, String, Vec<String>)>;
 
+/// The members of a JSON object in their order, each value as written in
+/// the file, so that what Underline does not change keeps every character
+/// (a number beyond 64 bits keeps its digits, Q-110).
+type Members = Vec<(String, Box<RawValue>)>;
+
+/// [`Members`] as read from JSON text.
+struct Ordered(Members);
+
+impl<'de> serde::Deserialize<'de> for Ordered {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visit;
+        impl<'de> serde::de::Visitor<'de> for Visit {
+            type Value = Ordered;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Ordered, A::Error> {
+                let mut members = Vec::new();
+                while let Some(member) = map.next_entry::<String, Box<RawValue>>()? {
+                    members.push(member);
+                }
+                Ok(Ordered(members))
+            }
+        }
+        deserializer.deserialize_map(Visit)
+    }
+}
+
+/// The members of the JSON text `raw` when it is an object, `None` when it
+/// is another value.
+fn members(raw: &str) -> Result<Option<Members>, serde_json::Error> {
+    if !raw.trim_start().starts_with('{') {
+        // Checked as a value, so that broken text is still said to be so.
+        serde_json::from_str::<serde::de::IgnoredAny>(raw)?;
+        return Ok(None);
+    }
+    serde_json::from_str::<Ordered>(raw).map(|ordered| Some(ordered.0))
+}
+
+/// `members` as an object at nesting `depth`, two spaces a level, each
+/// value as it was written.
+fn render(members: &Members, depth: usize) -> String {
+    if members.is_empty() {
+        return "{}".into();
+    }
+    let inner = "  ".repeat(depth + 1);
+    let lines: Vec<String> = members
+        .iter()
+        .map(|(key, value)| {
+            let key = serde_json::to_string(key).unwrap_or_default();
+            format!("{inner}{key}: {}", value.get())
+        })
+        .collect();
+    format!("{{\n{}\n{}}}", lines.join(",\n"), "  ".repeat(depth))
+}
+
+/// `value` pretty, as a member at nesting `depth`.
+fn raw_at(value: &Value, depth: usize) -> Box<RawValue> {
+    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    let indent = "  ".repeat(depth);
+    let text = text.replace('\n', &format!("\n{indent}"));
+    RawValue::from_string(text)
+        .unwrap_or_else(|_| RawValue::from_string("{}".into()).expect("{} is JSON"))
+}
+
+/// Sets the member `key` to `value`, in its place, or at the end.
+fn put(members: &mut Members, key: &str, value: Box<RawValue>) {
+    match members.iter_mut().find(|(k, _)| k == key) {
+        Some((_, old)) => *old = value,
+        None => members.push((key.to_owned(), value)),
+    }
+}
+
 /// The configuration of one tool as read.
 enum Document {
-    Json(Value),
+    Json(Members),
     Toml(toml_edit::DocumentMut),
 }
 
@@ -268,40 +362,46 @@ impl Document {
                 .map_err(|e| unreadable(e.to_string()));
         }
         if text.trim().is_empty() {
-            return Ok(Document::Json(json!({})));
+            return Ok(Document::Json(Vec::new()));
         }
-        match serde_json::from_str::<Value>(&text) {
-            Ok(value @ Value::Object(_)) => Ok(Document::Json(value)),
-            Ok(_) => Err(unreadable("it does not hold an object".into())),
+        match members(&text) {
+            Ok(Some(members)) => Ok(Document::Json(members)),
+            Ok(None) => Err(unreadable("it does not hold an object".into())),
             Err(err) => Err(unreadable(format!(
                 "{err}; it may hold comments, which Underline does not change"
             ))),
         }
     }
 
+    /// The servers of a JSON configuration: `Some` with the members of the
+    /// object under the tool's key, or none when there is no key; `None`
+    /// when the key holds something else.
+    fn json_servers(root: &Members, tool: Tool) -> Option<Members> {
+        match root.iter().find(|(key, _)| key == tool.key()) {
+            None => Some(Vec::new()),
+            Some((_, raw)) => members(raw.get()).ok().flatten(),
+        }
+    }
+
     fn entries(&self, tool: Tool) -> Entries {
         match self {
-            Document::Json(value) => value
-                .get(tool.key())
-                .and_then(Value::as_object)
-                .map(|servers| {
-                    servers
-                        .iter()
-                        .map(|(name, entry)| {
-                            let command = entry["command"].as_str().unwrap_or_default().to_owned();
-                            let args = entry["args"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str().map(str::to_owned))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            (name.clone(), command, args)
+            Document::Json(root) => Self::json_servers(root, tool)
+                .unwrap_or_default()
+                .iter()
+                .map(|(name, raw)| {
+                    let entry: Value = serde_json::from_str(raw.get()).unwrap_or_default();
+                    let command = entry["command"].as_str().unwrap_or_default().to_owned();
+                    let args = entry["args"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(str::to_owned))
+                                .collect()
                         })
-                        .collect()
+                        .unwrap_or_default();
+                    (name.clone(), command, args)
                 })
-                .unwrap_or_default(),
+                .collect(),
             Document::Toml(doc) => doc
                 .get(tool.key())
                 .and_then(|t| t.as_table_like())
@@ -331,56 +431,99 @@ impl Document {
         }
     }
 
-    fn set(&mut self, tool: Tool, name: &str, server: &Server) {
+    /// UC-016 step 4: puts the entry `name` for `server` into the servers.
+    /// In TOML the entry is a table of its own (`[mcp_servers.name]`), or
+    /// an inline table when the servers are one (`mcp_servers = { … }`).
+    /// Returns `false`, changing nothing, when the servers are kept in
+    /// something else than a table of entries (A6, Q-110).
+    fn set(&mut self, tool: Tool, name: &str, server: &Server) -> bool {
         match self {
-            Document::Json(value) => {
-                let root = value.as_object_mut().expect("an object");
-                let servers = root
-                    .entry(tool.key())
-                    .or_insert_with(|| Value::Object(Map::new()));
-                if !servers.is_object() {
-                    *servers = Value::Object(Map::new());
-                }
+            Document::Json(root) => {
+                let Some(mut servers) = Self::json_servers(root, tool) else {
+                    return false;
+                };
                 let mut entry = Map::new();
                 if matches!(tool, Tool::VsCode | Tool::ClaudeCode) {
                     entry.insert("type".into(), json!("stdio"));
                 }
                 entry.insert("command".into(), json!(server.program.to_string_lossy()));
                 entry.insert("args".into(), json!(server.args()));
-                servers
-                    .as_object_mut()
-                    .expect("an object")
-                    .insert(name.to_owned(), Value::Object(entry));
+                put(&mut servers, name, raw_at(&Value::Object(entry), 2));
+                Self::put_servers(root, tool, &servers);
+                true
             }
             Document::Toml(doc) => {
+                let mut entry = toml_edit::InlineTable::new();
+                entry.insert(
+                    "command",
+                    server.program.to_string_lossy().into_owned().into(),
+                );
+                entry.insert(
+                    "args",
+                    server.args().iter().collect::<toml_edit::Array>().into(),
+                );
                 let servers = doc
                     .entry(tool.key())
                     .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
                 if let Some(servers) = servers.as_table_mut() {
                     servers.set_implicit(true);
-                    let mut entry = toml_edit::Table::new();
-                    entry["command"] =
-                        toml_edit::value(server.program.to_string_lossy().into_owned());
-                    let mut args = toml_edit::Array::new();
-                    for arg in server.args() {
-                        args.push(arg);
+                    servers.insert(name, toml_edit::Item::Table(entry.into_table()));
+                    true
+                } else if let Some(servers) = servers.as_inline_table_mut() {
+                    // The space before the closing brace moves behind the
+                    // new last entry, not before its comma.
+                    if let Some((_, last)) = servers.iter_mut().last() {
+                        last.decor_mut().set_suffix("");
                     }
-                    entry["args"] = toml_edit::value(args);
-                    servers.insert(name, toml_edit::Item::Table(entry));
+                    servers.insert(name, toml_edit::Value::InlineTable(entry));
+                    true
+                } else {
+                    false
                 }
             }
         }
     }
 
+    /// Writes `servers` back under the tool's key of `root`.
+    fn put_servers(root: &mut Members, tool: Tool, servers: &Members) {
+        if let Ok(raw) = RawValue::from_string(render(servers, 1)) {
+            put(root, tool.key(), raw);
+        }
+    }
+
     fn remove(&mut self, tool: Tool, name: &str) {
         match self {
-            Document::Json(value) => {
-                if let Some(servers) = value.get_mut(tool.key()).and_then(Value::as_object_mut) {
-                    servers.remove(name);
+            Document::Json(root) => {
+                let Some(mut servers) = Self::json_servers(root, tool) else {
+                    return;
+                };
+                let before = servers.len();
+                servers.retain(|(key, _)| key != name);
+                if servers.len() != before {
+                    Self::put_servers(root, tool, &servers);
                 }
             }
             Document::Toml(doc) => {
-                if let Some(servers) = doc.get_mut(tool.key()).and_then(|t| t.as_table_like_mut()) {
+                let Some(servers) = doc.get_mut(tool.key()) else {
+                    return;
+                };
+                if let Some(servers) = servers.as_inline_table_mut() {
+                    // The space before the closing brace goes to the entry
+                    // that is last now, as [`Document::set`] took it.
+                    let last = servers.iter().last().map(|(key, _)| key.to_owned());
+                    let removed = servers.remove(name);
+                    if last.as_deref() == Some(name) {
+                        let suffix = removed
+                            .as_ref()
+                            .and_then(|v| v.decor().suffix())
+                            .and_then(|s| s.as_str())
+                            .unwrap_or(" ")
+                            .to_owned();
+                        if let Some((_, now_last)) = servers.iter_mut().last() {
+                            now_last.decor_mut().set_suffix(suffix);
+                        }
+                    }
+                } else if let Some(servers) = servers.as_table_like_mut() {
                     servers.remove(name);
                 }
             }
@@ -389,21 +532,96 @@ impl Document {
 
     fn write(&self, path: &Path) -> Result<(), InstallError> {
         let text = match self {
-            Document::Json(value) => {
-                let mut text = serde_json::to_string_pretty(value).unwrap_or_default();
+            Document::Json(root) => {
+                let mut text = render(root, 0);
                 text.push('\n');
                 text
             }
             Document::Toml(doc) => doc.to_string(),
         };
-        let unwritable = |source| InstallError::Unwritable {
-            path: path.to_owned(),
-            source,
-        };
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(unwritable)?;
+            std::fs::create_dir_all(parent).map_err(|source| InstallError::Unwritable {
+                path: path.to_owned(),
+                source,
+            })?;
         }
-        write_atomic(path, text.as_bytes()).map_err(unwritable)
+        // Q-110: the file may hold tokens: it keeps who may read it, a new
+        // one only the user may read, a link to it stays a link, and one
+        // the user may not write is not replaced.
+        write_atomic_private(path, text.as_bytes()).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::PermissionDenied {
+                InstallError::ReadOnly {
+                    path: path.to_owned(),
+                }
+            } else {
+                InstallError::Unwritable {
+                    path: path.to_owned(),
+                    source,
+                }
+            }
+        })
+    }
+}
+
+/// Q-110: while Underline changes a configuration (read, change, write),
+/// a lock file beside it keeps another install or removal of Underline,
+/// in this process or another, from writing the file as it read it before,
+/// which would lose the first one's entry. It is a file made only when
+/// none is there; it goes when the change is done. One left by an
+/// Underline that ended in between counts as gone after 30 seconds.
+/// The agent tools themselves do not know it.
+struct ConfigLock(PathBuf);
+
+impl ConfigLock {
+    /// How long to wait for another change, and when a lock counts as left.
+    const WAIT: Duration = Duration::from_secs(10);
+    const LEFT: Duration = Duration::from_secs(30);
+
+    fn take(path: &Path) -> Result<Self, InstallError> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let hidden = if name.starts_with('.') { "" } else { "." };
+        let lock = path.with_file_name(format!("{hidden}{name}.underline-lock"));
+        let start = Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock)
+            {
+                Ok(_) => return Ok(Self(lock)),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let left = std::fs::metadata(&lock)
+                        .and_then(|meta| meta.modified())
+                        .ok()
+                        .and_then(|at| SystemTime::now().duration_since(at).ok())
+                        .is_some_and(|age| age > Self::LEFT);
+                    if left {
+                        let _ = std::fs::remove_file(&lock);
+                    } else if start.elapsed() > Self::WAIT {
+                        return Err(InstallError::Busy {
+                            path: path.to_owned(),
+                        });
+                    } else {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                Err(source) => {
+                    return Err(InstallError::Unwritable {
+                        path: path.to_owned(),
+                        source,
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ConfigLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
@@ -450,6 +668,13 @@ pub fn install(
     replace: bool,
 ) -> Result<String, InstallError> {
     let path = tool.config_path(places).ok_or(InstallError::NoPlace)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| InstallError::Unwritable {
+            path: path.clone(),
+            source,
+        })?;
+    }
+    let _lock = ConfigLock::take(&path)?;
     let mut document = Document::read(tool, &path)?;
     let entries = document.entries(tool);
     let name = match own_entry(&entries, server) {
@@ -465,7 +690,13 @@ pub fn install(
                 .unwrap_or(base)
         }
     };
-    document.set(tool, &name, server);
+    // Q-110: "Installed" is said only when the entry is in what is written.
+    if !document.set(tool, &name, server) {
+        return Err(InstallError::NotAServerList {
+            path,
+            key: tool.key(),
+        });
+    }
     document.write(&path)?;
     Ok(name)
 }
@@ -473,6 +704,11 @@ pub fn install(
 /// UC-016 A3: removes only the workspace's entry from `tool`.
 pub fn remove(tool: Tool, places: &Places, server: &Server) -> Result<(), InstallError> {
     let path = tool.config_path(places).ok_or(InstallError::NoPlace)?;
+    if std::fs::symlink_metadata(&path).is_err() {
+        // No configuration: nothing to remove.
+        return Ok(());
+    }
+    let _lock = ConfigLock::take(&path)?;
     let mut document = Document::read(tool, &path)?;
     let Some((name, _)) = own_entry(&document.entries(tool), server) else {
         return Ok(());
@@ -711,5 +947,280 @@ mod tests {
             state(Tool::Codex, &places, &s).unwrap(),
             InstallState::NotInstalled
         );
+    }
+
+    /// UC-016 BR-002, Q-110: a configuration only the user may read stays
+    /// so (it may hold tokens), and a new one is created so.
+    #[cfg(unix)]
+    #[test]
+    fn uc016_br002_q110_the_file_mode_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = Home::new("mode");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let claude = home.0.join(".claude.json");
+        fs::write(&claude, "{\"oauthAccount\": {\"token\": \"secret\"}}\n").unwrap();
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o600)).unwrap();
+
+        install(Tool::ClaudeCode, &places, &s, false).unwrap();
+        assert_eq!(mode(&claude), 0o600);
+        remove(Tool::ClaudeCode, &places, &s).unwrap();
+        assert_eq!(mode(&claude), 0o600);
+
+        install(Tool::Cursor, &places, &s, false).unwrap();
+        assert_eq!(mode(&home.0.join(".cursor/mcp.json")), 0o600, "a new file");
+    }
+
+    /// UC-016 BR-002, Q-110: a configuration that is a symbolic link (as
+    /// dotfile managers make them) stays a link; the file it leads to gets
+    /// the entry.
+    #[cfg(unix)]
+    #[test]
+    fn uc016_br002_q110_a_link_stays_a_link() {
+        let home = Home::new("link");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        fs::create_dir_all(home.0.join("dotfiles")).unwrap();
+        fs::write(
+            home.0.join("dotfiles/claude.json"),
+            "{\"theme\": \"dark\"}\n",
+        )
+        .unwrap();
+        let link = home.0.join(".claude.json");
+        std::os::unix::fs::symlink("dotfiles/claude.json", &link).unwrap();
+
+        install(Tool::ClaudeCode, &places, &s, false).unwrap();
+
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let real: Value = serde_json::from_str(&home.read("dotfiles/claude.json")).unwrap();
+        assert_eq!(real["theme"], "dark");
+        assert_eq!(real["mcpServers"]["underline-notes"]["args"][0], "mcp");
+        assert_eq!(
+            state(Tool::ClaudeCode, &places, &s).unwrap(),
+            InstallState::Installed("underline-notes".into())
+        );
+    }
+
+    /// UC-016 step 4, A3, Q-110: Codex servers written as an inline table
+    /// get the entry in that table, and lose only it again.
+    #[test]
+    fn uc016_q110_codex_inline_table() {
+        let home = Home::new("inline");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        fs::create_dir_all(home.0.join(".codex")).unwrap();
+        let codex = "model = \"o3\"\nmcp_servers = { other = { command = \"x\" } }\n";
+        fs::write(home.0.join(".codex/config.toml"), codex).unwrap();
+
+        assert_eq!(
+            install(Tool::Codex, &places, &s, false).unwrap(),
+            "underline-notes"
+        );
+        let text = home.read(".codex/config.toml");
+        assert_eq!(
+            text,
+            "model = \"o3\"\nmcp_servers = { other = { command = \"x\" }, underline-notes = { command = \"/opt/underline/underline\", args = [\"mcp\", \"/home/ada/notes\"] } }\n"
+        );
+        let doc: toml_edit::DocumentMut = text.parse().unwrap();
+        assert_eq!(doc["mcp_servers"]["other"]["command"].as_str(), Some("x"));
+        assert_eq!(
+            doc["mcp_servers"]["underline-notes"]["args"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
+            Some(vec!["mcp", "/home/ada/notes"])
+        );
+        assert_eq!(
+            state(Tool::Codex, &places, &s).unwrap(),
+            InstallState::Installed("underline-notes".into())
+        );
+        remove(Tool::Codex, &places, &s).unwrap();
+        assert_eq!(home.read(".codex/config.toml"), codex, "as it was");
+        let after: toml_edit::DocumentMut = home.read(".codex/config.toml").parse().unwrap();
+        assert!(after["mcp_servers"].get("underline-notes").is_none());
+        assert_eq!(after["mcp_servers"]["other"]["command"].as_str(), Some("x"));
+        assert_eq!(after["model"].as_str(), Some("o3"));
+    }
+
+    /// UC-016 A6, Q-110: servers kept in something else than a table of
+    /// entries are refused with the reason; the file is not touched and
+    /// "Installed" is never said.
+    #[test]
+    fn uc016_a6_q110_servers_that_are_no_object_are_refused() {
+        let home = Home::new("not-object");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        fs::create_dir_all(home.0.join(".cursor")).unwrap();
+        fs::create_dir_all(home.0.join(".config/Code/User")).unwrap();
+        fs::create_dir_all(home.0.join(".codex")).unwrap();
+        let cases = [
+            (
+                Tool::Cursor,
+                ".cursor/mcp.json",
+                "{\"mcpServers\": [\"keep\"]}\n",
+            ),
+            (
+                Tool::VsCode,
+                ".config/Code/User/mcp.json",
+                "{\"servers\": \"x\"}\n",
+            ),
+            (Tool::Cursor, ".cursor/mcp.json", "{\"mcpServers\": null}\n"),
+            (
+                Tool::Codex,
+                ".codex/config.toml",
+                "mcp_servers = \"none\"\n",
+            ),
+            (Tool::Codex, ".codex/config.toml", "mcp_servers = [1, 2]\n"),
+        ];
+        for (tool, file, text) in cases {
+            fs::write(home.0.join(file), text).unwrap();
+            let err = install(tool, &places, &s, false).unwrap_err();
+            assert!(
+                matches!(err, InstallError::NotAServerList { .. }),
+                "{tool:?} {text}: {err:?}"
+            );
+            assert!(
+                err.to_string().contains("holds no list of servers")
+                    && err.to_string().contains(file),
+                "{err}"
+            );
+            assert_eq!(home.read(file), text, "{tool:?} unchanged");
+            assert_eq!(
+                state(tool, &places, &s).unwrap(),
+                InstallState::NotInstalled
+            );
+            remove(tool, &places, &s).unwrap();
+            assert_eq!(home.read(file), text, "{tool:?} unchanged by remove");
+        }
+    }
+    /// UC-016 BR-002, Q-110 (monkey finding): a configuration the user made
+    /// read-only (`0444`) is not replaced: the install fails cleanly, the
+    /// bytes and the mode stay. The rename over it made it succeed.
+    #[cfg(unix)]
+    #[test]
+    fn uc016_br002_q110_monkey_a_read_only_file_is_not_replaced() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = Home::new("read-only");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        let path = home.0.join(".claude.json");
+        fs::write(&path, "{\"a\": 1}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+
+        let result = install(Tool::ClaudeCode, &places, &s, false);
+
+        assert!(result.is_err(), "installed into a read-only file");
+        assert_eq!(home.read(".claude.json"), "{\"a\": 1}");
+    }
+
+    /// UC-016 step 4, Q-110 (monkey finding): installs of two workspaces
+    /// at the same time (read, change, write) lose entries: each one
+    /// writes the file as it read it. All eight must be there.
+    #[test]
+    fn uc016_q110_monkey_concurrent_installs_lose_no_entry() {
+        let home = Home::new("concurrent");
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let places = home.places(Os::Linux);
+                std::thread::spawn(move || {
+                    install(
+                        Tool::ClaudeCode,
+                        &places,
+                        &server(&format!("/w/n{i}")),
+                        false,
+                    )
+                })
+            })
+            .collect();
+        for thread in threads {
+            let _ = thread.join().unwrap();
+        }
+        let places = home.places(Os::Linux);
+        let missing: Vec<_> = (0..8)
+            .filter(|i| {
+                !matches!(
+                    state(Tool::ClaudeCode, &places, &server(&format!("/w/n{i}"))),
+                    Ok(InstallState::Installed(_))
+                )
+            })
+            .collect();
+        assert!(missing.is_empty(), "entries lost: {missing:?}");
+    }
+
+    /// UC-016 BR-002, Q-110 (monkey finding): everything else in the file
+    /// stays as it was: an integer beyond 64 bits (an id) is rewritten as
+    /// a float, `18446744073709551617` becoming `1.8446744073709552e+19`.
+    #[test]
+    fn uc016_br002_q110_monkey_other_values_keep_their_digits() {
+        let home = Home::new("digits");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        fs::write(
+            home.0.join(".claude.json"),
+            "{\"id\": 18446744073709551617}\n",
+        )
+        .unwrap();
+
+        install(Tool::ClaudeCode, &places, &s, false).unwrap();
+
+        assert!(
+            home.read(".claude.json").contains("18446744073709551617"),
+            "{}",
+            home.read(".claude.json")
+        );
+    }
+
+    /// UC-016 A6, Q-110: a read-only configuration is refused with a
+    /// reason that says so; no lock file is left behind.
+    #[cfg(unix)]
+    #[test]
+    fn uc016_a6_q110_read_only_is_said() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = Home::new("read-only-said");
+        let places = home.places(Os::Linux);
+        let path = home.0.join(".claude.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        if fs::OpenOptions::new().write(true).open(&path).is_ok() {
+            return;
+        }
+
+        let err =
+            install(Tool::ClaudeCode, &places, &server("/home/ada/notes"), false).unwrap_err();
+
+        assert!(matches!(err, InstallError::ReadOnly { .. }), "{err:?}");
+        assert!(err
+            .to_string()
+            .ends_with("is read-only for you, and Underline does not replace it"));
+        assert!(!home.0.join(".claude.json.underline-lock").exists());
+        assert_eq!(
+            fs::read_dir(&home.0).unwrap().count(),
+            1,
+            "only the configuration"
+        );
+    }
+
+    /// UC-016 BR-002, Q-110: what Underline does not change keeps every
+    /// character, its layout too.
+    #[test]
+    fn uc016_br002_q110_other_members_keep_their_text() {
+        let home = Home::new("verbatim");
+        let places = home.places(Os::Linux);
+        let s = server("/home/ada/notes");
+        fs::create_dir_all(home.0.join(".cursor")).unwrap();
+        let before = "{\n  \"big\": 1.000000000000000000001,\n  \"list\": [1,2,  3],\n  \"mcpServers\": {\n    \"z\": {\"command\":\"z\"}\n  }\n}\n";
+        fs::write(home.0.join(".cursor/mcp.json"), before).unwrap();
+
+        install(Tool::Cursor, &places, &s, false).unwrap();
+        let text = home.read(".cursor/mcp.json");
+        assert!(text.contains("\"big\": 1.000000000000000000001,"), "{text}");
+        assert!(text.contains("\"list\": [1,2,  3],"), "{text}");
+        assert!(text.contains("\"z\": {\"command\":\"z\"},"), "{text}");
+        serde_json::from_str::<Value>(&text).unwrap();
+        remove(Tool::Cursor, &places, &s).unwrap();
+        assert_eq!(home.read(".cursor/mcp.json"), before);
     }
 }

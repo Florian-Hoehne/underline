@@ -8,7 +8,8 @@
 //! re-export it under their former paths.
 
 mod asciidoc;
-pub use asciidoc::{stem_in_lines, stem_is_latexmath};
+pub mod asciimath;
+pub use asciidoc::{stem_in_lines, stem_notation};
 pub mod attributes;
 pub mod blocks;
 pub mod completion;

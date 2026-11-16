@@ -873,6 +873,40 @@ fn tc_005_37_tab_in_the_source_view() {
     assert!(tab.editor.text().ends_with("plain    "));
 }
 
+/// TC-005-37 step 6, OQ-260: the Vim keys' `>>` on an AsciiDoc item adds
+/// a `*` and `<<` takes it away, each one undo step; on a line outside a
+/// list `>>` shifts it by two spaces, as Vim does; a count in visual mode
+/// (`2>` over two lines of a paragraph) shifts both lines twice.
+#[test]
+fn tc_005_37_vim_shift_in_the_source_view() {
+    let shift = |from: u32, to: u32, outdent: bool, times: u32| EditorInput::VimShift {
+        from,
+        to,
+        outdent,
+        times,
+    };
+    let mut tab = EditorTab::new("* a\n* b\n\nplain\nmore\n", NoteFormat::AsciiDoc);
+    tab.keys.mode = KeysInputMode::Vim;
+    let start = "* a\n* b\n\nplain\nmore\n";
+    let patch = input(&mut tab, shift(5, 5, false, 1));
+    assert_eq!(tab.editor.text(), "* a\n** b\n\nplain\nmore\n");
+    assert_eq!(patch.place, "Ln 2, Col 1", "on the marker");
+    input(&mut tab, shift(6, 6, true, 1));
+    assert_eq!(tab.editor.text(), start);
+    input(&mut tab, ctrl(KeyName::Z));
+    assert_eq!(tab.editor.text(), "* a\n** b\n\nplain\nmore\n");
+    input(&mut tab, ctrl(KeyName::Z));
+    assert_eq!(tab.editor.text(), start);
+    let plain = u32::try_from(start.find("plain").unwrap()).unwrap();
+    let more = u32::try_from(start.find("more").unwrap()).unwrap();
+    input(&mut tab, shift(plain, plain, false, 1));
+    assert_eq!(tab.editor.text(), "* a\n* b\n\n  plain\nmore\n");
+    input(&mut tab, shift(plain, more + 2, false, 2));
+    assert_eq!(tab.editor.text(), "* a\n* b\n\n      plain\n    more\n");
+    input(&mut tab, ctrl(KeyName::Z));
+    assert_eq!(tab.editor.text(), "* a\n* b\n\n  plain\nmore\n");
+}
+
 /// TC-004-33 steps 2 and 4, UC-004 A16, BR-017: going to a line and
 /// column expands the folded section that holds it; beyond the note it
 /// goes to the last line, beyond a line to its end.

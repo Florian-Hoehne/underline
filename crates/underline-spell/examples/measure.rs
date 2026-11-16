@@ -14,7 +14,7 @@ use underline_spell::{Dictionaries, NoteSpeller, UserWords};
 fn main() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../apps/underline-tauri/src-tauri/resources/dictionaries");
-    let samples: [(&str, &[&str]); 4] = [
+    let samples: [(&str, &[&str]); 7] = [
         (
             "en-US",
             &[
@@ -44,6 +44,18 @@ fn main() {
         (
             "es-ES",
             &["cancion", "arbool", "manana", "nino", "graciass", "holaa"],
+        ),
+        (
+            "de-DE",
+            &["Strase", "Hauss", "gestren", "Fahrad", "Wörtebuch", "Kaffe"],
+        ),
+        (
+            "de-CH",
+            &["Straße", "Hauss", "gestren", "Fahrad", "Wörtebuch", "Kaffe"],
+        ),
+        (
+            "it-IT",
+            &["casaa", "perche", "citta", "ragazo", "aqua", "grazzie"],
         ),
     ];
     for (code, misspelled) in samples {

@@ -765,9 +765,12 @@ fn tc010_21_the_spell_check_language_by_name_stored_by_code() {
         names,
         [
             ("Off", Some("off")),
-            ("English (US)", Some("en-US")),
             ("English (UK)", Some("en-GB")),
+            ("English (US)", Some("en-US")),
             ("French (France)", Some("fr-FR")),
+            ("German (Germany)", Some("de-DE")),
+            ("German (Switzerland)", Some("de-CH")),
+            ("Italian (Italy)", Some("it-IT")),
             ("Spanish (Spain)", Some("es-ES")),
         ]
     );

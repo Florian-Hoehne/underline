@@ -5,11 +5,22 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const answers: { resolve: (words: string[]) => void; reject: (error: unknown) => void }[] = [];
+const asked: { word: string; note: string }[] = [];
+const added = vi.hoisted(() => ({ user: [] as string[], workspace: [] as string[] }));
 
 vi.mock('./spell', () => ({
-  spellSuggestions: () =>
-    new Promise<string[]>((resolve, reject) => answers.push({ resolve, reject })),
-  addToDictionary: async () => null,
+  spellSuggestions: (word: string, note: string) => {
+    asked.push({ word, note });
+    return new Promise<string[]>((resolve, reject) => answers.push({ resolve, reject }));
+  },
+  addToDictionary: async (word: string) => {
+    added.user.push(word);
+    return null;
+  },
+  addToWorkspaceDictionary: async (word: string) => {
+    added.workspace.push(word);
+    return word === 'refused' ? 'It could not be stored' : null;
+  },
 }));
 
 const { default: SpellMenu } = await import('./SpellMenu.svelte');
@@ -17,12 +28,15 @@ const { default: SpellMenu } = await import('./SpellMenu.svelte');
 afterEach(() => {
   cleanup();
   answers.length = 0;
+  asked.length = 0;
+  added.user.length = 0;
+  added.workspace.length = 0;
 });
 
-function open(wait = 20) {
+function open(wait = 20, word = 'ferri', onError = vi.fn()) {
   const onChoose = vi.fn();
   render(SpellMenu, {
-    props: { word: 'ferri', x: 10, y: 10, onChoose, onError: vi.fn(), onClose: vi.fn(), wait },
+    props: { word, note: 'Spell', x: 10, y: 10, onChoose, onError, onClose: vi.fn(), wait },
   });
   return onChoose;
 }
@@ -48,7 +62,7 @@ describe('the spell menu (OQ-302)', () => {
     const menu = await screen.findByRole('menu');
     await waitFor(() => expect(menu).toHaveFocus());
     await fireEvent.keyDown(menu, { key: 'ArrowDown' });
-    const add = within(menu).getByRole('menuitem', { name: 'Add "ferri" to dictionary' });
+    const add = within(menu).getByRole('menuitem', { name: 'Add "ferri" to my dictionary' });
     expect(add).toHaveFocus();
 
     answers[0].resolve(['ferry']);
@@ -61,7 +75,7 @@ describe('the spell menu (OQ-302)', () => {
     open(1000);
     answers[0].resolve([]);
     const menu = await screen.findByRole('menu');
-    const add = within(menu).getByRole('menuitem', { name: 'Add "ferri" to dictionary' });
+    const add = within(menu).getByRole('menuitem', { name: 'Add "ferri" to my dictionary' });
     await waitFor(() => expect(add).toHaveFocus());
     expect(within(menu).getByText('No corrections found')).toBeInTheDocument();
     cleanup();
@@ -70,5 +84,32 @@ describe('the spell menu (OQ-302)', () => {
     answers[1].reject(new Error('no dictionary'));
     const failed = await screen.findByRole('menu');
     expect(within(failed).getByText('Corrections unavailable')).toBeInTheDocument();
+  });
+
+  it('oq208: offers "Add to workspace dictionary" after "Add to dictionary"; OQ-207: asks for the note', async () => {
+    open(1000);
+    expect(asked).toEqual([{ word: 'ferri', note: 'Spell' }]);
+    answers[0].resolve(['ferry']);
+    const menu = await screen.findByRole('menu');
+    const items = within(menu).getAllByRole('menuitem');
+    expect(
+      items.map((item) => item.getAttribute('aria-label') ?? item.textContent?.trim()),
+    ).toEqual(['ferry', 'Add "ferri" to my dictionary', 'Add "ferri" to workspace dictionary']);
+    expect(items[2]).toHaveAccessibleDescription('Shared with everyone who uses this workspace');
+    expect(items[2]).toHaveTextContent('Shared with everyone who uses this workspace');
+    await fireEvent.click(items[2]);
+    await waitFor(() => expect(added.workspace).toEqual(['ferri']));
+    expect(added.user).toEqual([]);
+  });
+
+  it('oq208: a refusal of the workspace dictionary goes to the status bar', async () => {
+    const onError = vi.fn();
+    open(1000, 'refused', onError);
+    answers[0].resolve([]);
+    const menu = await screen.findByRole('menu');
+    await fireEvent.click(
+      within(menu).getByRole('menuitem', { name: 'Add "refused" to workspace dictionary' }),
+    );
+    await waitFor(() => expect(onError).toHaveBeenCalledWith('It could not be stored'));
   });
 });

@@ -39,7 +39,7 @@
         ],
         "call": "input",
         "out": {
-          "error": "The input is not valid: unknown variant `nothing`, expected one of `text`, `key`, `tool`, `edit` at line 1 column 17"
+          "error": "The input is not valid: unknown variant `nothing`, expected one of `text`, `key`, `tool`, `edit`, `vimShift` at line 1 column 17"
         }
       },
       {

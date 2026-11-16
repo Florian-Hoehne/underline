@@ -425,7 +425,9 @@ impl Lists {
                     return;
                 };
                 let by = item.indent - parent.indent;
-                for at in line..=end {
+                // A line of only space stays: taking it away could join a
+                // lone CR before it with its own break (OQ-260, test-monkey).
+                for at in (line..=end).filter(|&at| !self.blank(at)) {
                     if let Some(op) = outdented(self.text(at), by) {
                         into.insert(at, op);
                     }
@@ -543,11 +545,171 @@ pub fn indent(
 #[must_use]
 pub fn outdent_lines(rope: &Rope, cursor: usize, anchor: usize) -> Option<TextEdit> {
     let (first, last) = touched_lines(rope, cursor, anchor);
+    // A line of only space stays: taking its space away could join a lone
+    // CR before it with its own break into one CRLF (OQ-256, OQ-260).
     let ops: BTreeMap<usize, Op> = (first..=last)
-        .filter_map(|line| outdented(&line_text(rope, line), TAB).map(|op| (line, op)))
+        .map(|line| (line, line_text(rope, line)))
+        .filter(|(_, text)| !text.trim().is_empty())
+        .filter_map(|(line, text)| outdented(&text, TAB).map(|op| (line, op)))
         .filter(|(_, op)| op.delta() != 0)
         .collect();
     edit_of(rope, &ops, cursor, anchor)
+}
+
+/// OQ-260: the columns one of Vim's `>` and `<` shifts a line by, the
+/// indent unit of the source view (two spaces).
+pub const VIM_SHIFT: usize = 2;
+
+/// OQ-260: the most times one `>` or `<` shifts: a count beyond it (`99999>`)
+/// shifts as often, so a line gets at most 200 columns more at once.
+pub const VIM_MOST_TIMES: usize = 100;
+
+/// OQ-260, UC-005 BR-021: Vim's `>>` and `<<` (and `>` and `<` on a
+/// selection) on the list items of the lines from the one holding char
+/// `from` to the one holding char `to`, `times` times over (a count in
+/// visual mode, at most [`VIM_MOST_TIMES`]): each time the list rule of Tab
+/// or Shift+Tab, as one edit, so one step for undo. Lines in no list item
+/// stay. [`ListIndent::NotList`] when no line of the range is in a list
+/// item.
+///
+/// The edit leaves the cursor on the first char that is not space of the
+/// first item's line, as Vim does.
+#[must_use]
+pub fn vim_shift_items(
+    rope: &Rope,
+    from: usize,
+    to: usize,
+    format: NoteFormat,
+    outdent: bool,
+    times: usize,
+) -> ListIndent {
+    let (first, last) = lines_between(rope, from, to);
+    let lists = Lists::of(rope, format);
+    let Some(start) = (first..=last).find(|&line| lists.owner(line).is_some()) else {
+        return ListIndent::NotList;
+    };
+    let changed = items_shifted(rope, (start, last), format, outdent, times);
+    combined(rope, &changed, start).map_or(ListIndent::Unchanged, ListIndent::Edit)
+}
+
+/// OQ-260, UC-005 BR-021: Vim's `>>` and `<<` (and `>` and `<` with a
+/// motion or on a selection) in the source view on the lines from the one
+/// holding char `from` to the one holding char `to`, `times` times over (at
+/// most [`VIM_MOST_TIMES`]): the lines in a list item by the list rule of
+/// Tab and Shift+Tab ([`vim_shift_items`]); every other line by Vim's shift,
+/// [`VIM_SHIFT`] columns of space more or less, as the Vim keys of the
+/// source view shift (`codemirror-vim`). Empty lines and lines of only
+/// space stay, as in Vim. One edit, so one step for undo, the cursor on the
+/// first char that is not space of the first line; `None` when nothing
+/// changes.
+#[must_use]
+pub fn vim_shift_lines(
+    rope: &Rope,
+    from: usize,
+    to: usize,
+    format: NoteFormat,
+    outdent: bool,
+    times: usize,
+) -> Option<TextEdit> {
+    let (first, last) = lines_between(rope, from, to);
+    let lists = Lists::of(rope, format);
+    let listed: Vec<bool> = (first..=last)
+        .map(|line| lists.owner(line).is_some())
+        .collect();
+    let mut changed = match listed.iter().position(|&listed| listed) {
+        Some(at) => items_shifted(rope, (first + at, last), format, outdent, times),
+        None => rope.clone(),
+    };
+    let by = VIM_SHIFT * times.clamp(1, VIM_MOST_TIMES);
+    for (line, _) in (first..=last).zip(&listed).filter(|(_, &listed)| !listed) {
+        let text = line_text(&changed, line);
+        if text.trim().is_empty() {
+            continue;
+        }
+        let shifted = if outdent {
+            outdented(&text, by).map(|op| op.apply(&text))
+        } else {
+            Some(format!("{}{text}", " ".repeat(by)))
+        };
+        if let Some(shifted) = shifted {
+            let range = line_start(&changed, line)..content_end(&changed, line);
+            changed.remove(range.clone());
+            changed.insert(range.start, &shifted);
+        }
+    }
+    combined(rope, &changed, first)
+}
+
+/// `rope` with the list items of the lines `start` to `last` indented or
+/// outdented by the list rule, `times` times over (at most
+/// [`VIM_MOST_TIMES`]), as long as the rule changes them.
+fn items_shifted(
+    rope: &Rope,
+    (start, last): (usize, usize),
+    format: NoteFormat,
+    outdent: bool,
+    times: usize,
+) -> Rope {
+    let mut changed = rope.clone();
+    let (mut cursor, mut anchor) = (content_end(rope, last), line_start(rope, start));
+    for _ in 0..times.clamp(1, VIM_MOST_TIMES) {
+        let ListIndent::Edit(edit) = indent(&changed, cursor, anchor, format, outdent) else {
+            break;
+        };
+        changed.remove(edit.range.clone());
+        changed.insert(edit.range.start, &edit.text);
+        (cursor, anchor) = (edit.cursor, edit.anchor);
+    }
+    changed
+}
+
+/// The lines from the one holding char `from` to the one holding char
+/// `to`, in order.
+fn lines_between(rope: &Rope, from: usize, to: usize) -> (usize, usize) {
+    let (a, b) = (line_of(rope, from), line_of(rope, to));
+    (a.min(b), a.max(b))
+}
+
+/// The one edit that makes `rope` the text `changed`, replacing the lines
+/// between the first and the last that differ; the cursor on the first
+/// char that is not space of line `line`. `None` when the texts are the
+/// same. The edits of the list rule and of Vim's shift change only the
+/// space and the markers at the start of lines with text, so the lines
+/// stay the same; should they not, the whole text is replaced, so no line
+/// break is ever joined with another.
+fn combined(rope: &Rope, changed: &Rope, line: usize) -> Option<TextEdit> {
+    let lead = |at: usize| {
+        line_text(changed, at)
+            .chars()
+            .take_while(|c| matches!(c, ' ' | '\t'))
+            .count()
+    };
+    if rope.len_lines() != changed.len_lines() {
+        if *rope == *changed {
+            return None;
+        }
+        let line = line.min(changed.len_lines().saturating_sub(1));
+        let cursor = line_start(changed, line) + lead(line);
+        return Some(TextEdit {
+            range: 0..rope.len_chars(),
+            text: changed.to_string(),
+            cursor,
+            anchor: cursor,
+        });
+    }
+    let lines = rope.len_lines();
+    let differs = |at: usize| line_text(rope, at) != line_text(changed, at);
+    let first = (0..lines).find(|&at| differs(at))?;
+    let last = (first..lines).rev().find(|&at| differs(at))?;
+    let cursor = line_start(changed, line) + lead(line);
+    Some(TextEdit {
+        range: line_start(rope, first)..content_end(rope, last),
+        text: changed
+            .slice(line_start(changed, first)..content_end(changed, last))
+            .to_string(),
+        cursor,
+        anchor: cursor,
+    })
 }
 
 /// The edit of `ops`, with the selection moved along; `None` without ops.
@@ -813,5 +975,232 @@ mod tests {
         let edit = outdent_lines(&rope, 0, 17).expect("an edit");
         assert_eq!(edit.text, "  deep\nnone\nтаб");
         assert_eq!(outdent_lines(&Rope::from_str("none"), 1, 1), None);
+    }
+
+    /// OQ-256, OQ-260 (review): Shift+Tab on a line of only space after a
+    /// lone CR leaves it, so the CR never joins its break into a CRLF and
+    /// no line is lost or copied; lines of only space are not outdented.
+    #[test]
+    fn oq256_shift_tab_keeps_a_line_of_space_after_a_lone_cr() {
+        let text = "a\r  \nb";
+        let rope = Rope::from_str(text);
+        assert_eq!(outdent_lines(&rope, 3, 3), None);
+        let mut editor = crate::SourceEditor::new(text);
+        editor.set_selection(3, 3);
+        editor.outdent_lines();
+        let after = editor.text();
+        assert_eq!(after.matches('b').count(), 1, "{after:?}");
+        assert_eq!(after, text, "breaks and lines intact");
+        let mixed = "a\r  \n    b\n";
+        let rope = Rope::from_str(mixed);
+        let edit = outdent_lines(&rope, 2, rope.len_chars() - 1).expect("an edit");
+        let mut changed = rope.clone();
+        changed.remove(edit.range.clone());
+        changed.insert(edit.range.start, &edit.text);
+        assert_eq!(changed.to_string(), "a\r  \nb\n");
+    }
+
+    /// The text after `edit`.
+    fn edited(text: &str, edit: &TextEdit) -> String {
+        let mut rope = Rope::from_str(text);
+        rope.remove(edit.range.clone());
+        rope.insert(edit.range.start, &edit.text);
+        rope.to_string()
+    }
+
+    /// The char of `marker` in `text`.
+    fn char_of(text: &str, marker: &str) -> usize {
+        Rope::from_str(text).byte_to_char(text.find(marker).expect("marker"))
+    }
+
+    /// TC-005-37 step 6, OQ-260: Vim's `>>` on a list item indents it by the
+    /// list rule, as Tab does, the cursor on its marker; `<<` outdents it.
+    #[test]
+    fn tc_005_37_vim_shift_on_a_list_item_follows_the_list_rule() {
+        let text = "- a\n- b\n- c\n";
+        let at = char_of(text, "b");
+        let ListIndent::Edit(edit) = vim_shift_items(&Rope::from_str(text), at, at, MD, false, 1)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edited(text, &edit), "- a\n  - b\n- c\n");
+        assert_eq!((edit.cursor, edit.anchor), (6, 6), "on the marker of b");
+        let back = edited(text, &edit);
+        let at = char_of(&back, "b");
+        let ListIndent::Edit(edit) = vim_shift_items(&Rope::from_str(&back), at, at, MD, true, 1)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edited(&back, &edit), text);
+        // AsciiDoc: one more marker char, as Tab writes.
+        let adoc = "* a\n* b\n";
+        let at = char_of(adoc, "b");
+        let ListIndent::Edit(edit) = vim_shift_items(&Rope::from_str(adoc), at, at, ADOC, false, 1)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edited(adoc, &edit), "* a\n** b\n");
+    }
+
+    /// OQ-260: `3>>` takes the items of three lines, each by the list rule
+    /// (as Tab on a selection of them); an item that cannot go deeper stays,
+    /// and a top-level item is not outdented.
+    #[test]
+    fn oq260_vim_shift_of_several_lines_applies_the_rule_per_item() {
+        let text = "- a\n- b\n- c\n- d\n";
+        let rope = Rope::from_str(text);
+        let ListIndent::Edit(edit) =
+            vim_shift_items(&rope, char_of(text, "b"), char_of(text, "d"), MD, false, 1)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edited(text, &edit), "- a\n  - b\n  - c\n  - d\n");
+        assert_eq!(
+            vim_shift_items(&rope, 0, 0, MD, false, 1),
+            ListIndent::Unchanged,
+            "a has no item before it"
+        );
+        assert_eq!(
+            vim_shift_items(&rope, 0, 0, MD, true, 1),
+            ListIndent::Unchanged
+        );
+    }
+
+    /// OQ-260: a count in visual mode (`2>`) indents as often, as long as the
+    /// list rule lets the item go deeper; one edit, so one undo step.
+    #[test]
+    fn oq260_vim_shift_with_a_count_repeats_the_list_rule() {
+        let text = "- a\n  - b\n- c\n";
+        let at = char_of(text, "c");
+        let ListIndent::Edit(edit) = vim_shift_items(&Rope::from_str(text), at, at, MD, false, 3)
+        else {
+            panic!("an edit");
+        };
+        // Once below "a" (next to "b"), then below "b"; no third level
+        // without an item before it there.
+        assert_eq!(edited(text, &edit), "- a\n  - b\n    - c\n");
+        let adoc = "* a\n** b\n** c\n";
+        let at = char_of(adoc, "c");
+        let ListIndent::Edit(edit) = vim_shift_items(&Rope::from_str(adoc), at, at, ADOC, true, 2)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edited(adoc, &edit), "* a\n** b\n* c\n");
+    }
+
+    /// OQ-260: outside a list item `>>` and `<<` keep Vim's shift: two
+    /// columns of space per step, on every line of the range; a line in
+    /// fenced code is no item.
+    #[test]
+    fn oq260_vim_shift_outside_a_list_shifts_the_lines() {
+        let text = "para\n\n```\n- code\n```\n";
+        let rope = Rope::from_str(text);
+        assert_eq!(
+            vim_shift_items(&rope, 0, 0, MD, false, 1),
+            ListIndent::NotList
+        );
+        let edit = vim_shift_lines(&rope, 0, 0, MD, false, 1).expect("an edit");
+        assert_eq!(edited(text, &edit), "  para\n\n```\n- code\n```\n");
+        assert_eq!((edit.cursor, edit.anchor), (2, 2));
+        let code = char_of(text, "- code");
+        assert_eq!(
+            vim_shift_items(&rope, code, code, MD, false, 1),
+            ListIndent::NotList
+        );
+        let shifted = "    a\n\tb\nc\n";
+        let rope = Rope::from_str(shifted);
+        let end = rope.len_chars() - 1;
+        let edit = vim_shift_lines(&rope, 0, end, MD, true, 1).expect("an edit");
+        assert_eq!(edited(shifted, &edit), "  a\n  b\nc\n");
+        let edit = vim_shift_lines(&rope, 0, end, MD, false, 2).expect("an edit");
+        assert_eq!(edited(shifted, &edit), "        a\n    \tb\n    c\n");
+        assert_eq!(
+            vim_shift_lines(&Rope::from_str("x\n"), 0, 0, MD, true, 1),
+            None
+        );
+    }
+
+    /// OQ-260 (review): Vim's shift skips empty lines and lines of only
+    /// space, as Vim does, with `>`, `<` and a count.
+    #[test]
+    fn oq260_vim_shift_skips_blank_lines() {
+        let text = "a\n\n   \nb\n";
+        let rope = Rope::from_str(text);
+        let end = rope.len_chars() - 1;
+        let edit = vim_shift_lines(&rope, 0, end, MD, false, 3).expect("an edit");
+        assert_eq!(edited(text, &edit), "      a\n\n   \n      b\n");
+        let shifted = "  a\n  \n  b\n";
+        let rope = Rope::from_str(shifted);
+        let edit = vim_shift_lines(&rope, 0, rope.len_chars() - 1, MD, true, 1).expect("an edit");
+        assert_eq!(edited(shifted, &edit), "a\n  \nb\n");
+    }
+
+    /// OQ-260 (review): a selection of plain lines and list items: the items
+    /// by the list rule, the other lines by Vim's shift.
+    #[test]
+    fn oq260_a_mixed_selection_shifts_items_by_the_list_rule() {
+        let text = "intro\n- a\n- b\nafter\n\n```\n- code\n```\n";
+        let rope = Rope::from_str(text);
+        let edit =
+            vim_shift_lines(&rope, 0, char_of(text, "- code"), MD, false, 1).expect("an edit");
+        assert_eq!(
+            edited(text, &edit),
+            "  intro\n- a\n  - b\n  after\n\n  ```\n  - code\n```\n"
+        );
+        assert_eq!((edit.cursor, edit.anchor), (2, 2), "on the first line");
+        let adoc = "intro\n* a\n* b\n\nend\n";
+        let rope = Rope::from_str(adoc);
+        let edit =
+            vim_shift_lines(&rope, 0, rope.len_chars() - 1, ADOC, false, 1).expect("an edit");
+        assert_eq!(edited(adoc, &edit), "  intro\n* a\n** b\n\n  end\n");
+    }
+
+    /// OQ-260 (review): with CRLF breaks and a lone CR the breaks stay; a
+    /// line of only space after a lone CR is left alone, so its break never
+    /// joins the CR.
+    #[test]
+    fn oq260_vim_shift_keeps_crlf_and_lone_cr_breaks() {
+        let text = "- a\r\n- b\r\n  \r\nplain\r\n";
+        let rope = Rope::from_str(text);
+        let edit = vim_shift_lines(
+            &rope,
+            char_of(text, "b"),
+            char_of(text, "plain"),
+            MD,
+            false,
+            1,
+        )
+        .expect("an edit");
+        assert_eq!(edited(text, &edit), "- a\r\n  - b\r\n  \r\n  plain\r\n");
+        let lone = "- a\r  - b\n  \nc";
+        let rope = Rope::from_str(lone);
+        let edit = vim_shift_lines(&rope, char_of(lone, "- b"), rope.len_chars(), MD, true, 1)
+            .expect("an edit");
+        let after = edited(lone, &edit);
+        assert_eq!(after.matches('\r').count(), 1, "{after:?}");
+        assert_eq!(after.lines().count(), lone.lines().count(), "{after:?}");
+    }
+
+    /// OQ-260 (review): items with text beyond ASCII: the edit and the
+    /// cursor count chars, not bytes.
+    #[test]
+    fn oq260_vim_shift_of_items_beyond_ascii() {
+        let text = "- äöü\n- 日本語\n- 😀 x\n";
+        let at = char_of(text, "日");
+        let ListIndent::Edit(edit) =
+            vim_shift_items(&Rope::from_str(text), at, char_of(text, "😀"), MD, false, 1)
+        else {
+            panic!("an edit");
+        };
+        assert_eq!(edited(text, &edit), "- äöü\n  - 日本語\n  - 😀 x\n");
+        assert_eq!(edit.cursor, "- äöü\n  ".chars().count(), "on the marker");
+    }
+
+    /// OQ-260 (review): a count is capped at `VIM_MOST_TIMES`.
+    #[test]
+    fn oq260_the_count_is_capped() {
+        let rope = Rope::from_str("x");
+        let edit = vim_shift_lines(&rope, 0, 0, MD, false, usize::MAX).expect("an edit");
+        assert_eq!(edit.text.len(), VIM_SHIFT * VIM_MOST_TIMES + 1);
     }
 }

@@ -34,14 +34,15 @@
 ## TC-023-02: Matching and order
 
 **Flow:** BR-002, BR-004  
-**Preconditions:** No command was run since Underline started.
+**Preconditions:** No command was ever run from the palette.
 
 | Step | Action                                             | Expected result                                                         |
 |------|----------------------------------------------------|-------------------------------------------------------------------------|
 | 1    | Open the command palette and type `NOTE NEW`.      | The command to create a new note is listed; case and order do not matter. |
 | 2    | Type `theme` instead.                              | Commands whose name starts with "Theme" come before those that only hold the word. |
 | 3    | Run the command to show the minimap, then open the palette with an empty field. | That command is listed first.                       |
-| 4    | Restart Underline and open the palette.            | No command is listed as recently run.                                   |
+| 4    | Restart Underline and open the palette with an empty field. | The command to show the minimap is still listed first.          |
+| 5    | Open another workspace and open the palette with an empty field. | The command to show the minimap is listed first there too.  |
 
 ## TC-023-03: Every command is offered
 

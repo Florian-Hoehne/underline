@@ -131,8 +131,11 @@ Reihenfolge von links nach rechts:
   - Notiz → im Tab öffnen und zur Überschrift springen.
   - Fehlende Notiz → Dialog „New note“ vorbefüllt mit „{title} does not exist yet. Create it?“.
   - Web → einmal pro Sitzung fragen („Open X in your browser?“ / „Underline asks this once until it is closed.“,
-    „Open“/„Cancel“), dann im Systembrowser öffnen.
-  - Datei → öffnen, falls vorhanden, sonst „X does not exist“.
+    „Open“/„Cancel“), dann im Systembrowser öffnen. Seit 2026-11-16 (Q-62): `http`, `https`, `mailto` ohne Frage,
+    jedes andere Schema fragt jedes Mal („Open {scheme}: link“).
+  - Datei → öffnen, falls vorhanden, sonst „X does not exist“. Seit 2026-11-16 (Q-61, Q-63): ausführbare Dateien
+    („Open program“) und `file://`-Ziele („Open file“) fragen jedes Mal; `file://` wird dekodiert und relativ zur Notiz
+    aufgelöst.
   - Ausserhalb → „{link} leads outside the workspace and is not followed“.
 - [x] **M-07.4** In der Facade zeigt Hover über einem Link die Adresse und „Ctrl+click to follow“.
 - [x] **M-07.5** Änderungen von aussen (ADR-011):

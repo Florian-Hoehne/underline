@@ -80,6 +80,53 @@ fn scan_links(source: &str, format: NoteFormat, addresses: bool) -> Vec<FoundLin
     found
 }
 
+/// The lines of `source`, each with its line end: `\n`, `\r\n`, or a lone
+/// `\r`, as comrak and Asciidoctor end a line (OQ-199 test-monkey).
+pub(crate) fn lines(source: &str) -> impl Iterator<Item = &str> {
+    let bytes = source.as_bytes();
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        if start >= bytes.len() {
+            return None;
+        }
+        let mut end = start;
+        while end < bytes.len() {
+            match bytes[end] {
+                b'\n' => {
+                    end += 1;
+                    break;
+                }
+                b'\r' if bytes.get(end + 1) != Some(&b'\n') => {
+                    end += 1;
+                    break;
+                }
+                _ => end += 1,
+            }
+        }
+        let line = &source[start..end];
+        start = end;
+        Some(line)
+    })
+}
+
+/// The byte offsets of the starts of the [`lines`] of `source`, with one
+/// more for a line after a last line end.
+pub(crate) fn line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    let mut at = 0;
+    for line in lines(source) {
+        at += line.len();
+        starts.push(at);
+    }
+    if starts.last() == Some(&source.len()) && starts.len() > 1 {
+        let ended = source.ends_with(['\n', '\r']);
+        if !ended {
+            starts.pop();
+        }
+    }
+    starts
+}
+
 /// The bytes of the text of the first heading of `source`, if it has one.
 pub fn first_heading(source: &str, format: NoteFormat) -> Option<Range<usize>> {
     let marker = match format {
@@ -88,7 +135,7 @@ pub fn first_heading(source: &str, format: NoteFormat) -> Option<Range<usize>> {
     };
     let mut fence: Option<String> = None;
     let mut at = 0;
-    for line in source.split_inclusive('\n') {
+    for line in lines(source) {
         let start = at;
         at += line.len();
         let content = line.trim_end_matches(['\n', '\r']);
@@ -124,7 +171,7 @@ pub fn first_heading(source: &str, format: NoteFormat) -> Option<Range<usize>> {
 
 /// The line that opens a block whose content is not markup: a fenced or
 /// delimited code, literal, passthrough, or comment block.
-fn block_delimiter(line: &str, format: NoteFormat) -> Option<String> {
+pub(crate) fn block_delimiter(line: &str, format: NoteFormat) -> Option<String> {
     let line = line.trim_end();
     match format {
         NoteFormat::Markdown => {
@@ -154,9 +201,7 @@ fn markdown_links(source: &str, addresses: bool) -> Vec<FoundLink> {
     // links, so the links a rename sees stay those it always saw.
     options.extension.autolink = addresses;
     let root = parse_document(&arena, source, &options);
-    let starts: Vec<usize> = std::iter::once(0)
-        .chain(source.match_indices('\n').map(|(i, _)| i + 1))
-        .collect();
+    let starts = line_starts(source);
     let offset = |line: usize, column: usize| {
         starts.get(line.saturating_sub(1)).copied().unwrap_or(0) + column.saturating_sub(1)
     };
@@ -194,7 +239,7 @@ fn markdown_links(source: &str, addresses: bool) -> Vec<FoundLink> {
     // A definition cannot interrupt a paragraph: it follows a blank line,
     // the start, a heading or another definition.
     let mut after_paragraph = false;
-    for (index, line) in source.split_inclusive('\n').enumerate() {
+    for (index, line) in lines(source).enumerate() {
         if code_lines.iter().any(|lines| lines.contains(&(index + 1))) {
             after_paragraph = false;
             continue;
@@ -222,14 +267,14 @@ fn markdown_links(source: &str, addresses: bool) -> Vec<FoundLink> {
 
 /// The bytes of the formula blocks of a Markdown note: from a line that is
 /// `$$` (or starts one) to the line that ends with `$$`, outside code.
-fn math_bytes(
+pub(crate) fn math_bytes(
     source: &str,
     starts: &[usize],
     code_lines: &[std::ops::RangeInclusive<usize>],
 ) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut open: Option<usize> = None;
-    for (index, line) in source.split_inclusive('\n').enumerate() {
+    for (index, line) in lines(source).enumerate() {
         if code_lines.iter().any(|lines| lines.contains(&(index + 1))) {
             continue;
         }
@@ -409,7 +454,7 @@ fn asciidoc_links(source: &str, addresses: bool) -> Vec<FoundLink> {
     let mut found = Vec::new();
     let mut block: Option<String> = None;
     let mut at = 0;
-    for line in source.split_inclusive('\n') {
+    for line in lines(source) {
         let start = at;
         at += line.len();
         let content = line.trim_end_matches(['\n', '\r']);
@@ -502,7 +547,8 @@ fn asciidoc_line(line: &str, start: usize, addresses: bool, found: &mut Vec<Foun
             {
                 let place = &after[..open];
                 let name = &rest[..len];
-                let close = after[open..].find(']').map(|c| open + c);
+                // `\]` is a bracket of the text (OQ-248).
+                let close = unescaped_close(&after[open..]).map(|c| open + c);
                 let wanted = !place.is_empty() && (name != "xref:" || is_document_reference(place));
                 if wanted {
                     let begin = start + i + len;
@@ -547,6 +593,12 @@ fn asciidoc_line(line: &str, start: usize, addresses: bool, found: &mut Vec<Foun
         }
         i += 1;
     }
+}
+
+/// The first `]` of `text` without a backslash before it.
+fn unescaped_close(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    (0..bytes.len()).find(|&at| bytes[at] == b']' && (at == 0 || bytes[at - 1] != b'\\'))
 }
 
 /// The length of the web address `rest` starts with, written as it is in
@@ -1085,6 +1137,64 @@ mod tests {
             "xref:Installation.adoc[Installation] and <<Installation.adoc#install,install>>\n"
         );
         assert_eq!(sandbox.read("Intro.md"), "[setup](Installation.adoc)\n");
+    }
+
+    /// OQ-244, UC-006 BR-003, BR-005, TC-006-20: a file that includes the
+    /// renamed note, or shows it as a picture, follows it; a moved note's
+    /// own pictures and included files lead where they led.
+    #[test]
+    fn uc006_tc20_pictures_and_includes_follow() {
+        let sandbox = Sandbox::new(
+            "tc20",
+            &[
+                (
+                    "Chapter.adoc",
+                    "= Chapter\ninclude::part.adoc[]\nimage::img/a.png[A]\n",
+                ),
+                ("part.adoc", "Part\n"),
+                ("img/a.png", ""),
+                (
+                    "Book.adoc",
+                    "= Book\ninclude::Chapter.adoc[]\nimage:Chapter.adoc[]\n",
+                ),
+                ("Pics.md", "![chapter](Chapter.adoc)\n"),
+            ],
+        );
+        let renamed = sandbox.rename("Chapter", "parts", "First Chapter");
+        assert_eq!((renamed.links, renamed.notes), (3, 2));
+        assert_eq!(
+            sandbox.read("Book.adoc"),
+            "= Book\ninclude::parts/First-Chapter.adoc[]\nimage:parts/First-Chapter.adoc[]\n"
+        );
+        assert_eq!(
+            sandbox.read("Pics.md"),
+            "![chapter](parts/First-Chapter.adoc)\n"
+        );
+        assert_eq!(
+            sandbox.read("parts/First-Chapter.adoc"),
+            "= First Chapter\ninclude::../part.adoc[]\nimage::../img/a.png[A]\n"
+        );
+    }
+
+    /// OQ-199 (test-monkey): lines end at `\n`, `\r\n` and a lone `\r`,
+    /// as comrak ends them.
+    #[test]
+    fn lines_end_as_comrak_ends_them() {
+        let text = "a\r\nb\rc\n\rd";
+        assert_eq!(
+            lines(text).collect::<Vec<_>>(),
+            ["a\r\n", "b\r", "c\n", "\r", "d"]
+        );
+        assert_eq!(line_starts(text), [0, 3, 5, 7, 8]);
+        assert_eq!(line_starts("a\n"), [0, 2]);
+        assert_eq!(line_starts(""), [0]);
+        assert_eq!(
+            found_links("x\r[a](A.md)\r", NoteFormat::Markdown)
+                .iter()
+                .map(|l| (l.span.start, l.span.end))
+                .collect::<Vec<_>>(),
+            [(2, 11)]
+        );
     }
 
     /// TC-006-12: a linking note that cannot be written is named.

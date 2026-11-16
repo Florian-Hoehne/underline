@@ -20,7 +20,7 @@
 | Input mode              | The set of keys the editor follows: Normal, Vim, or Nano. Independent of the editing view.                                        | Edit mode         |
 | Tab                     | The area in the middle of the window that shows one open note.                                                                    |                   |
 | Note overview           | The panel on the left that lists the notes of the workspace, the recently opened first.                                          | Sidebar           |
-| Tool panel              | The panel on the right with the note properties and the tools: diff, outline, code index, figure index, backlinks, outgoing links, tags, todos. |                   |
+| Tool panel              | The panel on the right with the note properties and the tools: diff, outline, code index, figure index, backlinks, unlinked mentions, outgoing links, tags, todos. |                   |
 | Status bar              | The line at the bottom of the window with the workspace directory, the git sync state, the input mode commands, and messages.    |                   |
 | Outline                 | The list of the headings of the active note, used to jump to a section.                                                            | Table of contents |
 | Code index              | The list of the code blocks of the active note, used to jump to one.                                                               |                   |
@@ -53,8 +53,9 @@
 | Reading time            | The minutes an average reader needs for a text, counted at 200 words a minute and rounded up.                                     |                   |
 | Tag                     | A word that groups notes across folders: `#` followed by the word in the text of a Markdown note, or a value of the note attribute `tags`. | Keyword           |
 | Backlink                | A local link in another note that leads to the active note, seen from the note it leads to.                                       | Inbound link, Linked mention |
-| Outgoing link           | A link the active note holds: a local link, a link to a file of the workspace, or a web address.                                  |                   |
+| Outgoing link           | A link the active note holds: a local link, a link to a file of the workspace, a picture, an included file, or a web address.      |                   |
 | Broken link             | A local link whose note, file, or heading does not exist in the workspace.                                                        | Dead link         |
+| Unlinked mention        | A place in another note where the title of the active note stands as plain text, without a link to it.                          |                   |
 | Link completion         | The list of notes and headings the editor suggests while the user types a link, which writes the chosen one as a local link.     |                   |
 | Find field              | The field at the top of a tab that finds a text in the note of that tab and, opened for replacing, replaces it.                  | Find bar          |
 | Search switch           | One of the three switches of a search: match case, whole word, and regular expression.                                                   |                   |
@@ -78,4 +79,5 @@
 | Formula                 | Mathematics written in a note in the notation GitHub reads, inline in a line or as a block of its own, shown typeset.            | Equation          |
 | Spell check             | Marking the words of a note that the dictionary of the chosen language does not know, with suggestions, without a network connection. |                   |
 | User dictionary         | The words the user has added to the spell check, which are never marked in any workspace.                                        |                   |
+| Workspace dictionary    | The words added to the spell check of one workspace, kept in the workspace and shared with it, which are never marked in it.      |                   |
 | Snapshot                | An earlier version of a note, kept with when and why it was taken, on this computer only, that the user can compare and restore. | Revision          |

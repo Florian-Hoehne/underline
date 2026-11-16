@@ -60,7 +60,7 @@ fn count(n: usize, thing: &str) -> String {
 }
 
 /// `n` with a comma between thousands ("10,000"), as the texts write it.
-fn thousands(n: usize) -> String {
+pub(super) fn thousands(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {

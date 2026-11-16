@@ -1,7 +1,7 @@
 # ADR-031: Keep snapshots as plain files in the workspace's `.underline/` folder, one file per snapshot
 
-**Status:** Proposed
-**Date:** 2026-11-13
+**Status:** Accepted
+**Date:** 2026-11-16
 **Requirements:** NFR-005, NFR-014, C-006, FR-101, FR-102
 
 ## Context
@@ -53,7 +53,12 @@ ADR-008 already keeps the workspace's state in `.underline/`, a folder that igno
   - Snapshots are kept 30 days. Older ones are not listed and are pruned on a thread of their own when the workspace
     opens.
   - Pruning also removes stale temporary files and the leftover snapshots of deleted notes older than 30 days.
-  - There is no size or count limit yet (OQ-294).
+  - There is no size or count limit (OQ-294, decided 2026-11-16). The settings of the workspace show the space and
+    the number of the snapshots; they are counted off the session lock (`SnapshotStore::usage`).
+  - "Remove all snapshots" (UC-026 A7) removes everything below `.underline/snapshots` and only that, after a
+    confirmation, off the session lock (`SnapshotStore::remove_all`). It never follows a link: a link below is left
+    as it is, and a snapshots folder behind a link is refused (`link_below`). The `.snapshots` of deleted notes stay.
+    The status bar reports what was removed and what could not be.
   - Snapshots that cannot follow a rename, a deletion or a restore stay where they are, and the user is told.
 - **Comparing:** a line comparison stops after 200 ms and is then coarser, never smaller. The list compares at most 30
   snapshots within one second; the others show no line count.
@@ -67,8 +72,9 @@ ADR-008 already keeps the workspace's state in `.underline/`, a folder that igno
 - Snapshots work without git, are never committed, and are invisible to other tools that read the workspace's notes.
 - A snapshot is an ordinary file the user can open, copy or delete by hand; nothing is lost when an index would be out
   of date.
-- **Disk use:** a workspace's `.underline/` folder grows by up to 30 days of a note's versions. There is no cap and no
-  display of the space used (OQ-294).
+- **Disk use:** a workspace's `.underline/` folder grows by up to 30 days of a note's versions. There is no cap; the
+  settings of the workspace show the space used and offer to remove all snapshots after a confirmation (OQ-294,
+  UC-026 A7, BR-007). Snapshots are never dropped silently.
 - **Cross-process races:** the check against the newest snapshot runs under a lock in the process, held across the
   write and its fsync. Two processes, such as
   the window and the MCP server, may each take an equal snapshot. They never overwrite each other's file.
@@ -82,3 +88,9 @@ ADR-008 already keeps the workspace's state in `.underline/`, a folder that igno
     restoring needs the chain. Notes are small.
   - **The user's data folder** (`~/.local/share/underline`): snapshots would not move with the workspace. The machine's
     folder would grow for every workspace ever opened.
+
+## Update 2026-11-16
+
+A snapshot file, also one kept with a deleted note, is always created readable and writable only by its owner (0600),
+and a folder the snapshots create is open only to its owner (0700), while existing folders are left as they are, so
+the earlier text of a protected note stays protected.

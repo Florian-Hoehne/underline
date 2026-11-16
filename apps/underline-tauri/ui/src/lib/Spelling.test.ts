@@ -80,7 +80,8 @@ describe('TC-005-39 a word is corrected and added to the dictionary (UC-005 A28)
     const ferry = within(opened).getByRole('menuitem', { name: 'ferry' });
     await waitFor(() => expect(ferry).toHaveFocus());
     const items = within(opened).getAllByRole('menuitem');
-    expect(items.at(-1)).toHaveAccessibleName('Add "ferri" to dictionary');
+    expect(items.at(-2)).toHaveAccessibleName('Add "ferri" to my dictionary');
+    expect(items.at(-1)).toHaveAccessibleName('Add "ferri" to workspace dictionary');
     expect(within(opened).getByText('ferri')).toBeInTheDocument();
     expect(within(opened).queryByText('Looking for corrections…')).toBeNull();
 
@@ -142,12 +143,55 @@ describe('TC-005-39 a word is corrected and added to the dictionary (UC-005 A28)
     const opened = await waitFor(menu);
     // No word of the dictionary is one edit away: it says so.
     expect(within(opened).getByText('No corrections found')).toBeInTheDocument();
-    const add = within(opened).getByRole('menuitem', { name: 'Add "Kubernetes" to dictionary' });
+    const add = within(opened).getByRole('menuitem', {
+      name: 'Add "Kubernetes" to my dictionary',
+    });
     await waitFor(() => expect(add).toHaveFocus());
     await fireEvent.click(add);
 
     await waitFor(() => expect(marked(field)).toEqual([]));
-    await waitFor(() => expect(shell.status).toBe('Added "Kubernetes" to the dictionary'));
+    await waitFor(() => expect(shell.status).toBe('Added "Kubernetes" to your dictionary'));
+  });
+
+  it('step 5 (OQ-208): "Add to workspace dictionary" removes the marks too', async () => {
+    const shell = await workbench(SOURCE);
+    const field = await sourceField(shell, 'Other');
+    await waitFor(() => expect(marked(field)).toEqual(['Kubernetes', 'Kubernetes']));
+    activeSourceView()!.view.dispatch({
+      selection: { anchor: SPELL_TEXTS.Other.indexOf('Kubernetes') + 3 },
+    });
+
+    await fireEvent.keyDown(field, { key: 'F10', shiftKey: true });
+    const opened = await waitFor(menu);
+    const add = within(opened).getByRole('menuitem', {
+      name: 'Add "Kubernetes" to workspace dictionary',
+    });
+    await fireEvent.click(add);
+
+    await waitFor(() => expect(marked(field)).toEqual([]));
+    await waitFor(() =>
+      expect(shell.status).toBe('Added "Kubernetes" to the workspace dictionary'),
+    );
+  });
+});
+
+describe('OQ-207 a note names its own spell check language', () => {
+  it('a language without a dictionary here marks nothing in that note and says so', async () => {
+    const shell = await workbench(SOURCE);
+    const spell = await sourceField(shell, 'Spell');
+    await waitFor(() => expect(marked(spell)).toEqual(['ferri']));
+
+    const field = await sourceField(shell, 'Swiss-Spell');
+    expect(
+      await screen.findByRole('button', {
+        name: /^Swiss Spell: no dictionary for German \(Switzerland\)/,
+      }),
+    ).toBeInTheDocument();
+    expect(marked(field)).toEqual([]);
+
+    // Back in a note checked in the setting's language: the chip goes.
+    await sourceField(shell, 'Spell');
+    await waitFor(() => expect(screen.queryByRole('button', { name: /no dictionary/ })).toBeNull());
   });
 });
 
@@ -208,9 +252,12 @@ describe('UC-010 BR-006 the spell check language in the command palette (FR-100)
     await waitFor(() =>
       expect(names()).toEqual([
         'Off',
-        'English (US)',
         'English (UK)',
+        'English (US)',
         'French (France)',
+        'German (Germany)',
+        'German (Switzerland)',
+        'Italian (Italy)',
         'Spanish (Spain)',
       ]),
     );

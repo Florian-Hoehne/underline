@@ -12,9 +12,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use underline_core::{NoteId, StateStore, SETTINGS_FILE_NAME};
-use underline_spell::{Dictionaries, SpellChecker, WordList, USER_WORDS_FILE_NAME};
+use underline_spell::{
+    Dictionaries, SpellChecker, WordList, USER_WORDS_FILE_NAME, WORKSPACE_WORDS_FILE_NAME,
+};
 
-use super::{SPELL_AT_THE_LATEST, SPELL_DEBOUNCE};
+use super::{WordsOf, SPELL_AT_THE_LATEST, SPELL_DEBOUNCE};
 use crate::settings::{Scope, SettingName};
 use crate::{Event, Session, SettingsState, SpellMarksView};
 
@@ -155,7 +157,10 @@ fn tc005_39_a_word_is_marked_corrected_and_added_to_the_dictionary() {
     let marks = all.remove("Other").expect("marks of Other");
     assert_eq!(marked(other, &marks), ["Kubernetes", "Kubernetes"]);
     // Step 2: corrections, off the session.
-    let suggestions = session.spell_suggest_job("ferri").run().expect("found");
+    let suggestions = session
+        .spell_suggest_job("ferri", Some(&id("Spell")))
+        .run()
+        .expect("found");
     assert!(suggestions.contains(&"ferry".to_owned()), "{suggestions:?}");
     assert!(suggestions.len() <= 5);
     // Step 4: added to the dictionary, both lose their mark.
@@ -166,7 +171,7 @@ fn tc005_39_a_word_is_marked_corrected_and_added_to_the_dictionary() {
     assert_eq!(stored, "Kubernetes\n");
     assert!(session
         .status()
-        .contains("Added \"Kubernetes\" to the dictionary"));
+        .contains("Added \"Kubernetes\" to your dictionary"));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -413,7 +418,7 @@ fn uc005_a28_slow_suggestions_do_not_hold_the_session() {
         Arc::new(SlowSuggest(english())),
     );
     assert!(session.open_note(&id("Spell")));
-    let job = session.spell_suggest_job("ferri");
+    let job = session.spell_suggest_job("ferri", None);
     let asked = Instant::now();
     let running = std::thread::spawn(move || job.run());
     // The session goes on meanwhile.
@@ -937,5 +942,626 @@ fn adr030_the_check_thread_is_started_again_then_stops() {
     let all = settle(&mut session);
     assert_eq!(marked("the ferri\n", &all["Spell"]), ["ferri"]);
     assert_eq!(session.spell.restarts, 0, "a check done resets the count");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208, UC-005 A28, TC-005-39 step 5: "Add to workspace dictionary"
+/// stores the word in `underline-words.txt` in the workspace, not in the
+/// user's file; it loses its mark in every note.
+#[test]
+fn oq208_a_word_added_to_the_workspace_dictionary_is_stored_in_the_workspace() {
+    let dir = temp_dir("workspace-words");
+    let other = "Kubernetes and Kubernetes\n";
+    let mut session = session_with(&dir, &[("Other", other)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    let marks = tick_for_marks(&mut session, "Other").expect("marks");
+    assert_eq!(marked(other, &marks), ["Kubernetes", "Kubernetes"]);
+    session
+        .spell_add_workspace_word("Kubernetes")
+        .expect("added");
+    let marks = tick_for_marks(&mut session, "Other").expect("marks again");
+    assert!(marks.marks.is_empty(), "{marks:?}");
+    let file = dir.join("notes").join(WORKSPACE_WORDS_FILE_NAME);
+    assert_eq!(fs::read_to_string(file).unwrap(), "Kubernetes\n");
+    assert!(!dir.join("home").join(USER_WORDS_FILE_NAME).exists());
+    assert_eq!(
+        session.status(),
+        "Added \"Kubernetes\" to the workspace dictionary"
+    );
+    assert!(session.spell_add_workspace_word("two words").is_err());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208: the words in effect are the dictionary's, the user's and the
+/// workspace's; a workspace dictionary written outside (a `git pull`, an
+/// editor) is followed, and is no note of the overview.
+#[test]
+fn oq208_the_workspace_dictionary_is_followed_and_counts_with_the_users() {
+    let dir = temp_dir("workspace-words-outside");
+    let home = dir.join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(home.join(USER_WORDS_FILE_NAME), "Kubernetes\n").unwrap();
+    let text = "Kubernetes and Zettelkasten here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    let marks = tick_for_marks(&mut session, "Other").expect("marks");
+    assert_eq!(marked(text, &marks), ["Zettelkasten"]);
+    std::thread::sleep(Duration::from_millis(20));
+    let file = dir.join("notes").join(WORKSPACE_WORDS_FILE_NAME);
+    fs::write(&file, "Zettelkasten\n").unwrap();
+    let start = Instant::now();
+    let mut cleared = false;
+    while start.elapsed() < Duration::from_secs(5) && !cleared {
+        let events = session.tick(Instant::now());
+        cleared = marks_of(&events, "Other").is_some_and(|m| m.marks.is_empty());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(cleared, "the workspace's word is no longer marked");
+    let open = session.open.as_ref().expect("open");
+    assert!(
+        open.overview.iter().all(|entry| entry.id == id("Other")),
+        "the words file is no note: {:?}",
+        open.overview
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208, UC-005 A28: adding a word reads the workspace dictionary first:
+/// hand edits stay (lines that are no word too), and a file that cannot be
+/// read is never written over; the word then counts until the workspace
+/// is closed.
+#[test]
+fn oq208_the_workspace_dictionary_keeps_hand_edits_and_is_never_written_over() {
+    let dir = temp_dir("workspace-words-hand");
+    let root = dir.join("notes");
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join(WORKSPACE_WORDS_FILE_NAME);
+    fs::write(&file, "zeta\ntwo words\n").unwrap();
+    let text = "Kubernetes is here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    assert!(session.spell.user.contains("zeta"));
+    session.spell_add_workspace_word("alpha").expect("stored");
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "alpha\nzeta\ntwo words\n"
+    );
+
+    let original: &[u8] = b"alpha\nbet\xE0\n";
+    fs::write(&file, original).unwrap();
+    let refused = session
+        .spell_add_workspace_word("Kubernetes")
+        .expect_err("not written over");
+    assert!(
+        refused.message.contains("until the workspace is closed"),
+        "{}",
+        refused.message
+    );
+    assert_eq!(fs::read(&file).unwrap(), original);
+    assert!(session.spell.user.contains("Kubernetes"));
+    let marks = tick_for_marks(&mut session, "Other").expect("marks");
+    assert!(marks.marks.is_empty(), "{marks:?}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208: the words of a workspace count only in it: in another workspace
+/// they are marked again, its unstored ones too.
+#[test]
+fn oq208_the_workspace_dictionary_counts_only_in_its_workspace() {
+    let dir = temp_dir("workspace-words-switch");
+    let text = "Kubernetes is here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    session
+        .spell_add_workspace_word("Kubernetes")
+        .expect("added");
+    session.add_word_for_now(WordsOf::Workspace, "unstored");
+    assert!(session.spell.user.contains("Kubernetes"));
+    let second = dir.join("second");
+    fs::create_dir_all(&second).unwrap();
+    fs::write(second.join("Second.md"), text).unwrap();
+    session.open_chosen(&second, true);
+    assert!(session.open_note(&id("Second")));
+    let marks = tick_for_marks(&mut session, "Second").expect("marks");
+    assert_eq!(marked(text, &marks), ["Kubernetes"]);
+    assert!(!session.spell.user.contains("unstored"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A session of [`session_with`] that also has `de-CH`, knowing `words`.
+fn with_swiss(session: &mut Session, words: &[&str]) {
+    session.set_dictionaries(
+        Dictionaries::none()
+            .with("en-US", Arc::new(english()))
+            .with("de-CH", Arc::new(WordList::new(words.iter().copied()))),
+    );
+}
+
+/// The last spell state the window was told, after ticking until the
+/// spell check is done.
+fn told_state(session: &mut Session) -> Option<crate::SpellStateView> {
+    let start = Instant::now();
+    let mut state = None;
+    let mut quiet = 0;
+    while start.elapsed() < Duration::from_secs(5) && quiet < 3 {
+        let mut any = false;
+        for event in session.tick(Instant::now()) {
+            match event {
+                Event::SpellState(view) => state = Some(view),
+                Event::SpellMarks(_) => any = true,
+                _ => {}
+            }
+        }
+        quiet = if any || session.spell_busy() {
+            0
+        } else {
+            quiet + 1
+        };
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    state
+}
+
+/// OQ-207, UC-005 BR-023: a note's attribute `lang` overrides the language
+/// of the settings for that note, in front matter and in AsciiDoc; other
+/// notes keep the settings' language.
+#[test]
+fn oq207_a_notes_lang_overrides_the_spell_check_language() {
+    let dir = temp_dir("note-lang");
+    let swiss = "---\nlang: de_CH\n---\nStrasse und ferry\n";
+    let english_note = "Strasse and the ferry\n";
+    fs::create_dir_all(dir.join("notes")).unwrap();
+    fs::write(
+        dir.join("notes").join("Doc.adoc"),
+        "= Doc\n:lang: de-ch\n\nStrasse und ferry\n",
+    )
+    .unwrap();
+    let mut session = session_with(
+        &dir,
+        &[("Swiss", swiss), ("English", english_note)],
+        "spell_check_language: en-US\n",
+    );
+    with_swiss(&mut session, &["strasse", "und", "Doc"]);
+    assert!(session.open_note(&id("Swiss")));
+    assert!(session.open_note(&id("English")));
+    assert!(session.open_note(&id("Doc")));
+    let all = settle(&mut session);
+    assert_eq!(marked(swiss, &all["Swiss"]), ["ferry"]);
+    assert_eq!(marked(english_note, &all["English"]), ["Strasse"]);
+    let doc = "= Doc\n:lang: de-ch\n\nStrasse und ferry\n";
+    assert_eq!(marked(doc, &all["Doc"]), ["ferry"]);
+    // The corrections come from the note's language.
+    let suggestions = session
+        .spell_suggest_job("Strase", Some(&id("Swiss")))
+        .run()
+        .expect("found");
+    assert_eq!(suggestions, ["strasse"]);
+    let english_suggestions = session
+        .spell_suggest_job("Strase", Some(&id("English")))
+        .run()
+        .expect("found");
+    assert!(english_suggestions.is_empty(), "{english_suggestions:?}");
+    // The spell check off: the note's language does not switch it on.
+    session.change_setting(
+        Scope::Me,
+        SettingName::SpellCheckLanguage,
+        Some("off".into()),
+    );
+    let marks = tick_for_marks(&mut session, "Swiss").expect("marks when off");
+    assert!(marks.marks.is_empty());
+    assert!(session
+        .spell_suggest_job("Strase", Some(&id("Swiss")))
+        .run()
+        .expect("none")
+        .is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-207: the marks are recomputed when the attribute changes; a language
+/// not offered marks nothing and says "No dictionary for …" while the note
+/// is the active one, and nothing once the attribute names one again.
+#[test]
+fn oq207_a_changed_lang_is_followed_and_an_unknown_one_is_said() {
+    let dir = temp_dir("note-lang-change");
+    let text = "---\nlang: de-CH\n---\nStrasse und ferry\n";
+    let mut session = session_with(&dir, &[("Swiss", text)], "spell_check_language: en-US\n");
+    with_swiss(&mut session, &["Strasse", "und"]);
+    assert!(session.open_note(&id("Swiss")));
+    assert_eq!(marked(text, &settle(&mut session)["Swiss"]), ["ferry"]);
+    // "lang: de-CH" becomes "lang: pt-BR".
+    let at = text.find("de-CH").unwrap();
+    session.window_edit(&id("Swiss"), at, 5, "pt-BR");
+    let state = told_state(&mut session).expect("the status bar is told");
+    assert_eq!(
+        state.problem.as_deref(),
+        Some("Swiss: no dictionary for pt-BR")
+    );
+    assert_eq!(
+        state.detail.as_deref(),
+        Some("No dictionary for pt-BR, the language this note names in its attribute `lang`. Change or remove the attribute.")
+    );
+    assert!(
+        !session.status().contains("pt-BR"),
+        "the chip says it, not the status bar: {}",
+        session.status()
+    );
+    let open = session.open.as_ref().unwrap();
+    let tab = open.tabs.get(open.tabs.find(&id("Swiss")).unwrap());
+    assert!(tab.spell.marks.is_empty());
+    // Removed again: English, and nothing to say.
+    let changed = text.replace("de-CH", "pt-BR");
+    let at = changed.find("lang: pt-BR\n").unwrap();
+    session.window_edit(&id("Swiss"), at, "lang: pt-BR\n".len(), "");
+    let state = told_state(&mut session).expect("told again");
+    assert!(state.problem.is_none(), "{state:?}");
+    let now = session.window_text(&id("Swiss"));
+    let open = session.open.as_ref().unwrap();
+    let tab = open.tabs.get(open.tabs.find(&id("Swiss")).unwrap());
+    let view = SpellMarksView {
+        note: "Swiss".to_owned(),
+        rev: 0,
+        marks: tab.spell.marks.clone(),
+    };
+    assert_eq!(marked(&now, &view), ["Strasse", "und"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): a workspace dictionary that is a symbolic link to a file
+/// outside the workspace is never written through: the outside file stays
+/// as it is.
+#[cfg(unix)]
+#[test]
+fn oq208_chaos_a_linked_workspace_dictionary_never_writes_through() {
+    let dir = temp_dir("chaos-ws-symlink");
+    let outside = dir.join("outside.txt");
+    fs::write(&outside, "secret\n").unwrap();
+    let root = dir.join("notes");
+    fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join(WORKSPACE_WORDS_FILE_NAME)).unwrap();
+    let text = "Kubernetes is here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    let _ = session.spell_add_workspace_word("Kubernetes");
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "secret\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): a directory named `underline-words.txt` is never
+/// replaced; the word counts for now.
+#[test]
+fn oq208_chaos_a_directory_named_like_the_workspace_dictionary_stays() {
+    let dir = temp_dir("chaos-ws-dir");
+    let root = dir.join("notes");
+    fs::create_dir_all(root.join(WORKSPACE_WORDS_FILE_NAME)).unwrap();
+    fs::write(root.join(WORKSPACE_WORDS_FILE_NAME).join("keep"), "x").unwrap();
+    let text = "Kubernetes is here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    assert!(session.spell_add_workspace_word("Kubernetes").is_err());
+    assert!(root.join(WORKSPACE_WORDS_FILE_NAME).is_dir());
+    assert!(session.spell.user.contains("Kubernetes"));
+    let marks = tick_for_marks(&mut session, "Other");
+    assert!(marks.is_none_or(|m| m.marks.is_empty()));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): the user's words never land in the workspace file, and
+/// the workspace's never in the user's.
+#[test]
+fn oq208_chaos_the_two_files_never_mix() {
+    let dir = temp_dir("chaos-mix");
+    let mut session = session_with(&dir, &[("Other", "a b\n")], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    session.spell_add_word("Mine").unwrap();
+    session.spell_add_workspace_word("Ours").unwrap();
+    session.spell_add_word("Mine2").unwrap();
+    // The other file changes outside; the sessions rebuilds.
+    let ws = fs::read_to_string(dir.join("notes").join(WORKSPACE_WORDS_FILE_NAME)).unwrap();
+    let me = fs::read_to_string(dir.join("home").join(USER_WORDS_FILE_NAME)).unwrap();
+    assert_eq!(ws, "Ours\n");
+    assert_eq!(me, "Mine\nMine2\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): the workspace file deleted while open: its words count
+/// no more.
+#[test]
+fn oq208_chaos_a_deleted_workspace_dictionary_stops_counting() {
+    let dir = temp_dir("chaos-ws-deleted");
+    let text = "Kubernetes is here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    session.spell_add_workspace_word("Kubernetes").unwrap();
+    let marks = tick_for_marks(&mut session, "Other").expect("cleared");
+    assert!(marks.marks.is_empty());
+    fs::remove_file(dir.join("notes").join(WORKSPACE_WORDS_FILE_NAME)).unwrap();
+    let start = Instant::now();
+    let mut marked_again = false;
+    while start.elapsed() < Duration::from_secs(5) && !marked_again {
+        let events = session.tick(Instant::now());
+        marked_again = marks_of(&events, "Other").is_some_and(|m| !m.marks.is_empty());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(marked_again);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): a read-only workspace folder: the word counts for now,
+/// nothing is written, the error is told.
+#[cfg(unix)]
+#[test]
+fn oq208_chaos_a_read_only_workspace_keeps_the_word_for_now() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("chaos-ws-readonly");
+    let text = "Kubernetes is here\n";
+    let mut session = session_with(&dir, &[("Other", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    let root = dir.join("notes");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o555)).unwrap();
+    let writable = fs::write(root.join("probe"), "x").is_ok();
+    let result = session.spell_add_workspace_word("Kubernetes");
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    if !writable {
+        assert!(result.is_err());
+        assert!(session.spell.user.contains("Kubernetes"));
+        assert!(!root.join(WORKSPACE_WORDS_FILE_NAME).exists());
+        let leftovers: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".underline-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): a hand-written workspace file with CRLF and a byte order
+/// mark keeps its words; an added word does not duplicate or lose them.
+#[test]
+fn oq208_chaos_crlf_and_bom_workspace_file_is_kept() {
+    let dir = temp_dir("chaos-ws-crlf");
+    let root = dir.join("notes");
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join(WORKSPACE_WORDS_FILE_NAME);
+    fs::write(&file, "\u{feff}zeta\r\nbeta\r\n").unwrap();
+    let mut session = session_with(&dir, &[("Other", "a\n")], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    session.spell_add_workspace_word("alpha").unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), "alpha\nbeta\nzeta\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (chaos): two sessions adding words to the same workspace
+/// dictionary at once lose none of them.
+#[test]
+fn oq208_chaos_two_sessions_adding_at_once_lose_no_word() {
+    let dir = temp_dir("chaos-two-sessions");
+    let root = dir.join("notes");
+    fs::create_dir_all(&root).unwrap();
+    let file = root.join(WORKSPACE_WORDS_FILE_NAME);
+    let n = 40;
+    let handles: Vec<_> = (0..2)
+        .map(|who| {
+            let file = file.clone();
+            std::thread::spawn(move || {
+                for i in 0..n {
+                    let mut words = underline_spell::UserWords::load(&file).unwrap_or_default();
+                    words.add(&format!("w{who}x{i}")).unwrap();
+                    let _ = words.store(&file);
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let words = underline_spell::UserWords::load(&file).unwrap();
+    assert_eq!(words.len(), 2 * n, "words were lost");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-207 (chaos): a `lang` value of 60 KB is not copied into the status
+/// bar as it is.
+#[test]
+fn oq207_chaos_a_huge_unknown_lang_value_is_not_put_in_the_status_bar() {
+    let dir = temp_dir("chaos-lang-huge");
+    let tag = "x".repeat(60_000);
+    let text = format!("---\nlang: {tag}\n---\nbody\n");
+    let mut session = session_with(&dir, &[("Big", &text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("Big")));
+    let state = told_state(&mut session).expect("told");
+    let detail = state.detail.unwrap_or_default();
+    let problem = state.problem.unwrap_or_default();
+    assert!(detail.len() < 1000, "detail is {} bytes", detail.len());
+    assert!(problem.len() < 200, "problem is {} bytes", problem.len());
+    assert!(
+        session.status().len() < 1000,
+        "status is {}",
+        session.status().len()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-207 (chaos): `lang: null` or an empty list names no language: the
+/// settings' language applies, nothing says "No dictionary for null".
+#[test]
+fn oq207_chaos_a_null_lang_leaves_the_settings() {
+    let dir = temp_dir("chaos-lang-null");
+    let text = "---\nlang: null\n---\nthe ferri\n";
+    let mut session = session_with(&dir, &[("N", text)], "spell_check_language: en-US\n");
+    assert!(session.open_note(&id("N")));
+    let all = settle(&mut session);
+    assert_eq!(marked(text, &all["N"]), ["ferri"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-207 (chaos): a note whose `lang` changes while it is checked never
+/// shows marks of the old language, edit after edit (seeded).
+#[test]
+fn oq207_chaos_marks_never_stay_in_the_old_language() {
+    let seed: u64 = 20_261_116;
+    println!("seed {seed}");
+    let dir = temp_dir("chaos-lang-flip");
+    let text = "---\nlang: de-CH\n---\nStrasse und ferry\n";
+    let mut session = session_with(&dir, &[("Swiss", text)], "spell_check_language: en-US\n");
+    with_swiss(&mut session, &["Strasse", "und"]);
+    assert!(session.open_note(&id("Swiss")));
+    settle(&mut session);
+    let mut state = seed;
+    let mut current = "de-CH";
+    for _ in 0..30 {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        let next = if (state >> 33).is_multiple_of(2) {
+            "de-CH"
+        } else {
+            "en-US"
+        };
+        let now = session.window_text(&id("Swiss"));
+        let at = now.find(current).unwrap();
+        session.window_edit(&id("Swiss"), at, current.len(), next);
+        current = next;
+        // Read the marks after the settle.
+        let _ = settle(&mut session);
+        let now = session.window_text(&id("Swiss"));
+        let open = session.open.as_ref().unwrap();
+        let tab = open.tabs.get(open.tabs.find(&id("Swiss")).unwrap());
+        let view = SpellMarksView {
+            note: "Swiss".to_owned(),
+            rev: 0,
+            marks: tab.spell.marks.clone(),
+        };
+        let got = marked(&now, &view);
+        let want: &[&str] = if next == "de-CH" {
+            &["ferry"]
+        } else {
+            &["Strasse", "und"]
+        };
+        // en-US knows "ferry" but not "Strasse"/"und"; "lang" values are
+        // never marked.
+        let want: Vec<&str> = if next == "de-CH" {
+            want.to_vec()
+        } else {
+            vec!["Strasse", "und"]
+        };
+        assert_eq!(got, want, "after switching to {next} (seed {seed})");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (review): "Add to workspace dictionary" on a workspace dictionary
+/// that is a symbolic link refuses and says why; the link stays a link.
+#[cfg(unix)]
+#[test]
+fn oq208_a_linked_workspace_dictionary_refuses_and_says_so() {
+    let dir = temp_dir("ws-symlink-refused");
+    let outside = dir.join("outside.txt");
+    fs::write(&outside, "secret\n").unwrap();
+    let root = dir.join("notes");
+    fs::create_dir_all(&root).unwrap();
+    let link = root.join(WORKSPACE_WORDS_FILE_NAME);
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let mut session = session_with(
+        &dir,
+        &[("Other", "Kubernetes is here\n")],
+        "spell_check_language: en-US\n",
+    );
+    assert!(session.open_note(&id("Other")));
+    settle(&mut session);
+    assert!(
+        !session.spell.user.contains("secret"),
+        "the link is not read"
+    );
+    let refused = session
+        .spell_add_workspace_word("Kubernetes")
+        .expect_err("refused");
+    assert!(
+        refused.message.contains("symbolic link"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        session.status().contains("symbolic link"),
+        "{}",
+        session.status()
+    );
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "secret\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// OQ-208 (review): the user's file and the workspace's are told apart
+/// as files, not as spellings of their paths, so one file reached two ways
+/// is followed once (as the user's). The user settings folder itself is
+/// never a workspace (UC-001), but another way to it can be.
+#[cfg(unix)]
+#[test]
+fn oq208_one_file_reached_two_ways_is_the_same_file() {
+    let dir = temp_dir("same-file");
+    let home = dir.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let alias = dir.join("alias");
+    std::os::unix::fs::symlink(&home, &alias).unwrap();
+    let user = home.join(USER_WORDS_FILE_NAME);
+    let other_way = alias.join(USER_WORDS_FILE_NAME);
+    assert!(
+        super::same_file(Some(&user), Some(&other_way)),
+        "missing yet"
+    );
+    fs::write(&user, "x\n").unwrap();
+    assert!(super::same_file(Some(&user), Some(&other_way)));
+    assert!(super::same_file(Some(&user), Some(&user)));
+    assert!(!super::same_file(
+        Some(&user),
+        Some(&dir.join(USER_WORDS_FILE_NAME))
+    ));
+    assert!(!super::same_file(None, Some(&user)));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// ADR-030 (update 2026-11-16), OQ-207: a dictionary no open note and no
+/// setting uses any more is let go after a while; one in use stays.
+#[test]
+fn adr030_a_dictionary_no_note_uses_is_let_go() {
+    let dir = temp_dir("sweep");
+    let text = "---\nlang: de-CH\n---\nStrasse und ferry\n";
+    let mut session = session_with(&dir, &[("Swiss", text)], "spell_check_language: en-US\n");
+    with_swiss(&mut session, &["Strasse", "und"]);
+    assert!(session.open_note(&id("Swiss")));
+    settle(&mut session);
+    let later = Instant::now() + super::DICTIONARY_SWEEP * 2;
+    session.tick(later);
+    assert!(
+        session.spell.dictionaries.ready("de-CH").is_some(),
+        "in use"
+    );
+    assert!(
+        session.spell.dictionaries.ready("en-US").is_some(),
+        "the setting's"
+    );
+    let at = session
+        .window_text(&id("Swiss"))
+        .find("lang: de-CH\n")
+        .unwrap();
+    session.window_edit(&id("Swiss"), at, "lang: de-CH\n".len(), "");
+    settle(&mut session);
+    session.tick(later + super::DICTIONARY_SWEEP * 2);
+    assert!(
+        session.spell.dictionaries.ready("de-CH").is_none(),
+        "let go"
+    );
+    assert!(session.spell.dictionaries.ready("en-US").is_some());
     let _ = fs::remove_dir_all(&dir);
 }

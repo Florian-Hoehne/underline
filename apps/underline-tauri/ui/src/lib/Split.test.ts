@@ -398,14 +398,63 @@ describe('Package 7a review: the split view for the keyboard and screen readers'
     }
   });
 
-  it('OQ-279: with the right pane active, the tool panel shows its note while the left shows the todos', async () => {
+  it('OQ-279: the tab "Todos" opens in the active pane; the other pane keeps its note', async () => {
+    const shell = await workbench();
+    await shell.openToSide('Trip');
+    expect(shell.activePane).toBe('right');
+    await shell.showTodoList();
+    await waitFor(() => expect(shell.todoListShown).toBe(true));
+    expect(shell.tabs.todoList.pane).toBe('right');
+    await waitFor(() =>
+      expect(within(tabBar('right')).getByRole('tab', { name: /^Todos/ })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    expect(within(tabBar('left')).queryByRole('tab', { name: /^Todos/ })).toBeNull();
+    expect(paneEl('right').querySelector('.todo-list')).not.toBeNull();
+    expect(paneEl('left').querySelector('.todo-list')).toBeNull();
+
+    // TC-021-10 step 5: with the left pane made active, the tool panel
+    // shows its note while the right pane keeps the todos.
+    await shell.focusPane('left');
+    await waitFor(() => expect(shell.todoListShown).toBe(false));
+    await waitFor(() => expect(shell.properties?.note).toBe(shell.tabs.split?.leftActive));
+    expect(paneEl('right').querySelector('.todo-list')).not.toBeNull();
+  });
+
+  it('OQ-279: ending the split view keeps the tab "Todos", in the one pane left', async () => {
     const shell = await workbench();
     await shell.openToSide('Trip');
     await shell.showTodoList();
-    await waitFor(() => expect(shell.todoListShown).toBe(true));
-    await shell.focusPane('right');
-    await waitFor(() => expect(shell.todoListShown).toBe(false));
-    await waitFor(() => expect(shell.properties?.note).toBe('Trip'));
-    expect(document.querySelector('.todo-list')).not.toBeNull();
+    await waitFor(() => expect(shell.tabs.todoList.pane).toBe('right'));
+    await shell.endSplit();
+    await waitFor(() => expect(shell.split).toBe(false));
+    expect(shell.tabs.todoList).toMatchObject({ open: true, active: true, pane: 'left' });
+    expect(screen.getByRole('tab', { name: /^Todos/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('OQ-220: the width given to the panes is remembered, and comes back from the backend', async () => {
+    const shell = await workbench();
+    await shell.openToSide('Trip');
+    const border = await screen.findByRole('separator', { name: 'Border between the panes' });
+    expect(border).toHaveAttribute('aria-valuenow', '50');
+
+    await fireEvent.keyDown(border, { key: 'ArrowRight', shiftKey: true });
+    await waitFor(() => expect(mockHooks().splitShare()).toBe(600));
+    await fireEvent.dblClick(border);
+    await waitFor(() => expect(mockHooks().splitShare()).toBe(500));
+
+    // As after a restart: the backend's tab bar brings a width, kept within
+    // the least share of each pane.
+    await shell.endSplit();
+    await waitFor(() => expect(shell.split).toBe(false));
+    await shell.openToSide('Trip');
+    await shell.rememberSplitShare(70);
+    await waitFor(() => expect(shell.tabs.split?.leftShare).toBe(700));
+    const again = screen.getByRole('separator', { name: 'Border between the panes' });
+    await waitFor(() => expect(again).toHaveAttribute('aria-valuenow', '70'));
+    await shell.rememberSplitShare(99);
+    await waitFor(() => expect(shell.tabs.split?.leftShare).toBe(850));
   });
 });

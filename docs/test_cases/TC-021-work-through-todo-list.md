@@ -123,6 +123,9 @@
 | 3    | Choose "Open list" again in A.                           | The open tab "Todos" is shown; no second one.         |
 | 4    | Open as many notes as allowed.                           | The tab "Todos" does not count towards the limit.     |
 | 5    | Look at the workspace's changes (UC-011).                | Sort and filter are not among them.                   |
+| 6    | In A open a note to the side (UC-004 A18), then "Open list". | The tab "Todos" opens in the right pane, which shows the todo list; the left pane keeps its note. |
+| 7    | Make the left pane active.                               | The tool panel shows the left pane's note; the right pane still shows the todo list. |
+| 8    | "Open list" again, then end the split view.              | The tab "Todos" moves to the left pane; after ending the split view it is still open. |
 
 ## TC-021-11: Keyboard
 

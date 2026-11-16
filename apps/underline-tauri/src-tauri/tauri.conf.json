@@ -29,10 +29,11 @@
     "targets": ["appimage", "deb", "nsis", "dmg"],
     "publisher": "Florian Höhne",
     "copyright": "Copyright (c) 2026 Florian Höhne",
-    "license": "MIT",
+    "license": "MIT and others",
     "licenseFile": "../../../LICENSE",
     "resources": {
-      "resources/dictionaries/": "dictionaries/"
+      "resources/dictionaries/": "dictionaries/",
+      "../../../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
     },
     "homepage": "https://github.com/Florian-Hoehne/underline",
     "category": "Productivity",

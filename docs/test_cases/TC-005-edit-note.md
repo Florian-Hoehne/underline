@@ -45,7 +45,7 @@
 | TC-005-36 | A26 Move and duplicate lines and blocks              | FR-082, BR-020               |
 | TC-005-37 | A27 Indent and outdent list items                    | FR-083, BR-021               |
 | TC-005-38 | Current line and matching bracket                    | FR-084, FR-085, BR-022       |
-| TC-005-39 | A28 Correct a word, add it to the dictionary         | FR-099, BR-023               |
+| TC-005-39 | A28 Correct a word, add it to the dictionary         | FR-099, BR-023, OQ-208       |
 | TC-005-40 | What the spell check leaves out; offline             | BR-023, NFR-014, NFR-015, NFR-002 |
 | TC-005-41 | The same note on both sides                          | FR-097, BR-016               |
 | TC-005-42 | Edit a formula                                       | FR-098, BR-008               |
@@ -150,6 +150,7 @@
 | 3    | Repeat steps 1 and 2 in the source view.                                    | The same markup is inserted and shown as markup.                                    |
 | 4    | With nothing selected, insert a table.                                      | A table of 2 columns and 2 rows is inserted at the cursor in the markup of the format. |
 | 5    | Choose link and choose the note `Plan`.                                     | A link to `Plan` is inserted, relative to the note.                                 |
+| 5a   | Choose link and choose the note `Road map [v2]` (file `Road-map-[v2].md`) in the folder `old plans`.| `[Road map \[v2\]](old%20plans/Road-map-%5Bv2%5D.md)` is inserted in `Tools.md`, `link:old%20plans/Road-map-%5Bv2%5D.md[Road map [v2\]]` in `Tools.adoc`, as link completion writes the same link (OQ-248); following it opens the note. |
 | 6    | Choose image and choose `photo.png` from outside the workspace.             | `photo.png` is copied next to the note and inserted as an image.                    |
 | 7    | Reach and apply every toolbar function with the keyboard only.              | Each function can be reached and applied; its key is shown next to it.             |
 
@@ -476,7 +477,7 @@
 
 ## TC-005-37: Indent and outdent list items
 
-**Flow:** A27, BR-021, FR-083  
+**Flow:** A27, BR-021, BR-009, FR-083  
 **Preconditions:** `List.md` holds `- a`, `- b`, `- c`; `List.adoc` holds `* a`, `* b`.
 
 | Step | Action                                                   | Expected result                                              |
@@ -486,7 +487,9 @@
 | 3    | Press Shift+Tab twice.                                   | Both are top-level items again; the second Shift+Tab changes nothing. |
 | 4    | Put the cursor in "a" and press Tab.                     | Nothing changes: "a" has no item before it.                  |
 | 5    | In the source view of `List.adoc`, put the cursor in "b" and press Tab. | The markup reads `** b`.                    |
-| 6    | In the Vim input mode, insert mode, press Tab in "b"; then in normal mode type `<<`. | Tab indents "b"; `<<` outdents it.  |
+| 6    | In the Vim input mode, insert mode, press Tab in "b"; then in normal mode type `<<`, `>>`, and `u`. | Tab indents "b"; `<<` outdents it and `>>` indents it again by the list rules, in `List.adoc` as `** b`; `u` takes back only the last of them. |
+| 7    | In the Vim normal mode of the source view, put the cursor in "b" of "List" (Markdown) and type `2>>`; then `u`; then select "b" and "c" with `V` and type `>`. | `2>>` makes "b" and "c" items of "a"; `u` takes both back at once; `>` on the selection does the same as `2>>`. |
+| 8    | In the Vim normal mode of the source view, type `>>` on a line that is no list item; then in the facade, on a paragraph. | The line is shifted two spaces to the right; in the facade nothing changes. |
 
 ## TC-005-38: Current line and matching bracket
 
@@ -509,9 +512,11 @@
 | Step | Action                                                       | Expected result                                                 |
 |------|--------------------------------------------------------------|-----------------------------------------------------------------|
 | 1    | Open "Spell" in the facade.                                  | "ferri" is marked with a wavy line.                             |
-| 2    | Press Shift+F10 on "ferri".                                  | Up to five corrections, among them "ferry", and "Add to dictionary". |
+| 2    | Press Shift+F10 on "ferri".                                  | Up to five corrections, among them "ferry", "Add to my dictionary", and "Add to workspace dictionary" with the line "Shared with everyone who uses this workspace". |
 | 3    | Choose "ferry".                                              | The text reads "The ferry leaves"; Ctrl+Z brings "ferri" back. |
-| 4    | In "Other", add "Kubernetes" to the dictionary.              | Both "Kubernetes" lose their mark; in a second workspace and in German it is not marked either. |
+| 4    | In "Other", choose "Add to my dictionary" on "Kubernetes".   | Both "Kubernetes" lose their mark; in a second workspace and in German it is not marked either. |
+| 5    | In "Other", type "Zettelkasten", open its menu and choose "Add to workspace dictionary". | "Zettelkasten" loses its mark; the workspace dictionary in the workspace holds it and shows as a change for git, not as a note of the overview; in a second workspace "Zettelkasten" is marked. |
+| 6    | Remove "Zettelkasten" from the workspace dictionary with another editor. | Within a second "Zettelkasten" is marked again; the other words of the file stay as edited. |
 
 ## TC-005-40: What the spell check leaves out; offline
 
@@ -546,3 +551,7 @@
 | 2    | Change it to `a^2+b^2`.                      | The typeset formula follows each change.                               |
 | 3    | Click into the inline formula.               | Its source is shown in its place.                                       |
 | 4    | Type `\frac{` in the block and leave it.     | The block is shown as its source with the error.                       |
+| 5    | Click into the inline formula and type `+c`. | Above its source a small preview shows the formula typeset; it follows once the typing pauses. |
+| 6    | Type `\frac{` in the inline formula.         | The preview shows the reason of the error; the reason after the source is read out as before. |
+| 7    | Zoom the editor in, and open the note in the split view's other pane with the cursor in the inline formula. | The preview grows with the text, and stays within its pane. |
+| 8    | Move the cursor out of the formula.          | The preview goes.                                                       |

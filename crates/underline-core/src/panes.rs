@@ -26,21 +26,26 @@ pub enum PaneSide {
     Right,
 }
 
-/// A pane that is not known (a hand-written or a newer state file) reads as
-/// the left one, so the other tabs and the notes' places of the workspace
-/// stay (UC-004 step 6).
+/// A pane that is not known (a hand-written or a newer state file: another
+/// word, a number, a list, a map) reads as the left one, so the other tabs
+/// and the notes' places of the workspace stay (UC-004 step 6, OQ-279).
 impl<'de> Deserialize<'de> for PaneSide {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Ok(if name == "right" {
-            Self::Right
-        } else {
-            Self::Left
+        crate::loose::Loose::read(deserializer, |value| match value {
+            crate::loose::Loose::Text(name) if name == "right" => Self::Right,
+            _ => Self::Left,
         })
     }
 }
 
 impl PaneSide {
+    /// Whether this is the left pane (which a state file does not name).
+    #[must_use]
+    #[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if`
+    pub fn is_left(&self) -> bool {
+        *self == Self::Left
+    }
+
     /// The pane on the other side.
     #[must_use]
     pub fn other(self) -> Self {

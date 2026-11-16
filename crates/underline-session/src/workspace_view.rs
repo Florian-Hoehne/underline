@@ -115,6 +115,10 @@ pub struct SplitView {
     pub right_active: Option<String>,
     /// The active pane: the one the user last worked in.
     pub pane: PaneName,
+    /// OQ-220: the share of the width the left pane takes, in tenths of a
+    /// percent (500 is half), as remembered for the workspace; the window
+    /// keeps each pane at its least width besides.
+    pub left_share: u16,
 }
 
 /// One tab of the tab bar (M-06.1).
@@ -146,8 +150,12 @@ pub struct TabView {
 pub struct TodoTabView {
     /// The tab is open.
     pub open: bool,
-    /// The tab is the active one; no note tab is then.
+    /// The tab is the active one of its pane; no note tab of that pane is
+    /// then.
     pub active: bool,
+    /// OQ-279: the pane the tab is in: the one active when it was opened;
+    /// the left one without the split view.
+    pub pane: PaneName,
 }
 
 /// The tab bar (M-06): the note tabs left to right and the active one.

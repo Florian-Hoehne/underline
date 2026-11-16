@@ -69,4 +69,13 @@ describe('TC-004-38 formulas', () => {
 
     await waitFor(() => expect(pictures(field)).toEqual(['a^2', 'b^2']));
   });
+
+  it('step 4, OQ-222: AsciiMath with `:stem:` and `asciimath`, typeset from its LaTeX', async () => {
+    const shell = await workbench();
+    const field = await facadeField(shell, 'Math-AsciiMath');
+
+    await waitFor(() =>
+      expect(pictures(field)).toEqual(['\\frac{x^{2}}{2}', '\\sqrt{a}', '\\sum_{i=1}^{n} i']),
+    );
+  });
 });

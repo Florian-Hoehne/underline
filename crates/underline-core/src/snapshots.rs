@@ -42,7 +42,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use similar::{Algorithm, DiffTag, TextDiff};
 
-use crate::atomic::write_new_atomic;
+use crate::atomic::write_new_atomic_with;
 use crate::state::{underline_folder, Timestamp, UNDERLINE_FOLDER};
 
 /// The folder of the snapshots inside the Underline folder.
@@ -451,7 +451,7 @@ impl SnapshotStore {
         // Pruning may remove the folder between making it and writing.
         for _ in 0..WRITE_ATTEMPTS {
             underline_folder(&self.root).map_err(SnapshotError::Write)?;
-            match fs::create_dir_all(&folder) {
+            match create_private_folders(&folder) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     last = error;
@@ -468,7 +468,7 @@ impl SnapshotStore {
                     )));
                 }
                 let file = folder.join(Snapshot::name(at, cause, number));
-                match write_new_atomic(&file, content.as_bytes()) {
+                match write_new_atomic_with(&file, content.as_bytes(), private_file().as_ref()) {
                     Ok(()) => {
                         return Ok(Some(Snapshot {
                             taken_at: at,
@@ -575,26 +575,177 @@ impl SnapshotStore {
         }
         prune_folder(&all, now)
     }
+
+    /// UC-026 A7, OQ-294: how many snapshots the workspace keeps and the
+    /// space everything below `.underline/snapshots` takes on the disk
+    /// (temporary files of writes included, as removing them frees it too).
+    /// The snapshots of deleted notes are not counted: they belong to the
+    /// deleted notes (BR-003). A link below is neither followed nor counted.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Link`] when the folder of the snapshots, or one
+    /// above it in the workspace, is a symbolic link.
+    pub fn usage(&self) -> Result<SnapshotUsage, SnapshotError> {
+        let all = self.all_folder();
+        no_link_below(&self.root, &all)?;
+        let mut usage = SnapshotUsage::default();
+        usage_of(&all, &mut usage);
+        Ok(usage)
+    }
+
+    /// UC-026 A7, OQ-294: removes everything below `.underline/snapshots`
+    /// and that folder itself, and nothing else: the snapshots of deleted
+    /// notes in their `.snapshots` stay (BR-003). A symbolic link below is
+    /// never followed nor removed (ADR-031); it stays with the folders
+    /// above it. A file that cannot be removed does not stop the others.
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::Link`] when the folder of the snapshots, or one
+    /// above it in the workspace, is a symbolic link; nothing is removed
+    /// then.
+    pub fn remove_all(&self) -> Result<SnapshotRemoval, SnapshotError> {
+        let all = self.all_folder();
+        no_link_below(&self.root, &all)?;
+        let mut removal = SnapshotRemoval::default();
+        remove_all_in(&all, &mut removal);
+        Ok(removal)
+    }
+}
+
+/// UC-026 A7, OQ-294: the space the snapshots of a workspace take.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SnapshotUsage {
+    /// How many snapshots there are.
+    pub count: u64,
+    /// How many bytes the files below the folder of the snapshots take.
+    pub bytes: u64,
+    /// How many folders below could not be read; with any, `count` and
+    /// `bytes` are "at least".
+    pub unreadable: u64,
+}
+
+/// UC-026 A7, OQ-294: what [`SnapshotStore::remove_all`] removed and what
+/// it left.
+#[derive(Debug, Default)]
+pub struct SnapshotRemoval {
+    /// The snapshots removed and the space that freed.
+    pub removed: SnapshotUsage,
+    /// How many files could not be removed, and folders that could not
+    /// be read (their snapshots stay).
+    pub failed: u64,
+    /// The system's reason for the first of them.
+    pub first_error: Option<io::Error>,
+    /// How many symbolic links were left as they are.
+    pub links: u64,
+}
+
+/// Adds the snapshots and files below `folder` to `usage`; links are
+/// skipped.
+fn usage_of(folder: &Path, usage: &mut SnapshotUsage) {
+    let entries = match fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(_) => {
+            usage.unreadable += 1;
+            return;
+        }
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if meta.is_dir() {
+            usage_of(&entry.path(), usage);
+        } else if meta.is_file() {
+            usage.bytes = usage.bytes.saturating_add(meta.len());
+            if Snapshot::parse(entry.path()).is_some() {
+                usage.count += 1;
+            }
+        }
+    }
+}
+
+/// Removes the files and folders below `folder`, then `folder` when that
+/// leaves it empty; links stay. The folders below are done first, so the
+/// lock of a note's folder (taken while its files go) is never held twice.
+fn remove_all_in(folder: &Path, removal: &mut SnapshotRemoval) {
+    let entries = match fs::read_dir(folder) {
+        Ok(entries) => entries,
+        // Removed meanwhile (pruning, a move): nothing left to remove.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        // A folder that cannot be read keeps what it holds: said, not hidden.
+        Err(error) => {
+            removal.failed += 1;
+            removal.first_error.get_or_insert(error);
+            return;
+        }
+    };
+    let mut files = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            removal.links += 1;
+        } else if meta.is_dir() {
+            remove_all_in(&path, removal);
+        } else {
+            files.push((path, meta.len()));
+        }
+    }
+    // Not while a snapshot is being taken into it; one taken after this
+    // creates the folder again.
+    let _taking = lock_of(folder);
+    for (file, len) in files {
+        let snapshot = Snapshot::parse(file.clone()).is_some();
+        match fs::remove_file(&file) {
+            Ok(()) => {
+                removal.removed.bytes = removal.removed.bytes.saturating_add(len);
+                removal.removed.count += u64::from(snapshot);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                removal.failed += 1;
+                removal.first_error.get_or_insert(error);
+            }
+        }
+    }
+    // Not empty (a link, a file that stayed): the folder stays too.
+    let _ = fs::remove_dir(folder);
 }
 
 /// Errors when a part of `path` below `root` that exists is a symbolic
 /// link (ADR-031: no link is followed).
 fn no_link_below(root: &Path, path: &Path) -> Result<(), SnapshotError> {
-    let below = path
-        .strip_prefix(root)
-        .map_err(|_| SnapshotError::NotANote(path.display().to_string()))?;
+    if path.strip_prefix(root).is_err() {
+        return Err(SnapshotError::NotANote(path.display().to_string()));
+    }
+    match link_below(root, path) {
+        Some(link) => Err(SnapshotError::Link(link.display().to_string())),
+        None => Ok(()),
+    }
+}
+
+/// ADR-031, OQ-208: the first part of `path` below `root` that exists and
+/// is a symbolic link; `None` when there is none, or when `path` is not
+/// below `root`. A file of a workspace the user cloned is read and written
+/// only where no link leads elsewhere.
+#[must_use]
+pub fn link_below(root: &Path, path: &Path) -> Option<std::path::PathBuf> {
+    let below = path.strip_prefix(root).ok()?;
     let mut at = root.to_owned();
     for part in below.components() {
         at.push(part);
         match fs::symlink_metadata(&at) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(SnapshotError::Link(at.display().to_string()));
-            }
+            Ok(meta) if meta.file_type().is_symlink() => return Some(at),
             Ok(_) => {}
             Err(_) => break,
         }
     }
-    Ok(())
+    None
 }
 
 /// The number the next snapshot taken at `at` in `folder` gets: after
@@ -684,7 +835,7 @@ fn move_one(root: &Path, snapshot: &Snapshot, to: &Path) -> Result<(), SnapshotE
         if gone() {
             return Ok(());
         }
-        match fs::create_dir_all(to) {
+        match create_private_folders(to) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 last = error;
@@ -703,8 +854,16 @@ fn move_one(root: &Path, snapshot: &Snapshot, to: &Path) -> Result<(), SnapshotE
             let target = to.join(Snapshot::name(snapshot.taken_at, snapshot.cause, number));
             match fs::hard_link(&snapshot.file, &target) {
                 // The snapshot is at its new place; an old name that stays
-                // is a second copy, never a loss.
-                Ok(()) => return fs::remove_file(&snapshot.file).map_err(SnapshotError::Move),
+                // is a second copy, never a loss. An old name gone meanwhile
+                // (all snapshots removed, UC-026 A7) is gone as wanted.
+                Ok(()) => {
+                    return match fs::remove_file(&snapshot.file) {
+                        Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                            Err(SnapshotError::Move(error))
+                        }
+                        _ => Ok(()),
+                    }
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => number += 1,
                 Err(_) if gone() => return Ok(()),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -720,6 +879,36 @@ fn move_one(root: &Path, snapshot: &Snapshot, to: &Path) -> Result<(), SnapshotE
         }
     }
     Err(SnapshotError::Move(last))
+}
+
+/// Creates the missing folders up to `folder` so that only their owner
+/// may enter them (`0700` on Unix; ADR-031, update 2026-11-16): a snapshot
+/// holds a note's earlier text, which stays as protected as the note.
+/// Folders that are there are left as they are.
+fn create_private_folders(folder: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(folder)
+}
+
+/// The permissions of a new snapshot file: only its owner may read and
+/// write it (`0600` on Unix; ADR-031, update 2026-11-16); elsewhere the
+/// system's default.
+fn private_file() -> Option<fs::Permissions> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(fs::Permissions::from_mode(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Whether `a` and `b` are one folder under two names (differing in case).

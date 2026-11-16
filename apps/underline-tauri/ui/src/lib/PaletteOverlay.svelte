@@ -53,6 +53,9 @@
   let list = $state<HTMLElement | null>(null);
 
   const entries = $derived(palette.list.entries);
+  /** UC-023 BR-004: how many entries at the top are the recently run commands. */
+  const recentCount = $derived(palette.list.recent ?? 0);
+  const RECENT_ID = 'palette-recently-used';
   const mode = $derived(palette.mode);
   const typed = $derived(palette.typed.trim());
 
@@ -293,8 +296,16 @@
         <p class="weak message">{message}</p>
       {/if}
       {#if entries.length > 0}
+        <span id={RECENT_ID} class="visually-hidden">Recently used</span>
         <ul id={LIST_ID} class="entries" role="listbox" aria-label={label}>
           {#each entries as entry, at (at)}
+            {#if recentCount > 0 && (at === 0 || at === recentCount) && mode === 'commands'}
+              <!-- UC-023 BR-004 (app-tester): the recently run commands, then all; each
+                   recent entry says so to screen readers itself. -->
+              <li class="group" role="presentation" aria-hidden="true">
+                {at === 0 ? 'Recently used' : 'All commands'}
+              </li>
+            {/if}
             <!-- The keyboard stays in the field; the entries are for the pointer. -->
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <li
@@ -309,7 +320,9 @@
               aria-label={entryLabel(entry)}
               aria-describedby={entry.kind === 'command' && entry.unavailable !== null
                 ? `${entryId(at)}-why`
-                : undefined}
+                : at < recentCount
+                  ? RECENT_ID
+                  : undefined}
               onclick={() => palette.choose(at)}
               onpointermove={() => palette.point(at)}
             >
@@ -407,6 +420,19 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* UC-023 BR-004: "Recently used" and "All commands" above their entries. */
+  .group {
+    padding: var(--space-2) var(--space-2) var(--space-1);
+    font-size: 0.85em;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--ui-hint) 35%, var(--ui-text));
+  }
+
+  .group:not(:first-child) {
+    margin-top: var(--space-1);
+    border-top: 1px solid var(--ui-rule);
   }
 
   /* One row: the name, then where it belongs, the key at the right edge. */

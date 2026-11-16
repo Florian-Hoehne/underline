@@ -8,7 +8,8 @@
   - without a workspace, the offer to open or create one (M-02);
   - with one, the note overview (M-05) beside the tabs and the note (M-06).
   The Open and Create dialogs float above it, not modal (M-21.1, M-21.2),
-  and so do "Open web address" (M-07.3), "Changes not stored" (M-06.3,
+  and so does the question before a link opens a program or another
+  scheme (M-07.3, Q-61, Q-62), "Changes not stored" (M-06.3,
   M-21.4) and the note dialogs "New note", "Rename note", "Delete note",
   "Restore note" and "Remove deleted notes" (M-14).
 
@@ -81,7 +82,7 @@
   import ApproximatedDialog from './lib/ApproximatedDialog.svelte';
   import NoteArea from './lib/NoteArea.svelte';
   import OpenDialog from './lib/OpenDialog.svelte';
-  import OpenWebDialog from './lib/OpenWebDialog.svelte';
+  import OpenLinkDialog from './lib/OpenLinkDialog.svelte';
   import Overview from './lib/Overview.svelte';
   import StatusBar from './lib/StatusBar.svelte';
   import TodoCalendar from './lib/TodoCalendar.svelte';
@@ -214,8 +215,8 @@
     {:else if shell.dialog?.kind === 'create'}
       <CreateDialog {shell} dialog={shell.dialog} />
     {/if}
-    {#if shell.webQuestion !== null}
-      <OpenWebDialog {shell} address={shell.webQuestion} />
+    {#if shell.openQuestion !== null}
+      <OpenLinkDialog {shell} question={shell.openQuestion} />
     {/if}
     {#if shell.notes.newNote}
       <NewNoteDialog {shell} dialog={shell.notes.newNote} />

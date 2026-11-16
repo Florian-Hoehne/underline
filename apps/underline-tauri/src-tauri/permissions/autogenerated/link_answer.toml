@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-link-answer"
+description = "Enables the link_answer command without any pre-configured scope."
+commands.allow = ["link_answer"]
+
+[[permission]]
+identifier = "deny-link-answer"
+description = "Denies the link_answer command without any pre-configured scope."
+commands.deny = ["link_answer"]

@@ -412,6 +412,65 @@ describe('FR-098 formulas', () => {
     expect(within(block(0)).getByText('$E=mc^2$')).toHaveClass('source');
   });
 
+  it('TC-005-42 step 4, OQ-287: the cursor in an inline formula shows it typeset in a popover above its markup', async () => {
+    await show(state(formulaBlocks('formula/1.svg', 'formula/2.svg'), 9));
+
+    const preview = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-formula-preview]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(preview).toHaveAttribute('aria-hidden', 'true');
+    expect(preview.closest('[contenteditable="true"]')).toBeNull();
+    expect(preview.querySelector('[tabindex]')).toBeNull();
+    const picture = preview.querySelector('img')!;
+    expect(picture.getAttribute('src')).toBe('ul-asset://localhost/formula/1.svg');
+    expect(picture.style.width).toBe('2.4em');
+    // The markup stays in its place, edited there.
+    expect(within(block(0)).getByText('$E=mc^2$')).toHaveClass('source');
+  });
+
+  it('OQ-287: no preview outside an inline formula, nor in a block formula', async () => {
+    const blocks = formulaBlocks('formula/1.svg', 'formula/2.svg');
+    await show(state(blocks, 0));
+    expect(document.querySelector('[data-formula-preview]')).toBeNull();
+    cleanup();
+    await show(state(formulaBlocks('formula/1.svg', 'formula/2.svg'), blocks[1].start + 3));
+    expect(document.querySelector('[data-formula-preview]')).toBeNull();
+  });
+
+  it('OQ-287: a facade outside the active pane shows no preview', async () => {
+    render(FacadeView, {
+      props: {
+        note: 'Home',
+        label: 'Home',
+        platform: 'linux',
+        info: new EditorInfo(),
+        backend: backendWith(state(formulaBlocks('formula/1.svg', 'formula/2.svg'), 9)),
+        onError: () => {},
+        active: false,
+      },
+    });
+    await waitFor(() => expect(document.querySelector('[data-b="0"]')).not.toBeNull());
+    await tick();
+    expect(within(block(0)).getByText('$E=mc^2$')).toHaveClass('source');
+    expect(document.querySelector('[data-formula-preview]')).toBeNull();
+  });
+
+  it('OQ-287: with an error the preview shows the reason, which the text still announces', async () => {
+    const reason = "This formula cannot be typeset: Expected '}'";
+    await show(state(formulaBlocks(null, 'formula/2.svg', reason), 9));
+
+    const preview = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-formula-preview]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(preview).toHaveTextContent(reason);
+    expect(preview.querySelector('[role]')).toBeNull();
+    expect(within(block(0)).getByRole('status')).toHaveTextContent(reason);
+  });
+
   it('TC-005-42 step 1 (review): a click on the block formula puts the cursor into its source', async () => {
     const blocks = formulaBlocks('formula/1.svg', 'formula/2.svg');
     const { backend } = await show(state(blocks, 0));

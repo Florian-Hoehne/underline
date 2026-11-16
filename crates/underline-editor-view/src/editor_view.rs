@@ -542,6 +542,21 @@ pub enum EditorInput {
         /// The action.
         action: EditActionName,
     },
+    /// OQ-260, UC-005 BR-021: Vim's `>>` and `<<` (`>` and `<` on a
+    /// selection) of the source view's Vim keys on the lines from the one
+    /// holding web offset `from` to the one holding `to`: on a list item
+    /// the list rule of Tab and Shift+Tab, elsewhere Vim's shift; one step
+    /// for undo.
+    VimShift {
+        /// A web offset in the first line.
+        from: u32,
+        /// A web offset in the last line.
+        to: u32,
+        /// `<`: outdent.
+        outdent: bool,
+        /// How many times over (the count of `>` in visual mode).
+        times: u32,
+    },
 }
 
 /// FR-082, FR-083, UC-005 A26, A27: an action of the editing comfort that

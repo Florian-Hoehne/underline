@@ -215,6 +215,39 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// UC-005, ADR-005 (decision of 2026-11-16): a stored note keeps who
+    /// may read and write it, in the background and at once.
+    #[cfg(unix)]
+    #[test]
+    fn uc005_adr005_stored_note_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("underline-saver-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Diary.md");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mode = || std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let saver = NoteSaver::new(OwnWrites::default());
+
+        saver.save(SaveJob {
+            path: path.clone(),
+            text: "background".into(),
+            started: Instant::now(),
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while saver.poll().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "background");
+        assert_eq!(mode(), 0o600);
+
+        saver.save_now(&path, "at once").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "at once");
+        assert_eq!(mode(), 0o600);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// TC-005-23: a note that cannot be stored reports why.
     #[test]
     fn uc005_tc23_reports_a_failed_store() {

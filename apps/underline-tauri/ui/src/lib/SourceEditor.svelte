@@ -248,6 +248,7 @@
   {@const request = spellMenu}
   <SpellMenu
     word={request.shown.word}
+    {note}
     x={request.x}
     y={request.y}
     onChoose={(suggestion) => void correct(request, suggestion)}

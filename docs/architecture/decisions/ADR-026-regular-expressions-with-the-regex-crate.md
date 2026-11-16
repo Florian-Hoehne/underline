@@ -1,7 +1,7 @@
 # ADR-026: Match the regular expressions of every search with the `regex` crate, in the backend and in the WASM editor core
 
-**Status:** Proposed
-**Date:** 2026-11-11
+**Status:** Accepted
+**Date:** 2026-11-16
 **Requirements:** NFR-013, NFR-002, NFR-017, C-008, FR-075
 
 ## Context

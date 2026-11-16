@@ -410,6 +410,11 @@ pub struct TodoListState {
     pub active: bool,
     pub sort: TodoSort,
     pub filter: TodoFilter,
+    /// OQ-279, UC-004 BR-018: the pane of the split view the tab is in; the
+    /// left one without the split view (and in a state file written
+    /// before), which is not written.
+    #[serde(skip_serializing_if = "crate::panes::PaneSide::is_left")]
+    pub pane: crate::panes::PaneSide,
 }
 
 impl TodoListState {

@@ -2,7 +2,9 @@
 // command palette (UC-023), one overlay with one field: it is the command
 // palette while its text starts with `>` and go to note without (UC-023 A4,
 // BR-007). Not stored (M-22.4), except the recently run commands, which
-// are kept until Underline is closed (BR-004, OQ-198).
+// the backend keeps for the user across restarts (BR-004, OQ-198): the
+// window takes them at the start (`remember`), drops ids it does not know,
+// and tells the backend each command run (`PaletteHost.ran`).
 //
 // The ranking is the rule of `underline_markup::suggest` in the WASM
 // (`SuggestionList`), so both overlays match and order alike and the window
@@ -19,13 +21,16 @@
 // its cursor there.
 
 import type { LineTargetView, OverviewItem } from './bindings';
-import { paletteOrder, type Command, type CommandChoice } from './commands';
+import { paletteOrder, RECENT_FIRST, type Command, type CommandChoice } from './commands';
 import { editorCoreLoaded, lineTarget, loadEditorCore, SuggestionList } from './editor/core';
 import { activeFacade } from './facade/active';
 import { focusFallback } from './focus';
 
 /** How many notes the list shows at first, and how many more each time it nears its end. */
 export const NOTES_PAGE = 50;
+
+/** UC-023 BR-004, OQ-198: how many recently run commands are kept (the backend's `RECENT_COMMANDS`). */
+export const RECENT_COMMANDS = 20;
 
 /** What the overlay needs of the window. */
 export type PaletteHost = {
@@ -50,6 +55,8 @@ export type PaletteHost = {
   lineInfo(): { lines: number; facade: boolean } | null;
   /** UC-004 A16 step 3: the view shown puts its cursor on `target`, with the keyboard. */
   goToLine(target: LineTargetView): void;
+  /** UC-023 BR-004, OQ-198: the command `id` ran; the backend remembers it for the user. */
+  ran?(id: string): void;
 };
 
 /** One entry of the list. */
@@ -64,6 +71,12 @@ export type PaletteList = {
   entries: PaletteEntry[];
   /** How many match in all; the list shows the first ones (notes come page by page). */
   total: number;
+  /**
+   * BR-004: with an empty field of the command palette, how many entries at
+   * the top are the recently run commands ("Recently used", then "All
+   * commands"); 0 otherwise.
+   */
+  recent?: number;
 };
 
 const EMPTY: PaletteList = { entries: [], total: 0 };
@@ -79,7 +92,7 @@ export class PaletteState {
   asking = $state.raw<Command | null>(null);
   /** UC-023 A2: why the command chosen cannot run now. */
   notice = $state<string | null>(null);
-  /** BR-004: the ids of the commands run since Underline started, the most recent first. */
+  /** BR-004, OQ-198: the ids of the recently run commands, the most recent first. */
   recent = $state.raw<string[]>([]);
   /** How many notes the list shows (page by page). */
   limit = $state(NOTES_PAGE);
@@ -270,7 +283,6 @@ export class PaletteState {
           return;
         }
         this.close(true);
-        this.#ran(command);
         command.run(entry.choice.value);
         return;
       }
@@ -281,6 +293,9 @@ export class PaletteState {
           return;
         }
         if (entry.command.choices) {
+          // BR-004 (app-tester): a command counts as run when chosen, also
+          // one that asks for a choice next ("Theme…").
+          this.#ran(entry.command);
           this.asking = entry.command;
           this.#setText('');
           this.focusAsked++;
@@ -360,9 +375,25 @@ export class PaletteState {
     this.#host.goToLine(target);
   }
 
-  /** BR-004: `command` ran; it is listed first next time. */
+  /**
+   * BR-004, OQ-198: the recently run commands remembered for the user, as
+   * the backend gives them at the start; ids no command of `known` has (a
+   * command removed or renamed since) are dropped, and repeats.
+   */
+  remember(ids: readonly string[], known: readonly Command[]): void {
+    const ours = known.map((command) => command.id);
+    this.recent = ids
+      .filter((id, at) => ids.indexOf(id) === at && ours.includes(id))
+      .slice(0, RECENT_COMMANDS);
+  }
+
+  /** BR-004, OQ-198: `command` ran; it is listed first next time, also after a restart. */
   #ran(command: Command): void {
-    this.recent = [command.id, ...this.recent.filter((id) => id !== command.id)];
+    this.recent = [command.id, ...this.recent.filter((id) => id !== command.id)].slice(
+      0,
+      RECENT_COMMANDS,
+    );
+    this.#host.ran?.(command.id);
   }
 
   /** A3: the index of the choice in effect, chosen at first while nothing is typed. */
@@ -420,13 +451,22 @@ export class PaletteState {
     );
     try {
       const found = list.rank(typed, last);
+      const entries: PaletteEntry[] = found.map((at) => ({
+        kind: 'command',
+        command: ordered[at],
+        unavailable: unavailable[at],
+      }));
+      const firsts = this.recent.slice(0, RECENT_FIRST);
+      const recent =
+        typed.trim() === ''
+          ? entries.findIndex(
+              (entry) => entry.kind !== 'command' || !firsts.includes(entry.command.id),
+            )
+          : 0;
       return {
-        entries: found.map((at) => ({
-          kind: 'command',
-          command: ordered[at],
-          unavailable: unavailable[at],
-        })),
+        entries,
         total: found.length,
+        recent: recent < 0 ? entries.length : recent,
       };
     } finally {
       list.free();

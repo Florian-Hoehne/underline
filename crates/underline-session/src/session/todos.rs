@@ -1062,13 +1062,17 @@ impl Session {
 
     /// M-06.5, M-04.5 (UC-021 step 1, A2, BR-006): shows the tab "Todos",
     /// opening it if needed; the overdue todos of the status bar show it
-    /// with the filter "Open". OQ-279: the tab is the left pane's, which
-    /// becomes the active pane.
+    /// with the filter "Open". OQ-279: the tab opens in the active pane,
+    /// and moves there when it is open in the other one (there is one tab
+    /// "Todos", BR-006); the other pane keeps its note.
     pub fn show_todo_list(&mut self, filter: Option<TodoFilterName>) {
-        self.focus_pane(underline_core::PaneSide::Left);
+        let Some(side) = self.open.as_ref().map(|open| open.panes.active_side()) else {
+            return;
+        };
         self.change_todo_list(|list| {
             list.open = true;
             list.active = true;
+            list.pane = side;
             if let Some(filter) = filter {
                 list.filter = filter.into();
             }
@@ -1126,7 +1130,9 @@ impl Session {
         let active = open
             .tabs
             .active()
-            .filter(|_| !(list.open && list.active))
+            // OQ-279: no note is shown while the tab "Todos" is the active
+            // pane's active tab; with the other pane active, its note is.
+            .filter(|_| !open.todos_shown())
             .map(|(note, _)| note.clone());
         let today = self.todos.today.unwrap_or_else(Day::today);
         let built: Built = (

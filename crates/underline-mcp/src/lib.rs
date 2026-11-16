@@ -748,6 +748,35 @@ mod tests {
         remove(&server);
     }
 
+    /// UC-019, ADR-005 (decision of 2026-11-16): a note the server changes
+    /// itself (no window runs) keeps who may read and write it.
+    #[cfg(unix)]
+    #[test]
+    fn uc019_adr005_changed_note_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let server = server("mode");
+        let (failed, _) = tool(
+            &server,
+            "create_note",
+            json!({ "note": "Plan", "text": "- a" }),
+        );
+        assert!(!failed);
+        let path = server.workspace.root().join("Plan.md");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let (failed, message) = tool(
+            &server,
+            "rewrite_note",
+            json!({ "note": "Plan", "text": "- b" }),
+        );
+        assert!(!failed, "{message}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "- b");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        remove(&server);
+    }
+
     #[test]
     fn initialize_advertises_tools() {
         let server = server("init");

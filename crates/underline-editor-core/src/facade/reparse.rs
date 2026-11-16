@@ -200,9 +200,13 @@ pub(super) fn reparse(
     while trail < n && is_container(&blocks[trail].kind) {
         trail += 1;
     }
-    // FR-098, OQ-222: whether the AsciiDoc header sets `:stem: latexmath`,
+    // FR-098, OQ-222: the notation the AsciiDoc header sets with `:stem:`,
     // which a part of the note parsed alone does not hold.
-    let stem = format == NoteFormat::AsciiDoc && underline_markup::stem_in_lines(lines_of(rope));
+    let stem = if format == NoteFormat::AsciiDoc {
+        underline_markup::stem_in_lines(lines_of(rope))
+    } else {
+        underline_markup::blocks::Stem::Off
+    };
     let (mut before, mut after) = (1, 1);
     loop {
         let mut lo = lead.saturating_sub(before);
@@ -749,6 +753,10 @@ mod tests {
         "latexmath:[b]",
         "[latexmath]\n",
         "[stem]\n",
+        // OQ-222: AsciiMath.
+        ":stem:\n",
+        "asciimath:[x/y]",
+        "[asciimath]\n",
         "++++\n",
         "word ",
         // Breaks the rope knows but the parsers do not (FR-098 review).
@@ -895,7 +903,8 @@ mod tests {
         let value = adoc.find("latexmath\n").unwrap();
         check(adoc, value..value + 5, "ascii", NoteFormat::AsciiDoc);
         let mut blocks = parse_blocks(adoc, NoteFormat::AsciiDoc);
-        let new = adoc.replace(":stem: latexmath", ":stem:");
+        // OQ-222: `:stem:` alone is AsciiMath now; without it, no formula.
+        let new = adoc.replace(":stem: latexmath\n", "");
         let mut refs = false;
         let _ = reparse_between(
             &mut blocks,
@@ -908,6 +917,16 @@ mod tests {
         assert!(blocks
             .iter()
             .all(|b| !matches!(b.kind, BlockKind::Formula { .. })));
+        // OQ-222: AsciiMath, typed in and switched to LaTeX in the header.
+        let ascii = "= T\n:stem:\n\nA para.\n\nSee stem:[a/b] and asciimath:[x^2] here.\n\n[asciimath]\n++++\nsqrt 2\n++++\n";
+        let at = ascii.find("a/b").unwrap() + 1;
+        check(ascii, at..at, "/c", NoteFormat::AsciiDoc);
+        let at = ascii.find("x^2").unwrap() + 3;
+        check(ascii, at..at, "+y", NoteFormat::AsciiDoc);
+        let at = ascii.find("sqrt 2").unwrap() + 6;
+        check(ascii, at..at, "/3", NoteFormat::AsciiDoc);
+        let header = ascii.find(":stem:").unwrap() + 6;
+        check(ascii, header..header, " latexmath", NoteFormat::AsciiDoc);
     }
 
     /// FR-097, ADR-024: AsciiDoc, a title after block attributes.
@@ -1008,7 +1027,8 @@ mod tests {
     }
     /// FR-098, OQ-222, UC-005 BR-016 (property, test monkey): random edits
     /// that add or remove `$`, `$$`, backticks, `\$`, `latexmath:[`,
-    /// `stem:[`, `]`, `\]`, `++++`, `[stem]`, header lines of `:stem:`,
+    /// `asciimath:[`, `stem:[`, `]`, `\]`, `++++`, `[stem]`, `[asciimath]`,
+    /// AsciiMath, header lines of `:stem:` (LaTeX and AsciiMath),
     /// CRLF and emoji leave the blocks of the old text, brought up to the
     /// new one, equal to a full parse. The seed is in the failure message.
     #[test]
@@ -1028,6 +1048,14 @@ mod tests {
             "[latexmath]\n",
             ":stem: latexmath\n",
             ":stem:\n",
+            // OQ-222: AsciiMath forms.
+            ":stem: asciimath\n",
+            "asciimath:[",
+            "[asciimath]\n",
+            "asciimath:[a/b]",
+            "sqrt(x)",
+            "(",
+            ")",
             "\r\n",
             "\n",
             "\n\n",
@@ -1100,6 +1128,105 @@ mod tests {
             let adoc = format!("= T{separator}:stem: latexmath\n\nSee stem:[a] here.\n");
             let at = adoc.find("[a").unwrap() + 2;
             check(&adoc, at..at, "b", NoteFormat::AsciiDoc);
+        }
+    }
+
+    /// FR-098, OQ-222, UC-005 BR-016 (property, test monkey): a note that
+    /// does start with a header (`:stem:`, `:stem: asciimath`, `:stem!:`,
+    /// `= T` and a stem entry in either notation) and a body of AsciiMath
+    /// and LaTeX formulas in every form: random edits of the body and of the
+    /// header lines leave the blocks of the old text, brought up to the new
+    /// one, equal to a full parse. The seed is in the failure message.
+    #[test]
+    fn oq222_random_edits_of_a_note_with_a_stem_header_equal_the_full_parse() {
+        const HEADERS: &[&str] = &[
+            "",
+            ":stem:\n\n",
+            ":stem: asciimath\n\n",
+            ":stem: latexmath\n\n",
+            ":stem:\r\n\r\n",
+            "= T\n:stem:\n\n",
+            "= T\n:stem: latexmath\n\n",
+            "= T\n:stem!:\n\n",
+            "= T\n:stem: tex\n:stem!:\n\n",
+            "= T\n:stem:\n:author: A\n\n",
+            "// c\n= T\n:stem:\n\n",
+        ];
+        const BODY: &[&str] = &[
+            "asciimath:[a/b]",
+            "asciimath:[",
+            "stem:[x^2]",
+            "stem:[",
+            "latexmath:[\\frac{a}{b}]",
+            "[asciimath]\n++++\nsum_(i=1)^n i\n++++\n",
+            "[stem]\n++++\n(a+b)/2\n++++\n",
+            "[latexmath]\n++++\n\\sqrt{x}\n++++\n",
+            "[asciimath]\n",
+            "[stem]\n",
+            "++++\n",
+            "]",
+            "\\]",
+            "\\",
+            "text(\"a]b\")",
+            "(",
+            ")",
+            "{:",
+            ":}",
+            "\n",
+            "\n\n",
+            "\r\n",
+            " ",
+            "$",
+            "`",
+            "*bold*",
+            "\u{2028}",
+            "\u{1F600}",
+            ":stem:\n",
+            ":stem: latexmath\n",
+            "= T\n",
+            "// c\n",
+            "----\n",
+            "|===\n",
+            "* item\n",
+            ". one\n",
+            "word",
+        ];
+        let pick = |rng: &mut Lcg, n: usize| -> String {
+            (0..n).map(|_| BODY[rng.below(BODY.len())]).collect()
+        };
+        for seed in 0..8000u64 {
+            let mut rng = Lcg(seed * 32_452_843 + 7);
+            let header = HEADERS[rng.below(HEADERS.len())];
+            let n = 3 + rng.below(30);
+            let old = format!("{header}{}", pick(&mut rng, n));
+            let mut new = old.clone();
+            for _ in 0..=rng.below(3) {
+                let chars: Vec<usize> = new
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .chain([new.len()])
+                    .collect();
+                let a = chars[rng.below(chars.len())];
+                let b = chars[rng.below(chars.len())];
+                let k = rng.below(3);
+                let insert = pick(&mut rng, k);
+                new.replace_range(a.min(b)..a.max(b), &insert);
+            }
+            let format = NoteFormat::AsciiDoc;
+            let mut blocks = parse_blocks(&old, format);
+            let mut refs = has_reference_definitions(&old);
+            let _ = reparse_between(
+                &mut blocks,
+                &Rope::from_str(&old),
+                &Rope::from_str(&new),
+                format,
+                &mut refs,
+            );
+            assert_eq!(
+                blocks,
+                parse_blocks(&new, format),
+                "seed {seed}: {old:?} -> {new:?}"
+            );
         }
     }
 }

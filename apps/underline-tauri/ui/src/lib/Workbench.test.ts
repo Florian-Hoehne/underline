@@ -165,7 +165,7 @@ describe('M-06 tabs', () => {
 
   it('M-06.5 while the tab "Todos" is active, no note tab is', async () => {
     const shell = await workbench({ givenDir: '/home/user/Notes' });
-    const tabs: TabsView = { ...shell.tabs, todoList: { open: true, active: true } };
+    const tabs: TabsView = { ...shell.tabs, todoList: { open: true, active: true, pane: 'left' } };
 
     await emit('tabs', tabs);
 

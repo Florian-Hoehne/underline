@@ -720,6 +720,18 @@ export class SourceView {
     }
   }
 
+  /**
+   * OQ-260, UC-005 BR-021: the Vim keys' `>` or `<` on the lines from the
+   * one holding `from` to the one holding `to`, `times` times over: the
+   * core indents a list item by the list rule and shifts other lines as Vim
+   * does, after the inputs before it, as one undo step.
+   */
+  #vimShift(from: number, to: number, outdent: boolean, times: number): void {
+    this.#enqueue(() =>
+      this.#backend.input(this.note, { kind: 'vimShift', from, to, outdent, times }),
+    );
+  }
+
   /** M-10.2: a button of the toolbar; the keyboard goes back into the text. */
   tool(tool: ToolName): void {
     this.#enqueue(() => this.#backend.input(this.note, { kind: 'tool', tool }));
@@ -1154,6 +1166,7 @@ export class SourceView {
           undo: () => this.#history('Z'),
           redo: () => this.#history('Y'),
           command: (command) => this.#command(command),
+          shift: (from, to, outdent, times) => this.#vimShift(from, to, outdent, times),
         },
         {
           read: () => this.#backend.readClipboard(),

@@ -142,7 +142,7 @@ describe('UC-023 the command palette', () => {
     expect(names()[0]).toBe('Theme…');
   });
 
-  it('TC-023-02 BR-004 the command run last is listed first with an empty field, until a restart', async () => {
+  it('TC-023-02 BR-004, OQ-198 the command run last is listed first with an empty field, also after a restart', async () => {
     const { shell } = await workbench();
     shell.palette.show('commands');
     await waitFor(() => expect(overlay()).not.toBeNull());
@@ -155,12 +155,68 @@ describe('UC-023 the command palette', () => {
     await waitFor(() => expect(overlay()).not.toBeNull());
     // The switch names what it does now (shown or hidden).
     expect(names()[0]).toMatch(/^(Show|Hide) the minimap$/);
+    // The backend remembers it for the user.
+    const remembered = mockHooks().recentCommands();
+    expect(remembered).toHaveLength(1);
+    expect(shell.palette.recent).toEqual(remembered);
 
+    // TC-023-02 step 4: after a restart the backend gives them back.
     cleanup();
-    const again = await workbench();
+    const again = await workbench({ ...START, recentCommands: remembered });
     again.shell.palette.show('commands');
     await waitFor(() => expect(overlay()).not.toBeNull());
-    expect(names()).toEqual(before);
+    expect(names()[0]).toMatch(/^(Show|Hide) the minimap$/);
+    expect(names()).not.toEqual(before);
+  });
+
+  it('OQ-198 ids no command has any more are dropped at the start, and repeats', async () => {
+    const { shell } = await workbench();
+    const known = shell.commands.slice(0, 2).map((command) => command.id);
+    cleanup();
+    const again = await workbench({
+      ...START,
+      recentCommands: ['gone.command', known[1], known[0], known[1], 'renamed.since'],
+    });
+    expect(again.shell.palette.recent).toEqual([known[1], known[0]]);
+  });
+
+  it('BR-004 an empty palette heads the recent commands "Recently used", the rest "All commands"', async () => {
+    const { shell } = await workbench();
+    shell.palette.show('commands');
+    await waitFor(() => expect(overlay()).not.toBeNull());
+    expect(overlay()!.querySelectorAll('.group')).toHaveLength(0);
+    await type('>minimap');
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+
+    shell.palette.show('commands');
+    await waitFor(() => expect(overlay()).not.toBeNull());
+    const groups = [...overlay()!.querySelectorAll('.group')].map((g) => g.textContent?.trim());
+    expect(groups).toEqual(['Recently used', 'All commands']);
+    expect(options()[0]).toHaveAccessibleDescription('Recently used');
+    expect(options()[1]).not.toHaveAccessibleDescription('Recently used');
+    // While typing, no headings.
+    await type('>mini');
+    expect(overlay()!.querySelectorAll('.group')).toHaveLength(0);
+  });
+
+  it('BR-004 a command that asks for a choice counts as run when chosen ("Theme…")', async () => {
+    const { shell } = await workbench();
+    shell.palette.show('commands');
+    await waitFor(() => expect(overlay()).not.toBeNull());
+    await type('>theme');
+    expect(chosen()).toHaveTextContent('Theme…');
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(shell.palette.mode).toBe('choices'));
+    expect(mockHooks().recentCommands()).toEqual(['theme.choose']);
+    expect(shell.palette.recent).toEqual(['theme.choose']);
+  });
+
+  it('OQ-198 at most 20 recently run commands are kept', async () => {
+    const { shell } = await workbench();
+    const ids = shell.commands.slice(0, 25).map((command) => command.id);
+    expect(ids).toHaveLength(25);
+    shell.palette.remember(ids, shell.commands);
+    expect(shell.palette.recent).toEqual(ids.slice(0, 20));
   });
 
   it('TC-023-03 every command of the menus, the toolbar and the context menus is found under its name', async () => {

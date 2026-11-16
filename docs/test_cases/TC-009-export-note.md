@@ -217,3 +217,4 @@
 | 1    | Export `Math` to HTML and open the file.  | Both correct formulas are typeset; the one with the error is shown as its source.      |
 | 2    | Export `Math` to PDF.                     | The same.                                                                               |
 | 3    | Export `Math` to AsciiDoc.                | The formulas are written as `latexmath:[...]` and a `[latexmath]` block; the one with the error as its source. |
+| 4    | Export `AsciiMath.adoc` (of TC-004-38) to Markdown. | The AsciiMath formulas are written in LaTeX, as `$...$` and a `math` code block, and typeset as before. |

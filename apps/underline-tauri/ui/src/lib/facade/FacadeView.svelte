@@ -116,6 +116,8 @@
   import { wasmFacadeBackend } from './wasmBackend';
   import Block from './Block.svelte';
   import Enlarged from './Enlarged.svelte';
+  import FormulaPreview from './FormulaPreview.svelte';
+  import { editedFormula } from './formulaPreview';
   import { Heights } from './heights';
   import { routeBeforeInput, routeFacadeKey } from './keys';
   import {
@@ -174,6 +176,11 @@
     softWrap?: boolean;
     /** UC-004 BR-018: the pane of the split view the facade is in. */
     pane?: PaneName;
+    /**
+     * OQ-287: the facade is in the active pane; only there the formula the
+     * cursor is in shows its preview.
+     */
+    active?: boolean;
   };
 
   let {
@@ -194,6 +201,7 @@
     onCorrected,
     zoom = 100,
     softWrap = true,
+    active = true,
   }: Props = $props();
 
   /** UC-010 BR-009: the text's size as a share of its normal size. */
@@ -354,6 +362,10 @@
   });
   /** FR-098: the block holding the cursor, for the inline formulas it shows as markup. */
   const cursorBlock = $derived(gap ? -1 : blockAt(blocks, head));
+  /** OQ-287: the inline formula the cursor is in, previewed typeset above its markup. */
+  const previewed = $derived(
+    !active || cursorBlock < 0 ? null : editedFormula(blocks[cursorBlock], cursorBlock, head),
+  );
   /** The blocks in the DOM: those near the part in view, without the hidden ones. */
   const shown = $derived.by(() => {
     void layout;
@@ -2094,6 +2106,12 @@
   {#if format}
     <span class="indicator">{format}</span>
   {/if}
+  <FormulaPreview
+    edited={previewed}
+    {content}
+    {platform}
+    moved={`${scrollTop}:${layout}:${drawn}:${width}:${viewHeight}:${scale}`}
+  />
   {#if tooltip}
     <div
       class="tooltip"
@@ -2109,6 +2127,7 @@
     {@const menu = spellMenu}
     <SpellMenu
       word={menu.shown.word}
+      {note}
       x={menu.x}
       y={menu.y}
       onChoose={(suggestion) => correct(menu, suggestion)}

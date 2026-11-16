@@ -18,6 +18,8 @@ underline-facade.workspace = true
 underline-editor-core.workspace = true
 underline-editor-view.workspace = true
 underline-wiki.workspace = true
+# OQ-248: links to notes written as link completion writes them.
+underline-markup.workspace = true
 # FR-099, ADR-030: the spell check of the open notes, on their mirror.
 underline-spell.workspace = true
 # UC-016, ADR-017: MCP install for the section "Agents" of the settings.

@@ -18,6 +18,7 @@ import {
   foldingOf,
   gapAfter,
   em,
+  formulaBlockClick,
   formulaClick,
   inFormula,
   isFigure,
@@ -394,6 +395,26 @@ describe('FR-098 formulas', () => {
       formula: { ...formula, source: 'x' },
     };
     expect(formulaClick(paragraph(0, 0, [macro]), macro)).toBe(11);
+    // OQ-222: AsciiMath, whose source is written as LaTeX: after the `[`.
+    const ascii: RunView = {
+      ...run('asciimath:[a/b]', [[0, 0]], 15),
+      formula: { ...formula, source: '\\frac{a}{b}' },
+    };
+    expect(formulaClick(paragraph(0, 0, [ascii]), ascii)).toBe(11);
+  });
+
+  it('TC-005-42 step 1, OQ-222: a click on an AsciiMath block goes to the line after `++++`', () => {
+    const markup = '[asciimath]\n++++\nsqrt 2\n++++';
+    const shown: BlockView = {
+      ...paragraph(0, 0, [run(markup, [[0, 0]], markup.length)], markup.length),
+      kind: { type: 'formula', formula: { ...formula, source: '\\sqrt{2}' } },
+    };
+    expect(formulaBlockClick(shown)).toBe('[asciimath]\n++++\n'.length);
+    const latex: BlockView = {
+      ...shown,
+      kind: { type: 'formula', formula: { ...formula, source: 'sqrt 2' } },
+    };
+    expect(formulaBlockClick(latex)).toBe('[asciimath]\n++++\n'.length);
   });
 
   it('a block formula is a figure; sizes are in em', () => {

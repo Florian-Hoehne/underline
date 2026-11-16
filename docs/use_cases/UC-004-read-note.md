@@ -9,7 +9,7 @@
 **Trigger:** The user chooses a note in the note overview, follows a local link, or a workspace opens with remembered tabs.  
 **Status:** Reviewed  
 
-**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, FR-076, FR-078, FR-079, FR-086, FR-090, FR-091, FR-092, FR-096, FR-097, FR-098, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, NFR-018, NFR-019, C-003, C-004, C-005](../requirements.md)
+**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, FR-076, FR-078, FR-079, FR-086, FR-090, FR-091, FR-092, FR-096, FR-097, FR-098, FR-103, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, NFR-018, NFR-019, C-003, C-004, C-005](../requirements.md)
 
 ## Preconditions
 
@@ -20,7 +20,7 @@
 1. The user chooses a note in the note overview.
 2. The system opens the note in a new tab in the facade, placed right of the active tab, makes it the active tab, and lists it first in the note overview.
 3. The system shows the note as its note format is shown on GitHub and GitLab: headings, paragraphs, lists, checklists, tables, links, and images, code blocks highlighted for their language, PlantUML and Mermaid diagrams as pictures, formulas typeset as mathematics (BR-019), and the front matter of a Markdown note as a table, all in the colors of the active theme.
-4. The system shows in the tool panel the note properties (its place in the workspace, note format, size, last change, text statistics, and note attributes), its outline, its code index, its figure index, its backlinks, its outgoing links, and its tags, and beside the editor a minimap of the note.
+4. The system shows in the tool panel the note properties (its place in the workspace, note format, size, last change, text statistics, and note attributes), its outline, its code index, its figure index, its backlinks, its unlinked mentions (BR-021), its outgoing links, and its tags, and beside the editor a minimap of the note.
 5. The user reads the note: they scroll, jump to a heading, a code block, a figure, or a link through the tool panel or to a place through the minimap, fold and expand sections, and enlarge diagrams and images.
 6. The system keeps the reading position and the folded sections of the tab while it is open, and remembers the open tabs, their panes, and the active tab of each pane of the workspace.
 
@@ -57,9 +57,12 @@
 **Trigger:** The followed link points to a web address, to a file of the workspace that is not a note, or to a file on this computer that a note links to on purpose (UC-005 A19) (step 5)  
 **Flow:**
 
-1. For a web address the system asks, the first time in a session, whether to open web addresses, and opens it in the default browser once the user agrees.
-2. For a file of the workspace, or a file on this computer linked by its full place, the system opens it with the program the system uses for that kind of file; when the file does not exist, it says so in the status bar.
-3. Use case continues at step 5.
+1. For a web address or a mail address, the system opens it in the default browser or mail program.
+2. For an address of any other kind, such as `ssh:` or `smb:`, which starts another program, the system first asks whether to open it, naming its kind and showing the whole address.
+3. For a file of the workspace, or a file on this computer linked by its full place, the system opens it with the program the system uses for that kind of file; when the file does not exist, it says so in the status bar.
+4. For a file that may run as a program, such as a program, a script, or a launcher, and for a file linked as a `file://` address, the system first asks whether to open it, naming the file and its kind.
+5. Each such question shows the whole address and offers to copy it, to open it ("Open link", "Open program", or "Open file"), or "Cancel", with "Cancel" chosen at first; for a program it warns that opening may run it. It is asked every time, and "Cancel" opens nothing.
+6. Use case continues at step 5.
 
 ### A5: Switch or close a tab
 
@@ -138,13 +141,13 @@
 2. When the user accepts, the system creates the note (UC-003) with that title filled in; use case ends.
 3. Otherwise use case continues at A12 step 1.
 
-### A14: Go to a backlink or an outgoing link
+### A14: Go to a backlink, an unlinked mention, or an outgoing link
 
-**Trigger:** The user chooses a backlink or an outgoing link in the tool panel (step 5)  
+**Trigger:** The user chooses a backlink, an unlinked mention, or an outgoing link in the tool panel (step 5)  
 **Flow:**
 
-1. For a backlink, the system opens the linking note with the cursor on the link; use case continues at step 2 with that note, or at A1 when it is open already.
-2. For an outgoing link, the system puts the cursor on the link in the active note; with the Ctrl key held (the Cmd key on macOS), it follows the link as in A2 to A4.
+1. For a backlink, the system opens the linking note with the cursor on the link; for an unlinked mention, it opens the mentioning note with the cursor on the mention; use case continues at step 2 with that note, or at A1 when it is open already.
+2. For an outgoing link, the system puts the cursor on the link in the active note; with the Ctrl key held (the Cmd key on macOS), it follows the link as in A2 to A4: a picture opens with the program the system uses for it, asked about first where A4 asks, and an included note opens as a linked note.
 3. Use case continues at step 5.
 
 ### A15: Search by a tag of the note
@@ -207,13 +210,26 @@
 1. The system shows the source of that formula with the error in its place and renders the rest of the note.
 2. Use case continues at step 4.
 
+### A22: Link an unlinked mention
+
+**Trigger:** The user chooses "Link" beside an unlinked mention in the tool panel (step 5)  
+**Flow:**
+
+1. The system looks for the mention again in the mentioning note as it is now.
+2. When the mention is still at its place, the system turns it into a local link to the active note, written as link completion writes a link (UC-005 BR-018), with the mention as written as the text of the link, so the note shows the same words, now linked.
+3. When the mentioning note is open in a tab, the change is made there, as one change that a single undo takes back, and is stored as any change of the user (UC-005 BR-001). Otherwise the system first keeps the note as it was in a snapshot (UC-026 BR-001) and then stores the changed note; when the snapshot cannot be taken, the note is not changed and the status bar says why.
+4. The system says in the status bar that the mention was linked and how to take it back: by undo in the tab of an open note, or from the snapshots of a closed one. The mention leaves the unlinked mentions, the link appears among the backlinks, and the keyboard goes to the next "Link", or to the section when none is left.
+5. When two mentions of one note are linked at once, they are linked one after the other; when the second is no longer at its place, it is reported as in step 6. When the note is opened and changed in a tab while it is being linked, the link is made in the tab too, or, when the mention moved there, the status bar says the link could not be kept.
+6. When the mention is no longer at its place, because the note changed since the list was made, nothing is changed and the status bar says so; the list follows the change.
+7. Use case continues at step 5.
+
 ## Postconditions
 
 ### Success Postconditions
 
 - The note is open in its own tab, which is the active tab, and is listed first in the note overview.
 - The open tabs, their panes, order and editing views, and the active tab of each pane are remembered for the next time the workspace is opened. Tabs opened again when a workspace opens (UC-002 step 8) do not change the order of the note overview.
-- The note and its file are unchanged.
+- The note and its file are unchanged. Only a mention the user chose to link (A22) changes the note that holds it, and only there.
 
 ### Failure Postconditions
 
@@ -227,7 +243,7 @@ A note is open in at most one tab of each pane of its workspace. Opening a note 
 
 ### BR-002: Reading changes nothing
 
-Opening, reading, and closing a note never changes its file (NFR-007), in either editing view, also when a diagram cannot be rendered or a link is followed. A change from outside never overwrites a change of the user, nor the other way round (A9).
+Opening, reading, and closing a note never changes its file (NFR-007), in either editing view, also when a diagram cannot be rendered or a link is followed. Linking an unlinked mention (A22) is a change the user asks for, of the mentioning note only. A change from outside never overwrites a change of the user, nor the other way round (A9).
 
 ### BR-003: Editing view per tab
 
@@ -239,7 +255,7 @@ A note is rendered as the GitHub and GitLab web interfaces show its note format 
 
 ### BR-005: Local links
 
-A local link names the place of a note or file of the workspace relative to the note that holds it, as GitHub and GitLab read it, with or without the extension of the note format. It may name a heading of the note, and a link with only a heading points into the same note. A relative link that leads outside the workspace is not a local link and is not followed; a link to a file on this computer by its full place, as a large file can be linked (UC-005 A19), is followed like a link to another file (BR-007).
+A local link names the place of a note or file of the workspace relative to the note that holds it, as GitHub and GitLab read it, with or without the extension of the note format. It may name a heading of the note, and a link with only a heading points into the same note. A relative link that leads outside the workspace is not a local link and is not followed; a link to a file on this computer by its full place, as a large file can be linked (UC-005 A19), is followed like a link to another file (BR-007). A `file://` address is read the same way: written with `%20` for a space it names the file with the space, and a relative one is relative to the note that holds it.
 
 ### BR-006: Following links
 
@@ -247,7 +263,7 @@ A link is followed by a click with the Ctrl key held (the Cmd key on macOS), in 
 
 ### BR-007: Other links
 
-A web address opens in the default browser after the user agreed once in the session (A4). A file of the workspace that is not a note opens with the program the system uses for that kind of file.
+Web addresses (`http`, `https`) and mail addresses (`mailto`) open without asking (A4). An address of any other kind is asked about every time, since it starts another program. A file of the workspace that is not a note opens with the program the system uses for that kind of file; a file that may run as a program, and a file linked as a `file://` address, are asked about every time, so a click on a link never starts a program without the user's yes.
 
 ### BR-008: Tabs
 
@@ -290,7 +306,7 @@ A note matches in go to note when every word typed occurs in its title or its fo
 
 ### BR-015: Backlinks and outgoing links
 
-The backlinks of the active note are the local links (BR-005) in the other notes of the workspace that lead to it or to one of its headings, grouped by the note that holds them, in the order of the note overview, each with its line and the link marked (FR-078). A link of a note to itself is no backlink. The outgoing links of the active note are all its links in the order of the note: local links, links to other files of the workspace, and web addresses, each with its text and where it leads (FR-079). A local link whose note, file, or heading does not exist is a broken link and is marked as such; whether a web address can be reached is not checked. Text in code blocks, diagrams, and formulas holds no links. For notes open in a tab, the text of the tab counts, with changes not yet saved. Both lists follow every stored change of any note within 2 seconds in a workspace of 10,000 notes (NFR-019); the section of each shows how many there are.
+The backlinks of the active note are the local links (BR-005) in the other notes of the workspace that lead to it or to one of its headings, grouped by the note that holds them, in the order of the note overview, each with its line and the link marked (FR-078). A link of a note to itself is no backlink. The outgoing links of the active note are all its links in the order of the note: local links, links to other files of the workspace, and web addresses, each with its text and where it leads (FR-079). A picture shown in a note and a file an AsciiDoc note includes count as links of the note too (OQ-244): they are outgoing links of the note that holds them, and an included note lists that note among its backlinks; each is marked in both lists as a picture or an include, in words that a screen reader reads as well. A picture or an included file that does not exist is a broken link. A local link whose note, file, or heading does not exist is a broken link and is marked as such; whether a web address can be reached is not checked. Text in code blocks, diagrams, and formulas holds no links. For notes open in a tab, the text of the tab counts, with changes not yet saved. Both lists follow every stored change of any note within 2 seconds in a workspace of 10,000 notes (NFR-019); the section of each shows how many there are.
 
 ### BR-016: Tags
 
@@ -307,13 +323,16 @@ A line number counts the lines of the markup of the note, as the line numbers of
 
 ### BR-018: Split view
 
-The split view divides the middle of the window into a left and a right pane, each with its own tabs and its own active tab (FR-096); they start equally wide, and the border between them can be dragged. The pane the user last worked in is the active pane: the tool panel shows its active note, and a note chosen in the note overview, in go to note, or by a followed link opens there. Opening to the side opens the note in the other pane. A note may be open in both panes at once, one tab in each, which is how its source view and its facade are seen side by side (FR-097). The panes, their tabs, and their active tabs are remembered like the tabs (step 6); after a restart, the left pane is the active pane. The focus mode (UC-010 A12) hides the side panels but keeps both panes.
+The split view divides the middle of the window into a left and a right pane, each with its own tabs and its own active tab (FR-096); they start equally wide, and the border between them can be dragged. The width the user gives them is remembered for the workspace, like the tabs (step 6), and comes back when the split view is shown again; each pane keeps at least its least width, also when the window is narrower than it was. The pane the user last worked in is the active pane: the tool panel shows its active note, and a note chosen in the note overview, in go to note, or by a followed link opens there. Opening to the side opens the note in the other pane. A note may be open in both panes at once, one tab in each, which is how its source view and its facade are seen side by side (FR-097). The panes, their tabs, their active tabs, and the tab "Todos" in its pane (UC-021 BR-006) are remembered like the tabs (step 6); after a restart, the left pane is the active pane. The focus mode (UC-010 A12) hides the side panels but keeps both panes.
 
 ### BR-019: Formulas
 
-A formula is written in the notation GitHub reads (FR-098, C-003): in a Markdown note inline between `$` and `$` or between `` $` `` and `` `$ ``, and as a block between two lines `$$` or in a code block of the language `math`, decided as GitHub decides whether a `$` starts a formula. In an AsciiDoc note, a formula is written inline as `latexmath:[...]` and as a block marked `[latexmath]`, or with `stem` when the note sets the document attribute `stem` to `latexmath` (C-004). The facade shows it typeset, inline in its line or centered as a block, in the colors of the active theme; the source view shows its markup. Typesetting needs no network connection (NFR-014). A formula with an error is shown as its source with the error (A21).
+A formula is written in the notation GitHub reads (FR-098, C-003): in a Markdown note inline between `$` and `$` or between `` $` `` and `` `$ ``, and as a block between two lines `$$` or in a code block of the language `math`, decided as GitHub decides whether a `$` starts a formula. In an AsciiDoc note, a formula is written in LaTeX inline as `latexmath:[...]` and as a block marked `[latexmath]`, or in AsciiMath inline as `asciimath:[...]` and as a block marked `[asciimath]`; with `stem` (`stem:[...]`, `[stem]`), it is written in the notation the header of the note sets with the document attribute `stem`: LaTeX for `latexmath`, AsciiMath for no value or `asciimath`, as Asciidoctor reads it (C-004). Without `stem` in the header, `stem` is shown as its markup. The facade shows it typeset, inline in its line or centered as a block, in the colors of the active theme; the source view shows its markup. Typesetting needs no network connection (NFR-014). A formula with an error is shown as its source with the error (A21).
 
 ### BR-020: Text statistics
 
 The text statistics of a note count the text the facade shows (FR-090): its markup, front matter, link addresses, and the sources of diagrams and formulas are not counted; the text of code blocks is. A word is a run of letters and digits, with `'` and `-` inside it belonging to the word. Characters are counted with spaces. The reading time is the number of words divided by 200, rounded up to whole minutes, and at least one minute for a note with words. While text is selected, the note properties also show the words and characters of the selection. The statistics follow every change within 1 second.
 
+### BR-021: Unlinked mentions
+
+The unlinked mentions of the active note are the places in the other notes of the workspace where its title stands as plain text, not linked (FR-103). The title matches as whole words, upper and lower case alike, its words apart by spaces on one line; a part of a longer word, a tag such as `#plan`, and a place in code, in a link (its text and its place), in a picture, in an included file, in a written-out web address, in a formula, in a comment, or in the front matter or the attributes of a note is no mention. A Markdown mention right after `!` or a backslash is linked so that it stays a link, and the note shows the same text (OQ-305). The note itself is never searched, and at most 1,000 mentions of one note count. Only the title counts, as the note overview shows it; a title with fewer than 3 characters, spaces not counted, has no unlinked mentions, since it would match too many words, and the section says so. Without unlinked mentions, the section is folded shut. The tool panel lists them as "Unlinked mentions (N)" after the backlinks, grouped by the note that holds them, in the order of the note overview, each with its line and the mention marked differently from a link; at most 200 are listed at first, and "Show more" lists 200 more each time, while N counts them all. Choosing a mention goes there (A14); "Link" turns it into a link (A22). For notes open in a tab, the text of the tab counts, with changes not yet saved. The list follows every stored change of any note within 2 seconds in a workspace of 10,000 notes, as the backlinks do (NFR-019).

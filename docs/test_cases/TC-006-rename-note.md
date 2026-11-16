@@ -26,6 +26,7 @@
 | TC-006-17 | Renaming back, and the rename in git                     | BR-007, BR-010           |
 | TC-006-18 | Todo links follow                                        | BR-006                   |
 | TC-006-19 | Keyboard alone                                           | NFR-011                  |
+| TC-006-20 | Pictures and included files follow                       | BR-003, BR-005           |
 
 ## TC-006-01: Rename a note, links updated
 
@@ -232,3 +233,14 @@
 | 1    | Press F2, type "Road Map", press Enter.                           | The note is renamed.                                      |
 | 2    | Move the focus to the note overview with the keyboard, select "Road Map", open its context menu with the keyboard, and choose to rename. | The rename dialog opens. |
 | 3    | Move between title and folder with Tab and press Escape.          | The dialog closes without a change.                       |
+
+## TC-006-20: Pictures and included files follow
+
+**Flow:** BR-003, BR-005 (OQ-244)  
+**Preconditions:** `Chapter.adoc` includes `part.adoc` and shows `img/a.png`. `Book.adoc` includes `Chapter.adoc`; `Pics.md` shows `Chapter.adoc` as a picture.
+
+| Step | Action                                                    | Expected result                                                                       |
+|------|-----------------------------------------------------------|---------------------------------------------------------------------------------------|
+| 1    | Rename "Chapter" to "First Chapter" in the folder `parts`. | The report counts 3 links in 2 notes.                                                 |
+| 2    | Open `Book.adoc` and `Pics.md` in the source view.        | They include and show `parts/First-Chapter.adoc`.                                     |
+| 3    | Open `parts/First-Chapter.adoc` in the source view.       | It includes `../part.adoc` and shows `../img/a.png`.                                  |

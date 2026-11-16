@@ -5,7 +5,10 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use underline_spell::{Dictionaries, NoteSpeller, SpellChecker};
+use std::sync::Arc;
+
+use underline_markup::NoteFormat;
+use underline_spell::{Dictionaries, NoteSpeller, SpellChecker, UserWords};
 
 fn bundled() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -83,6 +86,78 @@ fn adr030_spanish() {
     );
 }
 
+/// OQ-299: German as written in Germany knows `ß` where it is written.
+#[test]
+fn oq299_german_germany() {
+    assert_known(
+        "de-DE",
+        &[
+            "Straße",
+            "Haus",
+            "Häuser",
+            "Fahrrad",
+            "Wörterbuch",
+            "Grüße",
+            "Donaudampfschifffahrt",
+        ],
+        &["Strase", "Hauss", "Wörtebuch"],
+    );
+    let suggestions = NoteSpeller::suggest(checker("de-DE").as_ref(), "Wörtebuch");
+    assert!(
+        suggestions.iter().any(|s| s == "Wörterbuch"),
+        "{suggestions:?}"
+    );
+}
+
+/// OQ-299, TC-005-40: German as written in Switzerland marks "Straße" and
+/// knows "Strasse".
+#[test]
+fn tc005_40_german_switzerland() {
+    assert_known(
+        "de-CH",
+        &["Strasse", "Grüsse", "Haus", "Fahrrad", "Wörterbuch"],
+        &["Straße", "Grüße", "Hauss"],
+    );
+}
+
+/// TC-005-40: the note `Mixed.md` checked in German (Switzerland): of the
+/// shown words only "Straße" and the plain "fehlr" are marked; the code,
+/// the address, the tag, "HTTPX", "abc123", the formula and the name
+/// "statsu" are not.
+#[test]
+fn tc005_40_mixed_note_in_german_switzerland() {
+    let text = "---\nstatsu: offen\n---\n# Gemischt\n\nStrasse und Straße und fehlr, \
+                `fehlr`, [Link](https://exampel.org), #taggg, HTTPX, abc123, $fehlr$.\n\n\
+                ```\nfehlr im Code\n```\n";
+    let mut speller = NoteSpeller::new(checker("de-CH"), Arc::new(UserWords::default()));
+    let marks = speller.check_note(text, NoteFormat::Markdown, None, &mut |_| {});
+    let words: Vec<&str> = marks.iter().map(|m| &text[m.clone()]).collect();
+    assert_eq!(words, ["Straße", "fehlr"]);
+}
+
+/// OQ-299: Italian, with its elisions.
+#[test]
+fn oq299_italian() {
+    assert_known(
+        "it-IT",
+        &[
+            "casa",
+            "perché",
+            "città",
+            "ragazzo",
+            "l'acqua",
+            "dell'anno",
+            "Grazie",
+        ],
+        &["casaa", "perche", "ragazo", "grazzie"],
+    );
+    let suggestions = NoteSpeller::suggest(checker("it-IT").as_ref(), "ragazo");
+    assert!(
+        suggestions.iter().any(|s| s == "ragazzo"),
+        "{suggestions:?}"
+    );
+}
+
 /// UC-005 A28: suggestions come within a bound even unoptimised; the
 /// window asks for them off the session, so a slow one only delays the
 /// menu's list, never the text.
@@ -99,4 +174,36 @@ fn uc005_a28_suggestions_come_in_time() {
         "five suggestions took {:?}",
         start.elapsed()
     );
+}
+
+/// OQ-299 (chaos): Italian written with the typographic apostrophe, as
+/// keyboards and word processors produce it, is as right as with the
+/// straight one: `l’acqua` and `dell’anno` are not marked (English accepts
+/// `Don’t`).
+#[test]
+fn oq299_chaos_italian_typographic_apostrophe_is_not_marked() {
+    let text = "Ecco l'acqua dell'anno e l’acqua dell’anno, un’amica.\n";
+    let mut speller = NoteSpeller::new(checker("it-IT"), Arc::new(UserWords::default()));
+    let marks = speller.check_note(text, NoteFormat::Markdown, None, &mut |_| {});
+    let words: Vec<&str> = marks.iter().map(|m| &text[m.clone()]).collect();
+    assert!(words.is_empty(), "marked: {words:?}");
+}
+
+/// OQ-207 (chaos): the value of `lang` is never marked, whatever it is, in
+/// front matter and in AsciiDoc.
+#[test]
+fn oq207_chaos_the_lang_value_is_never_marked() {
+    for value in ["xyzzyq", "de-CHH", "Schwiizertüütsch", "pt-BR", "off"] {
+        let md = format!("---\nlang: {value}\n---\nStrasse\n");
+        let adoc = format!("= Titel\n:lang: {value}\n\nStrasse\n");
+        for (text, format) in [(md, NoteFormat::Markdown), (adoc, NoteFormat::AsciiDoc)] {
+            let mut speller = NoteSpeller::new(checker("de-CH"), Arc::new(UserWords::default()));
+            let marks = speller.check_note(&text, format, None, &mut |_| {});
+            let words: Vec<&str> = marks.iter().map(|m| &text[m.clone()]).collect();
+            assert!(
+                words.iter().all(|w| !value.contains(w) || w.is_empty()),
+                "{value}: {words:?}"
+            );
+        }
+    }
 }

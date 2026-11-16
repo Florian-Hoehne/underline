@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-palette-ran"
+description = "Enables the palette_ran command without any pre-configured scope."
+commands.allow = ["palette_ran"]
+
+[[permission]]
+identifier = "deny-palette-ran"
+description = "Denies the palette_ran command without any pre-configured scope."
+commands.deny = ["palette_ran"]

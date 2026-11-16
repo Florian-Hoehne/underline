@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-snapshots-space"
+description = "Enables the snapshots_space command without any pre-configured scope."
+commands.allow = ["snapshots_space"]
+
+[[permission]]
+identifier = "deny-snapshots-space"
+description = "Denies the snapshots_space command without any pre-configured scope."
+commands.deny = ["snapshots_space"]

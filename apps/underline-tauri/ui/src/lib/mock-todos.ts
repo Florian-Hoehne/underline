@@ -18,6 +18,7 @@
 
 import type {
   CalendarView,
+  PaneName,
   TodoAnswer,
   TodoCandidatesView,
   TodoChange,
@@ -47,6 +48,8 @@ export type MockTodoList = {
   active: boolean;
   sort: TodoSortName;
   filter: TodoFilterName;
+  /** OQ-279: the pane the tab is in; the left one without the split view. */
+  pane: PaneName;
 };
 
 const URGENCY: Record<UrgencyName, { label: string; rank: number }> = {
@@ -198,7 +201,13 @@ export class MockTodos {
   readonly highest: Record<string, number> = {};
 
   list(root: string | null): MockTodoList {
-    const none: MockTodoList = { open: false, active: false, sort: 'due', filter: 'open' };
+    const none: MockTodoList = {
+      open: false,
+      active: false,
+      sort: 'due',
+      filter: 'open',
+      pane: 'left',
+    };
     if (root === null) {
       return none;
     }

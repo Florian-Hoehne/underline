@@ -85,7 +85,8 @@ impl NoteSpeller {
         if let Some(&known) = self.verdicts.get(word) {
             return known;
         }
-        let known = self.checker.check(word);
+        let known = self.checker.check(word)
+            || straight_apostrophes(word).is_some_and(|straight| self.checker.check(&straight));
         if self.verdicts.len() >= MAX_VERDICTS {
             self.verdicts.clear();
         }
@@ -173,12 +174,30 @@ impl NoteSpeller {
             return Vec::new();
         }
         let mut out = Vec::new();
-        checker.suggest(word, &mut out);
+        match straight_apostrophes(word) {
+            // OQ-299: the dictionary knows the straight apostrophe; the
+            // corrections keep the typographic one the user wrote.
+            Some(straight) if !checker.check(word) => {
+                checker.suggest(&straight, &mut out);
+                for suggestion in &mut out {
+                    *suggestion = suggestion.replace('\'', "\u{2019}");
+                }
+            }
+            _ => checker.suggest(word, &mut out),
+        }
         out.retain(|suggestion| suggestion != word);
         out.dedup();
         out.truncate(MAX_SUGGESTIONS);
         out
     }
+}
+
+/// OQ-299: `word` with its typographic apostrophes (`’`) written straight
+/// (`'`), as most dictionaries hold elisions such as `l'acqua`; `None` when
+/// it has none.
+fn straight_apostrophes(word: &str) -> Option<String> {
+    word.contains('\u{2019}')
+        .then(|| word.replace('\u{2019}', "'"))
 }
 
 /// The key of a block's marks: its markup, its kind, and the bytes in it
@@ -242,6 +261,16 @@ mod tests {
 
     fn marked<'a>(source: &'a str, marks: &[Range<usize>]) -> Vec<&'a str> {
         marks.iter().map(|m| &source[m.clone()]).collect()
+    }
+
+    #[test]
+    fn oq299_a_typographic_apostrophe_counts_as_the_straight_one() {
+        let checker: Arc<dyn SpellChecker> = Arc::new(WordList::new(["l'acqua", "l'anno"]));
+        let mut speller = NoteSpeller::new(Arc::clone(&checker), Arc::new(UserWords::default()));
+        assert!(speller.dictionary_knows("l\u{2019}acqua"));
+        assert!(!speller.dictionary_knows("l\u{2019}acqa"));
+        let suggestions = NoteSpeller::suggest(checker.as_ref(), "l\u{2019}acqa");
+        assert_eq!(suggestions, ["l\u{2019}acqua"]);
     }
 
     #[test]

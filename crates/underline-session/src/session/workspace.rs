@@ -76,8 +76,12 @@ pub(super) struct OpenWorkspace {
     pub(super) overview: Vec<OverviewEntry>,
     /// Grows with every change of `overview`, so only a change is sent.
     pub(super) overview_generation: u64,
-    /// UC-021 BR-005: the tab "Todos", its sort and filter.
+    /// UC-021 BR-005: the tab "Todos", its sort and filter, and its pane
+    /// (OQ-279).
     pub(super) todo_list: TodoListState,
+    /// UC-004 BR-018, OQ-220: the share of the split view's width the left
+    /// pane takes, in tenths of a percent, as remembered.
+    pub(super) split_share: u16,
     /// M-05.6, UC-007 A5: the deleted notes, most recently deleted first.
     pub(super) deleted: Vec<DeletedNote>,
     /// Grows with every change of `deleted`, so only a change is sent.
@@ -95,6 +99,24 @@ pub(super) struct OpenWorkspace {
 impl OpenWorkspace {
     pub(super) fn root(&self) -> &Path {
         self.workspace.root()
+    }
+
+    /// OQ-279, UC-004 BR-018: the tab "Todos" is the active tab of the
+    /// active pane, so no note is the one shown.
+    pub(super) fn todos_shown(&self) -> bool {
+        self.todo_list.open
+            && self.todo_list.active
+            && self.todo_list.pane == self.panes.active_side()
+    }
+
+    /// OQ-279, UC-004 A20: without the split view the tab "Todos" is the
+    /// left pane's; returns whether it moved there.
+    fn todos_to_a_shown_pane(&mut self) -> bool {
+        if self.todo_list.pane == PaneSide::Right && !self.panes.is_split() {
+            self.todo_list.pane = PaneSide::Left;
+            return true;
+        }
+        false
     }
 
     /// UC-004 BR-018: makes the open notes' active one that of the active
@@ -481,6 +503,7 @@ impl Session {
             left_active: active_of(PaneSide::Left),
             right_active: active_of(PaneSide::Right),
             pane: open.panes.active_side().into(),
+            left_share: open.split_share,
         });
         TabsView {
             tabs: views(PaneSide::Left),
@@ -491,6 +514,7 @@ impl Session {
             todo_list: TodoTabView {
                 open: todos.open,
                 active: todos.active,
+                pane: todos.pane.into(),
             },
             split,
         }
@@ -710,6 +734,8 @@ impl Session {
         self.state.workspace_opened(&root, now());
         // UC-021 BR-005: the tab "Todos", its sort and filter come back.
         let todo_list = self.state.todo_list(&root);
+        // OQ-220: the width of the split view comes back.
+        let split_share = self.state.split_share(&root);
         self.open = Some(OpenWorkspace {
             workspace,
             tabs: TabList::default(),
@@ -718,6 +744,7 @@ impl Session {
             overview: Vec::new(),
             overview_generation: 0,
             todo_list,
+            split_share,
             deleted: Vec::new(),
             deleted_generation: 0,
             searcher,
@@ -899,14 +926,15 @@ impl Session {
     /// it as the most recently opened note. Returns whether a tab shows the
     /// note now.
     fn open_tab(&mut self, id: &NoteId, viewed: bool, how: OpenIn) -> bool {
-        let at_the_limit = self.open.as_ref().is_some_and(|open| {
-            let side = match how {
-                OpenIn::ActivePane => open.panes.active_side(),
-                OpenIn::OtherPane => open.panes.active_side().other(),
-                OpenIn::Restore(side, _) => side,
-            };
-            open.panes.len() >= MAX_TABS && !open.panes.has(side, id)
+        let side = self.open.as_ref().map(|open| match how {
+            OpenIn::ActivePane => open.panes.active_side(),
+            OpenIn::OtherPane => open.panes.active_side().other(),
+            OpenIn::Restore(side, _) => side,
         });
+        let at_the_limit =
+            self.open.as_ref().zip(side).is_some_and(|(open, side)| {
+                open.panes.len() >= MAX_TABS && !open.panes.has(side, id)
+            });
         if at_the_limit {
             // UC-005 BR-001: no background save lands after the one below.
             self.settle_saves();
@@ -916,8 +944,9 @@ impl Session {
             return false;
         };
         let root = open.workspace.root().to_owned();
-        if viewed && open.todo_list.active {
-            // UC-021 step 6: the note shows; the tab "Todos" stays open.
+        if viewed && open.todo_list.active && Some(open.todo_list.pane) == side {
+            // UC-021 step 6: the note shows in the pane of the tab "Todos"
+            // (OQ-279); the tab "Todos" stays open.
             open.todo_list.active = false;
             self.state.set_todo_list(&root, open.todo_list);
         }
@@ -1052,7 +1081,9 @@ impl Session {
             return;
         };
         let root = open.workspace.root().to_owned();
-        if open.todo_list.active {
+        if open.todo_list.active && open.todo_list.pane == side {
+            // OQ-279: the note shows in place of the tab "Todos" of its
+            // pane; the other pane keeps it.
             open.todo_list.active = false;
             self.state.set_todo_list(&root, open.todo_list);
         }
@@ -1098,6 +1129,23 @@ impl Session {
         self.persist_tabs();
     }
 
+    /// UC-004 BR-018, OQ-220: the user dragged the border of the split
+    /// view (or moved it with the keys) so that the left pane takes `share`
+    /// tenths of a percent of the width; it is remembered for the
+    /// workspace, within the least share of each pane (15 percent; the
+    /// window keeps 280 px besides). Nothing happens without a workspace.
+    pub fn set_split_share(&mut self, share: f64) {
+        let Some(open) = &mut self.open else {
+            return;
+        };
+        let root = open.workspace.root().to_owned();
+        let share = self.state.set_split_share(&root, share);
+        if open.split_share != share {
+            open.split_share = share;
+            self.views_dirty = true;
+        }
+    }
+
     /// M-22.2, UC-004 step 6: remembers the open tabs and the active one,
     /// of each pane (BR-018).
     pub(super) fn persist_tabs(&mut self) {
@@ -1107,6 +1155,11 @@ impl Session {
         let tabs = open.panes.states();
         let root = open.workspace.root().to_owned();
         self.state.set_tabs(&root, tabs);
+        if let Some(open) = &mut self.open {
+            if open.todos_to_a_shown_pane() {
+                self.state.set_todo_list(&root, open.todo_list);
+            }
+        }
         // The tab bar changed; the watcher's poller follows the open notes.
         self.views_dirty = true;
         if let Some(open) = &mut self.open {

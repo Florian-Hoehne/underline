@@ -52,6 +52,20 @@ pub struct CloseQuestion {
     pub switching: bool,
 }
 
+/// UC-004 A4, BR-007 (Q-61, Q-62): what a question before opening a link
+/// is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub enum OpenKindName {
+    /// An address of another scheme: "Open link".
+    Link,
+    /// A file that may run as a program: "Open program".
+    Program,
+    /// A file by its full place: "Open file".
+    File,
+}
+
 /// M-10.5, UC-005 A9: files dragged over the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -110,11 +124,27 @@ pub enum LinkAnswer {
         /// Where the heading's text starts, in web units.
         offset: u32,
     },
-    /// A4: the first web address of the session: "Open web address" asks
-    /// whether to open it (`link_open_web`).
-    AskWeb {
-        /// The address, as the link has it.
-        address: String,
+    /// A4, BR-007 (Q-61, Q-62): the link leads to an address of another
+    /// scheme than `http`, `https` and `mailto`, to a file that may run as a
+    /// program, or to a file by a `file://` address or on another computer;
+    /// the question asks whether to open it, with "Cancel" first, and the
+    /// answer names it by `id` (`link_answer`). Asked every time.
+    AskOpen {
+        /// The question; an answer to another one opens nothing.
+        id: u32,
+        /// What is asked about; it names the "Open …" button.
+        about: OpenKindName,
+        /// The dialog's title, such as "Open ssh: link".
+        title: String,
+        /// What the link leads to, naming the scheme or the file and its
+        /// kind; the window adds the warning and "Open it?".
+        question: String,
+        /// For a program: "Opening it may run it on this computer.", shown
+        /// in bold with a calm warning sign.
+        warning: Option<String>,
+        /// The full address or place as shown, with invisible characters
+        /// and those turning the text's direction written as `\u{…}`.
+        target: String,
     },
     /// A3: the linked note does not exist; "New note" offers to create
     /// it with its folder and title filled in.

@@ -329,7 +329,8 @@ describe('M-06.5, M-18.6 to M-18.8 the tab "Todos" (UC-021)', () => {
     );
     const rows = within(table()).getAllByRole('row').slice(1);
     expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent)).toEqual(['#1', '#2', '#3']);
-    const overdue = within(rows[0] as HTMLElement).getByText(/days overdue/);
+    // The date and the days are kept apart for a narrow pane (never broken in the date).
+    const overdue = (rows[0] as HTMLElement).querySelector<HTMLElement>('.overdue')!;
     // Two spaces, as egui.
     expect(overdue.textContent).toBe(`${mockDay(-3)}  3 days overdue`);
     expect(overdue).toHaveClass('overdue');
@@ -419,7 +420,7 @@ describe('M-06.5, M-18.6 to M-18.8 the tab "Todos" (UC-021)', () => {
     rowTitle('Book the ferry').focus();
     await fireEvent.keyDown(rowTitle('Book the ferry'), { key: 'Enter' });
     await waitFor(() => expect(shell.tabs.active).toBe('Trip'));
-    expect(shell.tabs.todoList).toEqual({ open: true, active: false });
+    expect(shell.tabs.todoList).toEqual({ open: true, active: false, pane: 'left' });
   });
 
   it('a filter or sort chosen is said politely; a failed mark shows the check box as it is', async () => {
@@ -460,7 +461,7 @@ describe('M-06.5, M-18.6 to M-18.8 the tab "Todos" (UC-021)', () => {
 
     await fireEvent.click(within(tabs()).getByRole('button', { name: 'Close Todos' }));
     await waitFor(() => expect(within(tabs()).queryByRole('tab', { name: /^Todos/ })).toBeNull());
-    expect(shell.tabs.todoList).toEqual({ open: false, active: false });
+    expect(shell.tabs.todoList).toEqual({ open: false, active: false, pane: 'left' });
 
     await shell.showTodoList();
     await waitFor(() => todosTab());

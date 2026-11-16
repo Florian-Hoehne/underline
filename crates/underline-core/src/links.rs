@@ -63,7 +63,13 @@ pub fn resolve_link_with(
     let link = link.trim();
     // A scheme counts only before the `#`: a heading may name an address.
     let before_fragment = link.split_once('#').map_or(link, |(path, _)| path);
-    if before_fragment.contains("://") && !link.starts_with("file://")
+    let file_url = file_url_path(link);
+    // Q-62: `://` makes an address only after something that can be a
+    // scheme; `notes/a.md?u=http://x` is a place in the workspace.
+    let addressed = before_fragment
+        .split_once("://")
+        .is_some_and(|(scheme, _)| !scheme.is_empty() && !scheme.contains(['/', '\\', '?']));
+    if file_url.is_none() && addressed
         || WEB_SCHEMES.iter().any(|scheme| {
             link.get(..scheme.len())
                 .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
@@ -71,8 +77,8 @@ pub fn resolve_link_with(
     {
         return LinkTarget::Web(link.to_owned());
     }
-    if let Some(path) = link.strip_prefix("file://") {
-        return LinkTarget::File(PathBuf::from(path));
+    if let Some(path) = file_url {
+        return resolve_file_url(root, note, &path);
     }
     let (path, heading) = match link.split_once('#') {
         Some((path, heading)) => (path, Some(heading.to_owned())),
@@ -121,6 +127,68 @@ pub fn resolve_link_with(
         };
     }
     LinkTarget::File(target)
+}
+
+/// UC-004 BR-005, Q-63: whether `link` is a `file://` address, whatever
+/// the case of its scheme.
+pub fn is_file_url(link: &str) -> bool {
+    link.trim()
+        .get(..FILE_SCHEME.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(FILE_SCHEME))
+}
+
+const FILE_SCHEME: &str = "file://";
+
+/// UC-004 BR-005, Q-63: the place a `file://` address names, decoded
+/// (`%20` is a space): without a query or fragment, without the host
+/// `localhost`, and on Windows without the `/` before a drive (`/C:/x`).
+/// `None` when `link` is no `file://` address.
+fn file_url_path(link: &str) -> Option<String> {
+    if !is_file_url(link) {
+        return None;
+    }
+    let rest = &link.trim()[FILE_SCHEME.len()..];
+    let rest = rest.split(['#', '?']).next().unwrap_or_default();
+    let rest = match rest.get(..10) {
+        Some(host) if host.eq_ignore_ascii_case("localhost/") => &rest[9..],
+        _ => rest,
+    };
+    let path = percent_decode(rest);
+    if cfg!(windows) {
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            return Some(path[1..].to_owned());
+        }
+    }
+    Some(path)
+}
+
+/// UC-004 BR-005, Q-63: a `file://` place leads to that file on this
+/// computer when it is full (`file:///home/me/a.pdf`); a relative one
+/// (`file://docs/a.pdf`) is relative to the note that holds it, like every
+/// local link, never to the working folder of the program, and is not
+/// followed when it leads outside the workspace.
+fn resolve_file_url(root: &Path, note: &Path, path: &str) -> LinkTarget {
+    if path.is_empty() {
+        return LinkTarget::Outside;
+    }
+    if Path::new(path).is_absolute() {
+        return LinkTarget::File(normalize(Path::new(path)).unwrap_or_else(|| PathBuf::from(path)));
+    }
+    let base = note.parent().unwrap_or(root);
+    let Some(target) = normalize(&base.join(path)) else {
+        return LinkTarget::Outside;
+    };
+    let root = normalize(root).unwrap_or_else(|| root.to_owned());
+    if target.starts_with(&root) {
+        LinkTarget::File(target)
+    } else {
+        LinkTarget::Outside
+    }
 }
 
 /// The anchor GitHub gives a heading: lower case, spaces as dashes, other
@@ -331,5 +399,70 @@ mod tests {
             |_| false,
         );
         assert!(matches!(target, LinkTarget::Note { .. }), "{target:?}");
+    }
+
+    /// UC-004 BR-005, Q-63: a `file://` place is decoded, loses the host
+    /// `localhost`, a query and a fragment; a relative one is relative to
+    /// the note's folder and must stay in the workspace; the scheme's case
+    /// does not matter.
+    #[test]
+    fn uc004_br005_q63_file_urls() {
+        let root = Path::new("/w");
+        let note = Path::new("/w/guide/N.md");
+        let at = |link: &str| resolve_link_with(root, note, link, |_| false, |_| false);
+        // A full place is a Unix one here; Windows has its drives.
+        if cfg!(unix) {
+            assert_eq!(
+                at("file:///home/me/My%20Talk.mp4"),
+                LinkTarget::File(PathBuf::from("/home/me/My Talk.mp4"))
+            );
+            assert_eq!(
+                at("FILE://localhost/home/me/a.pdf#page=2"),
+                LinkTarget::File(PathBuf::from("/home/me/a.pdf"))
+            );
+            assert_eq!(
+                at("file:///home/me/x/../a.pdf?v=1"),
+                LinkTarget::File(PathBuf::from("/home/me/a.pdf"))
+            );
+        }
+        assert_eq!(
+            at("file://docs/r%201.pdf"),
+            LinkTarget::File(PathBuf::from("/w/guide/docs/r 1.pdf"))
+        );
+        assert_eq!(
+            at("file://../Home.md"),
+            LinkTarget::File(PathBuf::from("/w/Home.md"))
+        );
+        assert_eq!(at("file://../../etc/passwd"), LinkTarget::Outside);
+        assert_eq!(at("file://"), LinkTarget::Outside);
+        assert!(is_file_url("  File:///x"));
+        assert!(!is_file_url("files://x"));
+    }
+
+    /// UC-004 BR-005, Q-62: `://` after a place (in a query) does not make
+    /// an address; a scheme that cannot be read still does, to be asked
+    /// about.
+    #[test]
+    fn uc004_br005_q62_only_a_scheme_makes_an_address() {
+        let at = |link: &str| {
+            resolve_link_with(
+                Path::new("/w"),
+                Path::new("/w/N.md"),
+                link,
+                |_| false,
+                |_| false,
+            )
+        };
+        assert!(matches!(
+            at("notes/a.md?u=http://x"),
+            LinkTarget::MissingNote { .. } | LinkTarget::File(_)
+        ));
+        assert!(!matches!(at("a/b://c"), LinkTarget::Web(_)));
+        assert!(!matches!(at("://x"), LinkTarget::Web(_)));
+        assert_eq!(
+            at("\u{feff}http://x"),
+            LinkTarget::Web("\u{feff}http://x".into())
+        );
+        assert_eq!(at("smb://s/x"), LinkTarget::Web("smb://s/x".into()));
     }
 }

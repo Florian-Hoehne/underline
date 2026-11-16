@@ -166,7 +166,7 @@ fn source_key_input(input: &EditorInput, mac: bool) -> Option<KeyInput<'_>> {
             pressed: true,
             modifiers: Modifiers::from_web(*ctrl, *alt, *shift, *meta, mac),
         }),
-        EditorInput::Tool { .. } | EditorInput::Edit { .. } => None,
+        EditorInput::Tool { .. } | EditorInput::Edit { .. } | EditorInput::VimShift { .. } => None,
     }
 }
 
@@ -479,6 +479,24 @@ impl EditorTab {
             }
             EditorInput::Tool { tool } => self.apply_tool(tool.into(), done),
             EditorInput::Edit { action } => done.take(self.source_edit(action.into())),
+            EditorInput::VimShift {
+                from,
+                to,
+                outdent,
+                times,
+            } => {
+                let from = self.editor.char_at_web(from as usize);
+                let to = self.editor.char_at_web(to as usize);
+                // OQ-260: a count from the window is capped, so a huge one
+                // never builds a huge line.
+                let times = usize::try_from(times)
+                    .unwrap_or(usize::MAX)
+                    .clamp(1, underline_editor_core::comfort::lists::VIM_MOST_TIMES);
+                done.take(
+                    self.editor
+                        .vim_shift((from, to), self.format, outdent, times),
+                );
+            }
             EditorInput::Key {
                 key,
                 ctrl,
@@ -559,18 +577,21 @@ impl EditorTab {
         let base = self.editor.revision();
         let mut done = Done::default();
         let nano = self.keys.mode == KeysInputMode::Nano;
-        let through =
-            if nano && !matches!(input, EditorInput::Tool { .. } | EditorInput::Edit { .. }) {
-                let mut target = SourceKeys::new(&mut self.editor);
-                let (through, _) =
-                    self.keys
-                        .handle(vec![input], |i| source_key_input(i, mac), &mut target);
-                done.take(std::mem::take(&mut target.outcome));
-                done.commands = target.commands;
-                through
-            } else {
-                vec![input]
-            };
+        let through = if nano
+            && !matches!(
+                input,
+                EditorInput::Tool { .. } | EditorInput::Edit { .. } | EditorInput::VimShift { .. }
+            ) {
+            let mut target = SourceKeys::new(&mut self.editor);
+            let (through, _) =
+                self.keys
+                    .handle(vec![input], |i| source_key_input(i, mac), &mut target);
+            done.take(std::mem::take(&mut target.outcome));
+            done.commands = target.commands;
+            through
+        } else {
+            vec![input]
+        };
         for input in through {
             self.source_plain_input(input, mac, &mut done);
         }

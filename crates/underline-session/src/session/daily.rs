@@ -109,7 +109,7 @@ impl Session {
         let Some(open) = &self.open else {
             return DailyNoteAnswer::Done;
         };
-        let active = if open.todo_list.active {
+        let active = if open.todos_shown() {
             None
         } else {
             open.tabs.active().map(|(note, _)| note.clone())

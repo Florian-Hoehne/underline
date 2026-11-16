@@ -307,7 +307,10 @@
               </td>
               <td>
                 {#if todo.overdue}
-                  <span class="overdue">{todo.overdue}</span>
+                  {@const [date, ...late] = todo.overdue.split('  ')}
+                  {@const rest = late.length > 0 ? `  ${late.join('  ')}` : ''}
+                  <!-- "{due}  N days overdue": a narrow pane breaks between the two, never in the date. -->
+                  <span class="overdue"><span class="nowrap">{date}</span>{rest}</span>
                 {:else if todo.due}
                   {todo.due}
                 {:else}
@@ -446,10 +449,34 @@
     margin: 0;
   }
 
+  /* App-tester (package 11, OQ-279): in a half-wide pane of the split view
+     the table scrolls sideways; a shade at an edge says more columns lie
+     there (the scroll bar may only show while scrolling), and the titles
+     are shorter so more columns fit. */
   .scroll {
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
+    background:
+      linear-gradient(to right, var(--ui-surface) 30%, transparent) left / 24px 100% no-repeat local,
+      linear-gradient(to left, var(--ui-surface) 30%, transparent) right / 24px 100% no-repeat local,
+      radial-gradient(
+          farthest-side at 0 50%,
+          color-mix(in srgb, var(--ui-text) 22%, transparent),
+          transparent
+        )
+        left / 12px 100% no-repeat scroll,
+      radial-gradient(
+          farthest-side at 100% 50%,
+          color-mix(in srgb, var(--ui-text) 22%, transparent),
+          transparent
+        )
+        right / 12px 100% no-repeat scroll;
+    scrollbar-gutter: stable;
+  }
+
+  .todo-list {
+    container-type: inline-size;
   }
 
   table {
@@ -567,5 +594,37 @@
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
+  }
+
+  /* A narrow pane: cells may wrap, so most columns fit and the rest scroll. */
+  @container (max-width: 560px) {
+    .title {
+      max-width: 14ch;
+    }
+
+    th,
+    td {
+      padding: 3px 4px;
+    }
+
+    /* Only the title, the notes and the days overdue wrap; dates never break. */
+    td:has(.title),
+    td:has(.notes),
+    td:has(.overdue) {
+      white-space: normal;
+    }
+
+    .overdue {
+      white-space: normal;
+    }
+
+    .nowrap {
+      white-space: nowrap;
+    }
+
+    .notes {
+      flex-wrap: wrap;
+      column-gap: var(--space-1);
+    }
   }
 </style>

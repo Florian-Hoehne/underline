@@ -180,19 +180,29 @@ pub enum SpellCheckLanguage {
     EnglishUs,
     /// English as written in the United Kingdom.
     EnglishUk,
+    /// German as written in Germany (with `ß`).
+    GermanDe,
+    /// German as written in Switzerland (`ss` for `ß`).
+    GermanCh,
     /// French.
     French,
+    /// Italian.
+    Italian,
     /// Spanish.
     Spanish,
 }
 
 impl SpellCheckLanguage {
-    /// Every value, off first, in the order the settings window offers them.
+    /// Every value, off first, then by name, in the order the settings
+    /// window offers them.
     pub const ALL: &'static [SpellCheckLanguage] = &[
         SpellCheckLanguage::Off,
-        SpellCheckLanguage::EnglishUs,
         SpellCheckLanguage::EnglishUk,
+        SpellCheckLanguage::EnglishUs,
         SpellCheckLanguage::French,
+        SpellCheckLanguage::GermanDe,
+        SpellCheckLanguage::GermanCh,
+        SpellCheckLanguage::Italian,
         SpellCheckLanguage::Spanish,
     ];
 
@@ -203,7 +213,10 @@ impl SpellCheckLanguage {
             SpellCheckLanguage::Off => "off",
             SpellCheckLanguage::EnglishUs => "en-US",
             SpellCheckLanguage::EnglishUk => "en-GB",
+            SpellCheckLanguage::GermanDe => "de-DE",
+            SpellCheckLanguage::GermanCh => "de-CH",
             SpellCheckLanguage::French => "fr-FR",
+            SpellCheckLanguage::Italian => "it-IT",
             SpellCheckLanguage::Spanish => "es-ES",
         }
     }
@@ -215,7 +228,10 @@ impl SpellCheckLanguage {
             SpellCheckLanguage::Off => "Off",
             SpellCheckLanguage::EnglishUs => "English (US)",
             SpellCheckLanguage::EnglishUk => "English (UK)",
+            SpellCheckLanguage::GermanDe => "German (Germany)",
+            SpellCheckLanguage::GermanCh => "German (Switzerland)",
             SpellCheckLanguage::French => "French (France)",
+            SpellCheckLanguage::Italian => "Italian (Italy)",
             SpellCheckLanguage::Spanish => "Spanish (Spain)",
         }
     }
@@ -227,29 +243,52 @@ impl SpellCheckLanguage {
         (self != SpellCheckLanguage::Off).then(|| self.code())
     }
 
-    /// OQ-206, OQ-298: the offered language a locale of the system names,
-    /// such as `en_GB.UTF-8`, `de-CH` or `fr`; `None` for any other. English
-    /// without a region counts as English (US); French and Spanish of any
-    /// region as French and Spanish; English of another region than the US
-    /// and the UK as none.
+    /// OQ-206, OQ-298, OQ-299: the offered language a locale of the system
+    /// names, such as `en_GB.UTF-8`, `de-CH` or `fr`; `None` for any other.
+    /// The locale is read as [`SpellCheckLanguage::of_tag`] reads a tag,
+    /// without its character set (`.UTF-8`) and modifier (`@euro`).
     #[must_use]
     pub fn of_locale(locale: &str) -> Option<Self> {
-        let locale = locale
-            .split(['.', '@'])
-            .next()
-            .unwrap_or_default()
-            .replace('_', "-");
-        let mut parts = locale.split('-');
-        let language = parts.next().unwrap_or_default().to_ascii_lowercase();
-        let region = parts
-            .find(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()))
-            .map(str::to_ascii_uppercase);
-        match (language.as_str(), region.as_deref()) {
-            ("en", None | Some("US")) => Some(SpellCheckLanguage::EnglishUs),
-            ("en", Some("GB")) => Some(SpellCheckLanguage::EnglishUk),
-            ("fr", _) => Some(SpellCheckLanguage::French),
-            ("es", _) => Some(SpellCheckLanguage::Spanish),
-            _ => None,
+        let tag = locale.split(['.', '@']).next().unwrap_or_default();
+        Self::of_tag(tag)
+    }
+
+    /// OQ-207, OQ-298: the offered language a language tag names, such as
+    /// a note's attribute `lang`: `de-CH`, `de_CH`, `de-ch`, `de-CH-1996`;
+    /// `None` for any other, `off` included. English without a region
+    /// counts as English (US), of another region than the US and the UK as
+    /// none. German of Switzerland and Liechtenstein, and Swiss German
+    /// (`gsw`), count as German (Switzerland), German of any other region or
+    /// without one as German (Germany); French, Italian and Spanish of any
+    /// region as French, Italian and Spanish.
+    #[must_use]
+    pub fn of_tag(tag: &str) -> Option<Self> {
+        let mut parts = tag.trim().split(['-', '_']);
+        let language = parts.next().unwrap_or_default();
+        let region =
+            parts.find(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()));
+        let is = |code: &str| language.eq_ignore_ascii_case(code);
+        let region_is = |code: &str| region.is_some_and(|r| r.eq_ignore_ascii_case(code));
+        if is("en") {
+            if region.is_none() || region_is("US") {
+                Some(SpellCheckLanguage::EnglishUs)
+            } else if region_is("GB") {
+                Some(SpellCheckLanguage::EnglishUk)
+            } else {
+                None
+            }
+        } else if is("gsw") || (is("de") && (region_is("CH") || region_is("LI"))) {
+            Some(SpellCheckLanguage::GermanCh)
+        } else if is("de") {
+            Some(SpellCheckLanguage::GermanDe)
+        } else if is("fr") {
+            Some(SpellCheckLanguage::French)
+        } else if is("it") {
+            Some(SpellCheckLanguage::Italian)
+        } else if is("es") {
+            Some(SpellCheckLanguage::Spanish)
+        } else {
+            None
         }
     }
 }
@@ -1321,8 +1360,23 @@ mod tests {
         );
         let off = Settings::parse("spell_check_language: off\n", Path::new("u.yaml")).unwrap();
         assert_eq!(off.spell_check_language, Some(SpellCheckLanguage::Off));
-        let error = Settings::parse("spell_check_language: de-CH\n", Path::new("u.yaml"))
-            .expect_err("German is not offered (OQ-299)");
+        let swiss = Settings::parse("spell_check_language: de-CH\n", Path::new("u.yaml")).unwrap();
+        assert_eq!(
+            swiss.spell_check_language,
+            Some(SpellCheckLanguage::GermanCh),
+            "OQ-299: German comes with Underline"
+        );
+        let italian = Settings::parse(
+            "spell_check_language: Italian (Italy)\n",
+            Path::new("u.yaml"),
+        )
+        .unwrap();
+        assert_eq!(
+            italian.spell_check_language,
+            Some(SpellCheckLanguage::Italian)
+        );
+        let error = Settings::parse("spell_check_language: de-AT\n", Path::new("u.yaml"))
+            .expect_err("German (Austria) is not offered");
         assert!(error.to_string().contains("en-US"), "{error}");
         let mut settings = Settings::default();
         settings
@@ -1348,7 +1402,15 @@ mod tests {
         assert_eq!(of("en"), Some(SpellCheckLanguage::EnglishUs));
         assert_eq!(of("fr-CA"), Some(SpellCheckLanguage::French));
         assert_eq!(of("es_MX@euro"), Some(SpellCheckLanguage::Spanish));
-        assert_eq!(of("de-CH"), None);
+        assert_eq!(of("de-CH"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de_CH.UTF-8"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de_LI"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de_DE.UTF-8"), Some(SpellCheckLanguage::GermanDe));
+        assert_eq!(of("de_AT"), Some(SpellCheckLanguage::GermanDe));
+        assert_eq!(of("de"), Some(SpellCheckLanguage::GermanDe));
+        assert_eq!(of("it_IT.UTF-8"), Some(SpellCheckLanguage::Italian));
+        assert_eq!(of("it-CH"), Some(SpellCheckLanguage::Italian));
+        assert_eq!(of("gsw_CH.UTF-8"), Some(SpellCheckLanguage::GermanCh));
         assert_eq!(of("en-AU"), None);
         assert_eq!(of("C"), None);
 
@@ -1378,5 +1440,27 @@ mod tests {
             Effective::of_with_system(&me, Some(&workspace), None).spell_check_language,
             SpellCheckLanguage::EnglishUk
         );
+    }
+
+    /// OQ-207: a note's attribute `lang` names an offered language by its
+    /// code, written with `-` or `_` and in any case, with a region or a
+    /// variant, or by its language alone.
+    #[test]
+    fn oq207_a_note_names_its_language_by_tag() {
+        let of = SpellCheckLanguage::of_tag;
+        assert_eq!(of("de-CH"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de_CH"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de-ch"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de-CH-1996"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("gsw"), Some(SpellCheckLanguage::GermanCh));
+        assert_eq!(of("de"), Some(SpellCheckLanguage::GermanDe));
+        assert_eq!(of("it"), Some(SpellCheckLanguage::Italian));
+        assert_eq!(of(" it-IT "), Some(SpellCheckLanguage::Italian));
+        assert_eq!(of("en_us"), Some(SpellCheckLanguage::EnglishUs));
+        assert_eq!(of("en-AU"), None);
+        assert_eq!(of("German (Switzerland)"), None);
+        assert_eq!(of("off"), None);
+        assert_eq!(of("xx-YY"), None);
+        assert_eq!(of(""), None);
     }
 }

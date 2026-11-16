@@ -11,6 +11,11 @@
 // - The status line learns the mode, what is typed but not done yet, and
 //   whether search hits are marked (M-11.4); Escape and `:noh` end the
 //   marking, as `codemirror-vim` does by itself.
+// - OQ-260, UC-005 BR-021: `>>` and `<<` (`>` and `<` with a motion, or on
+//   a selection) go to the editor core, which indents and outdents a list
+//   item by the list rule, as Tab and Shift+Tab do, and shifts any other
+//   line as Vim does; one undo step. A block selection (Ctrl+V) shifts
+//   from its column as `codemirror-vim` does.
 //
 // The changes `codemirror-vim` makes to the text are sent to the backend by
 // the source view to the editor core (`sourceView.ts`, `apply`).
@@ -28,6 +33,11 @@ export interface VimHost {
   redo(): void;
   /** M-10.9: store the note at once, or close its tab. */
   command(command: 'store' | 'close'): void;
+  /**
+   * OQ-260: `>` (`outdent` false) or `<` on the lines from the one holding
+   * the offset `from` to the one holding `to`, `times` times over.
+   */
+  shift?(from: number, to: number, outdent: boolean, times: number): void;
 }
 
 /** The system clipboard as the backend reads and writes it (ADR-014). */
@@ -41,6 +51,15 @@ let clipboard: VimClipboard | null = null;
 let installed = false;
 
 type CM = NonNullable<ReturnType<typeof getCM>>;
+
+/** A place of `codemirror-vim`: a line and a column, both from 0. */
+type Place = { line: number; ch: number };
+
+/** What `codemirror-vim` gives the operator `indent`. */
+type IndentArgs = { indentRight?: boolean; repeat?: number; linewise?: boolean };
+
+/** The state of `codemirror-vim` the operator `indent` reads. */
+type IndentState = { visualMode?: boolean; visualBlock?: boolean };
 
 function hostOf(cm: CM): VimHost | undefined {
   return hosts.get((cm as unknown as { cm6: EditorView }).cm6);
@@ -108,6 +127,84 @@ type Actions = {
   ): void;
 };
 
+/** The editor view of `cm`. */
+function viewOf(cm: CM): EditorView {
+  return (cm as unknown as { cm6: EditorView }).cm6;
+}
+
+/** The first column of line `line` (from 0) of `view` that is not space. */
+function firstNonBlank(view: EditorView, line: number): Place {
+  const doc = view.state.doc;
+  const number = Math.min(Math.max(line, 0), doc.lines - 1);
+  const text = doc.line(number + 1).text;
+  return { line: number, ch: text.length - text.trimStart().length };
+}
+
+/**
+ * The lines `>` and `<` take of `ranges`, from 0, first and last, as
+ * `codemirror-vim` reads them: a linewise range ends at the start of the
+ * line after its last.
+ */
+function shiftedLines(
+  ranges: { anchor: Place; head: Place }[],
+  linewise: boolean,
+): [number, number] {
+  const range = ranges[0];
+  if (!range) {
+    return [0, 0];
+  }
+  const first = Math.min(range.anchor.line, range.head.line);
+  let last = Math.max(range.anchor.line, range.head.line);
+  if (linewise && last > first) {
+    last -= 1;
+  }
+  return [first, last];
+}
+
+/**
+ * Vim's `>` and `<` on a block selection, from its column, as
+ * `codemirror-vim` shifts it (MIT, `@replit/codemirror-vim`).
+ */
+function shiftBlock(cm: CM, args: IndentArgs, ranges: { anchor: Place; head: Place }[]): Place {
+  const editor = cm as unknown as {
+    getOption(name: string): unknown;
+    getLine(line: number): string;
+    replaceRange(text: string, from: Place, to: Place): void;
+  };
+  const repeat = args.repeat || 1;
+  const tabSize = Number(editor.getOption('tabSize')) || 4;
+  const unit = editor.getOption('indentWithTabs') ? '\t' : ' '.repeat(tabSize);
+  let cursor: Place = ranges[0]?.anchor ?? { line: 0, ch: 0 };
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const { anchor, head } = ranges[i];
+    cursor =
+      anchor.line < head.line || (anchor.line === head.line && anchor.ch <= head.ch)
+        ? anchor
+        : head;
+    if (args.indentRight) {
+      editor.replaceRange(unit.repeat(repeat), cursor, cursor);
+      continue;
+    }
+    const text = editor.getLine(cursor.line);
+    let end = 0;
+    for (let j = 0; j < repeat; j++) {
+      const ch = text[cursor.ch + end];
+      if (ch === '\t') {
+        end++;
+      } else if (ch === ' ') {
+        end++;
+        for (let k = 1; k < unit.length && text[cursor.ch + end] === ' '; k++) {
+          end++;
+        }
+      } else {
+        break;
+      }
+    }
+    editor.replaceRange('', cursor, { line: cursor.line, ch: cursor.ch + end });
+  }
+  return cursor;
+}
+
 /** Ties `codemirror-vim` to the backend, once for the window. */
 function install(): void {
   if (installed) {
@@ -130,6 +227,43 @@ function install(): void {
   Vim.defineEx('quit', 'q', ex('close'));
   Vim.defineEx('wq', 'wq', ex('store', 'close'));
   Vim.defineEx('xit', 'x', ex('store', 'close'));
+
+  // OQ-260, UC-005 BR-021: `>` and `<` are the editor core's: the list rule
+  // on a list item, Vim's shift elsewhere. In visual mode a count shifts as
+  // often (`3>`); in normal mode it counts lines (`3>>`).
+  Vim.defineOperator('indent', ((
+    cm: CM,
+    args: IndentArgs,
+    ranges: { anchor: Place; head: Place }[],
+  ) => {
+    const vimState = (cm as unknown as { state: { vim?: IndentState } }).state.vim ?? {};
+    if (vimState.visualBlock) {
+      return shiftBlock(cm, args, ranges);
+    }
+    const view = viewOf(cm);
+    const [first, last] = shiftedLines(ranges, !!args.linewise);
+    const doc = view.state.doc;
+    const lineAt = (line: number) => doc.line(Math.min(Math.max(line, 0), doc.lines - 1) + 1);
+    const times = vimState.visualMode ? args.repeat || 1 : 1;
+    const shift = hostOf(cm)?.shift;
+    if (shift) {
+      shift(lineAt(first).from, lineAt(last).from, !args.indentRight, times);
+      // The cursor is the core's answer: on the first char of the shifted
+      // line that is not space. Moving it here, in the text before the
+      // change, would keep it there (app-tester of package 13).
+      return undefined;
+    }
+    // Without the core, Vim's own shift, as `codemirror-vim` does it.
+    const editor = cm as unknown as { indentMore(): void; indentLess(): void };
+    for (let i = 0; i < times; i++) {
+      if (args.indentRight) {
+        editor.indentMore();
+      } else {
+        editor.indentLess();
+      }
+    }
+    return firstNonBlank(view, first);
+  }) as never);
 
   // ADR-014: `"+` and `"*` are the system clipboard, read and written by
   // the backend. `"*` is a register of its own; a yank into `"+` is taken

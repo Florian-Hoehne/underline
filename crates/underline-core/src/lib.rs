@@ -18,9 +18,11 @@ mod format;
 mod git;
 mod links;
 mod lookup;
+mod loose;
 mod new_note;
 mod note;
 mod open;
+mod opening;
 mod panes;
 mod properties;
 mod rename;
@@ -47,7 +49,7 @@ pub use agents::{
     write_presence, Presence, Reading, AGENTS_FOLDER, PRESENCE_RENEW, PRESENCE_STALE,
     READING_SHOWN, UNNAMED_AGENT,
 };
-pub use atomic::{write_atomic, write_new_atomic};
+pub use atomic::{write_atomic, write_atomic_private, write_new_atomic, write_new_atomic_with};
 pub use autosave::{Autosave, AUTOSAVE_LATEST, AUTOSAVE_QUIET, AUTOSAVE_RETRY};
 pub use branches::{branch_name, BranchNameProblem, Branches, SwitchError};
 pub use changes::{
@@ -70,7 +72,8 @@ pub use embed::{
 pub use format::NoteFormat;
 pub use git::{Git, GitError};
 pub use links::{
-    asciidoc_anchor, heading_anchor, percent_decode, resolve_link, resolve_link_with, LinkTarget,
+    asciidoc_anchor, heading_anchor, is_file_url, percent_decode, resolve_link, resolve_link_with,
+    LinkTarget,
 };
 pub use lookup::{
     find_note, list_for_agent, read_for_agent, search_for_agent, AgentFound, AgentSearch,
@@ -82,6 +85,10 @@ pub use new_note::{
 };
 pub use note::{Note, NoteId};
 pub use open::{check_open_directory, check_readable_directory, OpenProblem};
+pub use opening::{
+    executable_by_name, executable_kind, is_remote_place, link_scheme, opens_without_asking,
+    shown_scheme, shown_text,
+};
 pub use panes::{Pane, PaneOpened, PaneSide, PaneTab, Panes};
 pub use properties::{format_local_time, format_size, NoteProperties};
 pub use rename::{NoteMove, Rename};
@@ -100,13 +107,14 @@ pub use settings::{
     EDITOR_ZOOM_STEP, LEGACY_MCP_KEY, SETTINGS_FILE_NAME,
 };
 pub use snapshots::{
-    lines_differing, snapshot_time_text, Snapshot, SnapshotCause, SnapshotError, SnapshotJob,
-    SnapshotStore, DELETED_SNAPSHOTS_FOLDER, EDITING_SNAPSHOT_AFTER_MS, KEEP_SNAPSHOTS_MS,
-    SNAPSHOTS_FOLDER,
+    lines_differing, link_below, snapshot_time_text, Snapshot, SnapshotCause, SnapshotError,
+    SnapshotJob, SnapshotRemoval, SnapshotStore, SnapshotUsage, DELETED_SNAPSHOTS_FOLDER,
+    EDITING_SNAPSHOT_AFTER_MS, KEEP_SNAPSHOTS_MS, SNAPSHOTS_FOLDER,
 };
 pub use state::{
-    now, AppState, EditingView, NoteState, StateError, StateNotice, StateStore, TabState,
-    Timestamp, WorkspaceState, STATE_FILE_NAME, STATE_WRITE_DELAY,
+    now, split_share_within, AppState, EditingView, NoteState, StateError, StateNotice, StateStore,
+    TabState, Timestamp, WorkspaceState, RECENT_COMMANDS, SPLIT_SHARE_EVEN, SPLIT_SHARE_LEAST,
+    STATE_FILE_NAME, STATE_WRITE_DELAY,
 };
 pub use sync::{Distance, SyncMode, SyncOutcome, SyncRequest, Syncer, AUTO_PREFIX};
 pub use tabs::{Opened, TabList, MAX_TABS};

@@ -158,6 +158,26 @@ impl SourceEditor {
         }
     }
 
+    /// OQ-260, UC-005 BR-021: Vim's `>>` and `<<` (`>` and `<` on a
+    /// selection) on the lines from the one holding char `from` to the one
+    /// holding char `to`, `times` times over, in a note in `format`: on a
+    /// list item by the list rule, as Tab and Shift+Tab; elsewhere Vim's
+    /// shift by two columns. One step for undo, the cursor on the first
+    /// char of the first line that is not space.
+    pub fn vim_shift(
+        &mut self,
+        (from, to): (usize, usize),
+        format: NoteFormat,
+        outdent: bool,
+        times: usize,
+    ) -> Outcome {
+        let edit = lists::vim_shift_lines(self.doc.rope(), from, to, format, outdent, times);
+        match edit {
+            Some(edit) => self.apply_step(&edit),
+            None => Outcome::default(),
+        }
+    }
+
     /// OQ-204, OQ-256: Shift+Tab outside a list item: the lines the
     /// selection touches lose up to one tab stop of their leading space, as
     /// one step; nothing when they have none.
@@ -364,5 +384,182 @@ mod tests {
                 assert_eq!(editor.text(), text, "undo restores: {context}");
             }
         }
+    }
+
+    /// A small seeded generator, so a failure replays from the logged seed.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % n as u64).unwrap()
+        }
+    }
+
+    /// OQ-260, UC-005 BR-021, TC-005-37 (test-monkey): random notes (CRLF,
+    /// tabs, multibyte, list markers of both formats down to depth 5,
+    /// fences), random ranges, counts 0 to 100, both directions: no panic,
+    /// the cursor within the text, the line count and the line breaks and
+    /// every line outside the range unchanged, and one undo restores the
+    /// note exactly.
+    #[test]
+    fn oq260_vim_shift_random_notes_keep_their_shape_and_undo_in_one_step() {
+        let pieces = [
+            "- a",
+            "  - b",
+            "\t- c",
+            "* x",
+            "** y",
+            "***** deep",
+            "1. one",
+            "   2. two",
+            "- [ ] t",
+            "```",
+            "~~~",
+            "    code",
+            "\tтаб",
+            "日本語",
+            "e\u{301}",
+            "",
+            "   ",
+            "> - q",
+            "plain",
+            "- ",
+            "*",
+            "#",
+            "\u{2028}",
+            "\x0b",
+            "a\rb",
+            "😀 - x",
+            "  \t  - mixed",
+            ". dot",
+            ".. dot2",
+        ];
+        // No lone CR here: see the test for it.
+        let breaks = ["\n", "\r\n", "\n", "\r\n"];
+        let seed: u64 = std::env::var("UL_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0x5eed_1113);
+        eprintln!("seed {seed}");
+        let mut rng = Rng(seed);
+        for round in 0..4000 {
+            let lines = 1 + rng.below(12);
+            let mut text = String::new();
+            for n in 0..lines {
+                text.push_str(pieces[rng.below(pieces.len())]);
+                if n + 1 < lines || rng.below(2) == 0 {
+                    text.push_str(breaks[rng.below(breaks.len())]);
+                }
+            }
+            let len = text.chars().count();
+            let from = rng.below(len + 2);
+            let to = rng.below(len + 2);
+            let outdent = rng.below(2) == 0;
+            let times = [0, 1, 1, 2, 3, 7, 100][rng.below(7)];
+            let format = if rng.below(2) == 0 {
+                NoteFormat::Markdown
+            } else {
+                NoteFormat::AsciiDoc
+            };
+            let context = format!("seed {seed} round {round}: {text:?} {from}..{to} out {outdent} x{times} {format:?}");
+            let mut editor = SourceEditor::new(&text);
+            editor.set_selection(0, 0);
+            let before = editor.text();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                editor.vim_shift((from, to), format, outdent, times);
+                editor
+            }));
+            let mut editor = result.unwrap_or_else(|_| panic!("panic: {context}"));
+            let after = editor.text();
+            let selection = editor.selection();
+            let (cursor, anchor) = (selection.start, selection.end);
+            let chars = after.chars().count();
+            assert!(
+                cursor <= chars && anchor <= chars,
+                "cursor outside: {context}"
+            );
+            let breaks_of = |t: &str| -> String {
+                t.chars()
+                    .filter(|c| {
+                        matches!(
+                            c,
+                            '\r' | '\n' | '\u{2028}' | '\u{2029}' | '\x0b' | '\x0c' | '\u{85}'
+                        )
+                    })
+                    .collect()
+            };
+            assert_eq!(
+                breaks_of(&before),
+                breaks_of(&after),
+                "line breaks changed: {context}"
+            );
+            // Every line outside the range is as before.
+            let old = ropey::Rope::from_str(&before);
+            let new = ropey::Rope::from_str(&after);
+            assert_eq!(old.len_lines(), new.len_lines(), "{context}");
+            let (a, b) = (
+                old.char_to_line(from.min(old.len_chars())),
+                old.char_to_line(to.min(old.len_chars())),
+            );
+            let (first, last) = (a.min(b), a.max(b));
+            for line in 0..old.len_lines() {
+                if line < first || line > last {
+                    // A list item's children move with it, in their indent
+                    // and markers only.
+                    let bare = |l: ropey::RopeSlice| {
+                        l.to_string()
+                            .trim_start_matches([' ', '\t', '*', '.'])
+                            .to_owned()
+                    };
+                    assert_eq!(
+                        bare(old.line(line)),
+                        bare(new.line(line)),
+                        "line {line} outside {first}..={last}: {context}"
+                    );
+                }
+            }
+            if before != after {
+                editor.undo();
+                assert_eq!(
+                    editor.text(),
+                    before,
+                    "one undo does not restore: {context}"
+                );
+            }
+        }
+    }
+
+    /// OQ-260, UC-005 BR-021 (test-monkey): `<<` on a line of spaces after a
+    /// line that ends in a lone CR joins that CR with the line's own break
+    /// into one CRLF; the note must not lose a line or copy the next one
+    /// over it. Expected no copy of `b`; actual: "a\rb\nb".
+    #[test]
+    fn oq260_vim_shift_outdent_of_a_blank_line_after_a_lone_cr_keeps_the_lines() {
+        let text = "a\r  \nb";
+        let mut editor = SourceEditor::new(text);
+        editor.set_selection(0, 0);
+        editor.vim_shift((3, 3), NoteFormat::Markdown, true, 1);
+        let after = editor.text();
+        assert_eq!(after.matches('b').count(), 1, "text copied: {after:?}");
+    }
+
+    /// OQ-260 (test-monkey): a huge count (`99999999>>` typed in Vim) must not
+    /// build a note of hundreds of megabytes of spaces or hang the editor.
+    #[test]
+    fn oq260_vim_shift_with_a_huge_count_is_capped() {
+        let mut editor = SourceEditor::new("plain\n");
+        editor.set_selection(0, 0);
+        let started = std::time::Instant::now();
+        editor.vim_shift((0, 0), NoteFormat::Markdown, false, 50_000_000);
+        let size = editor.text().len();
+        assert!(size < 1_000_000, "{size} bytes after one shift");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }

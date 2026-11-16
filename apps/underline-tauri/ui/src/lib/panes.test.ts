@@ -17,19 +17,20 @@ const tab = (note: string, view: TabView['view'] = 'facade'): TabView => ({
 const single: TabsView = {
   tabs: [tab('Plan'), tab('Ideas')],
   active: 'Ideas',
-  todoList: { open: false, active: false },
+  todoList: { open: false, active: false, pane: 'left' },
   split: null,
 };
 
 const split: TabsView = {
   tabs: [tab('Plan'), tab('Ideas')],
   active: 'Plan',
-  todoList: { open: false, active: false },
+  todoList: { open: false, active: false, pane: 'left' },
   split: {
     right: [tab('Plan', 'source'), tab('Trip')],
     leftActive: 'Ideas',
     rightActive: 'Plan',
     pane: 'right',
+    leftShare: 500,
   },
 };
 

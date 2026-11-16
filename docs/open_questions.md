@@ -1932,10 +1932,13 @@ UC-008 should take in the overlay and the other searches; UC-010 BR-001 should l
 **Element:** UC-005 BR-017
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-017
 **Assumed:** Only the text the facade shows; markup and link addresses are replaced only in the source view.
 
 Readings: (a) as assumed; (b) the facade replaces in the markup too and shows each hidden place in a frame; (c) replacing is offered only in the source view.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-191: How long can a replacement in the workspace be undone at once?
 
@@ -1956,123 +1959,170 @@ after the offer is gone. What the undo itself replaces is OQ-289.
 **Element:** UC-022 BR-002
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 BR-002
 **Assumed:** As one text, spaces included; the words-in-any-order rule of the search (UC-008 BR-002) does not apply to replacing, also not in the find field of the note.
 
 A replacement needs one place to put the new text at, so words in any order cannot be replaced. The search field shows the same text with another meaning when the user switches from finding to replacing.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-193: Which notation of regular expressions do the searches accept?
 
 **Element:** Glossary: Regular expression
 **Raised by:** /requirements, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** Glossary: Regular expression
 **Assumed:** The usual notation of programming editors (character classes, groups, quantifiers, anchors, `\d`, `\w`), with `$1` to `$9` and `$0` in the replacement, as VS Code accepts it; no look-behind.
 
 The notation is visible to the user and decides which searches work the same on every platform (NFR-013).
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-194: Are the search switches kept per field and remembered?
 
 **Element:** UC-008 BR-011
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-008 BR-011
 **Assumed:** The search field of the workspace and the find field of the note each keep their own switches until Underline is closed; nothing is remembered after a restart (BR-010).
 
 Readings: (a) as assumed; (b) one set of switches for every search; (c) remembered in the user settings.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-195: Which keys open replacing, and how do they meet the Vim and Nano keys?
 
 **Element:** UC-022 BR-008
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 BR-008
 **Assumed:** Ctrl+H (Cmd+Alt+F on macOS) replaces in the note and Ctrl+Shift+H (Cmd+Shift+H) in the workspace, as in VS Code; where the input mode gives the key a meaning (Ctrl+H is Backspace in the Vim insert mode), the input mode keeps it and the command palette reaches the replace.
 
 Alt+C, Alt+W, and Alt+R switch the search switches; on macOS Option with a letter types a character in some keyboard layouts.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-196: Does go to note open with Ctrl+P or Ctrl+O, and does it match words or scattered letters?
 
 **Element:** UC-004 BR-014
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-014
 **Assumed:** Ctrl+P (Cmd+P on macOS), as in VS Code; every typed word occurs in the title or the folder, also as part of a word, as in the search of the workspace.
 
 Obsidian uses Ctrl+O; VS Code matches scattered letters in order (`plnts` finds Plane Tickets). Ctrl+P is printing in many programs; Underline prints through the PDF export.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-197: Does the command palette show commands that are not available now?
 
 **Element:** UC-023 A2
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-023 A2
 **Assumed:** Yes, after the others, marked as not available; choosing one says why and runs nothing.
 
 Readings: (a) as assumed, so the user learns the command exists; (b) hidden, as VS Code does.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-198: Are the recently run commands remembered after a restart?
 
 **Element:** UC-023 BR-004
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-023 BR-004; TC-023-02 steps 4 and 5
 **Assumed:** No; they are kept until Underline is closed.
 
 Readings: (a) as assumed; (b) remembered for the user across restarts.
+
+Decided by the user (2026-11-16): the recently run commands of the palette are remembered per user across restarts.
+Implemented (2026-11-16, package 11): the last 20 commands run are kept for the user, in every workspace and after a
+restart; a command that no longer exists is left out.
 
 ## OQ-199: Do the backlinks also list unlinked mentions of the note's title?
 
 **Element:** UC-004 BR-015
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 step 4, BR-021, A14, A22; FR-103; TC-004-42
 **Assumed:** No; only real local links count. Unlinked mentions are not part of this release.
 Implemented as assumed (2026-11-12, package 3): the backlinks list only local links.
 
 Obsidian lists notes that name the title without a link and offers to link them. The research comparison lists it as missing.
+
+Decided by the user (2026-11-16): the tool panel gets a section "Unlinked mentions (N)" that lists the notes whose text holds the active note's title without linking it, with an action that turns such a mention into a link; implementation pending.
+
+Implemented (2026-11-16, package 12): "Unlinked mentions (N)" follows the backlinks in the tool panel, grouped by
+note in the order of the note overview, each mention with its line and marked by a dashed underline (a link by a
+solid one). The title matches as whole words, upper and lower case alike, its words apart by spaces or tabs on one
+line; code, links (text and place), pictures, includes, written-out web addresses, formulas, comments, the front
+matter and attribute lines, and tags hold none; the active note itself is not searched. A title shorter than 3
+characters (spaces not counted) is not looked for, and the section says so; there is no list of common words, and
+only the title counts, since no note attribute names other names of a note (OQ-304). At most 200 are listed, "Show
+more" lists 200 more. Choosing one opens its note there (A14); "Link" writes a link as link completion does, with
+the mention as its text: in an open tab as one undo step, in a closed note after a snapshot with the cause Editing
+(OQ-306), never when the mention moved since the list was made.
 
 ## OQ-200: Does link completion start with `[[` in the facade?
 
 **Element:** UC-005 A23
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A23
 **Assumed:** Yes: `[[` only starts the completion and is replaced by a normal link of the note format; Escape keeps `[[` as typed text. In the source view it starts after `](`, `xref:`, or `<<`, and with Ctrl+Space.
 Implemented as assumed (2026-11-12, package 3); Ctrl+Space in the facade, where no place of a link shows, see
 OQ-247.
 
 C-003 rules out wiki links in the stored note; the question is only whether `[[` may serve as a key to start the completion.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-201: Does a completed link name the note with or without its extension?
 
 **Element:** UC-005 BR-018
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-018
 **Assumed:** As the formatting toolbar writes a link to a note (UC-005 A2); the specification of the toolbar does not say it either.
 Implemented as assumed (2026-11-12, package 3): always with the extension, as the toolbar writes it (reading (a)
 in effect); a place with spaces, see OQ-248.
 
 GitHub repositories need the extension, GitHub wikis do not (UC-004 BR-005 accepts both). Readings: (a) always with the extension; (b) without it in a workspace that is a GitHub wiki; (c) as the most links of the workspace do.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-202: Which characters does close pairs close, and can it be switched off?
 
 **Element:** UC-005 BR-019
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-019
 **Assumed:** Brackets, double quotes, and backticks always; `**` and `~~` within a line; a single `*`, `_` (and `#` in AsciiDoc) only around a selection; single quotes never, because of apostrophes. A setting "Close pairs" switches it, on at first.
 Implemented as assumed (2026-11-12, package 4), with the details of OQ-252.
 
 Readings for the markup: (a) as assumed; (b) every markup character closes; (c) markup never closes, only brackets and quotes.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-203: Which keys move and duplicate lines?
 
 **Element:** UC-005 BR-020
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-020
 **Assumed:** Alt+Up and Alt+Down move; Ctrl+Shift+D (Cmd+Shift+D on macOS) duplicates.
 Implemented as assumed (2026-11-12, package 4); in the Vim keys' normal mode the keys stay Vim's. The command palette
 has "Move line up", "Move line down", and "Duplicate line" in every input mode. Which block the facade moves past, see
@@ -2080,12 +2130,15 @@ OQ-255.
 
 VS Code duplicates with Shift+Alt+Down; GNOME Text Editor and Obsidian differ too. Ctrl+Shift+J opens the daily note (UC-025, OQ-219).
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-204: What do Tab and Shift+Tab do outside a list item?
 
 **Element:** UC-005 BR-021
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-021
 **Assumed:** They keep the meaning they have today; the specification does not state it yet.
 Implemented as assumed (2026-11-12, package 4): in the source view Tab writes four spaces, as before; Shift+Tab takes
 up to one tab stop of space from the start of the lines it touches (OQ-256); in the facade both do nothing (M-09.13).
@@ -2093,18 +2146,23 @@ Inside a list item that cannot go deeper or higher nothing happens either.
 
 Readings: (a) Tab inserts indentation in the source view and does nothing in the facade; (b) Tab moves the focus out of the editor for keyboard users (NFR-011); (c) Tab indents the paragraph.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-205: Are the current line and the matching bracket highlighted in the facade too, and can they be switched off?
 
 **Element:** UC-005 BR-022
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-022
 **Assumed:** Only in the source view, always on, with no setting.
 Implemented as assumed (2026-11-12, package 4): the colours are mixed from the active theme's palette (the current
 line a shade of the text colour, a matching pair outlined in the link colour, a bracket without a counterpart
 underlined with a wave in the colour of found places), so the mark is told by its shape too.
 
 In the facade a line of the markup is not a line on screen; the current block could be highlighted instead.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-206: Which languages does the spell check offer, and which is the default?
 
@@ -2121,12 +2179,16 @@ languages whose dictionaries are licensed permissively (ADR-030). German (German
 wait for the decision of OQ-299; until then they are not offered. The default is the language of the system when it
 is one of the offered languages, read as OQ-298 says, otherwise off.
 
+Implemented in full (2026-11-16, package 10): with OQ-299 decided, all languages of the assumption are offered:
+English (US), English (UK), German (Germany), German (Switzerland), French (France), Italian (Italy), Spanish (Spain).
+
 ## OQ-207: Can a note choose its own spell check language?
 
 **Element:** UC-005 BR-023
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-023; TC-010-21
 **Assumed:** No; the language comes from the settings of the user or the workspace.
 
 Readings: (a) as assumed; (b) a note attribute `lang` sets the language of one note; (c) several languages checked at once.
@@ -2134,12 +2196,23 @@ Readings: (a) as assumed; (b) a note attribute `lang` sets the language of one n
 Implemented as assumed (2026-11-13, package 8b): the language comes from the settings of the workspace, else of the
 user, else the system (OQ-206).
 
+Decided by the user (2026-11-16): a note attribute `lang` (front matter `lang: de-CH`, AsciiDoc `:lang: de-CH`) sets the spell check language of that note; implementation pending.
+
+Implemented (2026-11-16, package 10): a note attribute `lang` (front matter `lang: de-CH`, AsciiDoc `:lang: de-CH`;
+the code also written `de_CH`, `de-ch` or `de-CH-1996`; `de` alone as German (Germany), `it` as Italian, `gsw` as
+German (Switzerland)) sets the spell check language of that note, and the marks follow at once when it changes. No
+value, `null`, `~` and `off` leave the language of the settings. A language Underline does not offer marks no word of
+the note, and while it is the active note the status bar names the note and says it has no dictionary for that
+language. With the spell check off in the settings, the note's language does not switch it on. The value of `lang`
+itself is not checked.
+
 ## OQ-208: Is there also a dictionary of the workspace, shared through git?
 
 **Element:** Entity: DICTIONARY_WORD
 **Raised by:** /entity-model, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** FR-099; UC-005 A28, BR-023; TC-005-39; entity DICTIONARY_WORD
 **Assumed:** No; only the user dictionary, which counts in every workspace and every language.
 
 A word list of the workspace would let a team share project words; it would be a file in the workspace.
@@ -2149,92 +2222,125 @@ Implemented as assumed (2026-11-13, package 8b): only the user dictionary, a fil
 FR-099 and UC-005 A28 (where an added word goes), and would be the same kind of file in the workspace, shared through
 git.
 
+Decided by the user (2026-11-16): there is also a dictionary of the workspace, kept in the workspace and shared through git, and the spell menu gets a second entry "Add to workspace dictionary" (this changes FR-099, UC-005 A28 and TC-005-39); implementation pending.
+
+Implemented (2026-11-16, package 10): the workspace dictionary is the file `underline-words.txt` in the workspace,
+in the same form as the user dictionary, shared through git. The spell menu offers "Add "{word}" to my dictionary"
+and "Add "{word}" to workspace dictionary" ("Shared with everyone who uses this workspace"). The words in effect are the dictionary's, the user's and the workspace's.
+Changes made outside count within a second; a file that cannot be read is never written over, and a word that cannot
+be stored counts until the workspace is closed. The file is no note of the overview.
+
 ## OQ-209: Which key switches the focus mode, and does it stay on after a restart?
 
 **Element:** UC-010 A12
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 A12
 **Assumed:** Ctrl+Alt+F (Cmd+Ctrl+F on macOS); it is a setting like any other and stays on after a restart. It also hides the menu bar of OQ-188.
 
 VS Code uses Ctrl+K Z for its zen mode and leaves it on a restart; Cmd+Ctrl+F is full screen on macOS.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-210: Does the editor zoom change images and diagrams, and is it a setting of the workspace too?
 
 **Element:** UC-010 BR-009
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 BR-009
 **Assumed:** Only text, code, and formulas grow; images and diagrams keep their size. It is stored like a quick switch, so a workspace may hold its own value.
 
 Readings: (a) as assumed; (b) everything in the note grows; (c) the whole window grows, as the zoom of a browser.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-211: What does soft wrap change in the facade?
 
 **Element:** UC-010 BR-011
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 BR-011
 **Assumed:** Paragraphs, lists, and headings always wrap in the facade; tables, code blocks, and frames of markup follow soft wrap; on at first.
 
 Today every line wraps (research comparison).
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-212: What does the text statistics count?
 
 **Element:** UC-004 BR-020
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-020
 **Assumed:** The text the facade shows, code blocks included, without markup, front matter, link addresses, and the sources of diagrams and formulas; reading time at 200 words a minute, rounded up.
 
 Readings for code: (a) counted, as assumed; (b) left out, as prose only.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-213: How are tags written in an AsciiDoc note?
 
 **Element:** UC-004 BR-016
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-016
 **Assumed:** Only in the document attribute `tags`, written `:tags: a, b`; `#word` in the text is no tag, because `#` marks highlighted text in AsciiDoc.
 
 Readings: (a) as assumed; (b) `#word` in the text too, where it does not form highlighted text; (c) a role such as `[.tag]#word#`.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-214: How is a tag shown when the notes write it in different cases?
 
 **Element:** Entity: TAG.name
 **Raised by:** /entity-model, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** Entity: TAG.name
 **Assumed:** Tags that differ only in case are one tag, shown as most notes write it.
 
 Readings: (a) as assumed; (b) in lower case; (c) as the first note found writes it.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-215: Which kinds of values do note attributes have, and can nested values be changed?
 
 **Element:** UC-024 BR-002
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-024 BR-002
 **Assumed:** Text, List, Number, Date, Yes or no, and Nested; nested values are shown as markup and changed only in the source view. AsciiDoc holds only Text and List.
 
 Obsidian offers the same kinds without Nested and refuses notes with nested values.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-216: How are note attributes shown in the facade?
 
 **Element:** UC-004 BR-004
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-004
 **Assumed:** The front matter of a Markdown note is shown as a table at the start of the note, as GitHub shows it; document attributes of an AsciiDoc note are not shown in the facade, as on GitHub, only in the note properties.
 
 Today the facade shows the front matter as text (research comparison).
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-217: Are templates ordinary notes in every other respect?
 
 **Element:** UC-003 BR-008
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-003 BR-008
 **Assumed:** Yes: they are listed, searched, linked, carry tags, and count as backlinks like any note; only their placeholders stay unfilled. The folder is `templates` unless the workspace settings name another.
 Implemented as assumed (2026-11-13, package 6b): a template is a listed note in the template folder or below it, so a
 missing, hidden or outside folder holds none (OQ-274); the dialog "New note" offers them by title, a deeper one with
@@ -2242,24 +2348,30 @@ its folders after it ("Retro (work)").
 
 Readings: (a) as assumed; (b) the template folder is left out of the note overview, the search, the backlinks, and the tags. The placeholders are `{{title}}`, `{{date}}`, `{{time}}`, and `{{cursor}}`; others such as `{{yesterday}}` or a date format are not offered.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-218: Can the user choose the date format of the daily note title?
 
 **Element:** UC-025 BR-001
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-025 BR-001
 **Assumed:** No; the title is always `2026-11-11`.
 Implemented as assumed (2026-11-13, package 6b), with the local date of the computer; how the overview shows the
 title, see OQ-272.
 
 Obsidian lets the user choose a format and folders by month.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-219: Which keys open the daily note and the previous and next one?
 
 **Element:** UC-025 BR-007
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-025 BR-007
 **Assumed:** Ctrl+Alt+D, Ctrl+Alt+Left, and Ctrl+Alt+Right (Cmd+Alt on macOS).
 Not as assumed (2026-11-13, package 6b review), for the user to confirm: Ctrl+Alt+Left and Ctrl+Alt+Right switch
 workspaces on many Linux desktops, Ctrl+Alt+D shows the desktop in XFCE, Cinnamon and Unity, Cmd+Option+D hides the
@@ -2276,12 +2388,15 @@ Alt+Shift+Left and Right (which select by syntax in the source view and by word 
 
 Ctrl+Alt with the arrow keys switches desktops on some Linux desktops, and Cmd+Alt+D hides the Dock on macOS.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-220: How does the split view divide the window, and is its width remembered?
 
 **Element:** UC-004 BR-018
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-018; TC-004-37 steps 3 and 4
 **Assumed:** Two panes side by side, no more and not one above the other; they start equally wide; the width the user drags is not remembered after a restart, the panes and their tabs are.
 Implemented as assumed (2026-11-13, package 7a): each pane keeps at least 280 px (and 15 percent) of the width; the
 border is dragged with the pointer or, with the keyboard on it, moved with Left and Right (Shift for larger steps), Home
@@ -2289,6 +2404,11 @@ and End, and a double click or Enter makes both equally wide again. What happens
 how the active pane shows and where the tool panel stands, see OQ-278.
 
 VS Code allows any number of groups in any direction.
+
+Decided by the user (2026-11-16): the width of the split view is remembered in the workspace.
+Implemented (2026-11-16, package 11): the width the user drags or sets with the keys is remembered for the workspace
+with its tabs and comes back after a restart and when the split view is shown again; a workspace that remembers
+none starts equally wide, and each pane keeps its least width.
 
 ## OQ-221: Do two tabs of the same note share their undo history?
 
@@ -2308,7 +2428,8 @@ UC-005 BR-004 gives each tab its own history; with one note in two tabs that wou
 **Element:** UC-004 BR-019
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-019; TC-004-38 step 4; TC-009-18 step 4
 **Assumed:** `latexmath:[...]`, `[latexmath]` blocks, and `stem` when the note sets `:stem: latexmath` are typeset; AsciiMath (`:stem:` without a value) is shown as its source.
 
 Implemented as assumed (2026-11-13, package 7b): `latexmath:[…]` is a formula in every AsciiDoc note, `stem:[…]` and a
@@ -2319,12 +2440,20 @@ the header.
 
 GitHub does not typeset formulas of AsciiDoc files, so showing them typeset departs from C-004; Markdown follows GitHub (C-003).
 
+Decided by the user (2026-11-16): AsciiMath is typeset too (`:stem:` without a value, or `asciimath`), not only LaTeX; implementation pending.
+
+Implemented as decided (2026-11-16, package 13): `asciimath:[…]` and `[asciimath]` blocks are AsciiMath in every
+AsciiDoc note; `stem:[…]` and `[stem]` follow the header's `:stem:` as Asciidoctor reads it (`latexmath`, `latex`,
+`tex`: LaTeX; no value, `asciimath` or any other value: AsciiMath; no `stem` or `:stem!:`: markup). AsciiMath is
+written as LaTeX while the note is parsed and typeset as LaTeX; the export to Markdown writes that LaTeX.
+
 ## OQ-223: How often are snapshots taken while editing?
 
 **Element:** UC-026 BR-001
 **Raised by:** /use-case-spec, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 BR-001
 **Assumed:** Before the first change after the newest snapshot is older than 10 minutes, of the content before that change; a change from outside is kept only for notes open in a tab, because only their content is known.
 
 Readings: (a) as assumed; (b) at every autosave, thinned out over time; (c) only when the tab is closed.
@@ -2332,6 +2461,8 @@ Readings: (a) as assumed; (b) at every autosave, thinned out over time; (c) only
 Implemented as assumed (2026-11-13, package 8a): the Editing snapshot is taken when the change is stored (the
 autosave, storing at once, or closing the tab), of the content the note held before; see OQ-290. Changes from
 another program are kept only for notes open in a tab; git's changes are kept for every note they touch (OQ-293).
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-224: How long and how many snapshots are kept?
 
@@ -2352,36 +2483,46 @@ is not shown anywhere (OQ-294).
 **Element:** NFR-017
 **Raised by:** /requirements, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** NFR-017
 **Assumed:** Places shown within 2 seconds for 95% of search texts in 10,000 notes; replacing in 1,000 notes within 10 seconds.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-226: Is 200 milliseconds the right threshold for suggestions?
 
 **Element:** NFR-018
 **Raised by:** /requirements, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** NFR-018
 **Assumed:** Go to note, the command palette, and link completion follow each key within 200 milliseconds in 10,000 notes.
 Measured for link completion (2026-11-12, package 3): about 1 to 2 milliseconds a key in 10,000 notes, 32 for the
 first key, which takes in the notes.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-227: Is 2 seconds the right threshold for backlinks and tags?
 
 **Element:** NFR-019
 **Raised by:** /requirements, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** NFR-019
 **Assumed:** Backlinks, outgoing links, and tags reflect a stored change within 2 seconds in 10,000 notes.
 Measured for the backlinks and outgoing links (2026-11-12, package 3, see the report of the package): a change of
 one note of 10,000 shows well within 2 seconds once all notes were read; the first lists of a workspace of 10,000
 notes come after every note was read once.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-228: Which texts do finding and replacing show?
 
 **Element:** UC-005 A20–A22, UC-008 A7, A9, A10, UC-022 steps 2–6, A1, A2, A5–A7
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A20–A22, UC-008 A7, A9, A10, UC-022 steps 2–6, A1, A2, A5–A7
 **Assumed:** As the rest of the window words its texts:
 - Find field of the note: "Replace with:" under "Find in note:", the buttons "Replace" and "Replace all", and the
   button "Replace in this note" (a chevron) before the label; while it replaces, "No occurrence" when the note holds none (while it only
@@ -2402,12 +2543,15 @@ notes come after every note was read once.
   changed while you looked at them; look at them again before you replace"; after the undo "Took back the
   replacement in {m} notes", with "…; {title} was changed since and is left as it is".
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-229: Where does the replace of the workspace show, and how does it close?
 
 **Element:** UC-022 step 1, A8, BR-008; UC-008 A10
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 step 1, A8, BR-008; UC-008 A10
 **Assumed:** In the search overlay of the workspace (OQ-189): "Replace in notes" before the search field, or Ctrl+Shift+H
 (Cmd+Shift+H), adds the field "Replace with" and shows the places instead of the found notes; the search text and the
 search switches stay the same. Escape or "Replace in notes" again closes the replace, and the overlay shows the search of
@@ -2419,23 +2563,29 @@ not close it, so the replacement and the places left out are not lost. Tab goes 
 Readings: (a) as assumed; (b) a panel or a tab of its own beside the note; (c) the search field itself turns into the
 replace without a second field.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-230: What do `$$` and a `$` before another character write in a replacement?
 
 **Element:** UC-022 BR-003
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 BR-003
 **Assumed:** With regular expression, `$$` writes one `$`, and a `$` followed by anything but a digit or `$` is written
 as typed, so `${1}` and `$name` are written as they stand; `$10` is group 1 followed by `0`. A group that took no part
 in the place found (as `b` in `(a)|(b)` when `a` was found) writes nothing. Without regular expression, the
 replacement is written exactly as typed.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-231: Is an occurrence that runs across markup found when replacing in the facade?
 
 **Element:** UC-005 BR-017
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-017
 **Assumed:** No: in the facade, replacing finds an occurrence only where its text stands in the note as the facade shows
 it, without markup between its characters; "the **pl**an" is not found as "the plan", and a character written with an
 escape is not found either. The source view finds and replaces them in the markup.
@@ -2443,66 +2593,84 @@ escape is not found either. The source view finds and replaces them in the marku
 Readings: (a) as assumed; (b) such an occurrence is found and its markup is removed by the replacement; (c) it is found
 and the replacement keeps the markup around its first part.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-232: What happens to a note that changed between showing its places and replacing?
 
 **Element:** UC-022 step 5, A4, BR-004
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 step 5, A4, BR-004
 **Assumed:** When the user replaces before the list shows the note's new places, the note is replaced only when it
 still holds exactly the places shown; otherwise it is left as it is and named in the status bar ("was changed
 meanwhile"), and its places are found again. A note with places that are not shown (A7) counts as changed as soon as
 its text changed.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-233: How do whole word and a regular expression work together, and does an expression that matches nothing find a place?
 
 **Element:** UC-008 BR-011, UC-022 BR-002
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-008 BR-011, UC-022 BR-002
 **Assumed:** With both on, a place the expression finds counts only where it is not part of a longer word, by the
 same rule as for a plain text (letters and digits belong to a word). An expression that matches an empty text there,
 such as `^`, `x*` or `(|b)`, finds no place at that spot, so nothing is inserted between characters; where it can
 match more, as `(|b)` before a `b`, the search tries the next character and does not find the longer place there
 either.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-234: Do the search and the replace of the workspace share their search switches?
 
 **Element:** UC-022 step 1, UC-008 BR-010, BR-011
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 step 1, UC-008 BR-010, BR-011
 **Assumed:** Yes: the search of the workspace and its replace are one field with one set of switches, so the switches
 stay as they were when the replace opens or closes. The find field of the note keeps its own switches and its own
 replacement until Underline closes (OQ-194).
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-235: Which keys move through the places of the replace and leave one out?
 
 **Element:** UC-022 BR-008
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 BR-008
 **Assumed:** Down in either field moves into the list of places, which is one stop for Tab; in it Up and Down move,
 Space leaves the chosen note or place out or takes it in again, Ctrl+Enter (Cmd+Enter) replaces in the chosen note
 (A3), and Up at the top goes back to the field. Ctrl+Alt+Enter (Cmd+Alt+Enter) replaces anywhere in the overlay, as
 "Replace all" does in the find field; Enter in the search field goes to the field "Replace with" and replaces nothing.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-236: Can the Vim and Nano input modes replace in the note?
 
 **Element:** UC-005 BR-017, OQ-195
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-017, OQ-195
 **Assumed:** Not until the command palette exists (UC-023): Ctrl+H, like Ctrl+F, opens the find field only with the
 input mode Normal, and the Vim and Nano keys keep their own search and `:s`. The replace of the workspace
 (Ctrl+Shift+H) works in every input mode.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-237: Which commands does the command palette offer, and which menu does it name for each?
 
 **Element:** UC-023 BR-001, BR-002, step 2
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-023 BR-001, BR-002, step 2
 **Assumed:** The palette names a place for every command, also for those that are in no menu, and matches it like
 a menu's name:
 - File: New note…, Open workspace…, New workspace…; Theme: Theme… (asks for the theme, A3); Settings: Settings….
@@ -2529,12 +2697,15 @@ buttons and the status line's switches and choice have no menu entry; their butt
 
 UC-023 BR-001 should list the places; whether the left-out ones belong in the palette is for the user to decide.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-238: Which texts do go to note and the command palette show?
 
 **Element:** UC-004 A12, A13; UC-023 steps 1–2, A1–A3
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 A12, A13; UC-023 steps 1–2, A1–A3
 **Assumed:** As the rest of the window words its texts:
 - The field is named "Go to note", "Command palette", or, while a command asks for a choice, the command's name
   without "…" ("Theme", "Choose the input mode", "Agent access"); the name also stands visibly above the field. Empty,
@@ -2559,22 +2730,28 @@ UC-023 BR-001 should list the places; whether the left-out ones belong in the pa
   "Nothing is chosen.", "A synchronization left notes in conflict; resolve them before committing.", and "Open a
   workspace to connect agents to it."
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-239: How does go to note list a large workspace?
 
 **Element:** UC-004 A12 step 2, BR-014; NFR-018
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 A12 step 2, BR-014; NFR-018
 **Assumed:** It lists the first 50 notes that match and 50 more each time the list is scrolled near its end or the
 keyboard comes within five entries of it, with "Showing {k} of {n} notes. Scroll for more." under the list, as the
 search of the workspace does.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-240: Where does Ctrl+P open go to note in the Vim and Nano input modes?
 
 **Element:** UC-004 BR-014; UC-008 BR-009
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-014; UC-008 BR-009
 **Assumed:** Everywhere in the window except while the keyboard is in the text of a note with the input mode Vim or
 Nano, where Ctrl+P is a key of that input mode. Ctrl+F of the find field, by contrast, opens only with the input mode
 Normal (UC-008 BR-009).
@@ -2584,32 +2761,41 @@ Readings: (a) as assumed; (b) only with the input mode Normal, wherever the keyb
 Implemented and tested as (a) for Vim and Nano (2026-11-12). Neither Ctrl+P nor Ctrl+Shift+P and F1 open while a
 dialog that waits for an answer is open (Rename, Delete, Export, New note, the settings…), as Ctrl+Shift+E does not.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-241: Does the export of the command palette ask for the kind in the field or in its window?
 
 **Element:** UC-023 A3, BR-005; UC-009 step 1
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-023 A3, BR-005; UC-009 step 1
 **Assumed:** Both ways exist as in the menus: "Export…" (the tab's menu, Ctrl+Shift+E) opens the window "Export note",
 which asks for the kind as from its key (BR-005), and each kind of the note overview's submenu "Export" is a command
 of its own ("PDF…" under "Note › Export"), which asks only where to save. No command asks for the kind in the
 palette's field, although A3 names the note format of an export as an example.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-242: What does "starts with what was typed" mean for several words?
 
 **Element:** UC-004 BR-014; UC-023 BR-002
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-014; UC-023 BR-002
 **Assumed:** The whole text typed, upper and lower case aside and runs of spaces read as one: "plane ti" puts "Plane
 Tickets" in the first group; "tick plane" matches it but in the last group.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-243: Which command does Ctrl+Shift+H run, the heading of the toolbar or the replace in the workspace?
 
 **Element:** UC-005 A2 (toolbar keys), UC-022 BR-008
 **Raised by:** Implementation, 2026-11-11
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A2 (toolbar keys), UC-022 BR-008
 **Assumed:** Reading (b), the interim answer below.
 
 Readings: (a) as since the replace of the workspace came: with a workspace open, Ctrl+Shift+H opens the replace in
@@ -2622,12 +2808,15 @@ toolbar's heading, as before the replace of the workspace came; everywhere else,
 "Replace in notes" or, while it is open, closes it again. The command palette shows the key at both commands, each
 with its place: "in the note" and "outside the note".
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-244: Do pictures, included files and written-out web addresses count as links of a note?
 
 **Element:** UC-004 BR-015; FR-078, FR-079; entity NOTE_LINK
 **Raised by:** Implementation, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-015, A14; UC-006 BR-003, BR-005; entity NOTE_LINK (`form`); TC-004-41; TC-006-20
 **Assumed:** A picture (`![…](…)`, `image:`) and an included file (`include::`) are no links: they are neither
 outgoing links nor backlinks, also when the file is missing. A web address written out as it is (`<https://…>`, a bare
 address starting with `http://`, `https://` or `mailto:`, which GitHub and GitLab show as a link) is an outgoing
@@ -2638,6 +2827,18 @@ footnote (`[^1]: …`) and a definition inside a paragraph are no links. A formu
 
 Readings: (a) as assumed; (b) pictures and included files are outgoing links too, so a missing picture shows as a
 broken link; (c) a link by reference counts at each place it is used.
+
+Decided by the user (2026-11-16): pictures and included files count as links: they appear in the outgoing links and the backlinks, marked as picture or include, and broken ones are marked; implementation pending.
+
+Implemented (2026-11-16, package 12): `![…](…)`, `image:`, `image::` and `include::` are outgoing links of the note
+that holds them, listed with their place as written and a small label "picture" or "include" that a screen reader
+reads with them; a missing file is a broken link, a picture from a web address never is. A note that is included (or,
+rarely, shown as a picture) lists the including note among its backlinks, marked the same way. Followed from the
+outgoing links with the Ctrl key, a picture opens with the program the system uses for it, asked about first as any
+file link of UC-004 A4 (programs, `file://`), and an included note opens. The rename already changed pictures and
+includes that lead to the renamed note, and those of a moved note (UC-006 BR-003, BR-005 now say so); renaming a
+picture or another file that is no note is no function of Underline (OQ-307). Written-out web addresses, links by
+reference and formulas stay as assumed.
 
 ## OQ-245: Is a link that leads outside the workspace an outgoing link, and is it broken?
 
@@ -2658,19 +2859,23 @@ Readings: (a) as assumed; (b) it is marked, since following it does nothing; (c)
 **Element:** UC-005 A23 step 3, BR-018
 **Raised by:** Implementation, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A23 step 3, BR-018
 **Assumed:** In the form the user started, with the place the toolbar would write: `xref:place[text]` or
 `<<place,text>>`, keeping a text the user gave. A link started in the facade, or with `](` in the source view, is
 written as the toolbar writes it (`[text](place)`, `link:place[text]`).
 
 Readings: (a) as assumed; (b) always as the toolbar writes it, replacing the `xref:` or `<<` the user typed.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-247: What does Ctrl+Space do in the facade and outside the place of a link?
 
 **Element:** UC-005 A23 (trigger)
 **Raised by:** Implementation, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A23 (trigger)
 **Assumed:** In the facade, which shows no places of links, Ctrl+Space starts the completion at the cursor as `[[`
 does, and the link chosen is inserted there. In the source view, Ctrl+Space outside the place of a link does nothing.
 Ctrl+Space is Ctrl on macOS too, and it opens the list again after Escape closed it for the same link. As an input
@@ -2679,12 +2884,15 @@ method may take Ctrl+Space, the command palette has "Complete link" (menu Note),
 Readings: (a) as assumed; (b) in the facade, Ctrl+Space on the text of a link completes its place; (c) Ctrl+Space
 does nothing in the facade.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-248: How are places with spaces or brackets written in a link?
 
 **Element:** UC-005 A2, BR-018; UC-004 BR-005
 **Raised by:** Implementation, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A2, BR-018; TC-005-09 step 5a
 **Assumed:** The toolbar writes the place as it is, such as `[Plan v2](../a b/Plan v2.md)`; GitHub and GitLab do not
 read such a Markdown link as a link, so it is then neither followed, nor an outgoing link, nor a backlink. Link
 completion writes the place relative to the note, with the extension, and percent-encodes what would end the place or
@@ -2698,12 +2906,23 @@ decoded and upper and lower case alike.
 Readings: (a) as assumed (the completion encodes, the toolbar does not); (b) the toolbar encodes too; (c) neither
 does.
 
+Decided by the user (2026-11-16): "Insert link" of the toolbar writes spaces in a place as `%20` too, the same as link completion; implementation pending.
+
+Implemented (2026-11-16, package 12): the toolbar's link to a note, link completion and the linking of an unlinked
+mention (UC-004 A22) write the place and the text of a link through the same rule, in both note formats: the place
+relative to the note, with the extension, `%`, `#`, spaces, brackets, angle brackets, tabs, `:` and backticks as
+escapes, so a note named like an address of another program (`Tel:-Alice.md`) stays a note
+(`old%20plans/Road-map-%5Bv2%5D.md`); the title as text with its brackets (and in Markdown its backticks) escaped
+(`Road map \[v2\]` in Markdown, `Road map [v2\]` in AsciiDoc, where the link text ends at the first `]` without a
+backslash). A web address typed into the dialog is written as typed.
+
 ## OQ-249: What does the tool panel show of a backlink and of an outgoing link, and where does the cursor go?
 
 **Element:** UC-004 BR-015, A14
 **Raised by:** Implementation, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-015, A14
 **Assumed:**
 - "Backlinks (N)" and "Outgoing links (N)" follow "Figures", open at first, "None" when empty and "Looking for
   links…" until the first lists of the note come. N counts the links, not the notes.
@@ -2721,12 +2940,15 @@ does.
   followed and the status bar says "{title} changed since its links were listed; choose the link again"; the list
   follows the change.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-250: How does the user follow a link by keyboard?
 
 **Element:** UC-004 A2 to A4, A14; NFR-011
 **Raised by:** UX review of package 3, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 A2 to A4, A14; NFR-011
 **Assumed:** Interim answer (decided by the coordinator of the implementation, 2026-11-12, for the user to confirm):
 the command palette has "Follow link" (menu Note), which follows the link at the cursor in either view, as a
 Ctrl+click there does; in the outgoing links of the tool panel, Ctrl+Enter (Cmd+Enter) on a link follows it. The text
@@ -2736,12 +2958,15 @@ link (in the source view between its brackets), as for a click.
 Readings: (a) as assumed; (b) a key of its own in the text, such as Alt+Enter; (c) Ctrl+Enter follows a link in the
 text and enlarges a picture only when the cursor is in one.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-251: Does link completion match the place of a note too?
 
 **Element:** UC-005 A23 step 1, BR-018; UC-004 BR-014
 **Raised by:** App test of package 3, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A23 step 1, BR-018; UC-004 BR-014
 **Assumed:** Yes: besides the title and the folder, as go to note matches, link completion matches the place of the
 note with its extension (`travel/Packing.md`), so typing a place as a link names it (`Hub.md`, `travel/Pack`,
 `Meeting-0`) finds the note. The order is that of go to note: by the title first. Go to note itself matches title and
@@ -2752,12 +2977,15 @@ Escape in the source view with the input mode Normal and no list shown leaves th
 
 Readings: (a) as assumed; (b) only title and folder, as go to note.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-252: How exactly does close pairs behave around fences, line starts, and the facade?
 
 **Element:** UC-005 BR-019, A25; FR-081
 **Raised by:** Implementation of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-019, A25; FR-081
 **Assumed:** As implemented (2026-11-12, package 4):
 
 - A backtick typed right after two backticks is typed as it is, so ```` ``` ```` opening a code fence gets three
@@ -2776,12 +3004,15 @@ Readings: (a) as assumed; (b) only title and folder, as go to note.
 Readings for the fence: (a) as assumed; (b) every backtick closes, as BR-019 reads, and the user deletes the fourth.
 For the facade: (a) as assumed; (b) inline markup closes in the facade too, around a selection.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-253: How are list items indented in the cases BR-021 does not name?
 
 **Element:** UC-005 BR-021, A27; FR-083
 **Raised by:** Implementation of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-021, A27; FR-083
 **Assumed:** As implemented (2026-11-12, package 4):
 
 - An AsciiDoc item written with `-` has a single level and stays where it is; `*` and `.` get one more or one less.
@@ -2799,12 +3030,15 @@ For the facade: (a) as assumed; (b) inline markup closes in the facade too, arou
 
 Readings for the following items: (a) as assumed; (b) they are outdented along, keeping the item's place in the list.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-254: How does "Go to line" ask, and what does it accept?
 
 **Element:** UC-004 A16, A17, BR-017; FR-086
 **Raised by:** Implementation of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 A16, A17, BR-017; FR-086
 **Assumed:** As implemented (2026-11-12, package 4, after review): Ctrl+G (Cmd+G on macOS) and the palette's "Go to
 line…" ask in the field of the command palette, titled "Go to line", which says "The note has {n} lines. Add a column
 after a colon, such as 120:8." in the source view and "The note has {n} lines of markup." in the facade. Line or column
@@ -2818,12 +3052,15 @@ a note first." in the status bar.
 Cmd+G is "Find next" in many macOS programs; F3 is "Find next" here (UC-008). Readings: (a) as assumed; (b) a dialog
 of its own; (c) another key on macOS, such as Ctrl+G.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-255: Past which block does the facade move a block?
 
 **Element:** UC-005 BR-020, A26; FR-082
 **Raised by:** Implementation of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-020, A26; FR-082
 **Assumed:** As implemented (2026-11-12, package 4): a block moves past the unit next to it on its level: a list item
 past the item before or after it with that item's own items, a block that is no list item past a whole item of the
 outer list. A list item past an item of an outer level becomes, by its indent, an item of the item it now follows.
@@ -2835,60 +3072,75 @@ after it.
 Readings: (a) as assumed; (b) a block moves past one block only, never past a whole item with its items; (c) a list
 item never leaves its list.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-256: What does Shift+Tab do outside a list item?
 
 **Element:** UC-005 BR-021, A27; OQ-204
 **Raised by:** Review of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-021, A27; OQ-204
 **Assumed:** In the source view, Shift+Tab takes up to one tab stop (four columns) of space from the start of every
 line the selection touches, as one step for undo, and does nothing on lines without space; it never writes space. In
 the facade it does nothing. Before package 4 it wrote four spaces, as Tab does.
 
 Readings: (a) as assumed; (b) nothing outside a list; (c) four spaces, as before.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-257: Does a closing quote typed after the pairs were forgotten write a new pair?
 
 **Element:** UC-005 BR-019, A25
 **Raised by:** Review of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-019, A25
 **Assumed:** Yes: `"` and `` ` `` open and close alike, so once the cursor was put elsewhere (OQ-252), a `"` typed
 before a space or at the end of a line writes `""` even where the user means to close a quote typed earlier.
 
 Readings: (a) as assumed; (b) a quote right after a word char is never paired; (c) count the quotes of the line, and
 pair only when their number is even.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-258: Are Tab and Shift+Tab inverse around a fence that is not closed?
 
 **Element:** UC-005 BR-021; BR-019
 **Raised by:** Review of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-021; BR-019
 **Assumed:** No guarantee: lines after an opening fence (```` ``` ````, `~~~`, `----`) that is never closed count as
 code up to the end of the note and hold no list items, so Tab may find a list where Shift+Tab then finds none, or the
 other way round, once a fence is typed or deleted between them.
 
 Readings: (a) as assumed; (b) a fence that is not closed is no fence for these keys.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-259: What is "Duplicate line" called in the facade?
 
 **Element:** UC-005 A26, BR-020; UC-023 BR-001
 **Raised by:** Review of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 A26, BR-020; UC-023 BR-001
 **Assumed:** "Duplicate line", "Move line up", and "Move line down" in both views, the names of A26; in the facade they
 act on the block, as BR-020 says.
 
 Readings: (a) as assumed; (b) "Duplicate line or block" (and "Move line or block up"); (c) the name follows the view
 shown.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-260: Do Vim's `>>` and `<<` indent list items as Tab and Shift+Tab do?
 
 **Element:** UC-005 BR-021, BR-009
 **Raised by:** App test of package 4, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-021, BR-009; TC-005-37 steps 6 to 8
 **Assumed:** No: in the source view `>>` and `<<` are those of the Vim keys (`codemirror-vim`), which shift a line by
 two spaces whatever it holds, so `<<` does nothing on an AsciiDoc item and `>>` writes two spaces before it. Tab and
 Shift+Tab in insert mode, and the palette's "Indent list item" and "Outdent list item", follow BR-021 in every mode.
@@ -2897,12 +3149,23 @@ falling back to their own shift, with counts and the dot command; that was left 
 
 Readings: (a) as assumed; (b) on a list item `>>` and `<<` follow BR-021, elsewhere Vim's shift.
 
+Decided by the user (2026-11-16): Vim's `>>` and `<<` on a list item follow the list rules (BR-021, as Tab and Shift+Tab do), elsewhere they shift as in Vim; implementation pending.
+
+Implemented as decided (2026-11-16, package 13): in the Vim normal mode of the source view, `>>` and `<<` (and `>`
+and `<` with a motion or on a visual selection) go to the editor core, which applies the list rule of Tab and
+Shift+Tab to the lines in a list item and Vim's shift by two spaces to the other lines of the range (blank lines
+stay); one undo step, at most 100 times per count. A count
+counts lines in normal mode (`3>>`) and repeats in visual mode (`2>`). In the facade's Vim keys `>>` and `<<` indent
+and outdent a list item block the same way and change nothing elsewhere. A block selection (Ctrl+V) keeps Vim's own
+shift from its column.
+
 ## OQ-261: What exactly do the text statistics count as a word and a character?
 
 **Element:** UC-004 BR-020; FR-090; OQ-212
 **Raised by:** Implementation of package 5, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-020; FR-090; OQ-212
 **Assumed:** As implemented (2026-11-12, package 5):
 
 - A character is what a reader sees as one character: a letter with an accent written as two code points, an emoji
@@ -2925,12 +3188,15 @@ Readings: (a) as assumed; (b) on a list item `>>` and `<<` follow BR-021, elsewh
 
 Readings for CJK: (a) as assumed; (b) every CJK character is a word, as most word counters do.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-262: What does the focus mode hide besides the overview and the tool panel, and what if a command needs them?
 
 **Element:** UC-010 A12, BR-010; FR-088; OQ-209
 **Raised by:** Implementation of package 5, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 A12, BR-010; FR-088; OQ-209
 **Assumed:** As implemented (2026-11-12, package 5, after review): the toolbars are the top bar (with the menu bar,
 OQ-209) and the row above the note with the switch "Facade" / "Source" and the formatting toolbar. The status line
 under the note stays, as it shows the place of the cursor and the mode of the Vim and Nano keys; it holds the quick
@@ -2943,12 +3209,15 @@ OQ-209, which is the system's full screen (Cmd+Alt+F replaces in the note, OQ-19
 Readings: (a) as assumed; (b) the status line under the note is hidden too; (c) a command that shows something in a
 hidden part shows that part for the moment and keeps the focus mode.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-263: How are the editor zoom's commands named and when do their keys apply?
 
 **Element:** UC-010 A11, BR-006, BR-009; FR-087
 **Raised by:** Implementation of package 5, 2026-11-12
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 A11, BR-006, BR-009; FR-087
 **Assumed:** As implemented (2026-11-12, package 5): the palette names them "Zoom in", "Zoom out" and "Reset zoom"
 (menu View), and the status bar says "Editor zoom: 120%" after each key, also after Ctrl+0 at 100 percent; a step
 beyond the limits changes nothing and says "Editor zoom: 300% (largest)" or "Editor zoom: 50% (smallest)". A zoom
@@ -2962,12 +3231,15 @@ between two steps, typed or written in a file, is taken as the nearest step.
 
 Readings: (a) as assumed; (b) the keys zoom the enlarged picture too while it is open.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-264: Which document attributes of an AsciiDoc note are lists?
 
 **Element:** UC-024 BR-002; Entity: NOTE_ATTRIBUTE.kind; OQ-213
 **Raised by:** Implementation of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-024 BR-002; Entity: NOTE_ATTRIBUTE.kind; OQ-213
 **Assumed:** As implemented (2026-11-13, package 6a): AsciiDoc does not tell a list from a text, so the attributes
 `tags` and `keywords` are lists, their items separated by commas, and every other attribute is a text. A list added
 under another name is written with commas and read back as a text. An entry that unsets an attribute (`:name!:`) is no
@@ -2980,12 +3252,15 @@ refused; a name whose lower case is no name (`İx`) is refused; a byte order mar
 
 Readings: (a) as assumed; (b) every value with a comma is a list; (c) the kind the user chose is remembered.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-265: Are the tags of the note listed in lower case or as the notes write them?
 
 **Element:** UC-004 BR-016; TC-004-32; OQ-214
 **Raised by:** Implementation of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-016; TC-004-32; OQ-214
 **Assumed:** As implemented (2026-11-13, package 6a): the tool panel lists the tags of the active note in lower case,
 each once, those of the attribute `tags` first, then those of the text in the order of the note, as TC-004-32 and
 TC-024-11 expect ("travel" for `tags: [Travel]`). This differs from OQ-214's assumption ("as most notes write it"),
@@ -2995,12 +3270,15 @@ it in lower case.
 Readings: (a) as assumed; (b) as the active note writes it, the first way it writes it; (c) as most notes of the
 workspace write it (OQ-214).
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-266: What do kinds, quoting, and the last attribute mean in an unusual front matter?
 
 **Element:** UC-024 BR-002, BR-003, A2, A6; OQ-215
 **Raised by:** Implementation of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-024 BR-002, BR-003, A2, A6; OQ-215
 **Assumed:** As implemented (2026-11-13, package 6a), the front matter being edited as lines, never written out from
 a parsed value:
 
@@ -3028,12 +3306,15 @@ a parsed value:
 
 Readings: (a) as assumed; (b) removing the last attribute always removes the whole front matter, comments included.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-267: How does the search by tag show what it found?
 
 **Element:** UC-008 A8, BR-012, BR-004; TC-008-21
 **Raised by:** Implementation of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-008 A8, BR-012, BR-004; TC-008-21
 **Assumed:** As implemented (2026-11-13, package 6a): a word `#` followed by no tag (`#42`, `#`) is searched as an
 ordinary word of text. A note found by a tag is listed among the notes found by their text, never first as found by
 its title. The places found are the lines holding a matching `#tag` and, for the attribute `tags`, the line or lines
@@ -3045,12 +3326,15 @@ formula holds no tags (FR-098).
 
 Readings: (a) as assumed; (b) the open note marks the tags found, also in the attribute `tags`.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-268: How does the facade show a front matter, and what do exports make of it?
 
 **Element:** UC-004 BR-004; UC-009; OQ-216
 **Raised by:** Implementation of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-004; UC-009; OQ-216
 **Assumed:** As implemented (2026-11-13, package 6a): the facade shows the front matter as a table, the names as its
 header row and the values below, a list as its items joined by commas and a nested value as its markup; a click shows
 the markup below the table to be edited there, as for other tables. A front matter that cannot be read (A5) and an
@@ -3063,12 +3347,15 @@ export writes `\n` line breaks throughout, as for every block. The text statisti
 
 Readings: (a) as assumed; (b) the facade hides the front matter, as it is shown in the note properties.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-269: How are the fields of the note attributes confirmed and how do they look?
 
 **Element:** UC-024 step 3, BR-002, BR-007, A7
 **Raised by:** Implementation of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-024 step 3, BR-002, BR-007, A7
 **Assumed:** As implemented (2026-11-13, package 6a, after review): the note properties hold, below the text
 statistics, a part "Tags (N)" ("None" without tags; each tag a button named "#tag, search notes tagged tag") and
 then "Attributes"; while another note's are read, the last ones stay dimmed and not usable. The search overlay says
@@ -3088,12 +3375,15 @@ change its attributes."
 
 Readings: (a) as assumed; (b) a value is written only on Enter.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-270: May the attribute `tags` hold an item that is no tag?
 
 **Element:** UC-024 BR-005; UC-004 BR-016
 **Raised by:** App test of package 6a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-024 BR-005; UC-004 BR-016
 **Assumed:** No: an item written into the attribute `tags` from the note properties must be a tag (a `#` before it
 and a `/` after it are allowed and dropped when read); otherwise nothing is written and the properties say
 "“two words” is no tag: a tag holds letters, digits, _, - and /, and not only digits." An item that is no tag
@@ -3102,12 +3392,15 @@ written in the source view stays in the note and is shown as an item, but is no 
 Readings: (a) as assumed; (b) any item is allowed and only the tags among them count; (c) an item that is no tag
 is shown marked in the note properties.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-271: What do "Previous daily note" and "Next daily note" do without a daily note in the active tab?
 
 **Element:** UC-025 A2
 **Raised by:** Implementation of package 6b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-025 A2
 **Assumed:** Nothing opens; the status bar says "This note is not a daily note. Press Ctrl+Shift+J to open today's."
 (the key as the platform names it). A note is a daily note when it lies directly in the daily note folder (upper and
 lower case ignored) and its title is a date (UC-025 BR-001, BR-005); daily notes in folders below the daily note folder
@@ -3115,12 +3408,15 @@ are not stepped through. A step that opens a daily note clears an earlier report
 
 Readings: (a) as assumed; (b) the step starts from the date of today; (c) the newest or oldest daily note opens.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-272: How do the note overview and the tab show the title of a daily note?
 
 **Element:** UC-025 BR-001; UC-003 BR-001; TC-025-01
 **Raised by:** Implementation of package 6b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-025 BR-001; UC-003 BR-001; TC-025-01
 **Assumed:** Decided as an interim reading for the user to confirm (package 6b review, 2026-11-13), following the
 reviewed test cases TC-025-01 and TC-025-04: a title that is exactly a date, `2026-11-11`, keeps its dashes everywhere
 (note overview, tab, dialogs, status bar), as an exception to UC-003 BR-001; every other title shows a dash as a space.
@@ -3129,12 +3425,15 @@ This holds for any note so named, also outside the daily note folder.
 Readings: (a) as assumed; (b) the rule of UC-003 BR-001 without exception ("2026 11 11"); (c) daily notes are shown
 with the date written out ("11 November 2026").
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-273: How does the setting "Daily note template" name a template?
 
 **Element:** UC-010 BR-001; UC-025 BR-003
 **Raised by:** Implementation of package 6b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 BR-001; UC-025 BR-003
 **Assumed:** By the place of the note in the workspace, with or without its extension (`templates/Day.md`,
 `templates/Day`); it may name any listed note of the workspace, also one outside the template folder. The settings
 window offers "The template titled Daily" (no value of its own) and the templates of the template folder by their
@@ -3144,12 +3443,15 @@ titled Daily is the one nearest the top of the template folder, upper and lower 
 Readings: (a) as assumed; (b) the setting names a template by its title; (c) only templates of the template folder can
 be named.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-274: What happens with a template folder or daily note folder that is not allowed?
 
 **Element:** UC-010 BR-001; UC-003 BR-008; UC-025 A4
 **Raised by:** Implementation of package 6b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-010 BR-001; UC-003 BR-008; UC-025 A4
 **Assumed:** Reading (b), after the package 6b review: the settings window refuses a folder that lies outside the
 workspace, is hidden, holds a name not allowed, or (for the template folder) is the top folder; the field keeps what
 was typed and says under it why ("Daily note folder not changed: the folder `.days` is hidden"). An emptied field
@@ -3163,12 +3465,15 @@ folders and daily note folders are matched without regard to upper and lower cas
 Readings: (a) any folder is taken and only said when it is used; (b) as assumed; (c) "New note" says why a template
 folder offers no templates.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-275: Placeholders in detail
 
 **Element:** UC-003 BR-008; TC-025-01; TC-003-17
 **Raised by:** Implementation of package 6b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-003 BR-008; TC-025-01; TC-003-17
 **Assumed:** A placeholder is matched exactly, in lower case and without spaces (`{{ title }}` and `{{Title}}` stay as
 written); a template with several `{{cursor}}` loses all of them and the cursor goes to the first. Placeholders are
 filled in the whole template, front matter and document attributes included. Decided after the package 6b review so
@@ -3179,12 +3484,15 @@ a line of its own, which becomes empty, with the cursor on it.
 Readings: (a) as assumed; (b) a line that holds only `{{cursor}}` is always dropped and the cursor goes to its place;
 (c) the template is copied as it is, which gives two empty lines in TC-025-01.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-276: Names and places of the commands of templates and daily notes
 
 **Element:** UC-025 step 1, BR-007; UC-003 A7; UC-023 BR-001; TC-025-11
 **Raised by:** Implementation of package 6b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-025 step 1, BR-007; UC-003 A7; UC-023 BR-001; TC-025-11
 **Assumed:** The command palette has "Daily note" (Ctrl+Shift+J, named as TC-025-11 runs it), "Previous daily note"
 (Ctrl+Shift+PageUp), "Next daily note" (Ctrl+Shift+PageDown) in the group Note, and "New note from template…" in the
 group File, which opens "New note" with the keyboard on "Template:". The "toolbar" of UC-025 step 1 is the top bar: a
@@ -3196,12 +3504,15 @@ daily note", each with a line that says what it does.
 
 Readings: (a) as assumed; (b) the File menu lists the new commands too; (c) the template is chosen before the title.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-277: Keys and places to open to the side and to move between the panes
 
 **Element:** UC-004 A18, BR-018; UC-023 BR-001; FR-096
 **Raised by:** Implementation of package 7a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 A18, BR-018; UC-023 BR-001; FR-096
 **Assumed:** "Open to the side" opens the note of the active tab to the side with Ctrl+\ (Cmd+\ on macOS), as A18
 names it; on a keyboard where that sign needs AltGr (German, Swiss, French) the key at the same place does it, and
 Ctrl+Shift+S (Cmd+Shift+S) does it on every keyboard. "Focus the other pane" (Ctrl+F6, Cmd+F6) goes to the other pane;
@@ -3220,12 +3531,15 @@ Linux, Windows or macOS gives them a meaning, and none is an AltGr combination.
 Readings: (a) as assumed; (b) only the keys of the spec and Ctrl+1/Ctrl+2; (c) the hint on a link also names
 Ctrl+Shift+click.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-278: How does the window show the split view and its active pane?
 
 **Element:** UC-004 BR-018; UC-010 BR-010; FR-096
 **Raised by:** Implementation of package 7a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-018; UC-010 BR-010; FR-096
 **Assumed:** Each pane has its own tab bar, its switch "Facade" / "Source" with the formatting toolbar, its minimap and
 its status line under the note; the find field stands above the note of the active pane only. The tool panel stands
 right of both panes, over their whole height, also without the split view (before, the tab bar reached over the tool
@@ -3246,12 +3560,15 @@ both panes keep their tab bars and status lines (TC-010-19).
 Readings: (a) as assumed; (b) the tool panel stays under the tab bars and only the notes are split; (c) a split view that
 does not fit is refused, with a message, instead of showing one pane.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-279: Where does the tab "Todos" stand in the split view?
 
 **Element:** UC-021 BR-005; UC-004 BR-018
 **Raised by:** Implementation of package 7a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-021 BR-006; UC-004 BR-018; TC-021-10 steps 6 to 8
 **Assumed:** In the left pane only, after its note tabs. Showing it makes the left pane the active pane and shows the
 todo list in place of its note; the right pane keeps its note. With the right pane made active again, the tool panel
 shows the sections of the right pane's note and the commands act on it, while the left pane keeps the todo list.
@@ -3259,12 +3576,19 @@ Ending the split view keeps it where it is.
 
 Readings: (a) as assumed; (b) in the active pane; (c) it can be opened in either pane like a note.
 
+Decided by the user (2026-11-16): the tab "Todos" opens in the active pane, not always in the left one (reading b).
+Implemented (2026-11-16, package 11): it opens after the note tabs of the active pane and shows the todo list there,
+the other pane keeping its note; opened from the other pane, the one tab moves there. With the other pane made
+active, the tool panel and the commands act on that pane's note while the todo list stays. Its pane is remembered
+with the tabs; ending the split view keeps it open in the one pane left.
+
 ## OQ-280: Where does the cursor of the second tab of a note start, and what keeps each tab?
 
 **Element:** UC-005 BR-016; UC-004 A19, BR-003
 **Raised by:** Implementation of package 7a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-016; UC-004 A19, BR-003
 **Assumed:** The tab the note opens in on the other side starts with the cursor where the first tab has it, nothing
 folded, at the start of the note. Each tab keeps its cursor, selection, folded sections and reading position also
 while it switches between the source view and the facade, until it is closed; a change made on the other side moves
@@ -3275,12 +3599,15 @@ as a single tab does.
 Readings: (a) as assumed; (b) the second tab starts at the start of the note; (c) it starts where the first one is
 scrolled to.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-281: The source view on both sides
 
 **Element:** UC-005 BR-016; FR-097; UC-004 BR-004
 **Raised by:** Implementation of package 7a, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-016; FR-097; UC-004 BR-004
 **Assumed:** A note may show its source view in both panes (each tab keeps the view the user switches it to). The code
 and markup colours then follow the lines of the source view scrolled last; lines that only the other side shows keep
 the colours they had and get them anew once that side is scrolled. The colours are not made for the lines of both
@@ -3289,12 +3616,15 @@ views together (package 7a review: left as it is, recorded here).
 Readings: (a) as assumed; (b) the colours are made for the lines both source views show; (c) the second tab of a note always
 shows the other editing view and cannot be switched.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-282: Does `$22 and $2+2$` hold a formula, as GitHub reads it?
 
 **Element:** UC-004 BR-019; FR-098; C-003
 **Raised by:** Implementation of package 7b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-019; FR-098; C-003
 **Assumed:** As the Markdown parser reads the dollar (ADR-029): an opening `$` is followed by no space, a closing one is
 preceded by no space and followed by no digit, `\$` is a dollar, `$$…$$` within a paragraph is a display formula in
 its line, and `` $`…`$ `` is a formula. So "5$ or 6$" stays text, and `$22 and $2+2$` is the text "$22 and " and the
@@ -3302,12 +3632,15 @@ formula `2+2`. GitHub's own reading of the last case could not be checked offlin
 
 Readings: (a) as assumed; (b) as Pandoc reads it, one formula `22 and $2+2`; (c) no formula at all.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-283: Is a `$` typed in the facade written as it is?
 
 **Element:** UC-005 BR-008; FR-098
 **Raised by:** Implementation of package 7b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-008; FR-098
 **Assumed:** Yes. A `$` typed in the text of a Markdown note is written without a backslash, so a price stays `5$` in
 the markup, and typing `$x$` makes a formula, which is typeset once the cursor leaves it. Other formatting characters
 (`*`, `_`, `` ` ``) are still escaped. Inside a formula everything typed is its source, without escapes.
@@ -3317,12 +3650,15 @@ written only in the source view.
 
 Package 7b review (2026-11-13): the reviewers recommend keeping (a).
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-284: How is a formula with an error exported?
 
 **Element:** UC-009 BR-002, BR-003, A3; TC-009-18; FR-098
 **Raised by:** Implementation of package 7b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-009 BR-002, BR-003, A3; TC-009-18; FR-098
 **Assumed:** In HTML and PDF it is its source as code (a code block for a block formula, inline code for an inline
 one). In the other note format it is its source as well, not a formula of that notation: a literal block (`....`) or
 a code block without a language, and inline code (`` `+…+` `` or `` `…` ``). It is not reported as missing in the status
@@ -3334,12 +3670,15 @@ Readings: (a) as assumed; (b) in the other note format it is written as a formul
 A `$$…$$` within a paragraph goes to AsciiDoc as a formula in the line: AsciiDoc has no display formula in a line, and
 writing the display style into the source would change the formula on the way back.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-285: What does the frame below a block formula show?
 
 **Element:** UC-005 BR-008; UC-004 BR-019, A21; FR-098
 **Raised by:** Implementation of package 7b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-008; UC-004 BR-019, A21; FR-098
 **Assumed:** Its whole markup, as for a table or an image: `$$…$$`, the fences of a code block of the language `math`,
 or `[latexmath]` with its `++++` lines, so the formula can also be made text again in the facade. The frame shows while
 the cursor is in the formula, until the formula is typeset, and with an error, whose reason stands above it. A changed
@@ -3347,12 +3686,15 @@ block formula keeps its last picture until the new one comes.
 
 Readings: (a) as assumed; (b) only the source between the delimiters, as for a diagram.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-286: How large is a formula next to the text?
 
 **Element:** UC-004 BR-019; FR-098; C-003; UC-010 BR-009
 **Raised by:** Implementation of package 7b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-004 BR-019; FR-098; C-003; UC-010 BR-009
 **Assumed:** An em of the formula is an em of the text around it (ADR-029), so it grows with the editor zoom; a block
 formula is set in the size of body text. KaTeX, which GitLab uses, sets formulas 1.21 times larger than the text; GitHub
 (MathJax) sets them about as large as the text.
@@ -3361,12 +3703,15 @@ Readings: (a) as assumed; (b) 1.21 times the text, as KaTeX does.
 
 Package 7b review (2026-11-13): the reviewers recommend keeping (a).
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-287: Is an inline formula shown typeset while its source is edited?
 
 **Element:** UC-005 BR-008; TC-005-42; FR-098
 **Raised by:** Implementation of package 7b, 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-008; TC-005-42 steps 5 to 8
 **Assumed:** No. While the cursor is in an inline formula (after its first character of markup and before its end), its
 markup stands in its place in the code font and is edited there; the typeset formula shows again, with every change in
 it, once the cursor leaves it. A click on the typeset formula puts the cursor at the start of its source. A block
@@ -3377,12 +3722,21 @@ edited.
 
 Package 7b review (2026-11-13): the reviewers recommend keeping (a).
 
+Decided by the user (2026-11-16): while the source of an inline formula is edited, its typeset preview is shown, for example in a small popup above it; implementation pending.
+
+Implemented as decided (2026-11-16, package 13): while the cursor is in an inline formula, a small preview above its
+source (below it at the top of the view) shows the formula typeset by the same typesetting as the facade, following
+the changes 150 ms after the typing pauses and keeping the last picture, dimmed, while a change is typeset; with an
+error it shows the reason. It never takes the keyboard or the pointer, is hidden from screen readers, follows the
+editor zoom, and stays within its pane of the split view.
+
 ## OQ-288: Joining an AsciiDoc document title with the line after it
 
 **Element:** UC-005 BR-016; FR-097
 **Raised by:** Package 7b review (test monkey), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-016; FR-097
 **Assumed:** As it is: an edit that joins the document title of an AsciiDoc note with the line after it may show other
 blocks in the facade until the note is parsed whole again (the next edit near the start, or opening the note). Found
 by the test monkey outside of formulas; not changed in package 7b. Lines that a lone carriage return, U+000B, U+000C,
@@ -3390,24 +3744,30 @@ U+0085, U+2028 or U+2029 parts are now parsed whole after every edit near them, 
 
 Readings: (a) as assumed; (b) every edit in the first two blocks of an AsciiDoc note parses the note whole.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-289: What does the undo of a replacement in the workspace keep?
 
 **Element:** UC-022 A6, BR-005; UC-026 BR-001
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-022 A6, BR-005; UC-026 BR-001
 **Assumed:** The undo of the status bar gives each note back the content it had before the replacement, and keeps
 what it replaces as a snapshot with the cause Restore, as restoring a snapshot does (UC-026 step 6).
 
 Readings: (a) as assumed; (b) the undo keeps nothing, as the replaced text follows from the snapshot before it; (c)
 a cause of its own, such as "Undo replace".
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-290: When exactly is the Editing snapshot taken?
 
 **Element:** UC-026 BR-001; OQ-223
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 BR-001; OQ-223
 **Assumed:** When a change made in Underline is stored (at most 2 seconds after it, NFR-005), of the content the
 note's file held before; its time is when it is taken, not the moment of the first key. Taking it never holds up
 typing or storing. A tab asks for it at most once each 10 minutes, so when the newest snapshot held the same content
@@ -3416,12 +3776,15 @@ then, the next one waits for the next ask. A newest snapshot dated later than no
 Readings: (a) as assumed; (b) at the first key itself, of the text the tab showed before it, also when it is never
 stored.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-291: What happens when a snapshot cannot be taken?
 
 **Element:** UC-026 BR-001, failure postconditions
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 BR-001, failure postconditions
 **Assumed:** A restore, a replacement in the workspace and an agent's change of a note not open are not made
 without their snapshot; the status bar or the agent's answer says why. For editing, a change from another program,
 an agent's change of an open note, git and a resolved conflict the change goes on: the status bar says "No
@@ -3439,12 +3802,15 @@ Known limit (ADR-031): the window and an MCP server running without it on the sa
 other when taking snapshots. Each may take the same content once, so a snapshot can come twice; none is ever
 overwritten or lost. No snapshot is read, written, moved or removed through a symbolic link.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-292: How does the whole snapshot show code, pictures and diagrams?
 
 **Element:** UC-026 A2
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 A2
 **Assumed:** The whole snapshot is shown as the facade lays out its blocks, read only: headings, text, lists,
 quotes and tables as in the facade; code without its colours; pictures, diagrams and formulas as their
 placeholders ("Loading …", "Rendering …") or their markup, as nothing is rendered for a text that is no note.
@@ -3452,12 +3818,15 @@ placeholders ("Loading …", "Rendering …") or their markup, as nothing is ren
 Readings: (a) as assumed; (b) everything rendered as in the facade, with the cost of rendering diagrams and loading
 pictures for each snapshot shown.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-293: Which notes get a Git snapshot, and when?
 
 **Element:** UC-026 BR-001 (cause Git)
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 BR-001 (cause Git)
 **Assumed:** Before a pull (in a sync or alone) and before a switch to another branch, every note whose file differs
 between the branch and what is pulled or switched to keeps its content as it is now, open in a tab or not; a
 resolution of a conflict keeps the note with its conflicting places before each choice made in it. Aborting a sync
@@ -3467,12 +3836,15 @@ seen as changed from outside; that snapshot is not taken again, as it holds the 
 Readings: (a) as assumed; (b) only notes open in a tab, as for other programs (OQ-223); (c) one snapshot before the
 first choice of a resolution only.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-294: How much space may the snapshots take, and does the user see it?
 
 **Element:** UC-026 BR-002; OQ-224; NFR-014
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 A7, BR-002, BR-007; TC-026-15; ADR-031
 **Assumed:** No limit and no display: each snapshot is a whole copy of the note, removed after 30 days. A note of
 100 KB edited all day may keep about 5 MB a day (one snapshot each 10 minutes).
 
@@ -3483,24 +3855,33 @@ Recommended by the reviewers of package 8a: no limit now; the dialog shows "Kept
 the list. Later, the settings of the workspace show the space the snapshots take and offer "Remove all snapshots".
 Snapshots are never dropped without the user knowing.
 
+Decided by the user (2026-11-16): no size limit; the workspace settings show the space the snapshots take and offer "Remove all snapshots" after a confirmation, and snapshots are never dropped silently (reading c).
+Implemented (2026-11-16, package 11): the part "This workspace" of the settings shows "Snapshots" with the space and
+the number ("12.4 MB in 1,203 snapshots", or "None") and "Remove all snapshots…", which asks first, naming the
+amount and that it cannot be undone; the status bar reports what was removed. The snapshots of deleted notes stay.
+
 ## OQ-295: Where do "Snapshots…" stand in the context menus, and is there a key?
 
 **Element:** UC-026 step 1, BR-006
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 step 1, BR-006
 **Assumed:** "Snapshots…" follows "Export" in the context menu of a note in the overview and of a tab, a line
 separates both from "Open to the side", and the command palette has "Note: Snapshots…" for the active note, also in
 the menu "Note" of the menu bar; it has no key of its own (as the reviewers of package 8a recommend).
 
 Readings: (a) as assumed; (b) a key such as Ctrl+Alt+H ("history").
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-296: What becomes of the snapshots of a note deleted or renamed by another program?
 
 **Element:** UC-026 BR-003
 **Raised by:** Package 8a (snapshots), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 BR-003
 **Assumed:** The snapshots follow a note renamed or deleted in Underline (by the user or an agent). A note deleted or
 renamed by another program leaves its snapshots under its old name: they are listed again when a note of that name
 appears, and removed after 30 days.
@@ -3508,12 +3889,15 @@ appears, and removed after 30 days.
 Readings: (a) as assumed; (b) a note that appears where one disappeared at the same moment takes its snapshots
 along, as a rename.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-297: How are the causes of snapshots named in the list?
 
 **Element:** UC-026 step 2, BR-001; entity SNAPSHOT.cause
 **Raised by:** Package 8a review (UX), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-026 step 2, BR-001; entity SNAPSHOT.cause
 **Assumed:** The list names what a snapshot was taken before: "Before editing", "Before an outside change", "Before an
 agent's change", "Before a replace in the workspace", "Before a git change", "Before a restore". The specification
 names the causes Editing, Outside change, Agent change, Replace in workspace, Git and Restore; the test cases keep
@@ -3521,12 +3905,15 @@ those names for the causes, which the list shows in these words.
 
 Readings: (a) as assumed; (b) the list shows the cause names of BR-001 as they are.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-298: Which language of the system counts as one of the offered spell check languages?
 
 **Element:** FR-100, UC-010 BR-001 (built-in default of the spell check language)
 **Raised by:** Package 8b (spell check), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** FR-100, UC-010 BR-001 (built-in default of the spell check language)
 **Assumed:** English of the United States and English without a region count as English (US), English of the
 United Kingdom as English (UK); French and Spanish of any region as French and Spanish. English of another region
 (Canada, Australia, India, …) and every other language give no default: the spell check is off until the user chooses
@@ -3535,12 +3922,15 @@ a language.
 Readings: (a) as assumed; (b) English of the Commonwealth countries counts as English (UK), of Canada as English
 (US); (c) only the exact languages of the list count.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-299: Do the German and Italian dictionaries come with Underline?
 
 **Element:** FR-100, NFR-014, C-008; OQ-206
 **Raised by:** Package 8b (spell check), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** FR-100; ADR-030 (update 2026-11-16); THIRD-PARTY-NOTICES.md
 **Assumed:** Not yet: Underline offers no German (Germany), German (Switzerland) or Italian spell check, because their
 dictionaries (igerman98 / frami, the Italian dictionary of LibreOffice) are licensed GPL-2.0 or GPL-3.0 only, and
 Underline is MIT (ADR-030).
@@ -3553,12 +3943,23 @@ TC-005-40 and TC-010-21 name German (Switzerland) in their preconditions; until 
 English (US) and English (UK), and a language without a dictionary says "No dictionary for {language}" and marks
 nothing.
 
+Decided by the user (2026-11-16): ship the German (Germany), German (Switzerland) and Italian dictionaries with Underline as separate, unchanged files, each with its licence, its origin and an offer of its source, and name the licences in the app's information on licences; implementation pending.
+
+Implemented (2026-11-16, package 10): German (Germany), German (Switzerland) and Italian (Italy) are offered. Their
+dictionaries come unchanged, each in a folder of its own with its GPL texts and its README; the origin, the version,
+the checksums and the offer of the source are in the dictionaries' SOURCES.md, and the licences are named in
+THIRD-PARTY-NOTICES.md, which comes with the installers. The installers name their licence "MIT and others".
+TC-005-40 and TC-010-21 run as written. As the system's language, German of Switzerland and Liechtenstein counts as
+German (Switzerland), German of any other region as German (Germany), and Italian of any region as Italian (OQ-298
+extended).
+
 ## OQ-300: What does the user dictionary keep of a word, and where?
 
 **Element:** Entity DICTIONARY_WORD (added_at); UC-005 A28
 **Raised by:** Package 8b (spell check), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** Entity DICTIONARY_WORD (added_at); UC-005 A28
 **Assumed:** The words alone, one per line, sorted, in the file `underline-words.txt` next to the user settings file
 (ADR-030), so the user can edit and share it as text. When a word was added is not kept. A word added in one Underline
 counts in another running at the same time within a second; a word added with a capital counts only with the capital,
@@ -3570,12 +3971,15 @@ live in the settings file.
 A words file that cannot be read (not UTF-8, no permission, larger than 2 MB) is never written over: a word added
 then counts until Underline closes, and the status bar says why (package 8b review).
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
 ## OQ-301: Are the words of a table marked in the facade?
 
 **Element:** UC-005 BR-023 ("in both editing views")
 **Raised by:** Package 8b (spell check), 2026-11-13
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-023 ("in both editing views")
 **Assumed:** Yes: the cells of a table, and the values of the front matter shown as a table, carry the marks in the
 facade as in the source view (changed by the review of package 8b; see OQ-303 for the front matter). While a block is
 edited in the facade, the marks in that block are taken away until the check after the rest of 250 ms brings them
@@ -3583,6 +3987,8 @@ back; in the source view they move with the typing.
 
 Readings: (a) as assumed; (b) the cells of a table in the facade carry the marks too; (c) the marks of the edited
 block move with the typing in the facade as they do in the source view.
+
+Decided by the user (2026-11-16): as assumed/implemented.
 
 ## OQ-302: Which entry of the spell menu has the keyboard, and in which order are its entries?
 
@@ -3610,7 +4016,8 @@ keyboard; (c) the first correction takes the keyboard when it arrives, as long a
 **Element:** UC-005 BR-023 ("names of note attributes" are not checked), UC-024 BR-001
 **Raised by:** Package 8b review (rust-reviewer, ux-reviewer), 2026-11-16
 **Blocking:** No
-**Status:** Open
+**Status:** Resolved
+**Resolved in:** UC-005 BR-023 ("names of note attributes" are not checked), UC-024 BR-001
 **Assumed:** Yes, in both editing views, as BR-023 leaves out only the names: a value shown as it is written (bare, in
 quotes or in brackets) is checked and marked in the facade's front matter table as in the source view. The value of
 `tags`, and values the facade shows otherwise (nested values, values with escapes), are not checked in either view,
@@ -3618,3 +4025,78 @@ so both views always mark the same words.
 
 Readings: (a) as assumed; (b) no value of the front matter is checked; (c) only text values are checked, not lists.
 
+Decided by the user (2026-11-16): as assumed/implemented.
+
+## OQ-304: Which names of a note count for its unlinked mentions, and are short or common titles left out?
+
+**Element:** UC-004 BR-021; FR-103
+**Raised by:** Package 12, 2026-11-16
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** UC-004 BR-021; FR-103
+**Assumed:** Only the title, as the note overview shows it (dashes of the file name as spaces); no note attribute names
+other names (aliases) of a note, so none is read. A title of fewer than 3 characters, spaces not counted, has no
+unlinked mentions. There is no list of common words: a title such as "Notes" or "The" is looked for like any other,
+and the list is then long (at most 200 shown at first). At most 1,000 mentions of one note are found and counted.
+
+Readings: (a) as assumed; (b) a note attribute `aliases` names more names, each looked for too; (c) a list of common
+words (per language) that are never looked for; (d) a larger least length, such as 4.
+
+Decided by the user (2026-11-16): as assumed/implemented.
+
+## OQ-305: Are headings and text in HTML of other notes places of unlinked mentions?
+
+**Element:** UC-004 BR-021
+**Raised by:** Package 12, 2026-11-16
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** UC-004 BR-021
+**Assumed:** Yes: a heading of another note, and text between HTML tags such as `<b>…</b>`, are plain text, so the title
+there is a mention and can be linked (a linked heading keeps its place on GitHub and GitLab). The active note itself is
+never searched, its headings included. A `_` belongs to no word, since Markdown marks emphasis with it, so `plan_b`
+mentions "plan"; a word that goes on with a letter, a digit or a combining accent (`plans`, `plan2`, `Plané`, `cafe`
+with a combining acute) does not. A Markdown mention right after `!` is linked with the `!` written as `\!`, so the
+note still shows the `!` and the link does not become a picture; one right after a backslash gets one more backslash,
+so the link's bracket is not escaped. In AsciiDoc, where a backslash would escape the link, a mention right after a
+backslash is no unlinked mention. AsciiDoc macros of every kind (`kbd:`, `btn:`, `menu:`, `anchor:`, `icon:`,
+`video::`, `xref:`, `footnote:` …), cross references, attribute references (`{name}`), conditionals (`ifdef::` …),
+e-mail addresses, passthroughs (`$$…$$`, `+…+`), formulas (`\(…\)`), literal paragraphs (indented, or styled
+`[source]`, `[listing]`, `[literal]`) and, in Markdown, footnote references, `[[…]]` and links by reference hold no
+mention.
+
+Readings: (a) as assumed; (b) headings of other notes are left out too; (c) `_` belongs to a word.
+
+Decided by the user (2026-11-16): as assumed/implemented. When "Link" is chosen twice in quick succession for the
+same mention, the first links it and the second reports that the mention moved, as implemented.
+
+## OQ-306: Which cause does the snapshot before linking a mention in a closed note name?
+
+**Element:** UC-004 A22; UC-026 BR-001
+**Raised by:** Package 12, 2026-11-16
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** UC-004 A22; UC-026 BR-001
+**Assumed:** Editing ("Before editing"): linking a mention is a change of the note in Underline. Unlike the snapshot of
+editing, it is taken every time, at once, since the note is written at once; a note whose snapshot cannot be taken is
+not changed, as for a replacement (UC-022). A note open in a tab takes the snapshots of editing as any change there.
+
+Readings: (a) as assumed; (b) a cause of its own, "Before linking a mention", listed in UC-026 BR-001.
+
+Decided by the user (2026-11-16): as assumed/implemented.
+
+## OQ-307: Are the links to a picture or another file updated when it is renamed or moved?
+
+**Element:** UC-006 BR-003; UC-004 BR-015
+**Raised by:** Package 12, 2026-11-16
+**Blocking:** No
+**Status:** Resolved
+**Resolved in:** UC-006 BR-003; UC-004 BR-015
+**Assumed:** No. Underline renames and moves notes only (UC-006); a picture or another file renamed or moved with
+another program leaves its links broken, and the outgoing links mark them so (BR-015). The links to a renamed note,
+pictures and includes among them, and those of a moved note follow it (UC-006 BR-003, BR-005).
+
+Readings: (a) as assumed; (b) Underline offers to update the links to a file that disappeared when a file of the same
+name appears elsewhere in the workspace; (c) the note overview can rename and move other files too.
+
+Decided by the user (2026-11-16): as assumed; it stays a known limit. Links to a picture or another file renamed or
+moved with another program are not updated.

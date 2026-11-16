@@ -108,3 +108,21 @@ pub struct SnapshotWholeView {
     /// Why it cannot be shown.
     pub problem: Option<String>,
 }
+
+/// UC-026 A7, OQ-294: the space the snapshots of the open workspace take,
+/// for the part "This workspace" of the settings window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotsSpaceView {
+    /// "12.4 MB in 1,203 snapshots", or "None" without any.
+    pub summary: String,
+    /// How long they are kept, "Kept on this computer for 30 days" (BR-002).
+    pub kept: String,
+    /// Whether there is anything to remove; the button waits without.
+    pub any: bool,
+    /// The question before removing them, naming how many and their space.
+    pub question: String,
+    /// Why the space could not be measured; shown instead of the summary.
+    pub problem: Option<String>,
+}

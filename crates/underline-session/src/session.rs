@@ -17,6 +17,7 @@ mod facade;
 mod git;
 mod indexes;
 mod links;
+mod mention_links;
 mod note_links;
 mod notes;
 mod remote;
@@ -43,11 +44,13 @@ pub use self::git::{
     NEEDS_MESSAGE, NOTHING_CHOSEN,
 };
 pub use self::links::Followed;
+pub use self::mention_links::{MentionDone, MentionJob, MentionPlan};
 pub use self::note_links::HeadingsPlan;
 pub use self::remote::CLOSING_SYNC_AT_MOST;
 pub use self::replace::{ReplaceDone, ReplaceJob};
 pub use self::snapshots::{
-    SnapshotShowJob, SnapshotsJob, NO_SNAPSHOT, SNAPSHOTS_KEPT, SNAPSHOTS_TAKEN,
+    SnapshotShowJob, SnapshotsJob, SnapshotsRemovalJob, SnapshotsSpaceJob, NO_SNAPSHOT,
+    SNAPSHOTS_KEPT, SNAPSHOTS_TAKEN,
 };
 pub use self::spell::{SuggestJob, SPELL_AT_THE_LATEST, SPELL_DEBOUNCE, USER_WORDS_POLL};
 pub use self::sync::{KeepCopy, Synced};
@@ -148,11 +151,11 @@ pub struct Session {
     facade: facade::Shared,
     /// M-16.5: the jobs that make the tool panel's lists.
     index_jobs: indexes::IndexJobs,
-    /// UC-004 A4: the user agreed to open web addresses; asked once until
-    /// Underline closes.
-    web_allowed: bool,
-    /// UC-004 A4: the web address "Open web address" asks about.
-    web_asked: Option<String>,
+    /// UC-004 A4, BR-007 (Q-61, Q-62): the address or file the question
+    /// "Open …" asks about; asked again every time.
+    open_asked: Option<(u32, String)>,
+    /// Q-61: the number of the last question "Open …".
+    open_asks: u32,
     /// UC-007 A4: the undo offered right after deleting, while the status
     /// shows the report of the deletion.
     undo_delete: Option<notes::UndoDelete>,
@@ -307,8 +310,8 @@ impl Session {
             formulas: None,
             facade: facade::Shared::default(),
             index_jobs: indexes::IndexJobs::default(),
-            web_allowed: false,
-            web_asked: None,
+            open_asked: None,
+            open_asks: 0,
             undo_delete: None,
             restoring: None,
             settings_offer: None,
@@ -368,7 +371,14 @@ impl Session {
                 .map(|mode| mode.label().to_owned())
                 .collect(),
             agents: self.agents_view(),
+            recent_commands: self.state.recent_commands().to_vec(),
         }
+    }
+
+    /// UC-023 BR-004, OQ-198: the command `id` ran from the palette; it is
+    /// remembered for the user as the most recent one, across restarts.
+    pub fn command_ran(&mut self, id: &str) {
+        self.state.command_ran(id);
     }
 
     /// The status message (M-04.7).

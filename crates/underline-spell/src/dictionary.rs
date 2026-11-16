@@ -103,6 +103,16 @@ impl Dictionaries {
         .clone()
     }
 
+    /// ADR-030 (update 2026-11-16): lets go of the dictionaries of every
+    /// language but those of `keep`, and of every dictionary that could not
+    /// be read (it is tried again when it is needed again), so a language
+    /// no open note and no setting uses any more frees its memory.
+    pub fn retain(&self, keep: &[&str]) {
+        self.slots().retain(|code, slot| {
+            keep.contains(&code.as_str()) && slot.get().is_none_or(Result::is_ok)
+        });
+    }
+
     /// The checker of `code` when it was read already; `None` while it was
     /// not, so a caller that must not wait does not.
     #[must_use]
@@ -275,6 +285,25 @@ mod tests {
         );
         assert_eq!(decode(&[0xA4], "ISO8859-15", Path::new("x")).unwrap(), "€");
         assert_eq!(decode(&[0xE9], "ISO8859-1", Path::new("x")).unwrap(), "é");
+    }
+
+    #[test]
+    fn adr030_languages_not_used_and_failed_ones_are_let_go() {
+        let dictionaries = Dictionaries::new(Some(data()));
+        assert!(dictionaries.get("xx-TEST").is_ok());
+        assert!(dictionaries.get("xx-NONE").is_err());
+        dictionaries.retain(&["xx-TEST", "xx-NONE"]);
+        assert!(dictionaries.ready("xx-TEST").is_some());
+        assert!(
+            dictionaries.ready("xx-NONE").is_none(),
+            "a failed load is tried again"
+        );
+        dictionaries.retain(&[]);
+        assert!(dictionaries.ready("xx-TEST").is_none());
+        assert!(
+            dictionaries.get("xx-TEST").is_ok(),
+            "read again when needed"
+        );
     }
 
     #[test]

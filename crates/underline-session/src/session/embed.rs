@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use underline_core::{
-    dropped_link, embed_file, relative, store_pasted_image, EmbedError, NoteFormat, NoteId,
-    Workspace,
+    dropped_link, embed_file, store_pasted_image, EmbedError, NoteFormat, NoteId, Workspace,
 };
 use underline_facade::images::encode_png;
+use underline_markup::completion::{link_place, link_text};
 
 use super::editing::not_open as not_open_error;
 use super::Session;
@@ -75,6 +75,14 @@ fn link_of(item: &Path) -> Option<(String, Option<String>)> {
         }
     }
     dropped_link(item)
+}
+
+/// UC-005 A2, OQ-248: the place and the text of the toolbar's link from the
+/// note file `from` to the note file `to` titled `title`, in `format`: the
+/// parts [`underline_markup::completion::note_link`] writes, so the
+/// toolbar and link completion write alike.
+fn note_link_parts(from: &str, to: &str, title: &str, format: NoteFormat) -> (String, String) {
+    (link_place(from, to, None), link_text(title, format))
 }
 
 /// Whether `path` is a note by its extension, so that copying it changes
@@ -299,26 +307,37 @@ impl Session {
         }
     }
 
-    /// M-10.3, UC-005 A2: the link to the note `target` from the tab of
-    /// `note`: its place relative to the note's folder, labelled with its
-    /// title (`ToolAnswer::Note` of egui).
+    /// M-10.3, UC-005 A2, OQ-248: the link to the note `target` from the
+    /// tab of `note`: its place relative to the note's folder, with the
+    /// characters that would end the place percent-encoded (a space as
+    /// `%20`), labelled with its title, its brackets escaped; written as
+    /// link completion writes it ([`underline_markup::completion::note_link`]).
     ///
     /// # Errors
     ///
     /// The note has no open tab, or `target` is no note of the workspace.
     pub fn note_link(&self, note: &NoteId, target: &NoteId) -> Result<Insertion, UiError> {
-        let plan = self.embed_plan(note)?;
         let open = self.open.as_ref().ok_or_else(|| not_open_error(note))?;
+        let index = open.tabs.find(note).ok_or_else(|| not_open_error(note))?;
+        let format = open.tabs.get(index).edit.format;
         let target_path = open
             .workspace
             .note_path(target)
             .map_err(|err| UiError::new(crate::UiErrorKind::Invalid, err.to_string()))?;
-        let dir = plan.note.parent().unwrap_or(&plan.root).to_owned();
-        let dir = std::path::absolute(&dir).unwrap_or(dir);
-        let target_path = std::path::absolute(&target_path).unwrap_or(target_path);
+        let target_format = target_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(NoteFormat::from_extension)
+            .unwrap_or_else(|| open.workspace.default_format());
+        let (address, label) = note_link_parts(
+            &note.file_name(format),
+            &target.file_name(target_format),
+            &target.title(),
+            format,
+        );
         Ok(Insertion::Link {
-            address: relative(&dir, &target_path),
-            label: Some(target.title()),
+            address,
+            label: Some(label),
         })
     }
 

@@ -49,7 +49,7 @@ describe('M-01.1 start (UC-002 A1, A2, plan section 14)', () => {
                   tabs: {
                     tabs: [],
                     active: null,
-                    todoList: { open: false, active: false },
+                    todoList: { open: false, active: false, pane: 'left' },
                     split: null,
                   },
                 },

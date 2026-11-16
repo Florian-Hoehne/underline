@@ -21,6 +21,7 @@
 | TC-026-12 | Renamed and deleted notes                            | BR-003                  |
 | TC-026-13 | Without git and with git                             | BR-005                  |
 | TC-026-14 | Keyboard alone                                       | BR-006, NFR-011         |
+| TC-026-15 | A7 Remove all snapshots                              | BR-002, BR-003, BR-007  |
 
 ## TC-026-01: Compare and restore a snapshot
 
@@ -163,3 +164,17 @@
 |------|------------------------------------------------------------------------|-----------------------------------------|
 | 1    | Run the command for the snapshots from the command palette (UC-023).    | The list of snapshots opens.            |
 | 2    | Choose a snapshot with the arrow keys, see its differences, restore it.  | The note is restored.                   |
+
+## TC-026-15: Remove all snapshots
+
+**Flow:** A7, BR-002, BR-003, BR-007  
+**Preconditions:** The workspace `notes` keeps 2 snapshots of "Plan" and "Trip" taking 20 bytes; the deleted note "Old" has a snapshot.
+
+| Step | Action                                                         | Expected result                                                                      |
+|------|----------------------------------------------------------------|--------------------------------------------------------------------------------------|
+| 1    | Open the settings of a workspace without snapshots.            | "Snapshots: None"; removing them all cannot be chosen.                               |
+| 2    | Open the settings of `notes`, part "This workspace".           | "20 bytes in 2 snapshots" and "Kept on this computer for 30 days".                   |
+| 3    | Ask to remove all snapshots, then press Escape.                | The question names "20 bytes in 2 snapshots" and says it cannot be undone; after Escape nothing is removed and the settings stay open. |
+| 4    | Ask again and confirm.                                         | The status bar says all snapshots were removed, 20 bytes in 2 snapshots; the settings show "None". |
+| 5    | Ask for the snapshots of "Plan"; restore "Old" and ask for its snapshots. | "Plan" has no snapshot (A1); "Old" lists its snapshot.                     |
+| 6    | Change "Plan".                                                 | A new snapshot of "Plan" is taken (BR-001).                                          |

@@ -88,7 +88,8 @@ pub fn note_words(source: &str, format: NoteFormat) -> Vec<BlockWords> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Context {
     /// The bytes no word is taken from although the facade shows them: the
-    /// names of note attributes, the value of `tags`, the tags in the text;
+    /// names of note attributes, the values of `tags` and `lang`, the tags
+    /// in the text;
     /// sorted by their start.
     pub(crate) skips: Vec<Range<usize>>,
 }
@@ -112,7 +113,9 @@ fn skipped(source: &str, format: NoteFormat, blocks: &[Block]) -> Vec<Range<usiz
     }
     for attribute in &head.attributes {
         let value = &attribute.value_span;
+        // The value of `tags`, and of `lang`, a language code (OQ-207).
         if attribute.name.eq_ignore_ascii_case("tags")
+            || attribute.name.eq_ignore_ascii_case(crate::LANG_ATTRIBUTE)
             || value.is_empty()
             || attribute.kind == AttributeKind::Nested
         {
@@ -382,6 +385,19 @@ mod tests {
             words,
             ["offen", "Strasse", "fehlr", "and", "Link", "and", "and", "and", "wordd"]
         );
+    }
+
+    #[test]
+    fn oq207_the_value_of_lang_is_a_code_not_checked() {
+        let markdown = "---\nlang: de-CH\nstatsu: offen\n---\nStrasse\n";
+        assert_eq!(
+            checked(markdown, NoteFormat::Markdown),
+            ["offen", "Strasse"]
+        );
+        let asciidoc = "= Title\n:lang: de-CH\n\nStrasse\n";
+        let words = checked(asciidoc, NoteFormat::AsciiDoc);
+        assert!(!words.contains(&"de".to_owned()), "{words:?}");
+        assert!(words.contains(&"Strasse".to_owned()), "{words:?}");
     }
 
     #[test]

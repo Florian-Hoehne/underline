@@ -26,6 +26,7 @@ erDiagram
     NOTE ||--o{ SNAPSHOT : "keeps for 30 days"
     WORKSPACE ||--o{ SNAPSHOT : "keeps on this computer"
     SETTINGS ||--o{ DICTIONARY_WORD : "accepts"
+    WORKSPACE ||--o{ DICTIONARY_WORD : "shares"
 ```
 
 ### WORKSPACE
@@ -210,7 +211,7 @@ A note the user deleted (UC-007), kept with its content so it can be restored; k
 ### NOTE_LINK
 
 A link that a note holds, to another note, to a file, or to a web address; the outgoing links of the note, and the
-backlinks of the note it leads to.
+backlinks of the note it leads to. A picture the note shows and a file it includes are links too (OQ-244).
 
 | Attribute | Description                                                              | Data Type | Length/Precision | Validation Rules                         |
 |-----------|--------------------------------------------------------------------------|-----------|------------------|------------------------------------------|
@@ -218,6 +219,7 @@ backlinks of the note it leads to.
 | line      | Line of the note that holds the link, counted from 1                    | Integer   | 10               | Primary Key                              |
 | column    | Place of the link in its line, in characters counted from 1             | Integer   | 10               | Primary Key                              |
 | kind      | What the link leads to                                                  | String    | 20               | Not Null, Values: Note, File, Web address |
+| form      | How the note names what it leads to                                     | String    | 20               | Not Null, Values: Link, Picture, Include  |
 | target    | Place of the note or file in the workspace, or the web address           | String    | 2000             | Not Null                                 |
 | heading   | The heading of the linked note the link names                            | String    | 250              | Optional                                 |
 | text      | The text of the link as the note shows it                                | String    | 500              | Optional                                 |
@@ -230,6 +232,10 @@ backlinks of the note it leads to.
 - A link of the kind Web address is never broken; whether the address can be reached is not checked.
 - A link of the kind Note leads to a note of the same workspace; it is a backlink of that note unless it is held by
   that note itself.
+- A link of the form Include is held only by an AsciiDoc note.
+- An unlinked mention (UC-004 BR-021) is no note link: it is the title of a note standing as plain text in another
+  note, found from the content of that note as the links are, and it becomes a note link only when the user links it
+  (UC-004 A22).
 
 ### NOTE_ATTRIBUTE
 
@@ -321,15 +327,21 @@ An earlier version of a note, kept on this computer only so the user can compare
 
 ### DICTIONARY_WORD
 
-A word the user has added to the spell check, so that it is never marked.
+A word the user has added to the spell check, to the user dictionary or to the workspace dictionary, so that it is
+never marked.
 
-| Attribute | Description                              | Data Type | Length/Precision | Validation Rules                      |
-|-----------|------------------------------------------|-----------|------------------|---------------------------------------|
-| word      | The word as the user added it            | String    | 100              | Primary Key                           |
-| settings  | The user settings the word belongs to    | Long      | 19               | Not Null, Foreign Key (SETTINGS.id)   |
-| added_at  | When the word was added                  | DateTime  | -                | Not Null                              |
+| Attribute | Description                                            | Data Type | Length/Precision | Validation Rules                      |
+|-----------|--------------------------------------------------------|-----------|------------------|---------------------------------------|
+| word      | The word as the user added it                          | String    | 100              | Primary Key                           |
+| settings  | The user settings the word belongs to                  | Long      | 19               | Optional, Foreign Key (SETTINGS.id)   |
+| workspace | The workspace whose dictionary holds the word          | String    | 500              | Optional, Foreign Key (WORKSPACE.directory) |
+| added_at  | When the word was added                                | DateTime  | -                | Not Null                              |
 
 #### Constraints
 
-- Words belong to the set of settings with the scope User and count in every workspace and every language.
+- A word belongs either to the set of settings with the scope User (the user dictionary) or to a workspace (the
+  workspace dictionary, OQ-208).
+- Words of the user dictionary count in every workspace and every language.
+- Words of the workspace dictionary count in every language, in that workspace only; the workspace dictionary is kept
+  in the workspace and shared with it, as its notes are.
 - A word holds no spaces.

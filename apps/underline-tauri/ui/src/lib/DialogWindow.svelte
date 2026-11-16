@@ -43,6 +43,8 @@
     closeButton?: boolean;
     /** Where it stands: centred at the top, or at the bottom left. */
     anchor?: 'top' | 'bottom-left';
+    /** `alertdialog` for a question that guards against harm (Q-61). */
+    role?: 'dialog' | 'alertdialog';
     children: Snippet;
   };
 
@@ -56,6 +58,7 @@
     resizable = false,
     closeButton = false,
     anchor = 'top',
+    role = 'dialog',
     children,
   }: Props = $props();
 
@@ -171,7 +174,7 @@
   class:resizable
   class:bottom-left={anchor === 'bottom-left'}
   style:--dialog-width={width === undefined ? undefined : `${width}px`}
-  role="dialog"
+  {role}
   aria-labelledby={headingId}
   aria-describedby={describedBy}
   aria-busy={busy}

@@ -27,7 +27,7 @@
 | TC-010-18 | A11 Zoom the editor font                             | FR-087, BR-009                  |
 | TC-010-19 | A12 Focus mode                                       | FR-088, BR-010                  |
 | TC-010-20 | Soft wrap                                            | FR-089, BR-011, A3              |
-| TC-010-21 | Spell check language for me and for a workspace      | FR-100, BR-001, A1              |
+| TC-010-21 | Spell check language for me, a workspace and a note  | FR-100, BR-001, A1, OQ-207      |
 | TC-010-22 | Close pairs, template folder, and daily note folder  | FR-081, FR-094, FR-095, BR-001  |
 
 ## TC-010-01: Choose a theme for me
@@ -257,17 +257,19 @@
 | 3    | Switch to the facade.                          | The paragraph still wraps; the table and the code block scroll sideways.        |
 | 4    | Compare `Wide.md` with its version before.     | It is unchanged.                                                                |
 
-## TC-010-21: Spell check language for me and for a workspace
+## TC-010-21: Spell check language for me, a workspace and a note
 
-**Flow:** A1, BR-001, FR-100  
-**Preconditions:** The system language is German (Switzerland); the user settings file sets no spell check language; the workspaces `notes` and `english` exist.
+**Flow:** A1, BR-001, FR-100, UC-005 BR-023  
+**Preconditions:** The system language is German (Switzerland); the user settings file sets no spell check language; the workspaces `notes` and `english` exist; `notes` holds `Ricetta.md` with the note attribute `lang: it_IT` and the words "perché" and "Strasse".
 
 | Step | Action                                                         | Expected result                                                         |
 |------|----------------------------------------------------------------|-------------------------------------------------------------------------|
 | 1    | Open the settings.                                             | "For me" shows the spell check language German (Switzerland).          |
 | 2    | In "This workspace" of `english`, choose English (UK).         | Notes of `english` are checked in English (UK); the workspace settings file names it. |
 | 3    | Open `notes`.                                                  | Notes of `notes` are checked in German (Switzerland).                   |
-| 4    | In "For me", choose Off.                                       | `notes` shows no marks; `english` still uses English (UK).             |
+| 4    | Open `Ricetta`.                                                | It is checked in Italian: "Strasse" is marked, "perché" and `it_IT` are not. |
+| 5    | Change its attribute to `lang: pt-BR`.                         | At once no word of `Ricetta` is marked; while it is active the status bar says "Ricetta: no dictionary for pt-BR", and not once another note is active. |
+| 6    | In "For me", choose Off.                                       | `notes` shows no marks, `Ricetta` neither; `english` still uses English (UK). |
 
 ## TC-010-22: Close pairs, template folder, and daily note folder
 

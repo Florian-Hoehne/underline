@@ -9,7 +9,8 @@ rust-version.workspace = true
 
 [dependencies]
 underline-core.workspace = true
-serde_json = { workspace = true, features = ["preserve_order"] }
+serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
+serde.workspace = true
 thiserror.workspace = true
 # Codex keeps its configuration in TOML; edited keeping comments (ADR-017).
 toml_edit = "0.25"

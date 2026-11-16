@@ -441,6 +441,38 @@ impl FacadeEdit<'_> {
         }
     }
 
+    /// OQ-260, UC-005 BR-021: the Vim keys' `>>` and `<<` (`>` and `<` on a
+    /// selection) on the list items of the blocks from the one holding char
+    /// `from` to the one holding char `to`, `times` times over, by the list
+    /// rule of Tab and Shift+Tab, as one step; the cursor at the start of
+    /// the first item's text. Other blocks stay: the facade shows no space
+    /// at the start of a line to shift. Whether the text changed.
+    pub fn vim_shift(&mut self, from: usize, to: usize, outdent: bool, times: usize) -> bool {
+        let ListIndent::Edit(edit) =
+            lists::vim_shift_items(self.rope(), from, to, self.format, outdent, times)
+        else {
+            return false;
+        };
+        self.apply_step(&edit);
+        // The block whose markup holds the item's first char that is not
+        // space: blocks touch, and `position_at` takes the start of one for
+        // the end of the one before it (app-tester: `<<` put the cursor on
+        // the item above).
+        let byte = self
+            .rope()
+            .char_to_byte(edit.cursor.min(self.rope().len_chars()));
+        let index = self
+            .blocks
+            .iter()
+            .position(|block| block.span.start <= byte && byte < block.span.end)
+            .or_else(|| self.position_at(edit.cursor).map(|(index, _)| index));
+        if let Some(index) = index {
+            let at = self.char_of(index, 0);
+            self.set_selection(at, at);
+        }
+        true
+    }
+
     /// UC-004 A16, BR-017: the cursor to the block that holds the line of
     /// `target`, at that line and column (a column beyond the line at its
     /// end) where the facade shows it; a place in markup the facade does not

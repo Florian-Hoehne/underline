@@ -1,10 +1,12 @@
 <!--
-  UC-005 A28 (FR-099, ADR-030, OQ-302): the context menu of a word the
-  spell check marks, in either editing view.
+  UC-005 A28 (FR-099, ADR-030, OQ-302, OQ-207, OQ-208): the context menu
+  of a word the spell check marks, in either editing view.
 
   - It waits up to 100 ms for the corrections, then opens: the word as a
     header, a line saying how many corrections there are, the corrections
-    (the likeliest first), a line, and "Add "{word}" to dictionary" last.
+    (the likeliest first, in the language of the note), a line, and
+    "Add "{word}" to my dictionary" and "Add "{word}" to workspace dictionary"
+    (with the line "Shared with everyone who uses this workspace") last.
   - Corrections there: the first has the keyboard. None: "Add …" has it.
   - Still looking after 100 ms: it opens with "Looking for corrections…",
     the keyboard on the menu itself; when the corrections come, the first
@@ -24,11 +26,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import ContextMenu, { type MenuEntry } from './ContextMenu.svelte';
-  import { addToDictionary, spellSuggestions } from './spell';
+  import { addToDictionary, addToWorkspaceDictionary, spellSuggestions } from './spell';
 
   type Props = {
     /** The word as shown. */
     word: string;
+    /** The note the word is in; its attribute `lang` may name its language. */
+    note: string;
     /** Where the menu opens, in CSS pixels of the window: below the word's line. */
     x: number;
     y: number;
@@ -42,7 +46,7 @@
     wait?: number;
   };
 
-  let { word, x, y, onChoose, onError, onClose, wait = 100 }: Props = $props();
+  let { word, note, x, y, onChoose, onError, onClose, wait = 100 }: Props = $props();
 
   /** The corrections; `null` while they are looked for. */
   let suggestions = $state<string[] | null>(null);
@@ -66,7 +70,7 @@
         shown = true;
       }
     }, wait);
-    spellSuggestions(asked)
+    spellSuggestions(asked, note)
       .then((found) => {
         if (gone) return;
         suggestions = found;
@@ -88,8 +92,9 @@
     };
   });
 
-  async function add() {
-    const refused = await addToDictionary(word);
+  /** UC-005 A28 step 2, OQ-208: adds the word with `adding`; a refusal goes to the status bar. */
+  async function add(adding: (word: string) => Promise<string | null>) {
+    const refused = await adding(word);
     if (refused !== null) {
       onError(refused);
     }
@@ -101,9 +106,14 @@
       action: () => onChoose(suggestion),
     })),
     {
-      label: `Add "${word}" to dictionary`,
+      label: `Add "${word}" to my dictionary`,
       separatorBefore: (suggestions?.length ?? 0) > 0,
-      action: () => void add(),
+      action: () => void add(addToDictionary),
+    },
+    {
+      label: `Add "${word}" to workspace dictionary`,
+      hint: 'Shared with everyone who uses this workspace',
+      action: () => void add(addToWorkspaceDictionary),
     },
   ]);
 

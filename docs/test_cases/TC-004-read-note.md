@@ -1,7 +1,7 @@
 # Test Cases: Read Note
 
 **Use Case:** [UC-004 Read Note](../use_cases/UC-004-read-note.md)  
-**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, FR-076, FR-078, FR-079, FR-086, FR-090, FR-091, FR-092, FR-096, FR-097, FR-098, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, NFR-018, NFR-019, C-003, C-004, C-005](../requirements.md)
+**Requirements:** [FR-004, FR-017, FR-018, FR-019, FR-027, FR-030, FR-035, FR-036, FR-037, FR-038, FR-039, FR-040, FR-041, FR-042, FR-043, FR-046, FR-071, FR-076, FR-078, FR-079, FR-086, FR-090, FR-091, FR-092, FR-096, FR-097, FR-098, FR-103, NFR-004, NFR-005, NFR-007, NFR-008, NFR-014, NFR-015, NFR-018, NFR-019, C-003, C-004, C-005](../requirements.md)
 
 ## Coverage
 
@@ -47,6 +47,8 @@
 | TC-004-38 | Formulas and A21 a formula with an error           | FR-098, BR-019, NFR-014         |
 | TC-004-39 | Text statistics                                    | FR-090, BR-020                  |
 | TC-004-40 | Front matter and note attributes shown             | BR-004, BR-010                  |
+| TC-004-41 | Pictures and included files as links               | FR-078, FR-079, BR-015, A14     |
+| TC-004-42 | Unlinked mentions and A22 link one                 | FR-103, BR-021, A14, A22, NFR-019 |
 
 ## TC-004-01: Open a note in a tab
 
@@ -201,17 +203,20 @@
 
 ## TC-004-15: Links to web addresses and other files
 
-**Flow:** A4, BR-007  
-**Preconditions:** The note `Links.md` holds two web addresses, a link to `docs/manual.pdf`, which exists, and a link to `docs/missing.pdf`, which does not.
+**Flow:** A4, BR-005, BR-007  
+**Preconditions:** The note `Links.md` holds two web addresses, a mail address, an `ssh:` address, a link to `docs/manual.pdf`, which exists, a link to `docs/missing.pdf`, which does not, a link to the script `tools/deploy.sh`, and the link `file://docs/My%20Notes.pdf` to the file `docs/My Notes.pdf`, which exists.
 
 | Step | Action                                    | Expected result                                                                |
 |------|-------------------------------------------|--------------------------------------------------------------------------------|
-| 1    | Ctrl+click the first web address.         | The system asks whether to open web addresses.                                 |
-| 2    | Agree.                                    | The address opens in the default browser.                                      |
-| 3    | Ctrl+click the second web address.        | It opens in the browser without asking.                                        |
-| 4    | Restart Underline and Ctrl+click a web address. | The system asks again.                                                   |
-| 5    | Ctrl+click `manual.pdf`.                  | It opens in the program the system uses for PDF files.                         |
-| 6    | Ctrl+click `missing.pdf`.                 | The status bar says that the file does not exist.                              |
+| 1    | Ctrl+click the first web address.         | It opens in the default browser without asking.                                |
+| 2    | Ctrl+click the mail address.              | It opens in the default mail program without asking.                           |
+| 3    | Ctrl+click the `ssh:` address.            | The system asks whether to open it, naming `ssh:` and showing the whole address; "Cancel" is chosen. |
+| 4    | Press Enter.                              | Nothing opens.                                                                 |
+| 5    | Ctrl+click the `ssh:` address again and choose "Open link". | The system asks again; after "Open link" the address is handed to the program the system uses for it. |
+| 6    | Ctrl+click `manual.pdf`.                  | It opens in the program the system uses for PDF files, without asking.         |
+| 7    | Ctrl+click `missing.pdf`.                 | The status bar says that the file does not exist.                              |
+| 8    | Ctrl+click `deploy.sh`.                   | The system asks whether to open `deploy.sh`, a shell script, and warns that opening may run it; "Cancel" opens nothing. |
+| 9    | Ctrl+click the `file://` link.            | The system asks whether to open `My Notes.pdf`, a PDF file, in the folder `docs` of the note; "Open file" opens it. |
 
 ## TC-004-16: Switch and close tabs; remembered after a restart
 
@@ -447,18 +452,21 @@
 |------|------------------------------------------------|-------------------------------------------------------------------------|
 | 1    | Restart Underline.                             | Both panes come back with their tabs, editing views, and active tabs; the left pane is active. |
 | 2    | With 99 tabs left and 1 right, open one more note. | The tab used longest ago is closed (A6): 100 tabs in both panes together. |
+| 3    | Drag the border so the left pane takes about two thirds, restart Underline. | The left pane takes about two thirds again. |
+| 4    | Make the window so narrow that two thirds would leave the right pane narrower than its least width. | The right pane keeps its least width; widening the window again gives about two thirds back. |
 
 ## TC-004-38: Formulas
 
 **Flow:** BR-019, A21, FR-098, NFR-014  
-**Preconditions:** The network is off. `Math.md` holds "Energy $E=mc^2$ and price 5$ or 6$", a block `$$\sum_{i=1}^n i$$`, a code block of the language `math` with `\sqrt{2}`, and `$$\frac{1}{$$`. `Math.adoc` sets `:stem: latexmath` and holds `stem:[a^2]` and `latexmath:[b^2]`. The theme is Dark.
+**Preconditions:** The network is off. `Math.md` holds "Energy $E=mc^2$ and price 5$ or 6$", a block `$$\sum_{i=1}^n i$$`, a code block of the language `math` with `\sqrt{2}`, and `$$\frac{1}{$$`. `Math.adoc` sets `:stem: latexmath` and holds `stem:[a^2]` and `latexmath:[b^2]`. `AsciiMath.adoc` sets `:stem:` without a value and holds `stem:[x^2/2]`, `asciimath:[sqrt a]` and an `[asciimath]` block with `sum_(i=1)^n i`. The theme is Dark.
 
 | Step | Action                     | Expected result                                                                         |
 |------|----------------------------|-----------------------------------------------------------------------------------------|
 | 1    | Open `Math.md`.            | `E=mc^2` is typeset inline; "5$ or 6$" stays text; the sum and the root are typeset as blocks in the colors of Dark; `\frac{1}{` is shown as its source with the error. |
 | 2    | Switch to the source view. | The markup is shown.                                                                    |
 | 3    | Open `Math.adoc`.          | Both formulas are typeset inline.                                                       |
-| 4    | Look at both files.        | They are unchanged.                                                                     |
+| 4    | Open `AsciiMath.adoc`.     | The fraction and the root are typeset inline, the sum as a block, as AsciiMath reads them. |
+| 5    | Look at the files.         | They are unchanged.                                                                     |
 
 ## TC-004-39: Text statistics
 
@@ -479,3 +487,31 @@
 | Step | Action                              | Expected result                                                          |
 |------|-------------------------------------|--------------------------------------------------------------------------|
 | 1    | Open "Plan".                        | The facade shows a table with "status" and "draft" at the start; the note properties show "status" as a note attribute (UC-024). |
+
+## TC-004-41: Pictures and included files as links
+
+**Flow:** BR-015, A14, FR-078, FR-079 (OQ-244)  
+**Preconditions:** `Hub.md` shows the pictures `img/logo.png` (exists) and `img/gone.png` (does not exist), and a third one from `https://example.org/a.png`; a code span holds `![x](img/logo.png)`. `Book.adoc` includes `Chapter.adoc` (exists) and `Missing.adoc` (does not exist) and shows `img/logo.png`; a source block holds `include::Code.adoc[]`. `img/run.desktop` is a launcher.
+
+| Step | Action                                                    | Expected result                                                                       |
+|------|-----------------------------------------------------------|---------------------------------------------------------------------------------------|
+| 1    | Open "Hub" and look at the outgoing links.                | The section says 3; each is marked "picture"; `img/gone.png` is marked as a broken link; the web picture is not; the code span is not listed. |
+| 2    | Open "Book" and look at the outgoing links.               | `Chapter` and `Missing.adoc` are marked "include", `Missing.adoc` as broken; `img/logo.png` is marked "picture"; nothing of the source block is listed. A screen reader reads "picture" and "include" with each. |
+| 3    | Open "Chapter" and look at the backlinks.                 | "Book" is listed with the line of its include, marked "include".                      |
+| 4    | In "Book", choose `Chapter` among the outgoing links with the Ctrl key held. | "Chapter" opens (A2).                                               |
+| 5    | Show `img/run.desktop` as a picture in "Book" and choose it among the outgoing links with the Ctrl key held. | The system asks whether to open the program, naming it (A4); "Cancel" opens nothing. |
+| 6    | Choose `img/logo.png` among the outgoing links of "Hub" with the Ctrl key held. | The picture opens with the program the system uses for it.    |
+
+## TC-004-42: Unlinked mentions and linking one
+
+**Flow:** BR-021, A14, A22, FR-103, NFR-019 (OQ-199)  
+**Preconditions:** `Road-map.md` holds "The road map itself." `Ideas.md` holds "See the road map first." on line 3, `[Road map](Road-map.md)` on line 4 and `` `road map` `` on line 5. `travel/Trip.adoc` holds "The ROAD MAP, again." on line 3. `Log.md` holds "roadmap and road maps". `Go.md` exists.
+
+| Step | Action                                                    | Expected result                                                                       |
+|------|-----------------------------------------------------------|---------------------------------------------------------------------------------------|
+| 1    | Open "Road map" and look at the unlinked mentions.        | The section says 2: "Ideas" with line 3 and "Trip" (in `travel`) with line 3, each mention marked; the link of line 4 is a backlink, not a mention; code, "Log" and "Road map" itself are not listed. |
+| 2    | Open "Ideas" in another tab, type "The road map again." without waiting for autosave, and go back to "Road map". | "Ideas" shows two mentions. Open "Go": the section says that titles shorter than 3 characters are not looked for. |
+| 3    | Choose "Link" beside the mention in "Trip", then beside the first mention in "Ideas". | "Trip" holds `link:../Road-map.md[ROAD MAP]` and "Ideas" `[road map](Road-map.md)`; the status bar says each was linked; both leave the unlinked mentions and appear among the backlinks. "Trip" was closed: a snapshot of it from before is listed (UC-026). In "Ideas", one undo takes the link back. |
+| 4    | Let 250 notes mention "Road map".                         | The section counts all of them and lists 200; "Show more" lists the rest.             |
+| 5    | Change a mention of a closed note with another program, then choose "Link" for it in the list made before. | Nothing changes; the status bar says the note changed since the mentions were listed. |
+| 6    | In a workspace of 10,000 notes, add a mention to a note with another program. | Within 2 seconds the mention is listed.                                     |

@@ -206,6 +206,26 @@ fn uc022_tc07_replace_in_one_note() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// UC-022, ADR-005 (decision of 2026-11-16): a note the replace writes
+/// keeps who may read and write it.
+#[cfg(unix)]
+#[test]
+fn uc022_adr005_replaced_note_keeps_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("mode");
+    let (mut session, root) = session_with(&dir, FERRY);
+    let path = root.join("Ideas.md");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let result = replace(&mut session, "ferry", "boat");
+    session.replace_confirm(result.serial, Some(&id("Ideas")));
+    assert_eq!(read(&root, "Ideas.md"), "a boat to Hydra\n");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// TC-022-08, A4: a note changes while its places are shown: they are
 /// found again; the place left out stays left out, the new one is chosen.
 #[test]

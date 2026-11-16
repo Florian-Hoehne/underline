@@ -559,3 +559,92 @@ describe('review F10', () => {
     );
   });
 });
+
+describe('UC-026 A7, OQ-294: the space of the snapshots in "This workspace"', () => {
+  /** The section "Snapshots" of "This workspace". */
+  async function snapshotsSection() {
+    await openSettings();
+    await fireEvent.click(inSettings().getByRole('tab', { name: 'This workspace' }));
+    return waitFor(() => inSettings().getByRole('region', { name: 'Snapshots' }));
+  }
+
+  it('TC-026-15 step 1: a workspace without snapshots says "None"; nothing to remove', async () => {
+    await app(NOTES);
+    const section = await snapshotsSection();
+
+    await waitFor(() => expect(within(section).getByText('None')).toBeInTheDocument());
+    expect(within(section).getByText('Kept on this computer for 30 days')).toBeInTheDocument();
+    expect(within(section).getByRole('button', { name: 'Remove all snapshots…' })).toBeDisabled();
+  });
+
+  it('"For me" has no section "Snapshots"', async () => {
+    await app(NOTES);
+    await openSettings();
+    expect(inSettings().queryByRole('region', { name: 'Snapshots' })).not.toBeInTheDocument();
+  });
+
+  it('TC-026-15 steps 2 to 5: the space, a question that can be cancelled, then all removed with a report', async () => {
+    const shell = await app(NOTES);
+    mockHooks().addSnapshot('Trip', 'Version A\n', 'Editing');
+    mockHooks().addSnapshot('Ideas', 'Old ideas\n', 'Git');
+    const section = await snapshotsSection();
+    await waitFor(() =>
+      expect(within(section).getByText('20 bytes in 2 snapshots')).toBeInTheDocument(),
+    );
+
+    // Step 3: the question names the amount and that it cannot be undone;
+    // the keyboard is on "Cancel", and Escape keeps the snapshots and the window.
+    await fireEvent.click(within(section).getByRole('button', { name: 'Remove all snapshots…' }));
+    const question = within(section).getByRole('group', {
+      name: /^Remove all snapshots of this workspace \(20 bytes in 2 snapshots\)\?/,
+    });
+    expect(question).toHaveTextContent('This cannot be undone.');
+    await waitFor(() =>
+      expect(within(question).getByRole('button', { name: 'Cancel' })).toHaveFocus(),
+    );
+    await fireEvent.keyDown(within(question).getByRole('button', { name: 'Cancel' }), {
+      key: 'Escape',
+    });
+    expect(within(section).queryByRole('group')).not.toBeInTheDocument();
+    expect(settings()).toBeInTheDocument();
+    expect(mockHooks().snapshots('Trip')).toHaveLength(1);
+    await waitFor(() =>
+      expect(within(section).getByRole('button', { name: 'Remove all snapshots…' })).toHaveFocus(),
+    );
+
+    // Steps 4 and 5: confirmed, all go; the report says what went.
+    await fireEvent.click(within(section).getByRole('button', { name: 'Remove all snapshots…' }));
+    await fireEvent.click(within(section).getByRole('button', { name: 'Remove all snapshots' }));
+    const report = 'Removed all snapshots of this workspace: 20 bytes in 2 snapshots';
+    // The status bar says what went; the section does not repeat it.
+    await waitFor(() => expect(shell.status).toBe(report));
+    await waitFor(() => expect(within(section).getByRole('status').textContent).toBe(''));
+    await waitFor(() => expect(within(section).getByText('None')).toBeInTheDocument());
+    expect(within(section).getByRole('button', { name: 'Remove all snapshots…' })).toBeDisabled();
+    expect(mockHooks().snapshots('Trip')).toEqual([]);
+    expect(mockHooks().snapshots('Ideas')).toEqual([]);
+  });
+
+  it('a failure to measure is said in the section', async () => {
+    const handlers = mockHandlers(NOTES);
+    await app(NOTES, {
+      ...handlers,
+      snapshots_space: () => ({
+        summary: '',
+        kept: 'Kept on this computer for 30 days',
+        any: false,
+        question: '',
+        problem: 'The space of the snapshots cannot be measured: they are behind a link',
+      }),
+    });
+    const section = await snapshotsSection();
+    await waitFor(() =>
+      expect(
+        within(section).getByText(
+          'The space of the snapshots cannot be measured: they are behind a link',
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(within(section).getByRole('button', { name: 'Remove all snapshots…' })).toBeDisabled();
+  });
+});

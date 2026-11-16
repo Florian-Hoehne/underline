@@ -130,6 +130,7 @@ import { SnapshotsState } from './snapshots.svelte';
 import { COMMAND, commandsOf, type NoteActions } from './commandList';
 import { keyText, type Command } from './commands';
 import { PaletteState } from './palette.svelte';
+import { SnapshotsSpaceState } from './snapshotsSpace.svelte';
 
 /** M-21.1: the Open dialog (UC-002 steps 2–4). */
 export type OpenDialog = {
@@ -158,6 +159,15 @@ export type CreateDialog =
 
 /** The Open or the Create dialog; opening one closes the other (M-03.4). */
 export type WorkspaceDialog = OpenDialog | CreateDialog;
+
+/**
+ * M-07.3, UC-004 A4, BR-007 (Q-61, Q-62): the question before a followed
+ * link opens something, as the session words it: its id (the answer names
+ * it), what it is about, its title, the question naming the scheme or the
+ * file and its kind, the warning about a program, and the whole address
+ * or place as shown.
+ */
+export type OpenQuestion = Omit<Extract<LinkAnswer, { kind: 'askOpen' }>, 'kind'>;
 
 /**
  * M-14.1, UC-003: the dialog "New note". `file` is the file name the note
@@ -369,7 +379,7 @@ export function editorZoomText(percent: number): string {
 const NO_TABS: TabsView = {
   tabs: [],
   active: null,
-  todoList: { open: false, active: false },
+  todoList: { open: false, active: false, pane: 'left' },
   split: null,
 };
 
@@ -578,8 +588,11 @@ export class Shell {
   approximated = $state.raw<ExportShown | null>(null);
   /** Grows when the open "Export note" is asked for again; it takes the keyboard. */
   exportAskedAgain = $state(0);
-  /** M-07.3, UC-004 A4: the web address "Open web address" asks about. */
-  webQuestion = $state<string | null>(null);
+  /**
+   * M-07.3, UC-004 A4, BR-007 (Q-61, Q-62): the question before a link
+   * opens another program, a program, or a `file://` target.
+   */
+  openQuestion = $state<OpenQuestion | null>(null);
   /**
    * M-06.3, M-21.4: "Changes not stored": closing a tab or Underline could
    * not store its changes, and the user decides.
@@ -596,6 +609,8 @@ export class Shell {
   );
   /** UC-026: the snapshots of a note, while they are shown. */
   readonly snapshots = new SnapshotsState((command, error) => this.#fail(command, error));
+  /** UC-026 A7, OQ-294: the space the snapshots take, in the settings window. */
+  readonly snapshotsSpace = new SnapshotsSpaceState((command, error) => this.#fail(command, error));
   /**
    * FR-077, UC-023 BR-001: every command of the window, the registry the
    * menu bar, the window's keys and the command palette share
@@ -626,6 +641,7 @@ export class Shell {
     },
     lineInfo: () => this.noteActions?.lineInfo() ?? null,
     goToLine: (target) => this.noteActions?.goToLine(target),
+    ran: (id) => void this.#commandRan(id),
   });
   /** M-03.7, M-20.1: the settings window is open (UC-010 step 1). */
   settingsOpen = $state(false);
@@ -874,6 +890,8 @@ export class Shell {
         this.status = result.data.status;
         this.agents = result.data.agents;
         this.#takeSettings(result.data.settings);
+        // UC-023 BR-004, OQ-198: the commands run before the restart.
+        this.palette.remember(result.data.recentCommands, this.commands);
         // M-01.1: a workspace to start with is opened next (startWorkspace).
         this.starting = (result.data.givenDir ?? result.data.lastWorkspace) !== null;
         if (!this.starting) {
@@ -1284,13 +1302,18 @@ export class Shell {
    * once created (A18).
    */
   #takeLinkAnswer(answer: LinkAnswer, side = false): void {
+    // Q-61, Q-62: following another link drops a question still open; the
+    // backend forgot it already, so its dialog must not stay on screen.
+    this.openQuestion = null;
     switch (answer.kind) {
       case 'jump':
         jumpTo(answer.note, answer.rev, answer.offset);
         break;
-      case 'askWeb':
-        this.webQuestion = answer.address;
+      case 'askOpen': {
+        const { id, about, title, question, warning, target } = answer;
+        this.openQuestion = { id, about, title, question, warning, target };
         break;
+      }
       case 'newNote':
         // UC-004 A3: "New note" offers the missing note, with the link's
         // folder and title and egui's question.
@@ -1345,6 +1368,29 @@ export class Shell {
       return;
     }
     this.#takeLinkAnswer(result.data);
+  }
+
+  /**
+   * UC-004 A22, FR-103: "Link" of an unlinked mention: the mention at
+   * `place` in `note` becomes a link to the active note `active`, once the
+   * window's edits reached the backend (ADR-025). The status bar says what
+   * was done; the lists follow.
+   */
+  async linkMention(active: string, note: string, place: LinkPlace): Promise<void> {
+    const result = await this.#serial(() =>
+      flushed(() => commands.linksLinkMention(active, note, place)),
+    );
+    if (result.status === 'error') {
+      this.#fail('links_link_mention', result.error);
+    }
+  }
+
+  /** UC-004 BR-021: "Show more" lists more unlinked mentions of the active note `note`. */
+  async moreMentions(note: string): Promise<void> {
+    const result = await commands.linksMoreMentions(note);
+    if (result.status === 'error') {
+      this.#fail('links_more_mentions', result.error);
+    }
   }
 
   /**
@@ -2033,13 +2079,37 @@ export class Shell {
     }
   }
 
-  /** M-07.3, UC-004 A4: "Open" or "Cancel" of "Open web address". */
-  async answerWeb(open: boolean): Promise<void> {
-    this.webQuestion = null;
-    const result = await this.#serial(() => commands.linkOpenWeb(open));
-    if (result.status === 'error') {
-      this.#fail('link_open_web', result.error);
+  /**
+   * M-07.3, UC-004 A4, BR-007 (Q-61, Q-62): "Open" or "Cancel" of the
+   * question about a link; the backend opens what it asked about.
+   */
+  async answerOpen(open: boolean): Promise<void> {
+    const asked = this.openQuestion;
+    this.openQuestion = null;
+    if (asked === null) {
+      return;
     }
+    const result = await this.#serial(() => commands.linkAnswer(asked.id, open));
+    if (result.status === 'error') {
+      this.#fail('link_answer', result.error);
+    }
+  }
+
+  /**
+   * Q-61, Q-62: "Copy" of the question about a link puts the address as
+   * shown on the clipboard; returns whether it did.
+   */
+  async copyOpenAddress(): Promise<boolean> {
+    const asked = this.openQuestion;
+    if (asked === null) {
+      return false;
+    }
+    const result = await commands.clipWriteText(asked.target);
+    if (result.status === 'error') {
+      this.#fail('clip_write_text', result.error);
+      return false;
+    }
+    return true;
   }
 
   /** M-19.1: the changes came; the message follows the proposal until the user typed. */
@@ -2839,9 +2909,13 @@ export class Shell {
 
   /** M-06.5: the tab "Todos" is the active one; it shows in place of a note. */
   get todoListShown(): boolean {
-    // UC-004 BR-018: the tab "Todos" is the left pane's; with the right pane
-    // active, its note is the one shown.
-    return this.tabs.todoList.open && this.tabs.todoList.active && this.activePane === 'left';
+    // UC-004 BR-018, OQ-279: the tab "Todos" is the active tab of its pane;
+    // with the other pane active, that pane's note is the one shown.
+    return (
+      this.tabs.todoList.open &&
+      this.tabs.todoList.active &&
+      this.activePane === this.tabs.todoList.pane
+    );
   }
 
   /** Stops listening to the backend. */
@@ -3162,6 +3236,38 @@ export class Shell {
     } catch (error) {
       // The IPC itself failed, as when the window is going (a test ended).
       this.#fail('pane_focus', { kind: 'internal', message: String(error) });
+    }
+  }
+
+  /**
+   * UC-004 BR-018, OQ-220: the border of the split view moved: the left
+   * pane takes `share` percent of the width. The backend remembers it for
+   * the workspace (in tenths of a percent); nothing is shown of it.
+   */
+  async rememberSplitShare(share: number): Promise<void> {
+    if (!this.split || !Number.isFinite(share)) {
+      return;
+    }
+    const tenths = Math.round(Math.min(100, Math.max(0, share)) * 10);
+    try {
+      const result = await this.#serial(() => commands.splitShare(tenths));
+      if (result.status === 'error') {
+        this.#fail('split_share', result.error);
+      }
+    } catch (error) {
+      this.#fail('split_share', { kind: 'internal', message: String(error) });
+    }
+  }
+
+  /** UC-023 BR-004, OQ-198: the backend remembers the command `id` run from the palette. */
+  async #commandRan(id: string): Promise<void> {
+    try {
+      const result = await commands.paletteRan(id);
+      if (result.status === 'error') {
+        this.#fail('palette_ran', result.error);
+      }
+    } catch (error) {
+      this.#fail('palette_ran', { kind: 'internal', message: String(error) });
     }
   }
 

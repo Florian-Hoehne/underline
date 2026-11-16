@@ -92,7 +92,7 @@ Each command shows its key as it is on the platform (`Ctrl` on Linux and Windows
 
 ### BR-004: Recently run
 
-With an empty field, the command palette lists the five most recently run commands first, the last one on top, followed by all others by name. The commands run are remembered until Underline is closed.
+With an empty field, the command palette lists the five most recently run commands first under "Recently used", the last one on top, followed by all others by name under "All commands". A command counts as run when it is chosen, also one that then asks for a choice (A3). The commands run are remembered for the user, in every workspace and after a restart, up to the last 20; a command that no longer exists is left out.
 
 ### BR-005: Same as from the menu
 

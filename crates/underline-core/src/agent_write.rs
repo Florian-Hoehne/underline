@@ -741,6 +741,33 @@ mod tests {
         (dir.clone(), Workspace::open(dir).unwrap())
     }
 
+    /// UC-019, ADR-005 (decision of 2026-11-16): a note an agent changes
+    /// keeps who may read and write it.
+    #[cfg(unix)]
+    #[test]
+    fn uc019_adr005_agent_change_keeps_the_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ws) = workspace("mode", &[("Plan.md", PLAN)]);
+        let path = dir.join("Plan.md");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        for change in [
+            replace("- draft", "- final draft"),
+            insert(None, "- review"),
+            AgentChange::Rewrite {
+                text: "# Plan\n".into(),
+            },
+        ] {
+            let (answer, _) = apply_to_file(&mut ws, "Plan", &change);
+            assert!(answer.ok, "{answer:?}");
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# Plan\n");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// TC-019-03, TC-019-04, TC-019-10, TC-019-15: written to the files.
     #[test]
     fn uc019_tc03_tc04_tc10_files() {

@@ -16,7 +16,9 @@
 use std::path::Path;
 
 use underline_core::{
-    asciidoc_anchor, heading_anchor, resolve_link, LinkTarget, NoteFormat, NoteId,
+    asciidoc_anchor, executable_by_name, executable_kind, heading_anchor, is_file_url,
+    is_remote_place, opens_without_asking, resolve_link, shown_scheme, shown_text, LinkTarget,
+    NoteFormat, NoteId,
 };
 use underline_editor_core::utf16::WebOffsets;
 use underline_editor_view::link_at_web;
@@ -24,7 +26,7 @@ use underline_facade::blocks::{heading_offset, parse_blocks};
 
 use super::editing::not_open;
 use super::Session;
-use crate::editor_view::{units, LinkAnswer};
+use crate::editor_view::{units, LinkAnswer, OpenKindName};
 use crate::UiError;
 
 /// What following a link gave: the answer for the window, and what the
@@ -65,9 +67,11 @@ impl Session {
     /// - another note: it opens in a tab (A1, A2), at the heading the link
     ///   names;
     /// - a note that does not exist: "New note" offers it (A3);
-    /// - a web address: asked once in the session, then opened (A4);
+    /// - an `http`, `https` or `mailto` address: opened (A4, BR-007, Q-62);
+    /// - an address of any other scheme: asked about every time (Q-62);
     /// - a file: opened with the system's program when it exists, else
-    ///   "{path} does not exist" (A4);
+    ///   "{path} does not exist" (A4); one that may run as a program, or a
+    ///   `file://` target, is asked about first, every time (Q-61);
     /// - a relative link leading outside the workspace: "{link} leads
     ///   outside the workspace and is not followed" (BR-005).
     ///
@@ -95,6 +99,8 @@ impl Session {
         rev: u32,
         side: bool,
     ) -> Result<Followed, UiError> {
+        // Q-61: a question not answered does not outlive the next link.
+        self.open_asked = None;
         let open = self.open.as_ref().ok_or_else(|| not_open(note))?;
         let tab = open
             .tabs
@@ -128,6 +134,7 @@ impl Session {
         at: u32,
         rev: u32,
     ) -> Result<Followed, UiError> {
+        self.open_asked = None;
         let open = self.open.as_ref().ok_or_else(|| not_open(note))?;
         let tab = open
             .tabs
@@ -164,6 +171,12 @@ impl Session {
         }) else {
             return Followed::done();
         };
+        if super::note_links::is_inline_data(link) {
+            // OQ-244: the picture is in the note; there is nothing to open.
+            self.status =
+                "This picture is held in the note itself; there is nothing to open".into();
+            return Followed::done();
+        }
         match resolve_link(&root, &path, link) {
             LinkTarget::Heading(anchor) => Followed::answer(self.jump_to_heading(note, &anchor)),
             LinkTarget::Note { id, heading } => self.follow_to_note(&id, heading.as_deref(), side),
@@ -175,7 +188,7 @@ impl Session {
                 format: format.into(),
             }),
             LinkTarget::Web(address) => self.follow_to_web(address),
-            LinkTarget::File(path) => self.follow_to_file(&path),
+            LinkTarget::File(path) => self.follow_to_file(&path, is_file_url(link)),
             LinkTarget::Outside => {
                 self.status = format!("{link} leads outside the workspace and is not followed");
                 Followed::done()
@@ -198,38 +211,132 @@ impl Session {
         }
     }
 
-    /// UC-004 A4: a web address opens once the user agreed in the session;
-    /// until then "Open web address" asks.
+    /// UC-004 A4, BR-007, Q-62: an `http`, `https` or `mailto` address
+    /// opens in the default browser or mail program; one of any other
+    /// scheme starts another program, so "Open {scheme}: link" asks first,
+    /// naming the scheme (as written, when it cannot be read) and showing
+    /// the whole address, every time.
     fn follow_to_web(&mut self, address: String) -> Followed {
-        if self.web_allowed {
-            Followed::open(address)
-        } else {
-            self.web_asked = Some(address.clone());
-            Followed::answer(LinkAnswer::AskWeb { address })
+        if opens_without_asking(&address) {
+            return Followed::open(address);
         }
+        let scheme = shown_scheme(&address);
+        self.ask_open(
+            OpenKindName::Link,
+            format!("Open {scheme}: link"),
+            format!(
+                "This link uses the {scheme}: scheme and opens another program on this computer."
+            ),
+            None,
+            address,
+        )
     }
 
-    /// UC-004 A4: a file opens with the system's program when it exists.
-    fn follow_to_file(&mut self, path: &Path) -> Followed {
-        if path.exists() {
-            Followed::open(path.display().to_string())
-        } else {
+    /// UC-004 A4, BR-007: a file opens with the system's program when it
+    /// exists. Q-61: one that may run as a program (`.desktop`, `.exe`,
+    /// `.sh`, a file with an execute permission, …) asks "Open program"
+    /// first, and any `file://` target (`file_url`) "Open file", naming the
+    /// file and its kind, every time. A place on another computer or a
+    /// device of Windows (`\\server\share`) is asked about from its text
+    /// alone, since looking at it may reach out to that computer.
+    ///
+    /// What is asked about is looked at once, when the link is followed;
+    /// a file that changes between the question and the opening is opened
+    /// as it is then.
+    fn follow_to_file(&mut self, path: &Path, file_url: bool) -> Followed {
+        let target = path.display().to_string();
+        let name = path
+            .file_name()
+            .map_or_else(|| target.clone(), |n| n.to_string_lossy().into_owned());
+        let name = shortened(&shown_text(&name));
+        if is_remote_place(&target) {
+            return match executable_by_name(path) {
+                Some(kind) => self.ask_program(&name, kind, target),
+                None => self.ask_open(
+                    OpenKindName::File,
+                    "Open file".into(),
+                    format!("This link points to a file on another computer or a device: {name}."),
+                    None,
+                    target,
+                ),
+            };
+        }
+        if !path.exists() {
             self.status = format!("{} does not exist", path.display());
-            Followed::done()
+            return Followed::done();
+        }
+        if let Some(kind) = executable_kind(path) {
+            return self.ask_program(&name, kind, target);
+        }
+        if file_url {
+            let kind = file_kind(path);
+            return self.ask_open(
+                OpenKindName::File,
+                "Open file".into(),
+                format!("This link points to a file on this computer: {name}, {kind}."),
+                None,
+                target,
+            );
+        }
+        Followed::open(target)
+    }
+
+    /// Q-61: "Open program", for `name`, which is `kind` ("a shell script").
+    fn ask_program(&mut self, name: &str, kind: &str, target: String) -> Followed {
+        self.ask_open(
+            OpenKindName::Program,
+            "Open program".into(),
+            format!("{name} is {kind}."),
+            Some("Opening it may run it on this computer.".into()),
+            target,
+        )
+    }
+
+    /// UC-004 A4, Q-61, Q-62: asks whether to open `target`; the answer
+    /// comes through [`Session::answer_question`] with the question's id.
+    fn ask_open(
+        &mut self,
+        kind: OpenKindName,
+        title: String,
+        question: String,
+        warning: Option<String>,
+        target: String,
+    ) -> Followed {
+        self.open_asks = self.open_asks.wrapping_add(1);
+        let id = self.open_asks;
+        let shown = shown_text(&target);
+        self.open_asked = Some((id, target));
+        Followed::answer(LinkAnswer::AskOpen {
+            id,
+            about: kind,
+            title,
+            question,
+            warning,
+            target: shown,
+        })
+    }
+
+    /// UC-004 A4, Q-61, Q-62: the answer to the question `id` "Open …":
+    /// with `open` ("Open") the address or file asked about is returned,
+    /// to be opened with the system's program; "Cancel" opens nothing. An
+    /// answer to a question that is no longer asked (another link was
+    /// followed since) opens nothing. Nothing is remembered: the next such
+    /// link is asked about again.
+    pub fn answer_question(&mut self, id: u32, open: bool) -> Option<String> {
+        match self.open_asked.take() {
+            Some((asked, target)) if asked == id => open.then_some(target),
+            other => {
+                self.open_asked = other;
+                None
+            }
         }
     }
 
-    /// UC-004 A4: the answer to "Open web address": with `open` ("Open")
-    /// the address asked about is opened, and web addresses are no longer
-    /// asked about until Underline closes; "Cancel" opens nothing. Returns
-    /// the address to open with the system's program.
-    pub fn answer_web(&mut self, open: bool) -> Option<String> {
-        let address = self.web_asked.take()?;
-        if !open {
-            return None;
-        }
-        self.web_allowed = true;
-        Some(address)
+    /// [`Session::answer_question`] for the question asked last, in tests.
+    #[cfg(test)]
+    pub(crate) fn answer_open(&mut self, open: bool) -> Option<String> {
+        let id = self.open_asked.as_ref()?.0;
+        self.answer_question(id, open)
     }
 
     /// UC-004 BR-007: the system's program could not open `target`.
@@ -266,6 +373,32 @@ impl Session {
             }
         }
     }
+}
+
+/// Q-61: what the question calls a file that does not run: "folder", or
+/// "PDF file" by its ending, else "file".
+fn file_kind(path: &Path) -> String {
+    if path.is_dir() {
+        return "folder".into();
+    }
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ending) if !ending.is_empty() => {
+            format!("{} file", shown_text(&ending.to_uppercase()))
+        }
+        _ => "file".into(),
+    }
+}
+
+/// Q-61: a name of at most 60 characters for the question, the middle
+/// left out (the ending stays); the address line shows it whole.
+fn shortened(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= 60 {
+        return name.to_owned();
+    }
+    let start: String = chars[..28].iter().collect();
+    let end: String = chars[chars.len() - 28..].iter().collect();
+    format!("{start}…{end}")
 }
 
 #[cfg(test)]

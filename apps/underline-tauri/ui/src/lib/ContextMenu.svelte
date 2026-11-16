@@ -47,6 +47,8 @@
         checked?: boolean;
         /** A line stands before it. */
         separatorBefore?: boolean;
+        /** OQ-208: a second line under the label saying what it does. */
+        hint?: string;
       }
     | { label: string; entries: MenuEntry[] };
 
@@ -120,6 +122,8 @@
     focusFirst = 0,
     onTouched,
   }: Props = $props();
+  /** OQ-208: ties an entry to its hint line. */
+  const uid = $props.id();
 
   /** The open submenu: its entry's index, where it opens, and whether it takes the keyboard. */
   let sub = $state<{ index: number; x: number; y: number; flip: number; focus: boolean } | null>(
@@ -377,10 +381,20 @@
           role="menuitem"
           tabindex="-1"
           aria-keyshortcuts={entry.shortcut}
+          aria-label={entry.hint ? entry.label : undefined}
+          aria-describedby={entry.hint ? `${uid}-hint-${index}` : undefined}
+          class:with-hint={entry.hint !== undefined}
           onclick={() => choose(entry, index)}
           onpointerenter={() => onPoint(entry, index)}
         >
-          {entry.label}
+          {#if entry.hint}
+            <span class="entry-text">
+              <span>{entry.label}</span>
+              <span class="hint" id="{uid}-hint-{index}">{entry.hint}</span>
+            </span>
+          {:else}
+            {entry.label}
+          {/if}
           {#if entry.shortcut}
             <span class="shortcut" aria-hidden="true">{entry.shortcut}</span>
           {/if}
@@ -496,6 +510,26 @@
     height: 1px;
     margin: var(--space-1) 0;
     background: var(--ui-rule);
+  }
+
+  /* OQ-208: an entry with a second line saying what it does. */
+  .with-hint {
+    padding-block: var(--space-1);
+  }
+
+  .entry-text {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .hint {
+    font-size: 0.85em;
+    color: var(--ui-hint);
+  }
+
+  [role='menuitem']:hover .hint,
+  [role='menuitem']:focus .hint {
+    color: inherit;
   }
 
   .shortcut {

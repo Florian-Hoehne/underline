@@ -309,6 +309,57 @@ fn uc026_only_notes_of_the_workspace() {
     assert!(store.list("..", T0).is_empty());
 }
 
+/// UC-026, ADR-031 (update 2026-11-16): snapshot files are created 0600
+/// and the folders the snapshots create 0700, also those kept with a
+/// deleted note; a folder that was there keeps its mode.
+#[cfg(unix)]
+#[test]
+fn uc026_adr031_snapshots_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new("private", &[("work/Plan.md", "now"), ("Home.md", "")]);
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let underline = sandbox.0.join(UNDERLINE_FOLDER);
+    fs::create_dir_all(&underline).unwrap();
+    fs::set_permissions(&underline, fs::Permissions::from_mode(0o755)).unwrap();
+    let store = sandbox.store();
+
+    let taken = store
+        .take("work/Plan.md", "one", SnapshotCause::Editing, T0)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(mode(&taken.file), 0o600);
+    let folder = taken.file.parent().unwrap();
+    assert_eq!(mode(folder), 0o700);
+    assert_eq!(mode(&underline.join(SNAPSHOTS_FOLDER)), 0o700);
+    assert_eq!(mode(&underline), 0o755, "a folder that was there stays");
+
+    let mut workspace = Workspace::open(&sandbox.0).unwrap();
+    let now = T0 + MINUTE;
+    let deleted = workspace
+        .delete_note(&NoteId::from_relative("work/Plan"), now)
+        .unwrap();
+    let kept = underline
+        .join("deleted")
+        .join(now.to_string())
+        .join(DELETED_SNAPSHOTS_FOLDER);
+    let mut files = Vec::new();
+    let mut folders = vec![kept.clone()];
+    while let Some(dir) = folders.pop() {
+        assert_eq!(mode(&dir), 0o700, "{}", dir.display());
+        for entry in fs::read_dir(&dir).unwrap().flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                folders.push(entry.path());
+            } else {
+                files.push(entry.path());
+            }
+        }
+    }
+    assert_eq!(files.len(), 1, "the snapshot is kept with the deleted note");
+    assert_eq!(mode(&files[0]), 0o600);
+    assert!(workspace.deleted_notes().contains(&deleted));
+}
+
 /// UC-026 BR-003, TC-026-12: the snapshots follow a renamed note, are kept
 /// with a deleted one, and come back when it is restored, also to another
 /// place.
@@ -939,4 +990,385 @@ fn uc026_br003_a_move_goes_on_past_a_snapshot_gone_meanwhile() {
 
     assert_eq!(store.list("B.md", T0 + 1).len(), 1);
     assert!(store.list("A.md", T0 + 1).is_empty());
+}
+
+// ---- OQ-294, UC-026 A7: the space the snapshots take, and removing them all.
+
+/// UC-026 A7, OQ-294, TC-026-15: the snapshots of the workspace are counted
+/// with the space they take; a workspace without any has none.
+#[test]
+fn uc026_a7_tc15_usage_counts_the_snapshots_and_their_bytes() {
+    let sandbox = Sandbox::new("usage", &[("Plan.md", "x"), ("Projects/Trip.md", "y")]);
+    let store = sandbox.store();
+    assert_eq!(store.usage().unwrap(), SnapshotUsage::default());
+
+    store
+        .take("Plan.md", "12345", SnapshotCause::Editing, T0)
+        .unwrap();
+    store
+        .take("Plan.md", "1234567890", SnapshotCause::Restore, T0 + MINUTE)
+        .unwrap();
+    store
+        .take("Projects/Trip.md", "abc", SnapshotCause::Git, T0)
+        .unwrap();
+
+    assert_eq!(
+        store.usage().unwrap(),
+        SnapshotUsage {
+            count: 3,
+            bytes: 18,
+            unreadable: 0
+        }
+    );
+}
+
+/// UC-026 A7, OQ-294, TC-026-15: removing all snapshots empties
+/// `.underline/snapshots` and nothing else: the notes, the state file and
+/// the snapshots of a deleted note stay (BR-003).
+#[test]
+fn uc026_a7_tc15_remove_all_removes_only_the_snapshots_folder() {
+    let sandbox = Sandbox::new(
+        "remove-all",
+        &[
+            ("Plan.md", "x"),
+            (".underline/state.yaml", "tabs: []\n"),
+            (
+                ".underline/deleted/1/.snapshots/Old.md/1762851600000-editing.snap",
+                "old",
+            ),
+        ],
+    );
+    let store = sandbox.store();
+    store
+        .take("Plan.md", "12345", SnapshotCause::Editing, T0)
+        .unwrap();
+    store
+        .take("Projects/Trip.md", "abc", SnapshotCause::Git, T0)
+        .unwrap();
+    fs::write(sandbox.0.join(".underline/snapshots/notes.txt"), "zz").unwrap();
+
+    let removal = store.remove_all().unwrap();
+
+    assert_eq!(
+        removal.removed,
+        SnapshotUsage {
+            count: 2,
+            bytes: 10,
+            unreadable: 0
+        }
+    );
+    assert_eq!(removal.failed, 0);
+    assert!(!sandbox.0.join(".underline/snapshots").exists());
+    assert_eq!(store.usage().unwrap(), SnapshotUsage::default());
+    assert!(sandbox.0.join("Plan.md").is_file());
+    assert!(sandbox.0.join(".underline/state.yaml").is_file());
+    assert!(sandbox
+        .0
+        .join(".underline/deleted/1/.snapshots/Old.md/1762851600000-editing.snap")
+        .is_file());
+    // A snapshot is taken again afterwards.
+    assert!(store
+        .take("Plan.md", "later", SnapshotCause::Editing, T0 + DAY)
+        .unwrap()
+        .is_some());
+}
+
+/// UC-026 A7, OQ-294: removing without any snapshot removes nothing and
+/// is no error.
+#[test]
+fn uc026_a7_remove_all_without_snapshots_is_no_error() {
+    let sandbox = Sandbox::new("remove-none", &[("Plan.md", "x")]);
+    let removal = sandbox.store().remove_all().unwrap();
+    assert_eq!(removal.removed, SnapshotUsage::default());
+    assert!(sandbox.0.join("Plan.md").is_file());
+}
+
+/// UC-026 A7, OQ-294, ADR-031: a link below the snapshots is neither
+/// followed nor removed, and the files it points to are neither counted
+/// nor removed.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_remove_all_never_follows_a_link_below() {
+    let sandbox = Sandbox::new("remove-all-link", &[("Plan.md", "x")]);
+    let outside = Sandbox::new("remove-all-link-outside", &[]);
+    let victim = outside.0.join(format!("{T0}-editing.snap"));
+    fs::write(&victim, "precious").unwrap();
+    let store = sandbox.store();
+    store
+        .take("Plan.md", "12345", SnapshotCause::Editing, T0)
+        .unwrap();
+    let base = sandbox.0.join(".underline/snapshots");
+    std::os::unix::fs::symlink(&outside.0, base.join("Trip.md")).unwrap();
+    std::os::unix::fs::symlink(&victim, base.join("Plan.md").join("linked.snap")).unwrap();
+
+    assert_eq!(store.usage().unwrap().count, 1);
+    let removal = store.remove_all().unwrap();
+
+    assert_eq!(removal.removed.count, 1);
+    assert_eq!(removal.links, 2);
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+    assert!(fs::symlink_metadata(base.join("Trip.md")).is_ok());
+}
+
+/// UC-026 A7, OQ-294, ADR-031: when the folder of the snapshots (or the
+/// Underline folder) is a link, nothing is counted or removed.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_remove_all_refuses_a_linked_snapshots_folder() {
+    let sandbox = Sandbox::new("remove-all-linked-folder", &[("Plan.md", "x")]);
+    let outside = Sandbox::new("remove-all-linked-folder-outside", &[]);
+    let victim = outside.0.join("Plan.md").join(format!("{T0}-editing.snap"));
+    fs::create_dir_all(victim.parent().unwrap()).unwrap();
+    fs::write(&victim, "precious").unwrap();
+    fs::create_dir_all(sandbox.0.join(".underline")).unwrap();
+    std::os::unix::fs::symlink(&outside.0, sandbox.0.join(".underline/snapshots")).unwrap();
+
+    let store = sandbox.store();
+    assert!(matches!(store.usage(), Err(SnapshotError::Link(_))));
+    assert!(matches!(store.remove_all(), Err(SnapshotError::Link(_))));
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+}
+
+// ---- test-monkey: OQ-294, UC-026 A7 under hostile folders and threads.
+
+/// UC-026 A7, OQ-294 (test-monkey): a folder of the snapshots that cannot be
+/// read keeps its snapshots; removing all must say so (`failed` > 0), not
+/// report a clean removal while the files stay.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_remove_all_reports_an_unreadable_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new("remove-all-unreadable", &[("Plan.md", "x"), ("B.md", "y")]);
+    let store = sandbox.store();
+    store
+        .take("Plan.md", "12345", SnapshotCause::Editing, T0)
+        .unwrap();
+    store
+        .take("B.md", "abc", SnapshotCause::Editing, T0)
+        .unwrap();
+    let locked = sandbox.0.join(".underline/snapshots/B.md");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked).is_ok() {
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return; // running as root: permissions do not apply
+    }
+
+    let removal = store.remove_all().unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(removal.removed.count, 1);
+    assert!(
+        locked.join(format!("{T0}-editing.snap")).exists(),
+        "the snapshot stays"
+    );
+    assert!(
+        removal.failed > 0,
+        "an unreadable folder holding snapshots is reported as failed, not as removed cleanly"
+    );
+}
+
+/// UC-026 A7, OQ-294 (test-monkey): `usage` never undercounts silently when a
+/// folder cannot be read, and neither it nor `remove_all` panics on a
+/// read-only folder.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_remove_all_in_a_read_only_folder_counts_the_failures() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new("remove-all-readonly", &[("Plan.md", "x")]);
+    let store = sandbox.store();
+    for n in 0..3 {
+        store
+            .take(
+                "Plan.md",
+                &format!("v{n}"),
+                SnapshotCause::Editing,
+                T0 + n * MINUTE,
+            )
+            .unwrap();
+    }
+    let folder = sandbox.0.join(".underline/snapshots/Plan.md");
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
+    let usage = store.usage().unwrap();
+    let removal = store.remove_all().unwrap();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+    if removal.removed.count == 3 {
+        return; // running as root
+    }
+    assert_eq!(usage.count, 3);
+    assert_eq!(removal.failed, 3);
+    assert!(removal.first_error.is_some());
+    assert_eq!(store.usage().unwrap().count, 3, "nothing is lost");
+}
+
+/// UC-026 A7, ADR-031 (test-monkey): a linked `.underline` refuses both, and
+/// a link as a deeper level of a note's folder is skipped by both.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_links_at_every_level_are_never_followed() {
+    let sandbox = Sandbox::new("links-levels", &[("Plan.md", "x")]);
+    let outside = Sandbox::new("links-levels-out", &[]);
+    let victim = outside.0.join("snapshots/Plan.md");
+    fs::create_dir_all(&victim).unwrap();
+    fs::write(victim.join(format!("{T0}-editing.snap")), "precious").unwrap();
+    std::os::unix::fs::symlink(&outside.0, sandbox.0.join(".underline")).unwrap();
+    let store = sandbox.store();
+    assert!(matches!(store.usage(), Err(SnapshotError::Link(_))));
+    assert!(matches!(store.remove_all(), Err(SnapshotError::Link(_))));
+    assert!(victim.join(format!("{T0}-editing.snap")).exists());
+    fs::remove_file(sandbox.0.join(".underline")).unwrap();
+
+    // A link deep down, and a dangling and a looping one.
+    store
+        .take("Plan.md", "12345", SnapshotCause::Editing, T0)
+        .unwrap();
+    let base = sandbox.0.join(".underline/snapshots");
+    fs::create_dir_all(base.join("a/b/c")).unwrap();
+    std::os::unix::fs::symlink(&outside.0, base.join("a/b/c/deep")).unwrap();
+    std::os::unix::fs::symlink(base.join("a"), base.join("a/b/loop")).unwrap();
+    std::os::unix::fs::symlink(base.join("nothing"), base.join("dangling")).unwrap();
+    assert_eq!(store.usage().unwrap().count, 1);
+    let removal = store.remove_all().unwrap();
+    assert_eq!(removal.removed.count, 1);
+    assert_eq!(removal.links, 3);
+    assert!(victim.join(format!("{T0}-editing.snap")).exists());
+    assert!(fs::symlink_metadata(base.join("a/b/loop")).is_ok());
+}
+
+/// UC-026 A7, OQ-294 (test-monkey): removing all while other threads take,
+/// prune and move: no panic, no hang, no error from a take or a move that
+/// the removal races with, and afterwards a take works and the counts agree.
+#[test]
+fn uc026_a7_remove_all_races_with_take_prune_and_move() {
+    let sandbox = Sandbox::new("remove-all-race", &[("A.md", "x"), ("B/C.md", "y")]);
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut workers = Vec::new();
+    for (n, (note, other)) in [
+        ("A.md", "D.md"),
+        ("B/C.md", "B/E.md"),
+        ("F/G/H.md", "F/G/I.md"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let store = sandbox.store();
+        let stop = Arc::clone(&stop);
+        let errors = Arc::clone(&errors);
+        workers.push(std::thread::spawn(move || {
+            let mut i = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                i += 1;
+                let at = T0 + i * MINUTE;
+                if let Err(e) = store.take(note, &format!("v{n}-{i}"), SnapshotCause::Git, at) {
+                    errors.lock().unwrap().push(format!("take {note}: {e}"));
+                }
+                if i.is_multiple_of(3) {
+                    if let Err(e) = store.moved(note, other) {
+                        errors.lock().unwrap().push(format!("moved {note}: {e}"));
+                    }
+                    if let Err(e) = store.moved(other, note) {
+                        errors
+                            .lock()
+                            .unwrap()
+                            .push(format!("moved back {note}: {e}"));
+                    }
+                }
+                if i.is_multiple_of(5) {
+                    store.prune(T0 + 100 * DAY);
+                }
+                let _ = store.usage();
+            }
+        }));
+    }
+    let store = sandbox.store();
+    let started = std::time::Instant::now();
+    for _ in 0..2000 {
+        let removal = store.remove_all().unwrap();
+        assert_eq!(removal.failed, 0, "{:?}", removal.first_error);
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    assert!(started.elapsed() < Duration::from_secs(60));
+    let errors = errors.lock().unwrap();
+    assert!(errors.is_empty(), "{errors:?}");
+    store.remove_all().unwrap();
+    assert_eq!(store.usage().unwrap(), SnapshotUsage::default());
+    assert!(store
+        .take("A.md", "after", SnapshotCause::Editing, T0)
+        .unwrap()
+        .is_some());
+}
+
+/// UC-026 A7, OQ-294 (test-monkey): many thousands of files and deep folders
+/// are counted and removed, and the snapshots of deleted notes stay.
+#[test]
+fn uc026_a7_remove_all_many_files_and_deep_folders() {
+    let sandbox = Sandbox::new(
+        "remove-all-many",
+        &[(
+            ".underline/deleted/1/.snapshots/Old.md/1762851600000-editing.snap",
+            "old",
+        )],
+    );
+    let base = sandbox.0.join(".underline/snapshots");
+    for d in 0..50 {
+        let folder = base.join(format!("f{d}.md"));
+        fs::create_dir_all(&folder).unwrap();
+        for n in 0..300 {
+            fs::write(folder.join(format!("{}-editing.snap", T0 + n)), "ab").unwrap();
+        }
+    }
+    let mut deep = base.clone();
+    for _ in 0..100 {
+        deep.push("d");
+    }
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join(format!("{T0}-git.snap")), "z").unwrap();
+    let store = sandbox.store();
+    let started = std::time::Instant::now();
+    let usage = store.usage().unwrap();
+    assert_eq!(usage.count, 15_001);
+    let removal = store.remove_all().unwrap();
+    assert_eq!(removal.removed.count, 15_001);
+    assert_eq!(removal.failed, 0);
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(!base.exists());
+    assert!(sandbox
+        .0
+        .join(".underline/deleted/1/.snapshots/Old.md/1762851600000-editing.snap")
+        .is_file());
+}
+
+/// UC-026 A7, OQ-294: a folder that cannot be read is counted as such, so
+/// the space shown is "at least" and never too small without saying so.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_usage_counts_an_unreadable_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new("usage-unreadable", &[("Plan.md", "x"), ("B.md", "y")]);
+    let store = sandbox.store();
+    store
+        .take("Plan.md", "12345", SnapshotCause::Editing, T0)
+        .unwrap();
+    store
+        .take("B.md", "abc", SnapshotCause::Editing, T0)
+        .unwrap();
+    let locked = sandbox.0.join(".underline/snapshots/B.md");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = fs::read_dir(&locked).is_ok();
+    let usage = store.usage().unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        return; // running as root
+    }
+    assert_eq!(
+        usage,
+        SnapshotUsage {
+            count: 1,
+            bytes: 5,
+            unreadable: 1
+        }
+    );
 }

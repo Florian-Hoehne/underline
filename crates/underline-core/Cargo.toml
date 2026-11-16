@@ -23,3 +23,7 @@ jiff = "0.2"
 sys-locale = "0.3"
 # Line and word diffs of notes against their last commit (UC-011).
 similar = { version = "2", features = ["inline"] }
+
+# ADR-005: the errors of a file system that does not set file permissions.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

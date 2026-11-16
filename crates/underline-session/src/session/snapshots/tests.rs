@@ -489,6 +489,32 @@ fn uc026_restore_a_closed_note_and_take_it_back() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// UC-026, ADR-005 (decision of 2026-11-16): a restored note keeps who
+/// may read and write it.
+#[cfg(unix)]
+#[test]
+fn uc026_adr005_restored_note_keeps_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("mode");
+    let (mut session, root, clock) = session_with(&dir, &[("Plan.md", "Version B\n")]);
+    let path = root.join("Plan.md");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let taken = store(&root)
+        .take("Plan.md", "Version A\n", SnapshotCause::Editing, T0)
+        .unwrap()
+        .unwrap();
+    clock.store(T0 + MINUTE, Ordering::SeqCst);
+
+    session.snapshot_restore(&id("Plan"), &taken.key()).unwrap();
+
+    assert_eq!(read(&root, "Plan.md"), "Version A\n");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 /// NFR-006, BR-004: a restore writes the snapshot's bytes exactly, a byte
 /// order mark and CRLF line endings included, in a tab and from a file.
 #[test]
@@ -855,4 +881,195 @@ fn uc026_nfr005_the_list_reads_only_the_newest() {
         "{diff:?}"
     );
     fs::remove_dir_all(&dir).unwrap();
+}
+
+/// UC-026 A7, OQ-294, TC-026-15 steps 1–2: the settings show the space the
+/// snapshots of the workspace take, and say "None" without any.
+#[test]
+fn uc026_a7_tc15_the_space_of_the_snapshots() {
+    let dir = temp_dir("a7-space");
+    let (session, root, _) = session_with(&dir, &[("Plan.md", "x\n")]);
+    let empty = session.snapshots_space_plan().unwrap().run();
+    assert_eq!(
+        (empty.summary.as_str(), empty.any, empty.problem.as_deref()),
+        ("None", false, None)
+    );
+    assert_eq!(empty.kept, "Kept on this computer for 30 days");
+
+    let store = store(&root);
+    store
+        .take("Plan.md", &"a".repeat(2048), SnapshotCause::Editing, T0)
+        .unwrap();
+    store
+        .take("Plan.md", "b", SnapshotCause::Restore, T0 + MINUTE)
+        .unwrap();
+    let space = session.snapshots_space_plan().unwrap().run();
+    assert_eq!(space.summary, "2 KB in 2 snapshots");
+    assert!(space.any);
+    assert!(
+        space
+            .question
+            .starts_with("Remove all snapshots of this workspace (2 KB in 2 snapshots)?"),
+        "{}",
+        space.question
+    );
+    assert!(space.question.ends_with("This cannot be undone."));
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// UC-026 A7, OQ-294, TC-026-15 steps 3–5: "Remove all snapshots" removes
+/// them all, the status says how many and the space freed, the undo of a
+/// restore is no longer offered, and the next change takes a snapshot again.
+#[test]
+fn uc026_a7_tc15_remove_all_snapshots_says_what_it_removed() {
+    let dir = temp_dir("a7-remove");
+    let (mut session, root, clock) = session_with(&dir, &[("Plan.md", "Version A\n")]);
+    assert!(session.open_note(&id("Plan")));
+    rewrite(&mut session, "Plan", "Version B\n");
+    autosave(&mut session);
+    let key = list(&mut session, "Plan").items[0].key.clone();
+    session.snapshot_restore(&id("Plan"), &key).unwrap();
+    assert_eq!(session.restore_offer(), Some(StatusOffer::UndoRestore));
+
+    let job = session.snapshots_removal_plan().unwrap();
+    let removed = job.run();
+    let status = session.snapshots_removed(&removed);
+
+    assert_eq!(
+        status,
+        "Removed all snapshots of this workspace: 20 bytes in 2 snapshots"
+    );
+    assert_eq!(session.status(), status);
+    assert_eq!(session.restore_offer(), None);
+    assert!(kept(&root, "Plan.md").is_empty());
+    assert!(!root.join(".underline/snapshots").exists());
+    assert_eq!(read(&root, "Plan.md"), "Version A\n", "the note stays");
+    assert_eq!(
+        session.snapshots_space_plan().unwrap().run().summary,
+        "None"
+    );
+
+    let again = session.snapshots_removal_plan().unwrap().run();
+    assert_eq!(
+        session.snapshots_removed(&again),
+        "There were no snapshots to remove"
+    );
+
+    clock.store(T0 + 30 * MINUTE, Ordering::SeqCst);
+    rewrite(&mut session, "Plan", "Version C\n");
+    autosave(&mut session);
+    assert_eq!(
+        wait_for(&root, "Plan.md", 1),
+        [(SnapshotCause::Editing, "Version A\n".to_owned())]
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// UC-026 A7, OQ-294, ADR-031: with the folder of the snapshots behind a
+/// link, nothing is removed and the status says why; the space cannot be
+/// measured either.
+#[cfg(unix)]
+#[test]
+fn uc026_a7_a_linked_snapshots_folder_is_reported_not_followed() {
+    let dir = temp_dir("a7-link");
+    let (mut session, root, _) = session_with(&dir, &[("Plan.md", "x\n")]);
+    let outside = dir.join("outside");
+    fs::create_dir_all(outside.join("Plan.md")).unwrap();
+    let victim = outside.join("Plan.md").join(format!("{T0}-editing.snap"));
+    fs::write(&victim, "precious").unwrap();
+    fs::create_dir_all(root.join(".underline")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join(".underline/snapshots")).unwrap();
+
+    let space = session.snapshots_space_plan().unwrap().run();
+    assert!(!space.any);
+    assert!(space
+        .problem
+        .as_deref()
+        .is_some_and(|p| p.starts_with("The space of the snapshots cannot be measured:")));
+
+    let removed = session.snapshots_removal_plan().unwrap().run();
+    let status = session.snapshots_removed(&removed);
+    assert!(
+        status.starts_with("No snapshot was removed: the snapshots of "),
+        "{status}"
+    );
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// UC-026 A7: without a workspace there is nothing to measure or remove.
+#[test]
+fn uc026_a7_without_a_workspace() {
+    let dir = temp_dir("a7-none");
+    let mut session = Session::new(
+        None,
+        StateStore::in_memory(),
+        None,
+        SettingsState::with_user_file(Some(dir.join(SETTINGS_FILE_NAME)), Instant::now()),
+    );
+    assert!(session.snapshots_space_plan().is_err());
+    assert!(session.snapshots_removal_plan().is_err());
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// UC-026 A7, OQ-294: the report says what went and what stayed, with
+/// thousands separated, never a clean removal when something stayed; the
+/// space of snapshots partly unreadable is "at least".
+#[test]
+fn uc026_a7_reports_of_partial_removals_and_unreadable_space() {
+    use underline_core::{SnapshotRemoval, SnapshotUsage};
+    let usage = SnapshotUsage {
+        count: 1_203,
+        bytes: 13_002_342,
+        unreadable: 0,
+    };
+    let report = |removal: SnapshotRemoval| super::removal_report(&Ok(removal));
+    assert_eq!(
+        report(SnapshotRemoval {
+            removed: usage,
+            ..SnapshotRemoval::default()
+        }),
+        "Removed all snapshots of this workspace: 12.4 MB in 1,203 snapshots"
+    );
+    assert_eq!(
+        report(SnapshotRemoval {
+            removed: usage,
+            failed: 1_500,
+            first_error: Some(std::io::Error::other("denied")),
+            links: 2_000,
+        }),
+        "Removed 12.4 MB in 1,203 snapshots; 1,500 files or folders could not be removed: \
+         denied; 2,000 links were left as they are and not followed"
+    );
+    assert_eq!(
+        report(SnapshotRemoval {
+            failed: 1,
+            first_error: Some(std::io::Error::other("denied")),
+            ..SnapshotRemoval::default()
+        }),
+        "No snapshot was removed; 1 file or folder could not be removed: denied"
+    );
+    assert_eq!(
+        report(SnapshotRemoval {
+            links: 1,
+            ..SnapshotRemoval::default()
+        }),
+        "No snapshot was removed; 1 link was left as it is and not followed"
+    );
+    let view = super::space_view(SnapshotUsage {
+        unreadable: 1,
+        ..usage
+    });
+    assert_eq!(
+        view.summary,
+        "at least 12.4 MB in 1,203 snapshots; 1 folder could not be read"
+    );
+    assert!(view.any);
+    // Package 12 review: stray bytes without a snapshot remove nothing.
+    let stray = super::space_view(SnapshotUsage {
+        count: 0,
+        bytes: 100,
+        ..SnapshotUsage::default()
+    });
+    assert!(!stray.any);
 }

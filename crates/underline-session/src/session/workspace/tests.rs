@@ -1066,6 +1066,174 @@ fn uc004_br018_the_panes_come_back_with_the_left_one_active() {
     assert_eq!(snapshot.tabs.active, split.left_active);
 }
 
+/// OQ-220, UC-004 BR-018, TC-004-37 step 4: the width the user gives the
+/// split view is remembered for the workspace and comes back after a
+/// restart, within the least share of each pane; without one it is half.
+#[test]
+fn oq220_tc004_37_the_split_width_comes_back_after_a_restart() {
+    let dir = temp_dir("split-share");
+    let root = workspace_with(&dir, "notes", &["Plan", "Trip"]);
+    {
+        let mut session = session_in(&dir, None);
+        session.open_chosen(&root, false);
+        session.open_note(&id("Plan"));
+        session.open_note_to_side(&id("Trip"));
+        assert_eq!(session.snapshot().tabs.split.unwrap().left_share, 500);
+        session.set_split_share(652.4);
+        assert_eq!(session.snapshot().tabs.split.unwrap().left_share, 652);
+        session.set_split_share(5.0);
+        assert_eq!(session.snapshot().tabs.split.unwrap().left_share, 150);
+        session.set_split_share(700.0);
+        session.write_state_now().unwrap();
+    }
+    let mut session = session_in(&dir, None);
+    session.open_chosen(&root, false);
+    let split = session
+        .snapshot()
+        .tabs
+        .split
+        .expect("the split view comes back");
+    assert_eq!(split.left_share, 700);
+    // Ending the split view and splitting again keeps the width.
+    session.end_split();
+    session.open_note_to_side(&id("Trip"));
+    assert_eq!(session.snapshot().tabs.split.unwrap().left_share, 700);
+}
+
+/// OQ-220: without a workspace, a width is not kept anywhere.
+#[test]
+fn oq220_split_width_without_a_workspace_changes_nothing() {
+    let dir = temp_dir("split-share-none");
+    let mut session = session_in(&dir, None);
+    session.set_split_share(700.0);
+    assert!(session.snapshot().tabs.split.is_none());
+}
+
+/// OQ-279, UC-021 BR-005, TC-021-10 step 5: the tab "Todos" opens in the
+/// active pane; the other pane keeps its note, and the tool panel's note
+/// is the active pane's.
+#[test]
+fn oq279_tc021_10_the_todo_tab_opens_in_the_active_pane() {
+    let dir = temp_dir("todos-pane");
+    let root = workspace_with(&dir, "notes", &["Plan", "Trip"]);
+    let mut session = session_in(&dir, None);
+    session.open_chosen(&root, false);
+    session.open_note(&id("Plan"));
+    session.open_note_to_side(&id("Trip"));
+    assert_eq!(session.snapshot().tabs.split.unwrap().pane, PaneName::Right);
+
+    session.show_todo_list(None);
+    let tabs = session.snapshot().tabs;
+    assert!(tabs.todo_list.open && tabs.todo_list.active);
+    assert_eq!(tabs.todo_list.pane, PaneName::Right);
+    let split = tabs.split.unwrap();
+    assert_eq!(split.pane, PaneName::Right, "the right pane stays active");
+    assert_eq!(split.left_active.as_deref(), Some("Plan"));
+    assert!(session.open.as_ref().unwrap().todos_shown());
+
+    // The left pane made active: its note shows, the right keeps the todos.
+    session.focus_pane(PaneSide::Left);
+    assert!(!session.open.as_ref().unwrap().todos_shown());
+    assert!(session.snapshot().tabs.todo_list.active);
+    // A tab of the left pane activated leaves the todos of the right one.
+    session.activate_tab_in(PaneSide::Left, &id("Plan"));
+    let tabs = session.snapshot().tabs;
+    assert!(
+        tabs.todo_list.active,
+        "the right pane still shows the todos"
+    );
+    assert_eq!(tabs.todo_list.pane, PaneName::Right);
+
+    // Shown again from the left pane: it moves there (one tab "Todos").
+    session.show_todo_list(None);
+    assert_eq!(session.snapshot().tabs.todo_list.pane, PaneName::Left);
+    assert!(session.open.as_ref().unwrap().todos_shown());
+
+    // A note opened in the left pane shows in place of the todos.
+    session.open_note(&id("Plan"));
+    let tabs = session.snapshot().tabs;
+    assert!(tabs.todo_list.open && !tabs.todo_list.active);
+}
+
+/// OQ-279, UC-004 A20: ending the split view keeps the tab "Todos", in the
+/// one pane left; its pane is remembered with the tabs across a restart.
+#[test]
+fn oq279_the_todo_tab_of_the_right_pane_joins_the_left_and_comes_back() {
+    let dir = temp_dir("todos-pane-restart");
+    let root = workspace_with(&dir, "notes", &["Plan", "Trip"]);
+    {
+        let mut session = session_in(&dir, None);
+        session.open_chosen(&root, false);
+        session.open_note(&id("Plan"));
+        session.open_note_to_side(&id("Trip"));
+        session.show_todo_list(None);
+        session.write_state_now().unwrap();
+    }
+    let mut session = session_in(&dir, None);
+    session.open_chosen(&root, false);
+    let tabs = session.snapshot().tabs;
+    assert_eq!(tabs.todo_list.pane, PaneName::Right);
+    assert!(tabs.todo_list.open && tabs.todo_list.active);
+    // After a restart the left pane is active, with its note shown.
+    assert!(!session.open.as_ref().unwrap().todos_shown());
+
+    session.end_split();
+    let tabs = session.snapshot().tabs;
+    assert!(tabs.split.is_none());
+    assert_eq!(tabs.todo_list.pane, PaneName::Left);
+    assert!(tabs.todo_list.open && tabs.todo_list.active);
+    assert_eq!(
+        session.state.todo_list(&root).pane,
+        PaneSide::Left,
+        "remembered in the left pane"
+    );
+}
+
+/// OQ-279: a state file naming the right pane for the tab "Todos" without
+/// a right pane to restore gives it to the left pane.
+#[test]
+fn oq279_the_todo_tab_without_its_pane_comes_back_in_the_left_one() {
+    let dir = temp_dir("todos-pane-gone");
+    let root = workspace_with(&dir, "notes", &["Plan"]);
+    fs::create_dir_all(root.join(".underline")).unwrap();
+    fs::write(
+        root.join(".underline/state.yaml"),
+        "tabs:\n- note: Plan\n  position: 1\n  editing_view: source\n  active: true\n\
+         todo_list:\n  open: true\n  active: true\n  pane: right\n",
+    )
+    .unwrap();
+    let mut session = session_in(&dir, None);
+    session.open_chosen(&root, false);
+    let tabs = session.snapshot().tabs;
+    assert!(tabs.split.is_none());
+    assert_eq!(tabs.todo_list.pane, PaneName::Left);
+    assert!(session.open.as_ref().unwrap().todos_shown());
+}
+
+/// OQ-198, UC-023 BR-004, TC-023-02 step 4: the commands run from the
+/// palette are the user's, kept across a restart in the user's state (not
+/// the workspace's).
+#[test]
+fn oq198_tc023_02_recent_commands_come_back_after_a_restart() {
+    let dir = temp_dir("recent-commands");
+    let root = workspace_with(&dir, "notes", &["Plan"]);
+    {
+        let mut session = session_in(&dir, None);
+        session.open_chosen(&root, false);
+        session.command_ran("view.toggleFocus");
+        session.command_ran("file.newNote");
+        session.write_state_now().unwrap();
+    }
+    let session = session_in(&dir, None);
+    assert_eq!(
+        session.start_info().recent_commands,
+        ["file.newNote", "view.toggleFocus"]
+    );
+    let workspace_state =
+        fs::read_to_string(root.join(".underline/state.yaml")).unwrap_or_default();
+    assert!(!workspace_state.contains("file.newNote"));
+}
+
 // Monkey tests of the panes (package 7a)
 
 /// A small deterministic generator; every failure prints its seed.

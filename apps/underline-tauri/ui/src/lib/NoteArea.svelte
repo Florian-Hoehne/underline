@@ -81,7 +81,9 @@
   pane side by side, each with its tab bar, its note in its editing view,
   the switch and toolbar, the minimap and the status line; they start
   equally wide, and the border between them is dragged with the pointer or
-  moved with the arrow keys (not remembered). The tool panel stands right
+  moved with the arrow keys; the width given is remembered for the
+  workspace (OQ-220: sent when a drag ends or a key moved it, and taken
+  from the tab bar's view when the backend's differs). The tool panel stands right
   of the panes and shows the active pane's note. The pane the user last
   worked in (a click or the keyboard in it) is the active pane: the find
   field, go to line, the toolbar's and the palette's commands, link
@@ -144,12 +146,13 @@
   const panes = $derived(panesOf(shell.tabs));
   /** UC-004 BR-018: the pane the user works in. */
   const activePane = $derived<PaneName>(shell.activePane);
-  /** M-06.5: the tab "Todos" shows in the left pane. */
+  /** M-06.5, OQ-279: the tab "Todos" shows in its pane, the one active when it was opened. */
   const todosActive = $derived(shell.tabs.todoList.open && shell.tabs.todoList.active);
+  const todosPane = $derived<PaneName>(shell.tabs.split ? shell.tabs.todoList.pane : 'left');
 
   /** The tab a pane shows, `undefined` while the tab "Todos" or nothing shows there. */
   function shownTab(pane: PaneTabs) {
-    if (pane.pane === 'left' && todosActive) {
+    if (pane.pane === todosPane && todosActive) {
       return undefined;
     }
     return pane.tabs.find((tab) => tab.note === pane.active);
@@ -324,8 +327,25 @@
     }
   }
 
-  /** OQ-220: the share of the width the left pane takes; equal at first, not remembered. */
+  /** OQ-220: the share of the width the left pane takes, in percent; as remembered for the workspace. */
   let leftShare = $state(50);
+  /** OQ-220: the backend's remembered share, in percent; `null` without the split view. */
+  const rememberedShare = $derived(
+    shell.tabs.split === null ? null : shell.tabs.split.leftShare / 10,
+  );
+  // OQ-220: the remembered width comes (the workspace opened, or split
+  // again); what the user drags meanwhile is not taken back, as the share
+  // only changes when the backend's does.
+  $effect(() => {
+    if (rememberedShare !== null) {
+      leftShare = rememberedShare;
+    }
+  });
+
+  /** OQ-220: the backend remembers the width the user gave the panes. */
+  function rememberShare() {
+    void shell.rememberSplitShare(leftShare);
+  }
   let panesBox = $state<HTMLElement | null>(null);
   /** The width of the panes together, and of the whole note area. */
   let panesWidth = $state(0);
@@ -391,6 +411,7 @@
       border.removeEventListener('pointermove', move);
       border.removeEventListener('pointerup', end);
       border.removeEventListener('pointercancel', end);
+      rememberShare();
     };
     border.addEventListener('pointermove', move);
     border.addEventListener('pointerup', end);
@@ -413,7 +434,14 @@
     if (to !== undefined) {
       event.preventDefault();
       leftShare = shareWithin(to);
+      rememberShare();
     }
+  }
+
+  /** A double click gives both panes the same width again, remembered too. */
+  function evenShare() {
+    leftShare = 50;
+    rememberShare();
   }
 
   /** M-10.2: a toolbar button acts in the view shown. */
@@ -946,6 +974,7 @@
               onCorrected={(suggestion) => shell.announceSpell(`Corrected to ${suggestion}`)}
               zoom={shell.editorZoom}
               softWrap={settings?.softWrap ?? true}
+              {active}
             />
           {:else}
             <SourceEditor
@@ -1056,7 +1085,7 @@
           title="Drag to change the widths; double-click or Enter for equal widths"
           tabindex="0"
           onpointerdown={dragBorder}
-          ondblclick={() => (leftShare = 50)}
+          ondblclick={evenShare}
           onkeydown={borderKey}
         ></div>
       {/if}
@@ -1094,7 +1123,7 @@
         />
         {#if tab}
           {@render noteOf(pane.pane, tab)}
-        {:else if pane.pane === 'left' && todosActive}
+        {:else if pane.pane === todosPane && todosActive}
           <!-- M-06.5, M-18.6 (UC-021): the tab "Todos" in place of a note. -->
           <TodoTable {shell} />
         {:else}

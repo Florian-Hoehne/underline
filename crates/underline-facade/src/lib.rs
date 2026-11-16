@@ -12,6 +12,7 @@ pub mod highlight;
 pub mod images;
 pub mod index;
 pub mod math;
+pub mod mentions;
 pub mod rename;
 pub mod themes;
 

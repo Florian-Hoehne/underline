@@ -126,6 +126,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "asciimath-parser"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08a39f10e59ad84d890912d4d45a80c53931cd90660c8cc3cc8e410ef435beec"
+dependencies = [
+ "rustc-hash",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6692,6 +6702,7 @@ version = "0.1.0"
 dependencies = [
  "directories",
  "jiff",
+ "libc",
  "notify",
  "notify-debouncer-full",
  "regex",
@@ -6743,6 +6754,7 @@ name = "underline-facade"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "asciimath-parser",
  "comrak",
  "dejavu",
  "image",
@@ -6770,6 +6782,7 @@ dependencies = [
 name = "underline-markup"
 version = "0.1.0"
 dependencies = [
+ "asciimath-parser",
  "comrak",
  "regex",
  "regex-syntax",
@@ -6783,6 +6796,7 @@ dependencies = [
 name = "underline-mcp"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "toml_edit 0.25.18+spec-1.1.0",
@@ -6804,6 +6818,7 @@ dependencies = [
  "underline-editor-core",
  "underline-editor-view",
  "underline-facade",
+ "underline-markup",
  "underline-mcp",
  "underline-spell",
  "underline-wiki",

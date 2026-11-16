@@ -35,6 +35,14 @@
   of the last action, and "Copy configuration". The tools are checked when
   the window opens, when another workspace opens, and after every action
   (BR-006); meanwhile the section is busy.
+
+  UC-026 A7, OQ-294: below the settings of "This workspace", the section
+  "Snapshots": the space the workspace's snapshots take ("Measuring…" until
+  the backend answers, "None" without any, or why it cannot be measured),
+  how long they are kept, and "Remove all snapshots…", which asks first,
+  naming how many and their space and that it cannot be undone (Escape or
+  "Cancel" keeps them). The status bar says what was removed. They are
+  measured when the part is shown and when another workspace opens.
 -->
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
@@ -396,6 +404,64 @@
     return `${button.label} ${tool}`;
   }
 
+  // UC-026 A7, OQ-294: the snapshots are measured when "This workspace" is
+  // shown and when another workspace opens.
+  const space = $derived(shell.snapshotsSpace);
+  let spaceMeasuredFor: string | null = null;
+  $effect(() => {
+    const root = scope === 'workspace' ? (shell.workspace?.root ?? null) : null;
+    if (root === null) {
+      spaceMeasuredFor = null;
+      return;
+    }
+    if (root !== spaceMeasuredFor) {
+      if (spaceMeasuredFor !== null || space.view !== null) {
+        space.forget();
+      }
+      spaceMeasuredFor = root;
+      void space.measure();
+    }
+  });
+
+  let spaceBody = $state<HTMLElement | null>(null);
+
+  /** "Remove all snapshots…": the question takes the keyboard on "Cancel". */
+  async function askRemoveSnapshots() {
+    space.ask();
+    await tick();
+    spaceBody?.querySelector<HTMLButtonElement>('.question .cancel')?.focus();
+  }
+
+  /** The question answered: the keyboard goes back to the button, or the section while it waits. */
+  async function answerRemoveSnapshots(remove: boolean) {
+    const work = remove ? space.removeAll() : Promise.resolve(space.cancel());
+    await tick();
+    focusSpace();
+    await work;
+    await tick();
+    if (!destroyed && !frame?.contains(document.activeElement)) {
+      focusSpace();
+    }
+  }
+
+  function focusSpace() {
+    const button = spaceBody?.querySelector<HTMLButtonElement>('.remove');
+    if (button && !button.disabled) {
+      button.focus();
+    } else {
+      spaceBody?.querySelector<HTMLElement>('h3')?.focus();
+    }
+  }
+
+  /** Escape in the question is its "Cancel"; the window stays open. */
+  function onSpaceQuestionKey(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      void answerRemoveSnapshots(false);
+    }
+  }
+
   onDestroy(() => {
     flushNumbers();
     destroyed = true;
@@ -562,6 +628,61 @@
             {/if}
           {/each}
         </div>
+        {#if scope === 'workspace'}
+          {@const shown = space.view}
+          <section
+            class="space"
+            aria-labelledby="settings-snapshots"
+            aria-busy={space.measuring || space.removing}
+            bind:this={spaceBody}
+          >
+            <h3 class="section" id="settings-snapshots" tabindex="-1">Snapshots</h3>
+            {#if shown === null}
+              <p class="weak">{space.measuring ? 'Measuring…' : ''}</p>
+            {:else if shown.problem !== null}
+              <p class="problem">{shown.problem}</p>
+            {:else}
+              <p class="amount">{shown.summary}</p>
+              <p class="weak">{shown.kept}</p>
+            {/if}
+            {#if space.asking && shown !== null}
+              <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+              <div
+                class="question"
+                role="group"
+                aria-labelledby="snapshots-question"
+                onkeydown={onSpaceQuestionKey}
+              >
+                <p id="snapshots-question">{shown.question}</p>
+                <div class="actions">
+                  <button
+                    type="button"
+                    class="ui-button small danger"
+                    onclick={() => void answerRemoveSnapshots(true)}
+                    ><span aria-hidden="true">⚠&nbsp;</span>Remove all snapshots</button
+                  >
+                  <button
+                    type="button"
+                    class="ui-button small cancel"
+                    onclick={() => void answerRemoveSnapshots(false)}>Cancel</button
+                  >
+                </div>
+              </div>
+            {:else}
+              <div>
+                <button
+                  type="button"
+                  class="ui-button small remove danger"
+                  disabled={!shown?.any || space.removing}
+                  onclick={() => void askRemoveSnapshots()}
+                  ><span aria-hidden="true">⚠&nbsp;</span>Remove all snapshots…</button
+                >
+              </div>
+            {/if}
+            <!-- While they go; what went is said in the status bar (UC-026 A7 step 5). -->
+            <p class="weak" role="status">{space.removing ? 'Removing…' : ''}</p>
+          </section>
+        {/if}
       </div>
       <details class="agents" open>
         <summary>Agents</summary>
@@ -796,6 +917,40 @@
   .small {
     min-height: 24px;
     padding: 0 var(--space-2);
+  }
+
+  /* UC-026 A7: the section "Snapshots" of "This workspace", below its settings. */
+  .space {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    width: 0;
+    min-width: 100%;
+  }
+
+  .space p {
+    margin: 0;
+    max-width: 48ch;
+    overflow-wrap: anywhere;
+  }
+
+  .space .section {
+    margin-bottom: 0;
+  }
+
+  .space .section:focus {
+    outline: none;
+  }
+
+  .amount {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* UC-026 A7: what cannot be undone: a mark and the theme's colour for
+     errors on its outline, not the colour alone. */
+  .danger:not(:disabled) {
+    border-color: var(--ui-overdue, #a80000);
+    box-shadow: inset 0 0 0 1px var(--ui-overdue, #a80000);
   }
 
   /* M-17.2: the section "Agents", as egui's collapsing header, 8 px below. */

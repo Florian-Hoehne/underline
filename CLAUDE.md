@@ -64,12 +64,12 @@ The technical counterpart of the requirements is in `docs/architecture/decisions
 | ADR-023 | Webview loads nothing from the network; own `ul-asset://` protocol | Accepted |
 | ADR-024 | The backend owns the note text; one IPC command per edit; facade virtualized | Superseded by ADR-025 |
 | ADR-025 | The webview owns the note text: editor core as WASM, backend mirror with rebase | Accepted |
-| ADR-026 | Regular expressions of every search with the `regex` crate | Proposed |
-| ADR-027 | Text statistics with `unicode-segmentation` in the WASM core | Proposed |
-| ADR-028 | Note attributes edited as lines, checked with `serde_norway` | Proposed |
-| ADR-029 | Mathematics typeset with RaTeX in the backend, SVG for facade and exports | Proposed |
-| ADR-030 | Spell check with `spellbook` and Hunspell dictionaries in the backend | Proposed |
-| ADR-031 | Snapshots as plain files in the workspace's `.underline/` folder | Proposed |
+| ADR-026 | Regular expressions of every search with the `regex` crate | Accepted |
+| ADR-027 | Text statistics with `unicode-segmentation` in the WASM core | Accepted |
+| ADR-028 | Note attributes edited as lines, checked with `serde_norway` | Accepted |
+| ADR-029 | Mathematics typeset with RaTeX in the backend, SVG for facade and exports | Accepted |
+| ADR-030 | Spell check with `spellbook` and Hunspell dictionaries in the backend | Accepted |
+| ADR-031 | Snapshots as plain files in the workspace's `.underline/` folder | Accepted |
 
 Follow the accepted ones; a proposed one becomes binding once the user accepts it (`/architecture-decision ADR-003 accept`).
 

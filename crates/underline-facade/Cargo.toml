@@ -35,3 +35,7 @@ typst-kit = { version = "=0.15.1", default-features = false, features = ["embedd
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 ureq = "3"
 scraper = { version = "0.29", default-features = false }
+
+[dev-dependencies]
+# OQ-222: every AsciiMath spelling the parser knows is tested to typeset.
+asciimath-parser = "=0.7.0"

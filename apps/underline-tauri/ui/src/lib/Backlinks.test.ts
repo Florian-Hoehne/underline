@@ -17,7 +17,10 @@ import {
   mockHandlers,
   mockHooks,
   mockLinkCheck,
+  mockLinkPlace,
   mockLinks,
+  mockLinkText,
+  mockMentions,
   type MockHandlers,
   type MockStart,
 } from './mock-backend';
@@ -63,13 +66,14 @@ describe('FR-078 backlinks (UC-004 BR-015, A14)', () => {
     const shell = await workbench();
     await shell.openNote('Project-Plan');
 
-    // "Hub" (TC-004-30) links to it too.
-    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (5)'));
+    // "Hub" (TC-004-30) links to it too, and "Guide" includes it (OQ-244).
+    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (6)'));
     const list = within(section('Backlinks')).getByRole('list', { name: 'Backlinks' });
     const links = within(list).getAllByRole('button');
     expect(links.map((link) => link.getAttribute('aria-label'))).toEqual([
       '4 [the plan](Project-Plan.md) first, in Brainstorm',
       '9 [goals](Project-Plan.md#goals), in Brainstorm',
+      '5 include::Project-Plan.md[], include, in Guide',
       '3 [Project Plan](Project-Plan.md), in Hub',
       '5 [Goals](Project-Plan.md#nothing), in Hub',
       '2 [Plan](../Project-Plan.md) for the trip, in Itinerary',
@@ -78,7 +82,12 @@ describe('FR-078 backlinks (UC-004 BR-015, A14)', () => {
     // The link is marked in its line; code and the note itself are no backlinks.
     expect(links[0].querySelector('mark')).toHaveTextContent('[the plan](Project-Plan.md)');
     const sources = [...list.querySelectorAll('.source-name')].map((name) => name.textContent);
-    expect(sources.map((name) => name?.trim())).toEqual(['Brainstorm', 'Hub', 'Itinerary travel']);
+    expect(sources.map((name) => name?.trim())).toEqual([
+      'Brainstorm',
+      'Guide',
+      'Hub',
+      'Itinerary travel',
+    ]);
   });
 
   it('TC-004-29 step 2, A14 choosing a backlink opens its note with the cursor on the link', async () => {
@@ -117,10 +126,10 @@ describe('FR-078 backlinks (UC-004 BR-015, A14)', () => {
   it('TC-004-31 a link added by another program shows; an unsaved change of an open note counts', async () => {
     const shell = await workbench();
     await shell.openNote('Project-Plan');
-    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (5)'));
+    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (6)'));
 
     await mockHooks().outsideChange('Diary', '# Diary\n\n[plan](Project-Plan.md)\n');
-    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (6)'));
+    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (7)'));
     expect(section('Backlinks')).toHaveTextContent('Diary');
 
     // Step 2: "Brainstorm" in another tab loses its link of line 4.
@@ -130,7 +139,7 @@ describe('FR-078 backlinks (UC-004 BR-015, A14)', () => {
     const at = text.indexOf('[the plan]');
     await mockHooks().backendEdit('Brainstorm', at, '[the plan](Project-Plan.md) '.length, '');
     await shell.openNote('Project-Plan');
-    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (5)'));
+    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (6)'));
     const list = within(section('Backlinks')).getByRole('list', { name: 'Backlinks' });
     expect(within(list).queryByRole('button', { name: /^4 .*in Brainstorm$/ })).toBeNull();
     expect(within(list).getByRole('button', { name: /^9 .*in Brainstorm$/ })).toBeTruthy();
@@ -214,11 +223,18 @@ describe('the mock stands in for the link index', () => {
     expect(mockLinkCheck('[goals](Plan.md#goals) é')).toBe(436_401_621);
   });
 
-  it('finds links outside code and pictures, and resolves them over the notes', () => {
+  it('finds links, pictures and includes outside code, and resolves them over the notes', () => {
     expect(mockFoundLinks(LINKS_TEXTS.Snippets)).toEqual([]);
-    expect(mockFoundLinks('![a](b.png) [c](d.md) <https://e.org>').map((l) => l.place)).toEqual([
-      'd.md',
-      'https://e.org',
+    expect(
+      mockFoundLinks('![a](b.png) [c](d.md) <https://e.org> include::f.adoc[] image::g.png[]').map(
+        (l) => [l.form, l.place],
+      ),
+    ).toEqual([
+      ['picture', 'b.png'],
+      ['link', 'd.md'],
+      ['link', 'https://e.org'],
+      ['include', 'f.adoc'],
+      ['picture', 'g.png'],
     ]);
     const view = mockLinks(
       'Project-Plan',
@@ -227,16 +243,298 @@ describe('the mock stands in for the link index', () => {
       (note) => LINKS_TEXTS[note],
       ['img/logo.png'],
     );
-    expect(view.backlinkCount).toBe(5);
+    expect(view.backlinkCount).toBe(6);
     expect(view.outgoing).toEqual([
       {
         text: 'the goals',
         target: '#goals',
         kind: 'note',
+        form: 'link',
         broken: false,
         line: 5,
         offset: LINKS_TEXTS['Project-Plan'].indexOf('[the goals]'),
       },
     ]);
+  });
+});
+
+describe('OQ-244 pictures and included files count as links (UC-004 BR-015)', () => {
+  it('TC-004-41 a picture is an outgoing link, marked "picture", and broken when missing', async () => {
+    const shell = await workbench();
+    await shell.openNote('travel/Itinerary');
+
+    await waitFor(() => expect(section('Outgoing links')).toHaveTextContent('Outgoing links (2)'));
+    const list = within(section('Outgoing links')).getByRole('list', { name: 'Outgoing links' });
+    const links = within(list).getAllByRole('button');
+    expect(links.map((link) => link.getAttribute('aria-label'))).toEqual([
+      'Plan, note Project-Plan, line 2',
+      'map.png, picture, file travel/map.png, broken link, line 3',
+    ]);
+    // Said in words, not by colour or an icon alone.
+    expect(links[0].querySelector('.form')).toBeNull();
+    expect(links[1].querySelector('.form')).toHaveTextContent('picture');
+    expect(links[1]).toHaveTextContent('broken');
+  });
+
+  it('TC-004-41 an included note lists the including note as a backlink, marked "include"', async () => {
+    const shell = await workbench();
+    await shell.openNote('Project-Plan');
+    const list = await waitFor(() =>
+      within(section('Backlinks')).getByRole('list', { name: 'Backlinks' }),
+    );
+    const include = await waitFor(() =>
+      within(list).getByRole('button', { name: /include, in Guide$/ }),
+    );
+    expect(include.querySelector('.form')).toHaveTextContent('include');
+    expect(include.querySelector('mark')).toHaveTextContent('include::Project-Plan.md[]');
+  });
+});
+
+describe('FR-103 unlinked mentions (OQ-199, UC-004 BR-021, A22)', () => {
+  it('TC-004-42 step 1 lists the mentions of the title, not those in code or links', async () => {
+    const shell = await workbench();
+    await shell.openNote('Project-Plan');
+
+    await waitFor(() =>
+      expect(section('Unlinked mentions')).toHaveTextContent('Unlinked mentions (2)'),
+    );
+    const list = within(section('Unlinked mentions')).getByRole('list', {
+      name: 'Mentions in Diary',
+    });
+    const mentions = within(list)
+      .getAllByRole('button')
+      .filter((button) => !button.classList.contains('link-mention'));
+    expect(mentions.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'line 4, unlinked mention “project plan”: The project plan is late; ask about the Project Plan.',
+      'line 4, unlinked mention “Project Plan”: The project plan is late; ask about the Project Plan.',
+    ]);
+    const marks = [...list.querySelectorAll('mark.unlinked')].map((mark) => mark.textContent);
+    expect(marks).toEqual(['project plan', 'Project Plan']);
+    // Two on one line are told apart.
+    expect(
+      within(list)
+        .getAllByRole('button', { name: /^Link “/ })
+        .map((button) => button.getAttribute('aria-label')),
+    ).toEqual([
+      'Link “project plan” in Diary, line 4, mention 1 of 2',
+      'Link “Project Plan” in Diary, line 4, mention 2 of 2',
+    ]);
+    expect(section('Unlinked mentions')).toHaveTextContent(
+      'Link turns the underlined text into a link to this note.',
+    );
+    expect(section('Unlinked mentions').querySelector('[aria-live="polite"]')).toHaveTextContent(
+      '2 unlinked mentions',
+    );
+  });
+
+  it('TC-004-42 step 3 "Link" turns a mention into a link to the note', async () => {
+    const handlers = mockHandlers(START);
+    const link = vi.fn(handlers.links_link_mention);
+    const shell = await workbench(START, { ...handlers, links_link_mention: link });
+    await shell.openNote('Project-Plan');
+    const button = await waitFor(() =>
+      within(section('Unlinked mentions')).getByRole('button', {
+        name: 'Link “project plan” in Diary, line 4, mention 1 of 2',
+      }),
+    );
+
+    await fireEvent.click(button);
+
+    const at = new TextEncoder().encode(
+      LINKS_TEXTS.Diary.slice(0, LINKS_TEXTS.Diary.indexOf('project plan')),
+    ).length;
+    await waitFor(() =>
+      expect(link).toHaveBeenCalledWith({
+        active: 'Project-Plan',
+        note: 'Diary',
+        place: { from: at, to: at + 12, check: mockLinkCheck('project plan') },
+      }),
+    );
+    await waitFor(() =>
+      expect(section('Unlinked mentions')).toHaveTextContent('Unlinked mentions (1)'),
+    );
+    await waitFor(() => expect(section('Backlinks')).toHaveTextContent('Backlinks (7)'));
+    expect(shell.status).toBe(
+      'Linked the mention of Project Plan in Diary. The earlier version is in its snapshots.',
+    );
+  });
+
+  it('A22 a mention that moved meanwhile is not linked; the status says so', async () => {
+    const handlers = mockHandlers(START);
+    const shell = await workbench(START, handlers);
+    await shell.openNote('Project-Plan');
+    const button = await waitFor(() =>
+      within(section('Unlinked mentions')).getByRole('button', {
+        name: 'Link “Project Plan” in Diary, line 4, mention 2 of 2',
+      }),
+    );
+    // Another program moves the text before the click arrives.
+    await mockHooks().outsideChange('Diary', '# Diary\n\nMoved. ' + LINKS_TEXTS.Diary.slice(9));
+
+    await fireEvent.click(button);
+
+    await waitFor(() =>
+      expect(shell.status).toBe(
+        'Diary changed since the mentions were listed; the mention is no longer at its place',
+      ),
+    );
+  });
+
+  it('TC-004-42 step 4 at most 200 are listed; "Show more" lists more', async () => {
+    const handlers = mockHandlers(START);
+    const more = vi.fn(handlers.links_more_mentions);
+    const shell = await workbench(START, { ...handlers, links_more_mentions: more });
+    await shell.openNote('Project-Plan');
+    await waitFor(() =>
+      expect(section('Unlinked mentions')).toHaveTextContent('Unlinked mentions (2)'),
+    );
+    await mockHooks().outsideChange('Diary', 'Project plan, '.repeat(250));
+    const button = await waitFor(() =>
+      within(section('Unlinked mentions')).getByRole('button', {
+        name: 'Show more (50 not listed)',
+      }),
+    );
+    expect(section('Unlinked mentions')).toHaveTextContent('Unlinked mentions (250)');
+    expect(section('Unlinked mentions').querySelectorAll('mark.unlinked')).toHaveLength(200);
+
+    await fireEvent.click(button);
+
+    await waitFor(() => expect(more).toHaveBeenCalledWith({ note: 'Project-Plan' }));
+    await waitFor(() =>
+      expect(section('Unlinked mentions').querySelectorAll('mark.unlinked')).toHaveLength(250),
+    );
+    expect(
+      within(section('Unlinked mentions')).queryByRole('button', { name: /^Show more/ }),
+    ).toBeNull();
+  });
+
+  it('BR-021 none, or a short title, folds the section shut with (0)', async () => {
+    const shell = await workbench();
+    await shell.openNote('Hub');
+    await waitFor(() =>
+      expect(section('Unlinked mentions')).toHaveTextContent('Unlinked mentions (0)'),
+    );
+    expect(section('Unlinked mentions')).toHaveTextContent('None');
+    expect((section('Unlinked mentions') as HTMLDetailsElement).open).toBe(false);
+
+    shell.links = {
+      ...shell.links!,
+      mentions: { notes: [], count: 0, more: 0, tooShort: true },
+    };
+    await waitFor(() =>
+      expect(section('Unlinked mentions')).toHaveTextContent(
+        "This note's title is shorter than 3 characters, so mentions are not searched.",
+      ),
+    );
+    expect(section('Unlinked mentions').querySelector('summary')).toHaveTextContent(
+      /^Unlinked mentions \(0\)$/,
+    );
+    expect((section('Unlinked mentions') as HTMLDetailsElement).open).toBe(false);
+
+    // A note with mentions opens it again.
+    await shell.openNote('Project-Plan');
+    await waitFor(() =>
+      expect((section('Unlinked mentions') as HTMLDetailsElement).open).toBe(true),
+    );
+  });
+
+  it('A22, review 15 after "Link" the keyboard goes to the next "Link", then to the title', async () => {
+    const shell = await workbench();
+    await shell.openNote('Project-Plan');
+    const first = await waitFor(() =>
+      within(section('Unlinked mentions')).getByRole('button', {
+        name: 'Link “project plan” in Diary, line 4, mention 1 of 2',
+      }),
+    );
+    first.focus();
+    await fireEvent.click(first);
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('aria-label')).toBe(
+        'Link “Project Plan” in Diary, line 4, mention 1 of 1',
+      ),
+    );
+    await fireEvent.click(document.activeElement as HTMLElement);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(section('Unlinked mentions').querySelector('summary')),
+    );
+  });
+
+  it('review 16 the mentions of a note are one Tab stop; Up, Down, Home and End move', async () => {
+    const shell = await workbench();
+    await shell.openNote('Project-Plan');
+    const list = await waitFor(() =>
+      within(section('Unlinked mentions')).getByRole('list', { name: 'Mentions in Diary' }),
+    );
+    const entries = () => [
+      ...list.querySelectorAll<HTMLButtonElement>('button[data-kind="mention"]'),
+    ];
+    expect(entries().map((entry) => entry.tabIndex)).toEqual([0, -1]);
+    entries()[0].focus();
+
+    await fireEvent.keyDown(entries()[0], { key: 'ArrowDown' });
+    await waitFor(() => expect(document.activeElement).toBe(entries()[1]));
+    expect(entries().map((entry) => entry.tabIndex)).toEqual([-1, 0]);
+    await fireEvent.keyDown(entries()[1], { key: 'Home' });
+    await waitFor(() => expect(document.activeElement).toBe(entries()[0]));
+    // The "Link" buttons move along their column.
+    const links = [...list.querySelectorAll<HTMLButtonElement>('button[data-kind="link"]')];
+    links[0].focus();
+    await fireEvent.keyDown(links[0], { key: 'End' });
+    await waitFor(() => expect(document.activeElement).toBe(links[1]));
+  });
+
+  it('review 16 "Show more" comes before the list', async () => {
+    const shell = await workbench();
+    await shell.openNote('Project-Plan');
+    await mockHooks().outsideChange('Diary', 'Project plan, '.repeat(250));
+    const more = await waitFor(() =>
+      within(section('Unlinked mentions')).getByRole('button', { name: /^Show more/ }),
+    );
+    const list = within(section('Unlinked mentions')).getByRole('list', {
+      name: 'Unlinked mentions',
+    });
+    expect(more.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the mock finds mentions as the backend: whole words, case, not in code or links', () => {
+    const texts: Record<string, string> = {
+      'Road-map': '# Road map\n',
+      Notes: 'road map, Road  Map, roadmap, `road map`, [road map](Road-map.md), #road map\n',
+      Go: 'go go\n',
+    };
+    const view = mockMentions('Road-map', Object.keys(texts), (note) => texts[note]);
+    expect(view.notes[0].mentions.map((mention) => mention.mention)).toEqual([
+      'road map',
+      'Road  Map',
+    ]);
+    expect(mockMentions('Go', Object.keys(texts), (note) => texts[note]).tooShort).toBe(true);
+  });
+});
+
+describe('package 12 review: the mock stands in for the backend', () => {
+  it('a picture held in the note is listed, never broken; existing files are not broken', () => {
+    const texts: Record<string, string> = {
+      Hub: '![x](data:image/png;base64,AAAA) [d](tools/deploy.sh) [f](file://tools/deploy.sh) [g](gone.sh)\n',
+    };
+    const view = mockLinks('Hub', 1, ['Hub'], (note) => texts[note], ['tools/deploy.sh']);
+    expect(view.outgoing.map((link) => [link.kind, link.broken])).toEqual([
+      ['inline', false],
+      ['file', false],
+      ['file', false],
+      ['file', true],
+    ]);
+  });
+
+  it('OQ-244 a rename rewrites includes and pictures too', async () => {
+    const handlers = mockHandlers(START);
+    const shell = await workbench(START, handlers);
+    await shell.openNote('Hub');
+    await handlers.note_rename({ note: 'Project-Plan', title: 'Road Map', folder: '' });
+    expect(mockHooks().noteText('Guide')).toContain('include::Road-Map.md[]');
+  });
+
+  it('A22 the mock writes `:` and backticks as the backend does', () => {
+    expect(mockLinkPlace('a/N.md', 'Tel:-Alice.md')).toBe('../Tel%3A-Alice.md');
+    expect(mockLinkText('Plan`s [v2]', true)).toBe('Plan\\`s \\[v2\\]');
   });
 });

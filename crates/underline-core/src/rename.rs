@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::atomic::{write_atomic, write_new_atomic};
+use crate::atomic::{write_atomic, write_new_atomic_with};
 use crate::embed::relative;
 use crate::format::NoteFormat;
 use crate::links::{normalize, percent_decode};
@@ -242,33 +242,41 @@ impl Workspace {
         let folder = new.parent().unwrap_or(self.root()).to_owned();
         let created = topmost_missing(self.root(), &folder);
         let io = |action| move |source| NewNoteProblem::Io { action, source };
+        // The moved note keeps who may read and write it (ADR-005, the
+        // user's decision of 2026-11-16); when that cannot be read, the
+        // note is not moved rather than becoming readable to more users.
+        let permissions = fs::metadata(&old)
+            .map(|meta| meta.permissions())
+            .map_err(io("read who may read the note"))?;
         let result = fs::create_dir_all(&folder)
             .map_err(io("create the folder"))
-            .and_then(|()| match write_new_atomic(&new, content.as_bytes()) {
-                Ok(()) => fs::remove_file(&old).map_err(|source| {
-                    let _ = fs::remove_file(&new);
-                    NewNoteProblem::Io {
-                        action: "remove the old file",
-                        source,
+            .and_then(|()| {
+                match write_new_atomic_with(&new, content.as_bytes(), Some(&permissions)) {
+                    Ok(()) => fs::remove_file(&old).map_err(|source| {
+                        let _ = fs::remove_file(&new);
+                        NewNoteProblem::Io {
+                            action: "remove the old file",
+                            source,
+                        }
+                    }),
+                    // On a file system that ignores case, a change of case only
+                    // finds the note itself there.
+                    Err(err)
+                        if err.kind() == io::ErrorKind::AlreadyExists
+                            && same_file_ignoring_case(&old, &new) =>
+                    {
+                        write_atomic(&old, content.as_bytes())
+                            .and_then(|()| fs::rename(&old, &new))
+                            .map_err(io("rename the note"))
                     }
-                }),
-                // On a file system that ignores case, a change of case only
-                // finds the note itself there.
-                Err(err)
-                    if err.kind() == io::ErrorKind::AlreadyExists
-                        && same_file_ignoring_case(&old, &new) =>
-                {
-                    write_atomic(&old, content.as_bytes())
-                        .and_then(|()| fs::rename(&old, &new))
-                        .map_err(io("rename the note"))
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                        Err(NewNoteProblem::Exists(planned.to.clone()))
+                    }
+                    Err(source) => Err(NewNoteProblem::Io {
+                        action: "write the note",
+                        source,
+                    }),
                 }
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                    Err(NewNoteProblem::Exists(planned.to.clone()))
-                }
-                Err(source) => Err(NewNoteProblem::Io {
-                    action: "write the note",
-                    source,
-                }),
             });
         if result.is_err() {
             if let Some(created) = created {
@@ -448,6 +456,24 @@ mod tests {
         );
         assert_eq!(sandbox.names(), ["projects"]);
         assert!(workspace.listing().notes.iter().any(|n| n.id == planned.to));
+    }
+
+    /// UC-006, ADR-005 (decision of 2026-11-16): a renamed note keeps
+    /// who may read and write it.
+    #[cfg(unix)]
+    #[test]
+    fn uc006_adr005_moved_note_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = Sandbox::new("move-mode", &[("Plan.md", "# Plan\n")]);
+        fs::set_permissions(sandbox.0.join("Plan.md"), fs::Permissions::from_mode(0o600)).unwrap();
+        let mut workspace = Workspace::open(&sandbox.0).unwrap();
+        let planned = workspace
+            .plan_rename(&NoteId::from_relative("Plan"), &rename("", "Road Map"))
+            .unwrap()
+            .unwrap();
+        workspace.move_note(&planned, "# Road Map\n").unwrap();
+        let meta = fs::metadata(sandbox.0.join("Road-Map.md")).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
     }
 
     /// TC-006-05: an AsciiDoc note stays AsciiDoc.

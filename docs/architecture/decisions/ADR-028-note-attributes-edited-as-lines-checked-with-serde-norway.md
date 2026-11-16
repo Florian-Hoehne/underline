@@ -1,7 +1,7 @@
 # ADR-028: Edit note attributes as lines of the note, and check the front matter with `serde_norway` in the WASM editor core
 
-**Status:** Proposed
-**Date:** 2026-11-13
+**Status:** Accepted
+**Date:** 2026-11-16
 **Requirements:** NFR-007, NFR-002, NFR-013, C-008, FR-093
 
 ## Context

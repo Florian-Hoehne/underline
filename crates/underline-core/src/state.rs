@@ -1,6 +1,12 @@
 //! The state Underline keeps between two starts (ADR-008): per user the known
-//! workspaces, per workspace its open tabs and when its notes were last
-//! opened (FR-071, UC-001, UC-002).
+//! workspaces and the recently run commands of the palette (user-wide, in
+//! every workspace: UC-023 BR-004, OQ-198), per workspace its open tabs, the
+//! width of its split view (OQ-220), its tab "Todos" and when its notes were
+//! last opened (FR-071, UC-001, UC-002).
+//!
+//! A field of a state file whose value has an unexpected form is read
+//! loosely ([`Loose`]): it falls back to its default, and the rest of the
+//! file still counts.
 
 use std::collections::HashMap;
 use std::fs;
@@ -15,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::atomic::write_atomic;
 use crate::format::NoteFormat;
+use crate::loose::Loose;
 use crate::note::NoteId;
 
 /// File name of both state files: in the user's data directory and in the
@@ -48,11 +55,59 @@ pub fn now() -> Timestamp {
         .unwrap_or(0)
 }
 
-/// What the user's data directory keeps: the known workspaces.
+/// UC-023 BR-004, OQ-198: how many recently run commands the user's state
+/// keeps.
+pub const RECENT_COMMANDS: usize = 20;
+/// The longest id of a command kept; a longer one is no command's.
+const COMMAND_ID_MAX: usize = 100;
+
+/// What the user's data directory keeps: the known workspaces and the
+/// recently run commands of the palette.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppState {
     pub workspaces: Vec<KnownWorkspace>,
+    /// UC-023 BR-004, OQ-198: the ids of the commands run from the
+    /// palette, the most recent first, at most [`RECENT_COMMANDS`]; for the
+    /// user, in every workspace. A state file without them (written before)
+    /// or with entries that are no id reads as far as it can.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "lenient_commands"
+    )]
+    pub recent_commands: Vec<String>,
+}
+
+/// UC-023 BR-004, OQ-198: whether `id` can be a command's id
+/// (`file.newNote`): short, of letters, digits, `.`, `-` and `_`.
+fn is_command_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= COMMAND_ID_MAX
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+/// OQ-198: the recently run commands of a state file: the entries that are
+/// ids, without repeats, at most [`RECENT_COMMANDS`]; anything else reads
+/// as none, so the rest of the file still counts.
+fn lenient_commands<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    Loose::read(deserializer, |value| {
+        let Loose::List(entries) = value else {
+            return Vec::new();
+        };
+        let mut ids: Vec<String> = Vec::new();
+        for entry in entries {
+            if let Loose::Text(id) = entry {
+                if is_command_id(&id) && !ids.contains(&id) && ids.len() < RECENT_COMMANDS {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
+    })
 }
 
 /// One known workspace (entity WORKSPACE).
@@ -74,6 +129,51 @@ pub struct WorkspaceState {
     /// UC-021 BR-005: the tab "Todos", its sort and its filter.
     #[serde(default, skip_serializing_if = "TodoListState::is_default")]
     pub todo_list: TodoListState,
+    /// UC-004 BR-018, OQ-220: the share of the split view's width the left
+    /// pane takes, in tenths of a percent (500 is half); `None` (a state
+    /// file written before, or a value that is no number) is half. Kept
+    /// within [`SPLIT_SHARE_LEAST`] and its counterpart.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_split_share"
+    )]
+    pub split_share: Option<u16>,
+}
+
+/// UC-004 BR-018, OQ-220, OQ-278: the least share of the split view each
+/// pane keeps, in tenths of a percent (15 percent); the window keeps at
+/// least 280 px besides.
+pub const SPLIT_SHARE_LEAST: u16 = 150;
+/// OQ-220: the share of the split view's left pane without one remembered:
+/// half.
+pub const SPLIT_SHARE_EVEN: u16 = 500;
+
+/// OQ-220: `share` (tenths of a percent of the left pane) within the least
+/// share of each pane.
+#[must_use]
+pub fn split_share_within(share: f64) -> u16 {
+    if !share.is_finite() {
+        return SPLIT_SHARE_EVEN;
+    }
+    let least = f64::from(SPLIT_SHARE_LEAST);
+    let most = 1000.0 - least;
+    // Within 150..=850, so the cast loses nothing.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let within = share.clamp(least, most).round() as u16;
+    within
+}
+
+/// OQ-220: the remembered share of a state file, within the least share of
+/// each pane; anything that is no number reads as none, so the rest of the
+/// file still counts.
+fn lenient_split_share<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u16>, D::Error> {
+    Loose::read(deserializer, |value| match value {
+        Loose::Number(share) if share.is_finite() => Some(split_share_within(share)),
+        _ => None,
+    })
 }
 
 /// One open tab (entity OPEN_TAB).
@@ -351,8 +451,6 @@ impl StateStore {
         loaded.changed_at.get_or_insert_with(Instant::now);
     }
 
-    /// Remembers the open tabs of the workspace at `directory`, left to
-    /// right (UC-004 step 6, A5); positions start at 1.
     /// UC-021 BR-005: the todo list of the workspace at `directory`.
     pub fn todo_list(&mut self, directory: &Path) -> TodoListState {
         self.workspace(directory).state.todo_list
@@ -367,6 +465,54 @@ impl StateStore {
         }
     }
 
+    /// UC-004 BR-018, OQ-220: the share of the split view the left pane of
+    /// the workspace at `directory` takes, in tenths of a percent; half
+    /// when none is remembered.
+    pub fn split_share(&mut self, directory: &Path) -> u16 {
+        self.workspace(directory)
+            .state
+            .split_share
+            .unwrap_or(SPLIT_SHARE_EVEN)
+    }
+
+    /// UC-004 BR-018, OQ-220: remembers the share of the split view the
+    /// left pane of the workspace at `directory` takes, within the least
+    /// share of each pane; returns it.
+    pub fn set_split_share(&mut self, directory: &Path, share: f64) -> u16 {
+        let share = split_share_within(share);
+        let loaded = self.workspace(directory);
+        if loaded.state.split_share != Some(share) {
+            loaded.state.split_share = Some(share);
+            loaded.changed_at.get_or_insert_with(Instant::now);
+        }
+        share
+    }
+
+    /// UC-023 BR-004, OQ-198: the recently run commands, the most recent
+    /// first.
+    pub fn recent_commands(&self) -> &[String] {
+        &self.state.recent_commands
+    }
+
+    /// UC-023 BR-004, OQ-198: the command `id` ran from the palette: it is
+    /// the most recent one now; the oldest beyond [`RECENT_COMMANDS`] is
+    /// forgotten. What is no command's id is not kept.
+    pub fn command_ran(&mut self, id: &str) {
+        if !is_command_id(id) {
+            return;
+        }
+        let recent = &mut self.state.recent_commands;
+        if recent.first().map(String::as_str) == Some(id) {
+            return;
+        }
+        recent.retain(|known| known != id);
+        recent.insert(0, id.to_owned());
+        recent.truncate(RECENT_COMMANDS);
+        self.changed_at.get_or_insert_with(Instant::now);
+    }
+
+    /// Remembers the open tabs of the workspace at `directory`, left to
+    /// right (UC-004 step 6, A5); positions start at 1.
     pub fn set_tabs(&mut self, directory: &Path, tabs: Vec<TabState>) {
         let loaded = self.workspace(directory);
         if loaded.state.tabs != tabs {
@@ -631,6 +777,7 @@ mod tests {
             active: true,
             sort: TodoSort::Urgency,
             filter: TodoFilter::All,
+            pane: PaneSide::Left,
         };
         store.set_todo_list(&a, list);
         store.write().unwrap();
@@ -642,6 +789,170 @@ mod tests {
                 .unwrap()
                 .contains("urgency")
         );
+    }
+
+    /// OQ-279, TC-021-10 step 5: the pane of the tab "Todos" is kept; a
+    /// state file without one (written before) reads as the left pane, and
+    /// the left pane is not written.
+    #[test]
+    fn oq279_tc021_10_todo_tab_pane_kept_and_left_by_default() {
+        let sandbox = Sandbox::new("todo-pane");
+        let a = sandbox.workspace("a", &["A.md"]);
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        let mut list = TodoListState {
+            open: true,
+            active: true,
+            pane: PaneSide::Right,
+            ..TodoListState::default()
+        };
+        store.set_todo_list(&a, list);
+        store.write().unwrap();
+        let file = a.join(UNDERLINE_FOLDER).join(STATE_FILE_NAME);
+        assert!(fs::read_to_string(&file).unwrap().contains("pane: right"));
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        assert_eq!(store.todo_list(&a), list);
+
+        list.pane = PaneSide::Left;
+        store.set_todo_list(&a, list);
+        store.write().unwrap();
+        assert!(!fs::read_to_string(&file).unwrap().contains("pane"));
+
+        let old: WorkspaceState =
+            serde_norway::from_str("todo_list:\n  open: true\n  active: true\n").unwrap();
+        assert_eq!(old.todo_list.pane, PaneSide::Left);
+    }
+
+    /// OQ-220, UC-004 BR-018, TC-004-37 step 4: the width of the split view
+    /// is kept per workspace across a restart; without one it is half.
+    #[test]
+    fn oq220_tc004_37_split_share_kept_per_workspace() {
+        let sandbox = Sandbox::new("split-share");
+        let a = sandbox.workspace("a", &["A.md"]);
+        let b = sandbox.workspace("b", &["B.md"]);
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        assert_eq!(store.split_share(&a), SPLIT_SHARE_EVEN);
+        assert_eq!(store.set_split_share(&a, 623.4), 623);
+        store.write().unwrap();
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        assert_eq!(store.split_share(&a), 623);
+        assert_eq!(store.split_share(&b), 500);
+        assert!(
+            fs::read_to_string(a.join(UNDERLINE_FOLDER).join(STATE_FILE_NAME))
+                .unwrap()
+                .contains("split_share: 623")
+        );
+    }
+
+    /// OQ-220: a share beyond the least width of a pane is kept within it
+    /// (15 percent each); one that is no number is half.
+    #[test]
+    fn oq220_split_share_kept_within_the_least_share() {
+        assert_eq!(split_share_within(0.0), SPLIT_SHARE_LEAST);
+        assert_eq!(split_share_within(-5.0), 150);
+        assert_eq!(split_share_within(990.0), 850);
+        assert_eq!(split_share_within(f64::NAN), 500);
+        assert_eq!(split_share_within(f64::INFINITY), 500);
+        assert_eq!(split_share_within(499.6), 500);
+    }
+
+    /// OQ-220, UC-004 step 6: a state file written before the width was
+    /// remembered, or with a width that is out of bounds or no number,
+    /// still gives its tabs; the width is half, or within the bounds.
+    #[test]
+    fn oq220_old_and_odd_state_files_keep_their_tabs() {
+        let tabs = "tabs:\n- note: Plan\n  position: 1\n  editing_view: source\n  active: true\n";
+        let old: WorkspaceState = serde_norway::from_str(tabs).unwrap();
+        assert_eq!(old.split_share, None);
+        assert_eq!(old.tabs.len(), 1);
+        for (value, share) in [
+            ("2000", Some(850)),
+            ("-1", Some(150)),
+            ("612.7", Some(613)),
+            ("wide", None),
+            ("[1, 2]", None),
+            ("~", None),
+        ] {
+            let state: WorkspaceState =
+                serde_norway::from_str(&format!("{tabs}split_share: {value}\n")).unwrap();
+            assert_eq!(state.split_share, share, "{value}");
+            assert_eq!(state.tabs.len(), 1, "{value}");
+        }
+        let written = serde_norway::to_string(&old).unwrap();
+        assert!(!written.contains("split_share"));
+    }
+
+    /// OQ-198, UC-023 BR-004, TC-023-02 step 4: the recently run commands
+    /// are the user's, kept across a restart, the most recent first, at
+    /// most 20, each once.
+    #[test]
+    fn oq198_tc023_02_recent_commands_kept_for_the_user() {
+        let sandbox = Sandbox::new("recent-commands");
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        assert!(store.recent_commands().is_empty());
+        store.command_ran("file.newNote");
+        store.command_ran("view.toggleFocus");
+        store.command_ran("file.newNote");
+        assert_eq!(
+            store.recent_commands(),
+            ["file.newNote", "view.toggleFocus"]
+        );
+        store.write().unwrap();
+        let (mut store, _) = StateStore::load(sandbox.state_file());
+        assert_eq!(
+            store.recent_commands(),
+            ["file.newNote", "view.toggleFocus"]
+        );
+
+        for n in 0..30 {
+            store.command_ran(&format!("test.command{n}"));
+        }
+        assert_eq!(store.recent_commands().len(), RECENT_COMMANDS);
+        assert_eq!(store.recent_commands()[0], "test.command29");
+        assert_eq!(store.recent_commands()[19], "test.command10");
+    }
+
+    /// OQ-198: what is no command's id is not kept, and running the most
+    /// recent command again changes nothing to write.
+    #[test]
+    fn oq198_recent_commands_take_only_ids() {
+        let mut store = StateStore::in_memory();
+        store.command_ran("");
+        store.command_ran("has space");
+        store.command_ran("../../etc");
+        store.command_ran(&"x".repeat(101));
+        assert!(store.recent_commands().is_empty());
+        store.command_ran("file.newNote");
+        store.write().unwrap();
+        store.command_ran("file.newNote");
+        assert!(!store.has_unwritten_changes());
+    }
+
+    /// OQ-198: a state file written before, or with recent commands that
+    /// are odd, still gives its workspaces; what is no id is dropped, and
+    /// repeats and entries beyond 20 too.
+    #[test]
+    fn oq198_old_and_odd_state_files_keep_their_workspaces() {
+        let workspaces = "workspaces:\n- directory: /notes\n";
+        let old: AppState = serde_norway::from_str(workspaces).unwrap();
+        assert!(old.recent_commands.is_empty());
+        assert!(!serde_norway::to_string(&old)
+            .unwrap()
+            .contains("recent_commands"));
+        let many: Vec<String> = (0..25).map(|n| format!("c.n{n}")).collect();
+        for (value, expected) in [
+            ("7", Vec::new()),
+            ("wide", Vec::new()),
+            (
+                "[file.newNote, 3, {a: b}, 'bad id', file.newNote, view.x]",
+                vec!["file.newNote".to_owned(), "view.x".to_owned()],
+            ),
+            (&format!("[{}]", many.join(", ")), many[..20].to_vec()),
+        ] {
+            let state: AppState =
+                serde_norway::from_str(&format!("{workspaces}recent_commands: {value}\n")).unwrap();
+            assert_eq!(state.recent_commands, expected, "{value}");
+            assert_eq!(state.workspaces.len(), 1, "{value}");
+        }
     }
 
     /// TC-006-15: the tab and the recent note follow a renamed note.
@@ -728,6 +1039,129 @@ mod tests {
         store.workspace_opened(Path::new("/nowhere"), 1);
         store.write().unwrap();
         assert!(!store.has_unwritten_changes());
+    }
+
+    /// UC-021 BR-005, UC-004 step 6, OQ-279 (test-monkey): a pane value of the
+    /// tab "Todos" that is no word (a number, null, a list, a map) must not
+    /// lose the rest of the workspace's state file, like an unknown word.
+    #[test]
+    fn oq279_todo_pane_of_any_type_keeps_the_rest_of_the_state() {
+        let tabs = "tabs:\n- note: Plan\n  position: 1\n  editing_view: source\n  active: false\nsplit_share: 600\n";
+        let mut lost = Vec::new();
+        for value in [
+            "sideways", "5", "~", "true", "[left]", "{a: b}", "1.5", "''",
+        ] {
+            let text = format!("{tabs}todo_list:\n  open: true\n  pane: {value}\n");
+            match serde_norway::from_str::<WorkspaceState>(&text) {
+                Ok(state) => {
+                    assert_eq!(state.tabs.len(), 1, "{value}");
+                    assert_eq!(state.split_share, Some(600), "{value}");
+                }
+                Err(_) => lost.push(value),
+            }
+        }
+        assert!(lost.is_empty(), "whole state file lost for pane: {lost:?}");
+    }
+
+    /// UC-004 step 6, OQ-220 (test-monkey): the same for the pane of an open
+    /// tab, which has the same type.
+    #[test]
+    fn oq220_tab_pane_of_any_type_keeps_the_rest_of_the_state() {
+        let mut lost = Vec::new();
+        for value in ["5", "~", "true", "[right]", "{a: b}"] {
+            let text = format!(
+                "tabs:\n- note: Plan\n  position: 1\n  editing_view: source\n  active: true\n  pane: {value}\nsplit_share: 600\n"
+            );
+            if serde_norway::from_str::<WorkspaceState>(&text).is_err() {
+                lost.push(value);
+            }
+        }
+        assert!(lost.is_empty(), "whole state file lost for pane: {lost:?}");
+    }
+
+    /// OQ-220 (test-monkey): odd shares of every YAML type give a state, in
+    /// bounds, and never lose the tabs.
+    #[test]
+    fn oq220_split_share_hostile_values() {
+        let tabs = "tabs:\n- note: Plan\n  position: 1\n  editing_view: source\n  active: true\n";
+        let mut lost = Vec::new();
+        for value in [
+            "99999999999999999999999999",
+            "-99999999999999999999999999",
+            "1e400",
+            "-1e400",
+            ".inf",
+            "-.inf",
+            ".nan",
+            "0x1F4",
+            "0o764",
+            "'600'",
+            "true",
+            "null",
+            "''",
+            "-0.0",
+            "4.9e-324",
+            "18446744073709551615",
+            "-9223372036854775808",
+            "{a: 1}",
+            "!!str 5",
+            "&a 700",
+        ] {
+            let text = format!("{tabs}split_share: {value}\n");
+            match serde_norway::from_str::<WorkspaceState>(&text) {
+                Ok(state) => {
+                    assert_eq!(state.tabs.len(), 1, "{value}");
+                    if let Some(share) = state.split_share {
+                        assert!((150..=850).contains(&share), "{value}: {share}");
+                    }
+                }
+                Err(_) => lost.push(value),
+            }
+        }
+        assert!(
+            lost.is_empty(),
+            "whole state file lost for split_share: {lost:?}"
+        );
+    }
+
+    /// OQ-198 (test-monkey): hostile recent commands never lose the rest.
+    #[test]
+    fn oq198_recent_commands_hostile_values() {
+        let workspaces = "workspaces:\n- directory: /notes\n";
+        let mut lost = Vec::new();
+        let huge: Vec<String> = (0..50_000).map(|n| format!("c.n{}", n % 30)).collect();
+        for value in [
+            "[\"a\\0b\", \"ok.id\", \"\\u0000\"]".to_owned(),
+            "[\"ok.id\\n\"]".to_owned(),
+            "[\"ok.id\", \"ok.id\", \"OK.ID\"]".to_owned(),
+            "[~, ~, null, 1.5, [a], {a: 1}]".to_owned(),
+            "[\"\\u00e4.x\", \"\\u202e.x\"]".to_owned(),
+            "{a: b}".to_owned(),
+            "~".to_owned(),
+            "''".to_owned(),
+            "99999999999999999999999999".to_owned(),
+            "[ok.id, 99999999999999999999999999, -99999999999999999999999999]".to_owned(),
+            format!("[{}]", huge.join(", ")),
+        ] {
+            let text = format!("{workspaces}recent_commands: {value}\n");
+            let Ok(state) = serde_norway::from_str::<AppState>(&text) else {
+                lost.push(value[..value.len().min(40)].to_owned());
+                continue;
+            };
+            assert_eq!(state.workspaces.len(), 1);
+            assert!(state.recent_commands.len() <= RECENT_COMMANDS);
+            for id in &state.recent_commands {
+                assert!(is_command_id(id), "{id:?}");
+            }
+            let mut sorted = state.recent_commands.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(sorted.len(), state.recent_commands.len());
+        }
+        assert!(
+            lost.is_empty(),
+            "whole state file lost for recent_commands: {lost:?}"
+        );
     }
 }
 

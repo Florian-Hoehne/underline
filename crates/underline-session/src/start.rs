@@ -67,6 +67,10 @@ pub struct StartInfo {
     /// M-05.4: the kinds of export by note format, for the submenu
     /// "Export" of the note overview.
     pub export_kinds: ExportKindsView,
+    /// UC-023 BR-004, OQ-198: the ids of the commands the user ran from
+    /// the palette, the most recent first, kept across restarts; the
+    /// window drops those it does not know.
+    pub recent_commands: Vec<String>,
 }
 
 #[cfg(test)]

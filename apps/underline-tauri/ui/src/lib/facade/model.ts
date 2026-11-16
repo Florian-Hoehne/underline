@@ -163,8 +163,14 @@ export function formulaBlockClick(block: BlockView): number {
     return block.start;
   }
   const source = block.kind.type === 'formula' ? block.kind.formula.source : '';
-  const found = source ? run.text.lastIndexOf(source) : -1;
-  return sourceAt(block, run, found > 0 ? found : 0);
+  let found = source ? run.text.lastIndexOf(source) : -1;
+  if (found <= 0) {
+    // OQ-222: the source of an AsciiMath block is written as LaTeX, so it
+    // is not found in the markup: the line after the `++++` line.
+    const delimiter = /^\+{4,}[ \t]*$/m.exec(run.text);
+    found = delimiter ? delimiter.index + delimiter[0].length + 1 : 0;
+  }
+  return sourceAt(block, run, Math.min(found, run.text.length));
 }
 
 /** FR-098: a length in thousandths of an em as CSS. */

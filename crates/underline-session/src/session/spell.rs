@@ -28,6 +28,16 @@
 //!   outside (another Underline, an editor) applies too (ADR-011's poll, as
 //!   for the user settings file). A word that could not be stored counts
 //!   until Underline closes, whatever the file holds.
+//! - OQ-208: "Add to workspace dictionary" stores the word in
+//!   `underline-words.txt` in the root of the workspace, committed with it;
+//!   that file is followed the same way, and a word that could not be
+//!   stored there counts until the workspace is left. The words in effect
+//!   are the dictionary's, the user's and the workspace's.
+//! - OQ-207: a note's attribute `lang` overrides the language of the
+//!   settings for that note; it is read on the check thread from the text
+//!   checked, so the marks follow a change of it. A language Underline does
+//!   not offer marks nothing, and the status bar says "No dictionary for …"
+//!   while that note is the active one.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
@@ -40,7 +50,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use underline_core::{NoteFormat, NoteId, SpellCheckLanguage};
 use underline_editor_core::utf16::WebOffsets;
-use underline_spell::{Dictionaries, NoteSpeller, SpellError, UserWords, USER_WORDS_FILE_NAME};
+use underline_spell::{
+    note_language, Dictionaries, NoteLanguage, NoteSpeller, SpellError, UserWords, LANG_HEAD_BYTES,
+    USER_WORDS_FILE_NAME, WORKSPACE_WORDS_FILE_NAME,
+};
 
 use super::{Session, Wake};
 use crate::editor_view::units;
@@ -63,6 +76,10 @@ pub(super) const LARGE_DEBOUNCE: Duration = Duration::from_millis(1000);
 
 /// [`SPELL_AT_THE_LATEST`] of a large note.
 pub(super) const LARGE_AT_THE_LATEST: Duration = Duration::from_millis(3000);
+
+/// ADR-030 (update 2026-11-16): how often the dictionaries no open note and
+/// no setting uses are let go.
+pub(super) const DICTIONARY_SWEEP: Duration = Duration::from_secs(60);
 
 /// How often the user's words file is looked at.
 pub const USER_WORDS_POLL: Duration = Duration::from_millis(500);
@@ -95,6 +112,15 @@ pub(super) struct TabSpell {
     tried: Option<u64>,
     /// The marks sent last, for the tests.
     pub(super) marks: Vec<(u32, u32)>,
+    /// OQ-207: the note was last checked in the language its attribute
+    /// `lang` names, not in that of the settings.
+    pub(super) from_note: bool,
+    /// OQ-207: what the status bar shows while the note is the active one
+    /// and checked in its own language (a language without a dictionary).
+    pub(super) problem: Option<SpellStateView>,
+    /// The code of the language the note was last checked in, so its
+    /// dictionary is kept while the tab is open.
+    pub(super) language: Option<String>,
 }
 
 impl TabSpell {
@@ -113,6 +139,130 @@ impl TabSpell {
     }
 }
 
+/// The language a note is checked in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CheckLanguage {
+    /// The language of the settings, by the code of its dictionary.
+    Settings(&'static str),
+    /// OQ-207: an offered language the note's attribute `lang` names.
+    Note(&'static str),
+    /// OQ-207: a language the note names that Underline does not offer, as
+    /// written; it has no dictionary.
+    Unknown(String),
+}
+
+impl CheckLanguage {
+    /// OQ-207: the language of `text`, a note in `format`, checked while the
+    /// settings say `setting`.
+    fn of(setting: &'static str, text: &str, format: NoteFormat) -> Self {
+        match note_language(text, format) {
+            NoteLanguage::Settings => Self::Settings(setting),
+            NoteLanguage::Offered(language) => match language.dictionary() {
+                Some(code) if code != setting => Self::Note(code),
+                _ => Self::Settings(setting),
+            },
+            NoteLanguage::Unknown(tag) => Self::Unknown(tag),
+        }
+    }
+
+    /// The code of its dictionary, or the language as the note writes it.
+    fn code(&self) -> &str {
+        match self {
+            Self::Settings(code) | Self::Note(code) => code,
+            Self::Unknown(tag) => tag,
+        }
+    }
+
+    /// The note names it, not the settings.
+    fn is_the_notes(&self) -> bool {
+        !matches!(self, Self::Settings(_))
+    }
+
+    /// The name the status bar uses for it: the name of an offered
+    /// language, else the language as written.
+    fn name(&self) -> String {
+        SpellCheckLanguage::ALL
+            .iter()
+            .find(|language| language.dictionary() == Some(self.code()))
+            .map_or_else(
+                || self.code().to_owned(),
+                |language| language.label().to_owned(),
+            )
+    }
+}
+
+/// Whose words a words file holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordsOf {
+    /// The user's, next to the user settings file (UC-005 A28).
+    User,
+    /// The workspace's, in its root (OQ-208).
+    Workspace,
+}
+
+impl WordsOf {
+    /// How long a word that could not be stored counts.
+    fn until(self) -> &'static str {
+        match self {
+            Self::User => "until Underline closes",
+            Self::Workspace => "until the workspace is closed",
+        }
+    }
+
+    /// Whose words, for the status bar.
+    fn whose(self) -> &'static str {
+        match self {
+            Self::User => "the words of your dictionary",
+            Self::Workspace => "the words of the workspace dictionary",
+        }
+    }
+
+    /// UC-005 A28, OQ-208: the status bar once `word` was added.
+    fn added(self, word: &str) -> String {
+        match self {
+            Self::User => format!("Added \"{word}\" to your dictionary"),
+            Self::Workspace => format!("Added \"{word}\" to the workspace dictionary"),
+        }
+    }
+
+    /// The status bar when the file could not be read.
+    fn unreadable(self, error: &str) -> String {
+        match self {
+            Self::User => format!("The words of your dictionary could not be read: {error}"),
+            Self::Workspace => {
+                format!("The words of the workspace dictionary could not be read: {error}")
+            }
+        }
+    }
+}
+
+/// A file of words the session follows (the user's or the workspace's).
+#[derive(Debug, Default)]
+struct WordsFile {
+    /// Where it is; `None` without a home directory, or without a workspace.
+    path: Option<PathBuf>,
+    /// OQ-208: the root of the workspace it is in, below which no link is
+    /// followed (a cloned workspace is not trusted); `None` for the user's
+    /// file, which may be a link the user made.
+    root: Option<PathBuf>,
+    /// OQ-208: the workspace's file is the user's file (a workspace in the
+    /// folder of the user settings file): it is read and followed once, as
+    /// the user's; this one holds no words of its own.
+    same_as_user: bool,
+    /// Its words, as read on the check thread.
+    words: UserWords,
+    /// UC-005 A28: words added that could not be stored; they count until
+    /// Underline closes (the user's) or the workspace is left (the
+    /// workspace's), whatever the file holds.
+    unstored: BTreeSet<String>,
+    /// It was read once (or there is none).
+    ready: bool,
+    /// A read was asked for and not answered yet.
+    reading: bool,
+    /// Its time and size when last read.
+    seen: Stamp,
+}
+
 /// A check of one note.
 struct Job {
     note: NoteId,
@@ -122,7 +272,8 @@ struct Job {
     generation: u64,
     /// The generation of the language and the dictionaries.
     dictionary: u64,
-    language: &'static str,
+    /// The language of the settings; the note may name another (OQ-207).
+    setting: &'static str,
     user: Arc<UserWords>,
     rope: ropey::Rope,
     format: NoteFormat,
@@ -132,8 +283,8 @@ struct Job {
 /// What the check thread is asked to do.
 enum Work {
     Check(Box<Job>),
-    /// Read the user's words file, last seen with this time and size.
-    ReadWords(PathBuf, Stamp),
+    /// Read a words file, last seen with this time and size.
+    ReadWords(WordsOf, Option<PathBuf>, PathBuf, Stamp),
     /// Only the tabs of these instances are open: the others' spellers go.
     Retain(Vec<u64>),
 }
@@ -145,7 +296,7 @@ type Stamp = Option<(SystemTime, u64)>;
 struct Outcome {
     note: NoteId,
     /// The language the note was checked in.
-    language: &'static str,
+    language: CheckLanguage,
     instance: u64,
     rev: u32,
     generation: u64,
@@ -158,26 +309,23 @@ struct Outcome {
 /// What the check thread answers.
 enum Done {
     Checked(Outcome),
-    Words(Result<UserWords, String>, Stamp),
+    Words(WordsOf, PathBuf, Result<UserWords, String>, Stamp),
 }
 
 /// The spell check of the session.
 pub(super) struct Spell {
     dictionaries: Arc<Dictionaries>,
-    /// The user's words in effect: those of the file and those of this
-    /// session.
+    /// The words in effect besides the dictionary's: those of the user's
+    /// file and of the workspace's, and those not stored.
     user: Arc<UserWords>,
-    /// The words of the file, as read on the check thread.
-    file_words: UserWords,
-    /// UC-005 A28: words added that could not be stored; they count until
-    /// Underline closes, whatever the file holds.
-    session_words: BTreeSet<String>,
-    /// The words file was read once (or there is none).
-    user_ready: bool,
-    /// A read of the words file was asked for and not answered yet.
-    user_reading: bool,
-    user_seen: Stamp,
+    /// UC-005 A28: the user's words file.
+    user_file: WordsFile,
+    /// OQ-208: the workspace's words file.
+    workspace_file: WordsFile,
+    /// When the words files were last looked at.
     user_checked: Option<Instant>,
+    /// When the dictionaries not in use were last let go.
+    swept: Option<Instant>,
     /// The language checked in now.
     language: SpellCheckLanguage,
     /// Grows with every change of the language, the dictionaries or the
@@ -196,7 +344,7 @@ pub(super) struct Spell {
     /// How many times the thread was started again.
     restarts: u32,
     /// The languages whose missing dictionary was said, in this generation.
-    said: HashSet<&'static str>,
+    said: HashSet<String>,
     /// What the status bar shows of the spell check, and what it was told.
     state: SpellStateView,
     told_state: Option<SpellStateView>,
@@ -216,12 +364,10 @@ impl Default for Spell {
         Self {
             dictionaries: Arc::new(Dictionaries::none()),
             user: Arc::new(UserWords::default()),
-            file_words: UserWords::default(),
-            session_words: BTreeSet::new(),
-            user_ready: false,
-            user_reading: false,
-            user_seen: None,
+            user_file: WordsFile::default(),
+            workspace_file: WordsFile::default(),
             user_checked: None,
+            swept: None,
             language: SpellCheckLanguage::Off,
             generation: Arc::new(AtomicU64::new(0)),
             dictionary: 0,
@@ -274,11 +420,17 @@ impl Spell {
         self.restarts > RESTARTS
     }
 
-    /// The words in effect are those of the file and of this session; a
-    /// change checks every note again.
+    /// OQ-208: the words in effect are those of the user's file and of the
+    /// workspace's, and those not stored; a change checks every note again.
     fn rebuild_user(&mut self) {
-        let mut words = self.file_words.clone();
-        for word in &self.session_words {
+        let mut words = self.user_file.words.clone();
+        words.extend(&self.workspace_file.words);
+        for word in self
+            .user_file
+            .unstored
+            .iter()
+            .chain(&self.workspace_file.unstored)
+        {
             let _ = words.add(word);
         }
         if *self.user != words {
@@ -286,12 +438,32 @@ impl Spell {
             self.bump();
         }
     }
+
+    fn file_mut(&mut self, which: WordsOf) -> &mut WordsFile {
+        match which {
+            WordsOf::User => &mut self.user_file,
+            WordsOf::Workspace => &mut self.workspace_file,
+        }
+    }
+
+    /// Both words files were read once (or there are none).
+    fn words_ready(&self) -> bool {
+        self.user_file.ready && self.workspace_file.ready
+    }
+
+    /// No read of a words file is waited for (the thread was replaced or
+    /// ended).
+    fn forget_reads(&mut self) {
+        self.user_file.reading = false;
+        self.workspace_file.reading = false;
+    }
 }
 
 /// UC-005 A28: the corrections for a word, worked out without the session.
 pub struct SuggestJob {
     dictionaries: Arc<Dictionaries>,
-    language: Option<&'static str>,
+    /// `None` while the spell check is off.
+    language: Option<CheckLanguage>,
     word: String,
 }
 
@@ -307,7 +479,13 @@ impl SuggestJob {
         let Some(language) = self.language else {
             return Ok(Vec::new());
         };
-        match self.dictionaries.get(language) {
+        if let CheckLanguage::Unknown(tag) = &language {
+            let missing = SpellError::Missing {
+                language: tag.clone(),
+            };
+            return Err(UiError::new(UiErrorKind::Internal, missing.to_string()));
+        }
+        match self.dictionaries.get(language.code()) {
             Ok(checker) => Ok(NoteSpeller::suggest(checker.as_ref(), &self.word)),
             Err(error) => Err(UiError::new(UiErrorKind::Internal, error.to_string())),
         }
@@ -326,7 +504,7 @@ impl Session {
         // The thread keeps the dictionaries it was started with.
         self.spell.work = None;
         self.spell.done = None;
-        self.spell.user_reading = false;
+        self.spell.forget_reads();
         self.reset_spell_tabs();
     }
 
@@ -350,9 +528,36 @@ impl Session {
             .map(|dir| dir.join(USER_WORDS_FILE_NAME))
     }
 
-    /// Looks at the time and size of the user's words file at most every
+    /// OQ-208: the workspace's words file: in the root of the open
+    /// workspace; `None` without one.
+    fn workspace_words_path(&self) -> Option<PathBuf> {
+        self.open
+            .as_ref()
+            .map(|open| open.root().join(WORKSPACE_WORDS_FILE_NAME))
+    }
+
+    /// OQ-208: the workspace's words file follows the open workspace, as
+    /// one opens or closes (called on every tick); the words of one left,
+    /// the stored and the unstored, count no more.
+    fn follow_workspace_words(&mut self) {
+        let path = self.workspace_words_path();
+        if path != self.spell.workspace_file.path {
+            let root = self.open.as_ref().map(|open| open.root().to_owned());
+            let user = self.user_words_path();
+            let same_as_user = same_file(path.as_deref(), user.as_deref());
+            self.spell.workspace_file = WordsFile {
+                path,
+                root,
+                same_as_user,
+                ..WordsFile::default()
+            };
+            self.spell.rebuild_user();
+        }
+    }
+
+    /// Looks at the time and size of the words files at most every
     /// [`USER_WORDS_POLL`], while the spell check is on and a note is open;
-    /// when they changed, the check thread reads it.
+    /// when they changed, the check thread reads them.
     fn poll_user_words(&mut self, now: Instant) {
         let in_use = self.spell.language != SpellCheckLanguage::Off
             && self
@@ -366,53 +571,93 @@ impl Session {
             .spell
             .user_checked
             .is_none_or(|at| now.saturating_duration_since(at) >= USER_WORDS_POLL);
-        if !due || self.spell.user_reading {
+        if !due {
             return;
         }
         self.spell.user_checked = Some(now);
-        let Some(path) = self.user_words_path() else {
-            self.spell.user_ready = true;
+        self.spell.user_file.path = self.user_words_path();
+        self.poll_words_file(WordsOf::User);
+        self.poll_words_file(WordsOf::Workspace);
+    }
+
+    /// Asks the check thread to read the words file `which` when its time
+    /// or size changed.
+    fn poll_words_file(&mut self, which: WordsOf) {
+        let file = self.spell.file_mut(which);
+        if file.reading {
+            return;
+        }
+        let Some(path) = file.path.clone().filter(|_| !file.same_as_user) else {
+            file.ready = true;
             return;
         };
         let stamp = stamp(&path);
-        if self.spell.user_ready && stamp == self.spell.user_seen {
+        if file.ready && stamp == file.seen {
             return;
         }
         if stamp.is_none() {
-            // No file: no words of the file; those of this session stay.
-            self.spell.user_seen = None;
-            self.spell.file_words = UserWords::default();
+            // No file: no words of the file; those not stored stay.
+            file.seen = None;
+            file.words = UserWords::default();
+            file.ready = true;
             self.spell.rebuild_user();
-            self.spell.user_ready = true;
             return;
         }
-        self.spell.user_reading = true;
-        self.send_spell_work(Work::ReadWords(path, stamp));
+        file.reading = true;
+        let root = file.root.clone();
+        self.send_spell_work(Work::ReadWords(which, root, path, stamp));
     }
 
-    /// The user's words as the check thread read them.
-    fn take_user_words(&mut self, read: Result<UserWords, String>, seen: Stamp) {
-        self.spell.user_reading = false;
-        self.spell.user_ready = true;
-        self.spell.user_seen = seen;
+    /// The words of the file `which` at `path` as the check thread read
+    /// them; a read of a workspace left meanwhile is dropped.
+    fn take_user_words(
+        &mut self,
+        which: WordsOf,
+        path: &Path,
+        read: Result<UserWords, String>,
+        seen: Stamp,
+    ) {
+        let file = self.spell.file_mut(which);
+        if file.path.as_deref() != Some(path) {
+            return;
+        }
+        file.reading = false;
+        file.ready = true;
+        file.seen = seen;
         match read {
             Ok(words) => {
-                self.spell.file_words = words;
+                file.words = words;
                 self.spell.rebuild_user();
             }
-            Err(error) => {
-                self.status = format!("The words of your dictionary could not be read: {error}");
-            }
+            Err(error) => self.status = which.unreadable(&error),
         }
     }
 
-    /// UC-005 A28: the job that finds the corrections for `word`, run off
-    /// the session.
+    /// UC-005 A28, OQ-207: the job that finds the corrections for `word`
+    /// of the open note `note` (in the language it names, else in that of
+    /// the settings), run off the session.
     #[must_use]
-    pub fn spell_suggest_job(&self, word: &str) -> SuggestJob {
+    pub fn spell_suggest_job(&self, word: &str, note: Option<&NoteId>) -> SuggestJob {
+        let setting = self.settings.effective().spell_check_language.dictionary();
+        let language = setting.map(|setting| {
+            let tab = note.and_then(|note| {
+                let open = self.open.as_ref()?;
+                let index = open.tabs.find(note)?;
+                Some(open.tabs.get(index))
+            });
+            match tab {
+                Some(tab) => {
+                    let rope = tab.mirror.rope();
+                    let end = rope.byte_to_char(rope.len_bytes().min(LANG_HEAD_BYTES));
+                    let head = rope.slice(..end).to_string();
+                    CheckLanguage::of(setting, &head, tab.edit.format)
+                }
+                None => CheckLanguage::Settings(setting),
+            }
+        });
         SuggestJob {
             dictionaries: Arc::clone(&self.spell.dictionaries),
-            language: self.settings.effective().spell_check_language.dictionary(),
+            language,
             word: word.to_owned(),
         }
     }
@@ -431,55 +676,97 @@ impl Session {
     /// The word cannot be added (it holds a space, it is too long), or the
     /// file cannot be read or written; the status bar says why.
     pub fn spell_add_word(&mut self, word: &str) -> Result<(), UiError> {
+        self.add_spell_word(WordsOf::User, word)
+    }
+
+    /// OQ-208, UC-005 A28 step 2: adds `word` to the workspace dictionary,
+    /// `underline-words.txt` in the root of the workspace, as
+    /// [`Session::spell_add_word`] adds it to the user's: read first, the
+    /// hand edits kept, never written over when it cannot be read; a word
+    /// that cannot be stored counts until the workspace is left.
+    ///
+    /// # Errors
+    ///
+    /// No workspace is open, the word cannot be added, or the file cannot
+    /// be read or written; the status bar says why.
+    pub fn spell_add_workspace_word(&mut self, word: &str) -> Result<(), UiError> {
+        self.add_spell_word(WordsOf::Workspace, word)
+    }
+
+    /// Adds `word` to the words file `which`: read again and merged under
+    /// a lock right before it is written ([`UserWords::store`]); the
+    /// workspace's never through a link.
+    fn add_spell_word(&mut self, which: WordsOf, word: &str) -> Result<(), UiError> {
         let invalid = |error: SpellError| UiError::new(UiErrorKind::Invalid, error.to_string());
-        let mut check = UserWords::default();
-        check.add(word).map_err(invalid)?;
+        let mut words = UserWords::default();
+        words.add(word).map_err(invalid)?;
         let word = word.trim().to_owned();
-        let path = self.user_words_path();
-        self.spell.user_ready = true;
-        self.wake.wake();
+        let (path, root) = match which {
+            WordsOf::User => (self.user_words_path(), None),
+            WordsOf::Workspace => {
+                self.follow_workspace_words();
+                let file = &self.spell.workspace_file;
+                (file.path.clone(), file.root.clone())
+            }
+        };
         let Some(path) = path else {
-            self.add_word_for_now(&word);
+            if which == WordsOf::Workspace {
+                return Err(UiError::new(
+                    UiErrorKind::Invalid,
+                    "No workspace is open".to_owned(),
+                ));
+            }
+            self.spell.user_file.ready = true;
+            self.add_word_for_now(which, &word);
             self.status = format!(
                 "\"{word}\" is not marked until Underline closes: there is no home directory to store it in"
             );
             return Ok(());
         };
-        let mut words = match UserWords::load(&path) {
-            Ok(words) => words,
-            Err(error) => {
-                self.add_word_for_now(&word);
-                let reason = format!(
-                    "\"{word}\" is not marked until Underline closes: the words of your dictionary could not be read, so they are not written over ({error})"
-                );
-                self.status.clone_from(&reason);
-                return Err(UiError::new(UiErrorKind::Internal, reason));
-            }
+        self.spell.file_mut(which).ready = true;
+        self.wake.wake();
+        let stored = match &root {
+            Some(root) => words.store_in(root, &path),
+            None => words.store(&path),
         };
-        words.add(&word).map_err(invalid)?;
-        match words.store(&path) {
-            Ok(()) => {
-                self.spell.user_seen = stamp(&path);
-                self.spell.file_words = words;
+        match stored {
+            Ok(stored) => {
+                let seen = stamp(&path);
+                // One file for both: the user's holds its words.
+                let into = if self.spell.workspace_file.same_as_user {
+                    WordsOf::User
+                } else {
+                    which
+                };
+                let file = self.spell.file_mut(into);
+                file.seen = seen;
+                file.words = stored;
                 self.spell.rebuild_user();
-                self.status = format!("Added \"{word}\" to the dictionary");
+                self.status = which.added(&word);
                 Ok(())
             }
             Err(error) => {
-                self.add_word_for_now(&word);
-                let reason = format!(
-                    "\"{word}\" is not marked until Underline closes, as it could not be stored: {error}"
-                );
+                self.add_word_for_now(which, &word);
+                let until = which.until();
+                let reason = if matches!(error, SpellError::Read { .. }) {
+                    format!(
+                        "\"{word}\" is not marked {until}: {} could not be read, so they are not written over ({error})",
+                        which.whose()
+                    )
+                } else {
+                    format!("\"{word}\" is not marked {until}, as it could not be stored: {error}")
+                };
                 self.status.clone_from(&reason);
                 Err(UiError::new(UiErrorKind::Internal, reason))
             }
         }
     }
 
-    /// `word` counts as the user's until Underline closes, whatever the
-    /// file holds; nothing is stored.
-    fn add_word_for_now(&mut self, word: &str) {
-        self.spell.session_words.insert(word.to_owned());
+    /// `word` counts as one of `which` until Underline closes (the user's)
+    /// or the workspace is left (the workspace's), whatever the file holds;
+    /// nothing is stored.
+    fn add_word_for_now(&mut self, which: WordsOf, word: &str) {
+        self.spell.file_mut(which).unstored.insert(word.to_owned());
         self.spell.rebuild_user();
         self.wake.wake();
     }
@@ -494,16 +781,62 @@ impl Session {
             self.spell.bump_dictionary();
         }
         let mut events = self.take_spell_done();
+        self.sweep_dictionaries(now);
+        self.follow_workspace_words();
         self.poll_user_words(now);
         // The user's words are needed only to mark words.
-        if self.spell.user_ready || self.spell.language == SpellCheckLanguage::Off {
+        if self.spell.words_ready() || self.spell.language == SpellCheckLanguage::Off {
             events.extend(self.start_spell_checks(now));
         }
-        if self.spell.told_state.as_ref() != Some(&self.spell.state) {
-            self.spell.told_state = Some(self.spell.state.clone());
-            events.push(Event::SpellState(self.spell.state.clone()));
+        let shown = self.shown_spell_state();
+        if self.spell.told_state.as_ref() != Some(&shown) {
+            self.spell.told_state = Some(shown.clone());
+            events.push(Event::SpellState(shown));
         }
         events
+    }
+
+    /// ADR-030 (update 2026-11-16): every [`DICTIONARY_SWEEP`], lets go of
+    /// the dictionaries neither the setting nor an open note uses, and of
+    /// those that could not be read.
+    fn sweep_dictionaries(&mut self, now: Instant) {
+        // The first sweep comes a while after the start, once the open
+        // notes were checked and know their language.
+        let swept = *self.spell.swept.get_or_insert(now);
+        if now.saturating_duration_since(swept) < DICTIONARY_SWEEP {
+            return;
+        }
+        self.spell.swept = Some(now);
+        let mut keep: Vec<&str> = self.spell.language.dictionary().into_iter().collect();
+        if let Some(open) = self.open.as_ref() {
+            keep.extend(
+                open.tabs
+                    .iter()
+                    .filter_map(|(_, tab)| tab.spell.language.as_deref()),
+            );
+        }
+        self.spell.dictionaries.retain(&keep);
+    }
+
+    /// FR-100, OQ-207: what the status bar shows of the spell check: the
+    /// problem of the active note while it is checked in the language it
+    /// names, else that of the language of the settings.
+    fn shown_spell_state(&self) -> SpellStateView {
+        if self.spell.stopped() || self.spell.language == SpellCheckLanguage::Off {
+            return self.spell.state.clone();
+        }
+        let active = self.open.as_ref().and_then(|open| {
+            open.tabs
+                .active_index()
+                .map(|index| &open.tabs.get(index).spell)
+        });
+        match active {
+            Some(spell) if spell.from_note => spell.problem.clone().unwrap_or(SpellStateView {
+                problem: None,
+                detail: None,
+            }),
+            _ => self.spell.state.clone(),
+        }
     }
 
     /// What the check thread answered; a thread that ended is noticed.
@@ -525,7 +858,9 @@ impl Session {
         let mut events = Vec::new();
         for answer in answers {
             match answer {
-                Done::Words(read, seen) => self.take_user_words(read, seen),
+                Done::Words(which, path, read, seen) => {
+                    self.take_user_words(which, &path, read, seen);
+                }
                 Done::Checked(outcome) => events.extend(self.take_spell_outcome(outcome)),
             }
         }
@@ -540,7 +875,7 @@ impl Session {
     fn spell_thread_ended(&mut self) {
         self.spell.work = None;
         self.spell.done = None;
-        self.spell.user_reading = false;
+        self.spell.forget_reads();
         self.spell.live.clear();
         self.spell.restarts += 1;
         self.reset_spell_tabs();
@@ -577,20 +912,25 @@ impl Session {
         if !outcome.partial {
             tab.spell.told = Some((outcome.rev, generation));
         }
-        let marks = match outcome.marks {
+        let from_note = outcome.language.is_the_notes();
+        let code = outcome.language.code().to_owned();
+        let (marks, problem) = match outcome.marks {
             Ok(marks) => {
                 // A check done: the thread works again.
                 self.spell.restarts = 0;
-                marks
+                (marks, None)
             }
             Err(error) => {
-                self.spell_failed(&error, &outcome.note, outcome.language);
-                Vec::new()
+                let problem = self.spell_failed(&error, &outcome.note, &outcome.language);
+                (Vec::new(), problem)
             }
         };
         let open = self.open.as_mut()?;
         let tab = open.tabs.get_mut(index);
         tab.spell.marks.clone_from(&marks);
+        tab.spell.from_note = from_note;
+        tab.spell.problem = problem;
+        tab.spell.language = Some(code);
         Some(Event::SpellMarks(SpellMarksView {
             note: outcome.note.as_str().to_owned(),
             rev: outcome.rev,
@@ -600,35 +940,53 @@ impl Session {
 
     /// UC-005 BR-023: says once per language that it has no dictionary, or
     /// why its dictionary cannot be read, and keeps it in the status bar;
-    /// a check that failed is said for its note.
-    fn spell_failed(&mut self, error: &SpellError, note: &NoteId, code: &'static str) {
+    /// a check that failed is said for its note. OQ-207: of a language the
+    /// note names, what the status bar shows while the note is the active
+    /// one is answered, not kept for every note.
+    fn spell_failed(
+        &mut self,
+        error: &SpellError,
+        note: &NoteId,
+        language: &CheckLanguage,
+    ) -> Option<SpellStateView> {
         if let SpellError::Failed(why) = error {
             self.status = format!("{} could not be spell checked: {why}", note.title());
-            return;
+            return None;
         }
-        // The language the note was checked in, which is the one in effect
-        // (an outcome of another was dropped before).
-        let Some(language) = SpellCheckLanguage::ALL
-            .iter()
-            .copied()
-            .find(|language| language.dictionary() == Some(code))
-        else {
-            return;
-        };
-        if self.spell.said.insert(code) {
+        let name = language.name();
+        if language.is_the_notes() {
+            // OQ-207: the chip names the note; the status bar shows it only
+            // while the note is the active one, so nothing else is said.
+            let title = note.title();
             let (problem, detail) = match error {
                 SpellError::Missing { .. } => (
-                    format!("Spell check: {}, no dictionary", language.label()),
+                    format!("{title}: no dictionary for {name}"),
                     format!(
-                        "No dictionary for {}. Choose another language in the settings.",
-                        language.label()
+                        "No dictionary for {name}, the language this note names in its attribute `lang`. Change or remove the attribute."
                     ),
                 ),
                 other => (
-                    format!("Spell check: {}, dictionary unreadable", language.label()),
+                    format!("{title}: dictionary for {name} unreadable"),
                     format!(
-                        "The dictionary for {} cannot be read: {other}. Choose another language in the settings.",
-                        language.label()
+                        "The dictionary for {name} cannot be read: {other}. Change or remove the note's attribute `lang`."
+                    ),
+                ),
+            };
+            return Some(SpellStateView {
+                problem: Some(problem),
+                detail: Some(detail),
+            });
+        }
+        if self.spell.said.insert(language.code().to_owned()) {
+            let (problem, detail) = match error {
+                SpellError::Missing { .. } => (
+                    format!("Spell check: {name}, no dictionary"),
+                    format!("No dictionary for {name}. Choose another language in the settings."),
+                ),
+                other => (
+                    format!("Spell check: {name}, dictionary unreadable"),
+                    format!(
+                        "The dictionary for {name} cannot be read: {other}. Choose another language in the settings."
                     ),
                 ),
             };
@@ -638,6 +996,7 @@ impl Session {
                 detail: Some(detail),
             };
         }
+        None
     }
 
     /// Gives the check thread the open notes whose marks are not of their
@@ -688,6 +1047,8 @@ impl Session {
                 let first_time = spell.told.is_none_or(|(_, told)| told != generation);
                 spell.told = Some((rev, generation));
                 spell.first_edit = None;
+                spell.from_note = false;
+                spell.problem = None;
                 if first_time || !spell.marks.is_empty() {
                     spell.marks.clear();
                     events.push(Event::SpellMarks(SpellMarksView {
@@ -728,7 +1089,7 @@ impl Session {
                 rev,
                 generation,
                 dictionary,
-                language,
+                setting: language,
                 user: Arc::clone(&user),
                 rope,
                 format: tab.edit.format,
@@ -794,6 +1155,23 @@ fn first_part(rope: &ropey::Rope, lines: Option<Range<usize>>, cursor: usize) ->
     }
 }
 
+/// OQ-208: whether `a` and `b` are the same file (also through another
+/// spelling of its folder); `false` when either is `None`.
+fn same_file(a: Option<&Path>, b: Option<&Path>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    if a == b {
+        return true;
+    }
+    // The file need not exist yet: its folders decide.
+    let real = |path: &Path| {
+        let dir = path.parent()?.canonicalize().ok()?;
+        Some(dir.join(path.file_name()?))
+    };
+    real(a).is_some_and(|a| Some(a) == real(b))
+}
+
 /// The time and size of the file at `path`; `None` when there is none.
 fn stamp(path: &Path) -> Stamp {
     let meta = std::fs::metadata(path).ok()?;
@@ -819,9 +1197,9 @@ fn start_thread(
     }
 }
 
-/// One speller per tab (its instance) and language, with the dictionary
-/// generation it was made for.
-type Spellers = HashMap<(u64, &'static str), (u64, NoteSpeller)>;
+/// One speller per tab (its instance) and language (its code), with the
+/// dictionary generation it was made for.
+type Spellers = HashMap<(u64, String), (u64, NoteSpeller)>;
 
 /// The check thread: does the work one after the other and sends what it
 /// found; ends when the session lets go of it. A tab has at most one check
@@ -837,8 +1215,13 @@ fn run_thread(
     let mut spellers: Spellers = HashMap::new();
     while let Ok(next) = work.recv() {
         let answer = match next {
-            Work::ReadWords(path, seen) => {
-                Done::Words(UserWords::load(&path).map_err(|e| e.to_string()), seen)
+            Work::ReadWords(which, root, path, seen) => {
+                let read = match &root {
+                    Some(root) => UserWords::load_in(root, &path),
+                    None => UserWords::load(&path),
+                }
+                .map_err(|e| e.to_string());
+                Done::Words(which, path, read, seen)
             }
             Work::Retain(live) => {
                 spellers.retain(|(instance, _), _| live.binary_search(instance).is_ok());
@@ -872,7 +1255,7 @@ fn check_caught(
 ) -> Outcome {
     let failed = Outcome {
         note: job.note.clone(),
-        language: job.language,
+        language: CheckLanguage::Settings(job.setting),
         instance: job.instance,
         rev: job.rev,
         generation: job.generation,
@@ -881,18 +1264,19 @@ fn check_caught(
             "the spell check met a fault in this text".to_owned(),
         ))),
     };
-    let key = (job.instance, job.language);
+    let instance = job.instance;
     let caught = panic::catch_unwind(AssertUnwindSafe(|| {
         check(dictionaries, generation, spellers, job, done, wake)
     }));
     caught.unwrap_or_else(|_| {
-        spellers.remove(&key);
+        spellers.retain(|(of, _), _| *of != instance);
         failed
     })
 }
 
-/// Checks the note of `job`; the part in view goes out first. Work of an
-/// older generation is answered as dropped.
+/// Checks the note of `job` in the language it names, else in that of the
+/// settings (OQ-207); the part in view goes out first. Work of an older
+/// generation is answered as dropped.
 fn check(
     dictionaries: &Dictionaries,
     generation: &AtomicU64,
@@ -901,9 +1285,9 @@ fn check(
     done: &Sender<Done>,
     wake: &Wake,
 ) -> Outcome {
-    let answer = |marks| Outcome {
+    let answer = |language: CheckLanguage, marks| Outcome {
         note: job.note.clone(),
-        language: job.language,
+        language,
         instance: job.instance,
         rev: job.rev,
         generation: job.generation,
@@ -912,23 +1296,35 @@ fn check(
     };
     if job.generation < generation.load(Ordering::SeqCst) {
         // The session checks the note again for what changed.
-        return answer(Ok(Vec::new()));
+        return answer(CheckLanguage::Settings(job.setting), Ok(Vec::new()));
     }
-    let checker = match dictionaries.get(job.language) {
+    let text = job.rope.to_string();
+    let language = CheckLanguage::of(job.setting, &text, job.format);
+    if let CheckLanguage::Unknown(tag) = &language {
+        let missing = SpellError::Missing {
+            language: tag.clone(),
+        };
+        return answer(language, Err(Arc::new(missing)));
+    }
+    let checker = match dictionaries.get(language.code()) {
         Ok(checker) => checker,
-        Err(error) => return answer(Err(error)),
+        Err(error) => return answer(language, Err(error)),
     };
-    let key = (job.instance, job.language);
+    let key = (job.instance, language.code().to_owned());
     let renew = spellers
         .get(&key)
         .is_none_or(|(made_for, _)| *made_for != job.dictionary);
     if renew {
-        spellers.retain(|_, (made_for, _)| *made_for == job.dictionary);
+        // A tab keeps the speller of its language now only (OQ-207: its
+        // `lang` changed), so the dictionary it held can go.
+        spellers.retain(|(instance, code), (made_for, _)| {
+            *made_for == job.dictionary && (*instance != job.instance || *code == key.1)
+        });
         if spellers.len() > 64 {
             spellers.clear();
         }
         spellers.insert(
-            key,
+            key.clone(),
             (
                 job.dictionary,
                 NoteSpeller::new(checker, Arc::clone(&job.user)),
@@ -936,11 +1332,10 @@ fn check(
         );
     }
     let Some((_, speller)) = spellers.get_mut(&key) else {
-        return answer(Ok(Vec::new()));
+        return answer(language, Ok(Vec::new()));
     };
     // The user's words change without what the dictionary said.
     speller.set_user_words(Arc::clone(&job.user));
-    let text = job.rope.to_string();
     let offsets = WebOffsets::of(&job.rope);
     let rope = &job.rope;
     let web = |marks: &[Range<usize>]| -> Vec<(u32, u32)> {
@@ -957,7 +1352,7 @@ fn check(
     let mut early = |marks: &[Range<usize>]| {
         let _ = done.send(Done::Checked(Outcome {
             note: job.note.clone(),
-            language: job.language,
+            language: language.clone(),
             instance: job.instance,
             rev: job.rev,
             generation: job.generation,
@@ -967,7 +1362,7 @@ fn check(
         wake.wake();
     };
     let marks = speller.check_note(&text, job.format, job.first.clone(), &mut early);
-    answer(Ok(web(&marks)))
+    answer(language, Ok(web(&marks)))
 }
 
 #[cfg(test)]

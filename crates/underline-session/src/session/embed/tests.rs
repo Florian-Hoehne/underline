@@ -376,15 +376,18 @@ fn a_copied_note_is_listed() {
         .is_none());
 }
 
-/// Kann (review F6): links to notes whose names hold spaces or brackets,
-/// in subfolders, are their plain relative places with the title (as
-/// egui); the markup made of them is the formatting rules' (Q-52).
+/// OQ-248, UC-005 A2, TC-005-04: links to notes whose names hold spaces
+/// or brackets, in subfolders, have their places percent-encoded (a space
+/// as `%20`) and their titles' brackets escaped, as link completion writes
+/// them; in Markdown and in AsciiDoc.
 #[test]
-fn m10_3_note_links_with_spaces_brackets_and_folders() {
+fn oq_248_note_links_with_spaces_brackets_and_folders() {
     let dir = temp_dir("names");
     let mut session = session_in(&dir);
     fs::create_dir_all(dir.join("notes/a b")).unwrap();
     fs::write(dir.join("notes/a b/Plan [v2].md"), "# Plan\n").unwrap();
+    fs::write(dir.join("notes/a b/50% #1.adoc"), "= Fifty\n").unwrap();
+    fs::write(dir.join("notes/Über (alt).adoc"), "= Über\n").unwrap();
     session.open_note(&NoteId::from_relative("Home"));
     let link = session
         .note_link(&setup(), &NoteId::from_relative("a b/Plan [v2]"))
@@ -392,8 +395,28 @@ fn m10_3_note_links_with_spaces_brackets_and_folders() {
     assert_eq!(
         link,
         Insertion::Link {
-            address: "../a b/Plan [v2].md".into(),
-            label: Some("Plan [v2]".into())
+            address: "../a%20b/Plan%20%5Bv2%5D.md".into(),
+            label: Some("Plan \\[v2\\]".into())
+        }
+    );
+    let link = session
+        .note_link(&setup(), &NoteId::from_relative("a b/50% #1"))
+        .unwrap();
+    assert_eq!(
+        link,
+        Insertion::Link {
+            address: "../a%20b/50%25%20%231.adoc".into(),
+            label: Some("50% #1".into())
+        }
+    );
+    let link = session
+        .note_link(&setup(), &NoteId::from_relative("Über (alt)"))
+        .unwrap();
+    assert_eq!(
+        link,
+        Insertion::Link {
+            address: "../Über%20%28alt%29.adoc".into(),
+            label: Some("Über (alt)".into())
         }
     );
 }

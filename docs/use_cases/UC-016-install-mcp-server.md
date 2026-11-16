@@ -71,10 +71,10 @@
 
 ### A6: Configuration cannot be read or written
 
-**Trigger:** The tool's configuration holds something that cannot be read, or cannot be written, for example for missing permission (step 4, A3 step 1)  
+**Trigger:** The tool's configuration holds something that cannot be read, holds its servers in a form the system does not change, or cannot be written, for example for missing permission (step 4, A3 step 1)  
 **Flow:**
 
-1. The system changes nothing and says why, naming the configuration's place, so the user can fix it or use A4.
+1. The system changes nothing and says why, naming the configuration's place, so the user can fix it or use A4; it never reports the workspace as installed when nothing was written.
 2. Use case ends.
 
 ## Postconditions
@@ -96,7 +96,7 @@ Each workspace gets an entry of its own, named `underline-` and the workspace's 
 
 ### BR-002: The user's configuration
 
-The entry goes into the tool's configuration for the user, never into a file of the workspace, so it is not shared through git. Every other entry and setting of that configuration stays as it was, and the configuration is written whole or not at all (NFR-006).
+The entry goes into the tool's configuration for the user, never into a file of the workspace, so it is not shared through git. Every other entry and setting of that configuration stays as it was, and the configuration is written whole or not at all (NFR-006). Since a configuration may hold the user's secrets, it keeps who may read it, and one the system creates can be read only by the user. When the configuration is a link to a file elsewhere, the link stays and that file gets the entry.
 
 ### BR-003: Which tools
 

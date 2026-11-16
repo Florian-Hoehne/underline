@@ -1281,6 +1281,49 @@ fn tc_005_37_list_items_are_indented_in_the_facade() {
     assert_eq!(plain.text(), "Text\n", "Tab does nothing outside a list");
 }
 
+/// TC-005-37 step 6, OQ-260: with the Vim keys, `>>` and `<<` on a list
+/// item block indent and outdent it by the list rule, each one undo step;
+/// on a paragraph they change nothing (the facade shows no leading space).
+#[test]
+fn tc_005_37_vim_shift_in_the_facade() {
+    let mut f = Facade::new("List", "- a\n- b\n- c\n\nText\n");
+    f.mode("Vim");
+    f.click_after("- b");
+    f.type_text(">");
+    f.type_text(">");
+    assert_eq!(f.text(), "- a\n  - b\n- c\n\nText\n");
+    f.type_text("<");
+    let patch = f.type_text("<");
+    assert_eq!(f.text(), "- a\n- b\n- c\n\nText\n");
+    // App-tester: the cursor stays on "b", so the next `>>` acts on it.
+    assert_eq!(patch.place, "Ln 2, Col 3", "on the text of b");
+    f.type_text(">");
+    f.type_text(">");
+    assert_eq!(f.text(), "- a\n  - b\n- c\n\nText\n");
+    f.type_text("u");
+    assert_eq!(f.text(), "- a\n- b\n- c\n\nText\n");
+    f.type_text("u");
+    assert_eq!(f.text(), "- a\n  - b\n- c\n\nText\n");
+    f.type_text("u");
+    assert_eq!(f.text(), "- a\n- b\n- c\n\nText\n");
+    // `2>>` on "b": "b" and "c" each go below the item before them.
+    f.click_after("- b");
+    f.type_text("2");
+    f.type_text(">");
+    f.type_text(">");
+    assert_eq!(f.text(), "- a\n  - b\n  - c\n\nText\n");
+    f.click_after("Te");
+    f.type_text(">");
+    f.type_text(">");
+    assert_eq!(f.text(), "- a\n  - b\n  - c\n\nText\n", "a paragraph stays");
+    let mut adoc = Facade::adoc("List", "* a\n* b\n");
+    adoc.mode("Vim");
+    adoc.click_after("* b");
+    adoc.type_text(">");
+    adoc.type_text(">");
+    assert_eq!(adoc.text(), "* a\n** b\n");
+}
+
 /// UC-005 A25, BR-019: brackets and quotes close in the facade, written as
 /// the facade writes them; the closing one is typed over, and Backspace
 /// takes both; a selection within a block is enclosed.

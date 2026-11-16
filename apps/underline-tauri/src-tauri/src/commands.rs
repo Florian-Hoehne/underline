@@ -41,14 +41,14 @@ use underline_session::{
     BranchMenuView, BranchNameView, BranchTarget, ChoiceName, SideName, SwitchAnswer, SyncModeName,
 };
 use underline_session::{
-    ChosenView, FoundNoteView, FoundPlace, HeadingView, LinkPlace, ReplaceJob, ReplaceNoteView,
-    SearchOpened, SearchSwitches,
+    ChosenView, FoundNoteView, FoundPlace, HeadingView, LinkPlace, MentionPlan, ReplaceJob,
+    ReplaceNoteView, SearchOpened, SearchSwitches,
 };
 use underline_session::{
     DialogOutcome, ExportAnswer, ExportDialogPlan, ExportJob, ExportKindName, ExportPlaceAnswer,
     ExportShown, ExportStart, TypedExportPath,
 };
-use underline_session::{SnapshotDiffView, SnapshotWholeView, SnapshotsView};
+use underline_session::{SnapshotDiffView, SnapshotWholeView, SnapshotsSpaceView, SnapshotsView};
 
 use crate::clipboard::SystemClipboard;
 use crate::events::CloseQuestionEvent;
@@ -327,6 +327,23 @@ pub async fn split_end(
     waker: State<'_, Waker>,
 ) -> Result<(), UiError> {
     on_session(&session, &waker, Session::end_split).await
+}
+
+/// UC-004 BR-018, OQ-220: the border of the split view was dragged or
+/// moved with the keys: the left pane takes `share` tenths of a percent of
+/// the width (500 is half). It is remembered for the workspace, within the
+/// least share of each pane; the tab bar event brings it back.
+#[tauri::command]
+#[specta::specta]
+pub async fn split_share(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    share: u32,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.set_split_share(f64::from(share));
+    })
+    .await
 }
 
 /// M-06.3, UC-004 A5: closes the tab of `note`, storing its changes first.
@@ -633,8 +650,8 @@ pub async fn ed_note_link(
 /// text of the tab `note`, clicked while the window was in step with the
 /// backend's revision `rev` (its edits sent first). The session finds the
 /// link in its own text, so the window never names what is opened; a
-/// place of another revision follows nothing. A web address (after "Open
-/// web address" agreed) or a file is opened with the system's program once
+/// place of another revision follows nothing. A web address or a file the
+/// session did not ask about (Q-61, Q-62) is opened with the system's program once
 /// the session is let go (plan section 8: the `open` crate, no plugin); a
 /// failure is said in the status bar.
 #[tauri::command]
@@ -658,17 +675,23 @@ pub async fn ed_follow_link(
     Ok(followed.answer)
 }
 
-/// UC-004 A4: the answer to "Open web address": with `open`, the address
-/// asked about opens in the browser, and web addresses are not asked about
-/// again until Underline closes.
+/// UC-004 A4, BR-007 (Q-61, Q-62): the answer to the question `id` "Open
+/// …" about a link: with `open`, the address or file the session asked
+/// about opens with the system's program; the window never names it. An
+/// answer to a question no longer asked opens nothing. Nothing is
+/// remembered; the next such link asks again.
 #[tauri::command]
 #[specta::specta]
-pub async fn link_open_web(
+pub async fn link_answer(
     session: State<'_, SharedSession>,
     waker: State<'_, Waker>,
+    id: u32,
     open: bool,
 ) -> Result<(), UiError> {
-    let address = on_session(&session, &waker, move |session| session.answer_web(open)).await?;
+    let address = on_session(&session, &waker, move |session| {
+        session.answer_question(id, open)
+    })
+    .await?;
     if let Some(address) = address {
         open_with_system(&session, &waker, address).await?;
     }
@@ -1239,6 +1262,56 @@ pub async fn links_follow(
     Ok(followed.answer)
 }
 
+/// UC-004 A22, FR-103 (OQ-199): "Link" of an unlinked mention: the mention
+/// of the active note `active` at `place` in the note `note` becomes a link
+/// to it. The window sends its edits before it calls this (`flushed` in
+/// the frontend, ADR-025). A note open in a tab changes there, as one undo step; a closed
+/// note is checked, kept as a snapshot and written without holding the
+/// session. The status, which says what was done.
+#[tauri::command]
+#[specta::specta]
+pub async fn links_link_mention(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    active: String,
+    note: String,
+    place: LinkPlace,
+) -> Result<String, UiError> {
+    let active = NoteId::from_relative(&active);
+    let note = NoteId::from_relative(&note);
+    let shared = Arc::clone(&session);
+    let waker = waker.inner().clone();
+    blocking(move || {
+        let plan = shared.lock().link_mention_plan(&active, &note, place)?;
+        let status = match plan {
+            MentionPlan::Done => shared.lock().status().to_owned(),
+            MentionPlan::Closed(job) => {
+                let done = job.run();
+                shared.lock().link_mention_finish(done)
+            }
+        };
+        waker.wake();
+        Ok(status)
+    })
+    .await?
+}
+
+/// UC-004 BR-021, FR-103: "Show more" of the unlinked mentions of the
+/// active note `note`: more are listed with the next event `links`.
+#[tauri::command]
+#[specta::specta]
+pub async fn links_more_mentions(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    note: String,
+) -> Result<(), UiError> {
+    let id = NoteId::from_relative(&note);
+    on_session(&session, &waker, move |session| {
+        session.links_more_mentions(&id);
+    })
+    .await
+}
+
 /// UC-005 A23, BR-018 (FR-080): the headings of the note `note` that link
 /// completion offers after a `#`, with their anchors; of its tab when it is
 /// open, else of its file; none when it cannot be read.
@@ -1454,20 +1527,64 @@ pub async fn snapshots_close(
     on_session(&session, &waker, Session::snapshots_close).await
 }
 
-/// UC-005 A28, ADR-030: up to five corrections for `word`, the likeliest
-/// first, from the dictionary of the spell check language. They are worked
-/// out off the session (a dictionary may take a while to suggest), so the
-/// menu shows "Add to dictionary" at once and the corrections when they
-/// come.
+/// UC-026 A7, OQ-294: the space the snapshots of the open workspace take,
+/// for the part "This workspace" of the settings window. The snapshots are
+/// counted without the session held.
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshots_space(
+    session: State<'_, SharedSession>,
+) -> Result<SnapshotsSpaceView, UiError> {
+    let job = read_session(&session, Session::snapshots_space_plan).await??;
+    blocking(move || job.run()).await
+}
+
+/// UC-026 A7, OQ-294: "Remove all snapshots", confirmed: everything below
+/// `.underline/snapshots` goes, without the session held, and the status
+/// says what was removed (also the answer).
+#[tauri::command]
+#[specta::specta]
+pub async fn snapshots_remove_all(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+) -> Result<String, UiError> {
+    let job = on_session(&session, &waker, Session::snapshots_removal_plan).await??;
+    let removed = blocking(move || job.run()).await?;
+    on_session(&session, &waker, move |session| {
+        session.snapshots_removed(&removed)
+    })
+    .await
+}
+
+/// UC-023 BR-004, OQ-198: the command `id` ran from the palette; it is
+/// remembered for the user, across restarts.
+#[tauri::command]
+#[specta::specta]
+pub async fn palette_ran(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    id: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| session.command_ran(&id)).await
+}
+
+/// UC-005 A28, ADR-030, OQ-207: up to five corrections for `word` of the
+/// open note `note`, the likeliest first, from the dictionary of the
+/// language the note names, else of the spell check language. They are
+/// worked out off the session (a dictionary may take a while to suggest),
+/// so the menu shows "Add to dictionary" at once and the corrections when
+/// they come.
 #[tauri::command]
 #[specta::specta]
 pub async fn spell_suggest(
     session: State<'_, SharedSession>,
     word: String,
+    note: String,
 ) -> Result<Vec<String>, UiError> {
     let shared = Arc::clone(&session);
     blocking(move || {
-        let job = shared.lock().spell_suggest_job(&word);
+        let note = NoteId::from_relative(&note);
+        let job = shared.lock().spell_suggest_job(&word, Some(&note));
         job.run()
     })
     .await?
@@ -1484,6 +1601,21 @@ pub async fn spell_add_word(
 ) -> Result<(), UiError> {
     on_session(&session, &waker, move |session| {
         session.spell_add_word(&word)
+    })
+    .await?
+}
+
+/// OQ-208, UC-005 A28 step 2: adds `word` to the workspace dictionary,
+/// shared through git; every open note is checked again.
+#[tauri::command]
+#[specta::specta]
+pub async fn spell_add_workspace_word(
+    session: State<'_, SharedSession>,
+    waker: State<'_, Waker>,
+    word: String,
+) -> Result<(), UiError> {
+    on_session(&session, &waker, move |session| {
+        session.spell_add_workspace_word(&word)
     })
     .await?
 }
@@ -2254,6 +2386,7 @@ mod tests {
         "tab_activate",
         "pane_focus",
         "split_end",
+        "split_share",
         "tab_close",
         "tab_store",
         "tab_set_view",
@@ -2274,7 +2407,7 @@ mod tests {
         "ed_mirror",
         "app_request_close",
         "ed_follow_link",
-        "link_open_web",
+        "link_answer",
         "note_new_start",
         "note_plan",
         "note_create",
@@ -2302,8 +2435,12 @@ mod tests {
         "snapshot_restore",
         "snapshot_undo_restore",
         "snapshots_close",
+        "snapshots_space",
+        "snapshots_remove_all",
+        "palette_ran",
         "spell_suggest",
         "spell_add_word",
+        "spell_add_workspace_word",
         "export_start",
         "export_choose",
         "export_run",
@@ -2604,9 +2741,53 @@ mod tests {
         assert_eq!(response["snapshot"]["tabs"]["active"], json!("Home"));
         assert_eq!(
             response["snapshot"]["tabs"]["todoList"],
-            json!({ "open": false, "active": false })
+            json!({ "open": false, "active": false, "pane": "left" })
         );
         assert_eq!(mock.wakes.try_recv(), Ok(()));
+    }
+
+    /// UC-026 A7, OQ-294: the space of the snapshots, and removing them
+    /// all with the report as the answer.
+    #[test]
+    fn uc026_a7_snapshots_space_and_remove_all() {
+        let dir = temp_dir("snapshots-space");
+        let root = workspace_with(&dir, "notes", &["Home"]);
+        let mock = Mock::new(Some(root.clone()), &dir);
+        mock.invoke("ws_start", json!({})).unwrap();
+        underline_core::SnapshotStore::new(&root)
+            .take(
+                "Home.md",
+                "old",
+                underline_core::SnapshotCause::Editing,
+                // Now: an older one may be pruned by the opening (BR-002).
+                underline_core::now(),
+            )
+            .unwrap();
+
+        let space = mock.invoke("snapshots_space", json!({})).unwrap();
+        assert_eq!(space["summary"], json!("3 bytes in 1 snapshot"));
+        assert_eq!(space["any"], json!(true));
+        let report = mock.invoke("snapshots_remove_all", json!({})).unwrap();
+        assert_eq!(
+            report,
+            json!("Removed all snapshots of this workspace: 3 bytes in 1 snapshot")
+        );
+        let space = mock.invoke("snapshots_space", json!({})).unwrap();
+        assert_eq!(space["summary"], json!("None"));
+    }
+
+    /// OQ-220, OQ-198: the width of the split view and a command run from
+    /// the palette are taken; a width without a workspace is no error.
+    #[test]
+    fn oq220_oq198_split_share_and_palette_ran() {
+        let dir = temp_dir("split-share");
+        let mock = Mock::new(None, &dir);
+        assert!(mock.invoke("split_share", json!({ "share": 650 })).is_ok());
+        assert!(mock
+            .invoke("palette_ran", json!({ "id": "file.newNote" }))
+            .is_ok());
+        let start = mock.invoke("app_start", json!({})).unwrap();
+        assert_eq!(start["recentCommands"], json!(["file.newNote"]));
     }
 
     #[test]

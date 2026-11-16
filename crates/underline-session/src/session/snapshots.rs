@@ -29,16 +29,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use underline_core::{
-    diff, lines_differing, snapshot_time_text, NoteFormat, NoteId, Snapshot, SnapshotCause,
-    SnapshotError, SnapshotJob, SnapshotStore, Timestamp,
+    diff, format_size, lines_differing, snapshot_time_text, NoteFormat, NoteId, Snapshot,
+    SnapshotCause, SnapshotError, SnapshotJob, SnapshotRemoval, SnapshotStore, SnapshotUsage,
+    Timestamp,
 };
 use underline_editor_view::{CachedViews, EditorTab};
 
 use super::git::hunks_view;
+use super::replace::thousands;
 use super::Session;
 use crate::snapshots_view::{
     SnapshotDiffBody, SnapshotDiffView, SnapshotItemView, SnapshotWholeView, SnapshotsNoneView,
-    SnapshotsView,
+    SnapshotsSpaceView, SnapshotsView,
 };
 use crate::{Event, StatusOffer, UiError, UiErrorKind};
 
@@ -338,6 +340,148 @@ impl SnapshotShowJob {
     }
 }
 
+/// UC-026 A7, OQ-294: the space the snapshots of the open workspace take,
+/// measured without the session held ([`SnapshotsSpaceJob::run`]): a
+/// workspace may keep thousands of them.
+#[derive(Debug)]
+pub struct SnapshotsSpaceJob {
+    store: SnapshotStore,
+}
+
+impl SnapshotsSpaceJob {
+    /// Measures the snapshots: how many and the space they take.
+    #[must_use]
+    pub fn run(self) -> SnapshotsSpaceView {
+        match self.store.usage() {
+            Ok(usage) => space_view(usage),
+            Err(error) => SnapshotsSpaceView {
+                summary: String::new(),
+                kept: SNAPSHOTS_KEPT.to_owned(),
+                any: false,
+                question: String::new(),
+                problem: Some(format!(
+                    "The space of the snapshots cannot be measured: {error}"
+                )),
+            },
+        }
+    }
+}
+
+/// UC-026 A7: what the settings window shows of `usage`. With folders
+/// that could not be read, the amount is "at least" and says so.
+fn space_view(usage: SnapshotUsage) -> SnapshotsSpaceView {
+    // Package 12 review: the button waits while there is no snapshot, also
+    // when stray files below the folder take some bytes.
+    let any = usage.count > 0;
+    let mut amount = snapshots_amount(usage);
+    if usage.unreadable > 0 {
+        amount = format!(
+            "at least {amount}; {} could not be read",
+            counted(usage.unreadable, "folder", "folders")
+        );
+    }
+    SnapshotsSpaceView {
+        summary: if any || usage.unreadable > 0 || usage.bytes > 0 {
+            amount.clone()
+        } else {
+            "None".to_owned()
+        },
+        kept: SNAPSHOTS_KEPT.to_owned(),
+        any,
+        question: format!(
+            "Remove all snapshots of this workspace ({amount})? Earlier versions of its notes \
+             can no longer be restored. This cannot be undone."
+        ),
+        problem: None,
+    }
+}
+
+/// `n` things with a comma between thousands: "1 snapshot", "1,203 snapshots".
+fn counted(n: u64, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {one}")
+    } else {
+        format!(
+            "{} {many}",
+            thousands(usize::try_from(n).unwrap_or(usize::MAX))
+        )
+    }
+}
+
+/// "12.4 MB in 1,203 snapshots", "2 KB in 1 snapshot".
+fn snapshots_amount(usage: SnapshotUsage) -> String {
+    format!(
+        "{} in {}",
+        format_size(usage.bytes),
+        counted(usage.count, "snapshot", "snapshots")
+    )
+}
+
+/// UC-026 A7, OQ-294: removing every snapshot of the open workspace,
+/// without the session held ([`SnapshotsRemovalJob::run`]); the session
+/// is told after ([`Session::snapshots_removed`]).
+#[derive(Debug)]
+pub struct SnapshotsRemovalJob {
+    store: SnapshotStore,
+}
+
+impl SnapshotsRemovalJob {
+    /// Removes everything below `.underline/snapshots`, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// The folder of the snapshots is behind a link; nothing was removed.
+    pub fn run(self) -> Result<SnapshotRemoval, SnapshotError> {
+        self.store.remove_all()
+    }
+}
+
+/// UC-026 A7: the report of a removal of all snapshots: what went, and
+/// what stayed and why (never silently).
+fn removal_report(removed: &Result<SnapshotRemoval, SnapshotError>) -> String {
+    use std::fmt::Write as _;
+    let removal = match removed {
+        Ok(removal) => removal,
+        Err(error) => return format!("No snapshot was removed: {error}"),
+    };
+    let nothing = removal.removed.count == 0 && removal.removed.bytes == 0;
+    let complete = removal.failed == 0 && removal.links == 0;
+    let mut report = match (nothing, complete) {
+        (true, true) => "There were no snapshots to remove".to_owned(),
+        (false, true) => format!(
+            "Removed all snapshots of this workspace: {}",
+            snapshots_amount(removal.removed)
+        ),
+        (true, false) => "No snapshot was removed".to_owned(),
+        (false, false) => format!("Removed {}", snapshots_amount(removal.removed)),
+    };
+    if removal.failed > 0 {
+        let why = removal
+            .first_error
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let _ = write!(
+            report,
+            "; {} could not be removed: {why}",
+            counted(removal.failed, "file or folder", "files or folders")
+        );
+    }
+    if removal.links > 0 {
+        let _ = write!(
+            report,
+            "; {} left as {} and not followed",
+            counted(removal.links, "link was", "links were"),
+            if removal.links == 1 {
+                "it is"
+            } else {
+                "they are"
+            }
+        );
+    }
+    report
+}
+
 fn invalid(message: String) -> UiError {
     UiError::new(UiErrorKind::Invalid, message)
 }
@@ -515,6 +659,48 @@ impl Session {
                 underline_facade::themes::palette(theme).dark,
             ),
         })
+    }
+
+    /// UC-026 A7, OQ-294: the space the snapshots of the open workspace
+    /// take, to measure without the session held.
+    ///
+    /// # Errors
+    ///
+    /// No workspace is open.
+    pub fn snapshots_space_plan(&self) -> Result<SnapshotsSpaceJob, UiError> {
+        let store = self
+            .snapshot_store()
+            .ok_or_else(|| invalid("No workspace is open".to_owned()))?;
+        Ok(SnapshotsSpaceJob { store })
+    }
+
+    /// UC-026 A7, OQ-294: the user confirmed "Remove all snapshots": the
+    /// job removes them without the session held. The undo of a restore
+    /// is no longer offered, as its snapshot goes too.
+    ///
+    /// # Errors
+    ///
+    /// No workspace is open.
+    pub fn snapshots_removal_plan(&mut self) -> Result<SnapshotsRemovalJob, UiError> {
+        let store = self
+            .snapshot_store()
+            .ok_or_else(|| invalid("No workspace is open".to_owned()))?;
+        self.snapshots.undo = None;
+        Ok(SnapshotsRemovalJob { store })
+    }
+
+    /// UC-026 A7, OQ-294: the snapshots were removed (`removed`): the
+    /// status says how many and the space freed, or why not all (never
+    /// silently); a list of snapshots shown is read again (A4). The report
+    /// is also the answer.
+    pub fn snapshots_removed(
+        &mut self,
+        removed: &Result<SnapshotRemoval, SnapshotError>,
+    ) -> String {
+        let report = removal_report(removed);
+        self.snapshot_taken();
+        self.status.clone_from(&report);
+        report
     }
 
     /// UC-026 A6: the snapshots are no longer shown.

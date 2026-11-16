@@ -28,8 +28,8 @@
   it, else to the note overview.
 
   Package 7a (FR-096, FR-097, UC-004 A18 to A20, BR-018): each pane of the
-  split view has its own tab bar (`pane`); the tab "Todos" is the left
-  pane's. A tab's context menu has "Open to the side" (A18; for the active
+  split view has its own tab bar (`pane`); the tab "Todos" is in the pane
+  that was active when it was opened (OQ-279). A tab's context menu has "Open to the side" (A18; for the active
   tab's note A19 shows its other editing view) and, while the split view
   shows, "End the split view" (A20). A click on a tab makes its pane the
   active one. After the review: the right pane's tab bar ends with a
@@ -66,8 +66,10 @@
   /** UC-004 BR-018: the tabs of this pane. */
   const own = $derived(paneOf(shell.tabs, pane));
   const tabs = $derived(own.tabs);
-  /** M-06.5: the tab "Todos" is the left pane's. */
-  const todoTab = $derived(pane === 'left' && shell.tabs.todoList.open);
+  /** M-06.5, OQ-279: the tab "Todos" is in the pane it was opened in; the left one without the split view. */
+  const todoTab = $derived(
+    pane === (shell.tabs.split ? shell.tabs.todoList.pane : 'left') && shell.tabs.todoList.open,
+  );
   /** M-06.5: while the tab "Todos" is active, no note tab is. */
   const todosActive = $derived(todoTab && shell.tabs.todoList.active);
   const active = $derived(todosActive ? null : own.active);
@@ -285,7 +287,11 @@
             aria-controls={todosActive ? panelId : undefined}
             tabindex={reachable === TODOS ? 0 : -1}
             aria-keyshortcuts="Delete"
-            onclick={() => {
+            onclick={async () => {
+              // OQ-279: the tab's pane becomes the active one first, so it stays there.
+              if (pane !== shell.activePane) {
+                await shell.focusPane(pane);
+              }
               if (!todosActive) {
                 void shell.showTodoList();
               }

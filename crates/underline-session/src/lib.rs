@@ -96,10 +96,10 @@ pub use editor_view::{
     DragName, EditorCommandName, EditorInput, EditorPatch, EditorState, EmbedAnswer, FindAnswer,
     FindSpec, FindStatus, FindStep, FoundView, HeadProblemView, HighlightView, IndexEntryView,
     IndexesView, Insertion, KeyHintView, KeyName, KeysStatusView, LineTargetAnswer, LinkAnswer,
-    LinkChoice, LinkContextView, NoteAttributeView, NoteHeadView, NotePropertiesView, Replaced,
-    SearchSwitches, SectionView, SectionsView, SelectionCopy, SelectionStatisticsView, SpanStyle,
-    TabPropertiesView, TabViews, TextChange, TextStatisticsView, ToolName, ToolView, VimChange,
-    VimModeName, VimState,
+    LinkChoice, LinkContextView, NoteAttributeView, NoteHeadView, NotePropertiesView, OpenKindName,
+    Replaced, SearchSwitches, SectionView, SectionsView, SelectionCopy, SelectionStatisticsView,
+    SpanStyle, TabPropertiesView, TabViews, TextChange, TextStatisticsView, ToolName, ToolView,
+    VimChange, VimModeName, VimState,
 };
 pub use error::{UiError, UiErrorKind};
 pub use event::{Event, StatusView};
@@ -116,8 +116,8 @@ pub use git_view::{
     DiffLineView, DiffPartView, DiffView, DiscardQuestion, HunkView,
 };
 pub use links_view::{
-    BacklinkNoteView, BacklinkView, HeadingView, LinkKindName, LinkPlace, LinksView,
-    OutgoingLinkView,
+    BacklinkNoteView, BacklinkView, HeadingView, LinkFormName, LinkKindName, LinkPlace, LinksView,
+    MentionNoteView, MentionView, MentionsView, OutgoingLinkView, MENTION_LEAST_CHARS,
 };
 pub use notes_view::{
     CreateNoteAnswer, DailyNoteAnswer, DeleteAnswer, DeleteQuestion, DeletedNoteView,
@@ -147,9 +147,10 @@ pub use session::{
     CommitJob, CommitOutcome, CreatePlan, DiscardFetched, DiscardJob, DiscardPlan, DiscardRefused,
     EmbedDone, EmbedPlan, ExportDialogPlan, ExportJob, ExportOutcome, Followed, HeadingsPlan,
     IdentityJob, KeepCopy, OpenPlan, PreparedCreate, PreparedOpen, ReplaceDone, ReplaceJob,
-    Session, SnapshotShowJob, SnapshotsJob, Synced, NEEDS_MESSAGE, NOTHING_CHOSEN, NO_SNAPSHOT,
-    SNAPSHOTS_KEPT, SNAPSHOTS_TAKEN,
+    Session, SnapshotShowJob, SnapshotsJob, SnapshotsRemovalJob, SnapshotsSpaceJob, Synced,
+    NEEDS_MESSAGE, NOTHING_CHOSEN, NO_SNAPSHOT, SNAPSHOTS_KEPT, SNAPSHOTS_TAKEN,
 };
+pub use session::{MentionDone, MentionJob, MentionPlan};
 pub use session::{SuggestJob, SPELL_AT_THE_LATEST, SPELL_DEBOUNCE, USER_WORDS_POLL};
 pub use settings::{
     agent_access_refused_message, theme_names, Scope, SettingChoiceView, SettingControlView,
@@ -158,7 +159,7 @@ pub use settings::{
 };
 pub use snapshots_view::{
     SnapshotDiffBody, SnapshotDiffView, SnapshotItemView, SnapshotWholeView, SnapshotsNoneView,
-    SnapshotsView,
+    SnapshotsSpaceView, SnapshotsView,
 };
 pub use spell_view::{SpellMarksView, SpellStateView};
 pub use start::{Platform, StartInfo};

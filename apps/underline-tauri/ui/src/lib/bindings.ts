@@ -94,6 +94,13 @@ export const commands = {
 	/**  UC-004 A20: ends the split view; the right pane's tabs join the left. */
 	splitEnd: () => typedError<null, UiError>(__TAURI_INVOKE("split_end")),
 	/**
+	 *  UC-004 BR-018, OQ-220: the border of the split view was dragged or
+	 *  moved with the keys: the left pane takes `share` tenths of a percent of
+	 *  the width (500 is half). It is remembered for the workspace, within the
+	 *  least share of each pane; the tab bar event brings it back.
+	 */
+	splitShare: (share: number) => typedError<null, UiError>(__TAURI_INVOKE("split_share", { share })),
+	/**
 	 *  M-06.3, UC-004 A5: closes the tab of `note`, storing its changes first.
 	 *  When they cannot be stored, the tab stays and the answer is the question
 	 *  "Changes not stored" (UC-005 A14 step 3); with `force` ("Close anyway")
@@ -214,18 +221,20 @@ export const commands = {
 	 *  text of the tab `note`, clicked while the window was in step with the
 	 *  backend's revision `rev` (its edits sent first). The session finds the
 	 *  link in its own text, so the window never names what is opened; a
-	 *  place of another revision follows nothing. A web address (after "Open
-	 *  web address" agreed) or a file is opened with the system's program once
+	 *  place of another revision follows nothing. A web address or a file the
+	 *  session did not ask about (Q-61, Q-62) is opened with the system's program once
 	 *  the session is let go (plan section 8: the `open` crate, no plugin); a
 	 *  failure is said in the status bar.
 	 */
 	edFollowLink: (note: string, at: number, rev: number, side: boolean) => typedError<LinkAnswer, UiError>(__TAURI_INVOKE("ed_follow_link", { note, at, rev, side })),
 	/**
-	 *  UC-004 A4: the answer to "Open web address": with `open`, the address
-	 *  asked about opens in the browser, and web addresses are not asked about
-	 *  again until Underline closes.
+	 *  UC-004 A4, BR-007 (Q-61, Q-62): the answer to the question `id` "Open
+	 *  …" about a link: with `open`, the address or file the session asked
+	 *  about opens with the system's program; the window never names it. An
+	 *  answer to a question no longer asked opens nothing. Nothing is
+	 *  remembered; the next such link asks again.
 	 */
-	linkOpenWeb: (open: boolean) => typedError<null, UiError>(__TAURI_INVOKE("link_open_web", { open })),
+	linkAnswer: (id: number, open: boolean) => typedError<null, UiError>(__TAURI_INVOKE("link_answer", { id, open })),
 	/**
 	 *  M-21.4, UC-005 A14 step 3: "Close anyway": Underline ends without the
 	 *  changes that could not be stored. What can be stored is stored once
@@ -349,6 +358,20 @@ export const commands = {
 	 */
 	linksFollow: (note: string, at: number, rev: number) => typedError<LinkAnswer, UiError>(__TAURI_INVOKE("links_follow", { note, at, rev })),
 	/**
+	 *  UC-004 A22, FR-103 (OQ-199): "Link" of an unlinked mention: the mention
+	 *  of the active note `active` at `place` in the note `note` becomes a link
+	 *  to it. The window sends its edits before it calls this (`flushed` in
+	 *  the frontend, ADR-025). A note open in a tab changes there, as one undo step; a closed
+	 *  note is checked, kept as a snapshot and written without holding the
+	 *  session. The status, which says what was done.
+	 */
+	linksLinkMention: (active: string, note: string, place: LinkPlace) => typedError<string, UiError>(__TAURI_INVOKE("links_link_mention", { active, note, place })),
+	/**
+	 *  UC-004 BR-021, FR-103: "Show more" of the unlinked mentions of the
+	 *  active note `note`: more are listed with the next event `links`.
+	 */
+	linksMoreMentions: (note: string) => typedError<null, UiError>(__TAURI_INVOKE("links_more_mentions", { note })),
+	/**
 	 *  UC-022 steps 1–2, A1, A2 (FR-074): the replace of the workspace holds
 	 *  `text`, `replacement` and the search switches `switches`; its places are
 	 *  found on the search thread and come as the event `replace`. The number
@@ -409,18 +432,41 @@ export const commands = {
 	/**  UC-026 A6: the snapshots are no longer shown. */
 	snapshotsClose: () => typedError<null, UiError>(__TAURI_INVOKE("snapshots_close")),
 	/**
-	 *  UC-005 A28, ADR-030: up to five corrections for `word`, the likeliest
-	 *  first, from the dictionary of the spell check language. They are worked
-	 *  out off the session (a dictionary may take a while to suggest), so the
-	 *  menu shows "Add to dictionary" at once and the corrections when they
-	 *  come.
+	 *  UC-026 A7, OQ-294: the space the snapshots of the open workspace take,
+	 *  for the part "This workspace" of the settings window. The snapshots are
+	 *  counted without the session held.
 	 */
-	spellSuggest: (word: string) => typedError<string[], UiError>(__TAURI_INVOKE("spell_suggest", { word })),
+	snapshotsSpace: () => typedError<SnapshotsSpaceView, UiError>(__TAURI_INVOKE("snapshots_space")),
+	/**
+	 *  UC-026 A7, OQ-294: "Remove all snapshots", confirmed: everything below
+	 *  `.underline/snapshots` goes, without the session held, and the status
+	 *  says what was removed (also the answer).
+	 */
+	snapshotsRemoveAll: () => typedError<string, UiError>(__TAURI_INVOKE("snapshots_remove_all")),
+	/**
+	 *  UC-023 BR-004, OQ-198: the command `id` ran from the palette; it is
+	 *  remembered for the user, across restarts.
+	 */
+	paletteRan: (id: string) => typedError<null, UiError>(__TAURI_INVOKE("palette_ran", { id })),
+	/**
+	 *  UC-005 A28, ADR-030, OQ-207: up to five corrections for `word` of the
+	 *  open note `note`, the likeliest first, from the dictionary of the
+	 *  language the note names, else of the spell check language. They are
+	 *  worked out off the session (a dictionary may take a while to suggest),
+	 *  so the menu shows "Add to dictionary" at once and the corrections when
+	 *  they come.
+	 */
+	spellSuggest: (word: string, note: string) => typedError<string[], UiError>(__TAURI_INVOKE("spell_suggest", { word, note })),
 	/**
 	 *  UC-005 A28 step 2: adds `word` to the user's dictionary; every open note
 	 *  is checked again, so it loses its mark everywhere.
 	 */
 	spellAddWord: (word: string) => typedError<null, UiError>(__TAURI_INVOKE("spell_add_word", { word })),
+	/**
+	 *  OQ-208, UC-005 A28 step 2: adds `word` to the workspace dictionary,
+	 *  shared through git; every open note is checked again.
+	 */
+	spellAddWorkspaceWord: (word: string) => typedError<null, UiError>(__TAURI_INVOKE("spell_add_workspace_word", { word })),
 	/**
 	 *  UC-009 step 1, BR-008, M-15.1: Ctrl+Shift+E or "Export…" of the tab
 	 *  menu: "Export {t} as:" with the kinds of export of the note. `null`
@@ -966,6 +1012,8 @@ export type BacklinkView = {
 	link: string,
 	/**  The text of the line after the link, shortened at its end. */
 	after: string,
+	/**  OQ-244: a link, a picture or an included file. */
+	form: LinkFormName,
 	/**
 	 *  Where the link is in the text of its note, which A14 puts the cursor
 	 *  on (`links_open`).
@@ -1774,7 +1822,23 @@ tool: ToolName } |
  */
 { kind: "edit"; 
 /**  The action. */
-action: EditActionName };
+action: EditActionName } | 
+/**
+ *  OQ-260, UC-005 BR-021: Vim's `>>` and `<<` (`>` and `<` on a
+ *  selection) of the source view's Vim keys on the lines from the one
+ *  holding web offset `from` to the one holding `to`: on a list item
+ *  the list rule of Tab and Shift+Tab, elsewhere Vim's shift; one step
+ *  for undo.
+ */
+{ kind: "vimShift"; 
+/**  A web offset in the first line. */
+from: number; 
+/**  A web offset in the last line. */
+to: number; 
+/**  `<`: outdent. */
+outdent: boolean; 
+/**  How many times over (the count of `>` in visual mode). */
+times: number };
 
 /**
  *  The answer to an input (ADR-024): the changes of the text, one after the
@@ -2700,12 +2764,34 @@ rev: number;
 /**  Where the heading's text starts, in web units. */
 offset: number } | 
 /**
- *  A4: the first web address of the session: "Open web address" asks
- *  whether to open it (`link_open_web`).
+ *  A4, BR-007 (Q-61, Q-62): the link leads to an address of another
+ *  scheme than `http`, `https` and `mailto`, to a file that may run as a
+ *  program, or to a file by a `file://` address or on another computer;
+ *  the question asks whether to open it, with "Cancel" first, and the
+ *  answer names it by `id` (`link_answer`). Asked every time.
  */
-{ kind: "askWeb"; 
-/**  The address, as the link has it. */
-address: string } | 
+{ kind: "askOpen"; 
+/**  The question; an answer to another one opens nothing. */
+id: number; 
+/**  What is asked about; it names the "Open …" button. */
+about: OpenKindName; 
+/**  The dialog's title, such as "Open ssh: link". */
+title: string; 
+/**
+ *  What the link leads to, naming the scheme or the file and its
+ *  kind; the window adds the warning and "Open it?".
+ */
+question: string; 
+/**
+ *  For a program: "Opening it may run it on this computer.", shown
+ *  in bold with a calm warning sign.
+ */
+warning: string | null; 
+/**
+ *  The full address or place as shown, with invisible characters
+ *  and those turning the text's direction written as `\u{…}`.
+ */
+target: string } | 
 /**
  *  A3: the linked note does not exist; "New note" offers to create
  *  it with its folder and title filled in.
@@ -2768,6 +2854,18 @@ export type LinkContextView = {
 	named: string | null,
 };
 
+/**
+ *  OQ-244, UC-004 BR-015: how a note names what it links to: a link (or a
+ *  web address written out), a picture shown in it, or a file it includes.
+ */
+export type LinkFormName = 
+/**  A link: `[text](place)`, `link:`, `xref:`, `<<…>>`, an address. */
+"link" | 
+/**  A picture: `![alt](place)`, `image:`, `image::`. */
+"picture" | 
+/**  An included file: AsciiDoc `include::`. */
+"include";
+
 /**  What a link leads to (the entity NOTE_LINK, `kind`). */
 export type LinkKindName = 
 /**  A note of the workspace, or a heading of one. */
@@ -2775,7 +2873,12 @@ export type LinkKindName =
 /**  Another file. */
 "file" | 
 /**  A web address. */
-"web";
+"web" | 
+/**
+ *  OQ-244: a picture held in the note itself (`data:`), which is never
+ *  broken and never followed.
+ */
+"inline";
 
 /**  A14: where a backlink is in the text of the note that holds it. */
 export type LinkPlace = {
@@ -2818,6 +2921,59 @@ export type LinksView = {
 	backlinkCount: number,
 	/**  FR-079: the links of the active note, in the order of the note. */
 	outgoing: OutgoingLinkView[],
+	/**  FR-103, BR-021: the unlinked mentions of the active note's title. */
+	mentions: MentionsView,
+};
+
+/**  FR-103: a note whose text mentions the active note's title. */
+export type MentionNoteView = {
+	/**  The mentioning note, which A22 changes. */
+	note: string,
+	/**  Its title. */
+	title: string,
+	/**  Its folder, `None` for the top folder. */
+	folder: string | null,
+	/**  Its mentions, in the order of the note. */
+	mentions: MentionView[],
+};
+
+/**  FR-103, BR-021: one mention: its line, shown with the mention marked. */
+export type MentionView = {
+	/**  The line of the mention, counted from 1. */
+	line: number,
+	/**  The text of the line before the mention, shortened at its start. */
+	before: string,
+	/**  The mention as the note writes it. */
+	mention: string,
+	/**  The text of the line after it, shortened at its end. */
+	after: string,
+	/**
+	 *  Where it is in the text of its note, which A22 turns into a link
+	 *  (`links_link_mention`) and A14 opens.
+	 */
+	place: LinkPlace,
+};
+
+/**
+ *  FR-103, UC-004 BR-021: "Unlinked mentions (N)": the places in the other
+ *  notes where the active note's title stands as plain text, grouped by
+ *  the note that holds them, in the order of the note overview.
+ */
+export type MentionsView = {
+	/**  The notes with mentions, each with those listed. */
+	notes: MentionNoteView[],
+	/**
+	 *  How many mentions there are in all, the number of the section; more
+	 *  than are listed when `more` is set.
+	 */
+	count: number,
+	/**  How many more there are than are listed; "Show more" lists them. */
+	more: number,
+	/**
+	 *  BR-021: the title is shorter than [`MENTION_LEAST_CHARS`] characters,
+	 *  so no mention of it is looked for.
+	 */
+	tooShort: boolean,
 };
 
 /**
@@ -2956,6 +3112,18 @@ offer: OpenOffer | null;
 recent: string[] };
 
 /**
+ *  UC-004 A4, BR-007 (Q-61, Q-62): what a question before opening a link
+ *  is about.
+ */
+export type OpenKindName = 
+/**  An address of another scheme: "Open link". */
+"link" | 
+/**  A file that may run as a program: "Open program". */
+"program" | 
+/**  A file by its full place: "Open file". */
+"file";
+
+/**
  *  What the Open dialog offers besides choosing another directory
  *  (M-21.1).
  */
@@ -2985,6 +3153,8 @@ export type OutgoingLinkView = {
 	target: string,
 	/**  What it leads to. */
 	kind: LinkKindName,
+	/**  OQ-244: a link, a picture or an included file. */
+	form: LinkFormName,
 	/**
 	 *  BR-015: the note, file or heading it leads to does not exist (a
 	 *  broken link); a web address is never broken.
@@ -3827,6 +3997,23 @@ export type SnapshotsNoneView = {
 	when: string[],
 };
 
+/**
+ *  UC-026 A7, OQ-294: the space the snapshots of the open workspace take,
+ *  for the part "This workspace" of the settings window.
+ */
+export type SnapshotsSpaceView = {
+	/**  "12.4 MB in 1,203 snapshots", or "None" without any. */
+	summary: string,
+	/**  How long they are kept, "Kept on this computer for 30 days" (BR-002). */
+	kept: string,
+	/**  Whether there is anything to remove; the button waits without. */
+	any: boolean,
+	/**  The question before removing them, naming how many and their space. */
+	question: string,
+	/**  Why the space could not be measured; shown instead of the summary. */
+	problem: string | null,
+};
+
 /**  UC-026 step 2, A1: the snapshots of a note, the newest first. */
 export type SnapshotsView = {
 	/**  The note. */
@@ -3916,6 +4103,12 @@ export type SplitView = {
 	rightActive: string | null,
 	/**  The active pane: the one the user last worked in. */
 	pane: PaneName,
+	/**
+	 *  OQ-220: the share of the width the left pane takes, in tenths of a
+	 *  percent (500 is half), as remembered for the workspace; the window
+	 *  keeps each pane at its least width besides.
+	 */
+	leftShare: number,
 };
 
 /**  What the window needs to know when it starts (M-01). */
@@ -3958,6 +4151,12 @@ export type StartInfo = {
 	 *  "Export" of the note overview.
 	 */
 	exportKinds: ExportKindsView,
+	/**
+	 *  UC-023 BR-004, OQ-198: the ids of the commands the user ran from
+	 *  the palette, the most recent first, kept across restarts; the
+	 *  window drops those it does not know.
+	 */
+	recentCommands: string[],
 };
 
 /**
@@ -4405,8 +4604,16 @@ export type TodoSortName =
 export type TodoTabView = {
 	/**  The tab is open. */
 	open: boolean,
-	/**  The tab is the active one; no note tab is then. */
+	/**
+	 *  The tab is the active one of its pane; no note tab of that pane is
+	 *  then.
+	 */
 	active: boolean,
+	/**
+	 *  OQ-279: the pane the tab is in: the one active when it was opened;
+	 *  the left one without the split view.
+	 */
+	pane: PaneName,
 };
 
 /**
